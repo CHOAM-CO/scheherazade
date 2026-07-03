@@ -151,32 +151,109 @@ function isMarkerFresh(marker) {
   return Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= LIVENESS_FRESH_MS
 }
 
+// Timeout backstop (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 2): a
+// silent hang (e.g. a broken promise somewhere in the claude boot / MCP
+// handshake / discord.js gateway-connect chain that never rejects) used to
+// leave the UI on 'connecting' forever -- no deadline existed. TIMEOUT_MS
+// is the single tunable ceiling for how long 'connecting' is allowed to
+// stay 'connecting' with no fresh liveness marker, counted from the START
+// of the CURRENT spawn attempt (agent-status.cjs's `since`, re-stamped by
+// main.cjs's spawnRealAgentChild() at the moment of each spawn -- see that
+// function's own comment). A named const so it's a one-line tune, not a
+// buried magic number.
+const TIMEOUT_MS = 60_000
+
 // GET /api/agent/status -- REQUIREMENT 4 (PO, agent-lifecycle fix,
 // 2026-07-03): combines the process-side state (agent-status.cjs, written
 // by main.cjs) with the Discord-side heartbeat marker (this file's own
 // read) into ONE state the Step 5 UI can poll and gate its success screen
 // on, instead of showing "waiting in Discord" the instant
 // ONBOARDING_COMPLETE flips.
+//
+// Precedence (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 1 + PIECE 2):
+// explicit failed > live > timeout > connecting.
+//   state: 'failed'     -- proc.state is already 'failed' (main.cjs set it
+//          directly, or relayed it from the .agent-failed.json marker via
+//          pollFailureMarker()) -- `code`/`detail` carry the cause. Takes
+//          priority over marker freshness -- a stale marker plus a dead/
+//          blocked process is unambiguously "failed", not "connecting".
+//   state: 'live'       -- marker fresh (see isMarkerFresh()). Real,
+//          confirmed Discord liveness.
+//   state: 'failed', code: 'timeout' -- proc.state is 'connecting' (an
+//          actual spawn attempt happened) and it's been sitting there,
+//          with no fresh marker, for longer than TIMEOUT_MS since that
+//          spawn attempt. Synthesized here at read time, cause-agnostic --
+//          it doesn't know (or need to know) WHY nothing ever went live,
+//          only that too long has passed. Never applied to proc.state ===
+//          'idle' (no spawn attempted yet -- see the "existingPid &&
+//          isOurSupervisor" discovery path in main.cjs's
+//          spawnRealAgentChild(), which intentionally does not call
+//          setAgentStatus('connecting') since it didn't spawn anything)
+//          so an app instance that merely discovered an already-alive
+//          supervisor is never falsely timed out before it's had any
+//          `since` stamp of its own.
 //   state: 'connecting' -- process spawned (or not attempted yet), marker
-//          absent/stale. Normal transient state.
-//   state: 'live'       -- marker fresh. Real, confirmed Discord liveness.
-//   state: 'failed'     -- the persistent supervisor process itself died or
-//          never spawned; `reason` carries the cause. Takes priority over
-//          marker freshness -- a stale marker plus a dead process is
-//          unambiguously "failed", not "connecting".
+//          absent/stale, timeout not yet exceeded. Normal transient state.
 function computeAgentStatus() {
   const proc = getAgentStatus()
   const marker = readLivenessMarker()
   if (proc.state === 'failed') {
-    return { state: 'failed', reason: proc.reason, lastHeartbeat: marker ? marker.lastHeartbeat : null }
+    return { state: 'failed', code: proc.code || 'unknown', detail: proc.detail, lastHeartbeat: marker ? marker.lastHeartbeat : null }
   }
   if (isMarkerFresh(marker)) {
-    return { state: 'live', reason: null, lastHeartbeat: marker.lastHeartbeat }
+    return { state: 'live', code: null, detail: null, lastHeartbeat: marker.lastHeartbeat }
   }
-  return { state: 'connecting', reason: null, lastHeartbeat: marker ? marker.lastHeartbeat : null }
+  if (proc.state === 'connecting') {
+    const connectingSince = Date.parse(proc.since)
+    if (Number.isFinite(connectingSince) && Date.now() - connectingSince > TIMEOUT_MS) {
+      return {
+        state: 'failed',
+        code: 'timeout',
+        detail: `agent did not reach a confirmed live state within ${TIMEOUT_MS}ms of the last spawn attempt`,
+        lastHeartbeat: marker ? marker.lastHeartbeat : null,
+      }
+    }
+  }
+  return { state: 'connecting', code: null, detail: null, lastHeartbeat: marker ? marker.lastHeartbeat : null }
 }
 
 const PROVIDERS = ['claude', 'chatgpt', 'ollama']
+
+// ROUTER_WIRED (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 3): only the
+// 'claude' provider (BYOK Anthropic key forwarded directly to the claude
+// CLI) actually spawns today -- see main.cjs's spawnRealAgentChild()
+// non-claude branch, which fails loud with code 'provider_not_wired'.
+// 'chatgpt'/'ollama' are listed in PROVIDERS (so BYOK-key validation and
+// storage against their own live APIs still works, e.g. for a future
+// router to consume) but have no local Anthropic-inbound router yet. This
+// single flag is the one place that fact lives; flip it to true once the
+// router exists. Two consumers:
+//   1. Exposed read-only via GET /api/config (see the routerWired field
+//      added to that handler below) so a future UI can gray out/disable
+//      non-claude provider tabs instead of letting the user hit the dead
+//      end at spawn time.
+//   2. SERVER-SIDE ENFORCEMENT (the important half, security-relevant, not
+//      just UX polish) -- rejectIfRouterNotWired() below, called from every
+//      endpoint that accepts a provider choice, so a crafted request (or a
+//      future settings-page provider switch) can't select a non-wired
+//      provider regardless of what the client-side UI shows/hides.
+const ROUTER_WIRED = false
+
+// Shared 4xx guard for every endpoint that accepts a `provider` field
+// (PIECE 3). Returns true (and has already sent the response) if the
+// request was rejected; callers must `return` immediately when this
+// returns true. Provider name validity (PROVIDERS.includes(provider)) is a
+// SEPARATE, earlier check at each call site -- this only gates the
+// router-capability question, not whether the string is a recognized
+// provider at all.
+function rejectIfRouterNotWired(res, provider) {
+  if (ROUTER_WIRED || provider === 'claude') return false
+  sendJson(res, 400, {
+    error: `provider "${provider}" is not wired yet -- only "claude" can be selected until the local router ships.`,
+    code: 'provider_not_wired',
+  })
+  return true
+}
 
 function log(...args) {
   console.log(`[scheherazade/onboarding]`, new Date().toISOString(), ...args)
@@ -795,7 +872,14 @@ function serveStatic(req, res, urlPath) {
 // ── route dispatch ────────────────────────────────────────────────────────
 async function handleApi(req, res, pathname, onOnboardingComplete) {
   if (pathname === '/api/config' && req.method === 'GET') {
-    sendJson(res, 200, readAgentConfig())
+    // routerWired (PIECE 3, consumer 1): a static capability flag, not
+    // proc-state, so it rides along with the rest of the config bag every
+    // page here already fetches (see wizard.js/settings.js/memory.js/
+    // waiting.js's own `api('/api/config')` calls) rather than needing a
+    // new route. camelCase key deliberately, to stay visually distinct from
+    // readAgentConfig()'s UPPER_SNAKE_CASE on-disk fields -- this one isn't
+    // a stored config value, it's a build-time constant.
+    sendJson(res, 200, { ...readAgentConfig(), routerWired: ROUTER_WIRED })
     return
   }
 
@@ -805,6 +889,12 @@ async function handleApi(req, res, pathname, onOnboardingComplete) {
       sendJson(res, 400, { error: `unknown provider: ${provider}` })
       return
     }
+    // PIECE 3 enforcement: reject BEFORE ever validating/storing a key for
+    // a non-wired provider -- this is the earliest point a provider choice
+    // becomes persisted (storeProviderKeyVerified below), so gating here
+    // closes the backdoor at its source rather than only at
+    // onboarding-complete.
+    if (rejectIfRouterNotWired(res, provider)) return
     const result = await validateProviderKey(provider, key)
     if (!result.ok) {
       sendJson(res, 200, result)
@@ -826,6 +916,15 @@ async function handleApi(req, res, pathname, onOnboardingComplete) {
       sendJson(res, 400, { error: `unknown provider: ${provider}` })
       return
     }
+    // PIECE 3 enforcement, defense-in-depth: /api/byok/validate above
+    // already refuses to validate/store a key for a non-wired provider, so
+    // this should be unreachable via the normal wizard flow -- but
+    // onboarding-complete is a separate crafted-request surface (a client
+    // could, in principle, POST here directly with a provider it never
+    // actually validated a key for, though the credential check right below
+    // would already catch that case too). Belt-and-suspenders: check
+    // ROUTER_WIRED here as well so this endpoint alone is never the gap.
+    if (rejectIfRouterNotWired(res, provider)) return
     // Onboarding-complete gate (security review, 2026-07-03): completing
     // setup used to accept ANY provider string with no check that its key
     // was ever actually validated. readProviderKey(provider) can only
@@ -1111,4 +1210,11 @@ module.exports = {
   readLivenessMarker,
   computeAgentStatus,
   isPidAlive,
+  // Exported for testability/tuning visibility (Step 5 onboarding-wiring
+  // fix, 2026-07-03, PIECE 2 + PIECE 3) -- same rationale as the Fix D
+  // exports above: plain values/consts, no Electron dependency, safe for a
+  // test harness (or a future settings-page capability check) to read
+  // directly.
+  TIMEOUT_MS,
+  ROUTER_WIRED,
 }

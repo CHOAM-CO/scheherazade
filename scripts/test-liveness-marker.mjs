@@ -110,6 +110,11 @@ const failParsed = JSON.parse(fs.readFileSync(FAILURE_MARKER_PATH, 'utf8'))
 assert(failParsed.status === 'failed', 'failure marker.status === "failed"')
 assert(failParsed.reason === 'smoke-test synthetic failure reason', 'failure marker.reason carries the given reason')
 assert(typeof failParsed.since === 'string' && !Number.isNaN(Date.parse(failParsed.since)), 'failure marker.since is a valid timestamp')
+// ── 3b. cause-code field (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 1) ─
+assert(failParsed.code === 'unknown', 'failure marker.code defaults to "unknown" when writeFailureMarker() is called with no explicit code')
+await writeFailureMarker('smoke-test synthetic failure reason, explicit code', 'discord_token_bad')
+const failParsedExplicitCode = JSON.parse(fs.readFileSync(FAILURE_MARKER_PATH, 'utf8'))
+assert(failParsedExplicitCode.code === 'discord_token_bad', 'failure marker.code carries an explicitly-passed code ("discord_token_bad")')
 
 // ── 4. real subprocess: missing DISCORD_BOT_TOKEN writes a failure marker ──
 // (hardening E2 exact scenario) -- this needs a real child process since
@@ -130,6 +135,8 @@ assert(typeof failParsed.since === 'string' && !Number.isNaN(Date.parse(failPars
     const subFailParsed = JSON.parse(fs.readFileSync(subFailPath, 'utf8'))
     assert(subFailParsed.status === 'failed', 'subprocess failure marker.status === "failed"')
     assert(/DISCORD_BOT_TOKEN/.test(subFailParsed.reason || ''), 'subprocess failure marker.reason names DISCORD_BOT_TOKEN')
+    // PIECE 1: the missing-token guard passes 'discord_token_bad' explicitly.
+    assert(subFailParsed.code === 'discord_token_bad', `subprocess failure marker.code === "discord_token_bad" (got ${subFailParsed.code})`)
   }
   fs.rmSync(subTmpDir, { recursive: true, force: true })
 }
