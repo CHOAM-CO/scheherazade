@@ -57,6 +57,7 @@ export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE="${AUTOCOMPACT_PCT:-80}"
 PIDFILE="$MEM/.agent.pid"
 LOGFILE="$MEM/logs/agent.log"
 STOPFLAG="$MEM/.stop_requested"
+FAILFILE="$MEM/.agent-failed.json"
 PKILL_PATTERN="${CLAUDE_BIN} --model ${MODEL} --name ${AGENT_NAME}"
 
 # Session timeout: forces the expect-wrapped claude process to exit after
@@ -86,6 +87,46 @@ require_claude() {
 
 is_alive() {
   [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null
+}
+
+# Critical B (agent-lifecycle model-divergent review, 2026-07-03): a bad/
+# revoked provider key or bot token makes claude/the MCP handshake fail
+# near-instantly every time, so run_loop() below restarts it forever with
+# no on-disk signal -- main.cjs's onboarding UI stays on "connecting"
+# indefinitely. write_failure() is called once RESTART_COUNT crosses a
+# quick-fail-streak threshold (see run_loop()); clear_failure() is called
+# when a run finally survives, or at a fresh loop start, so a since-fixed
+# problem doesn't leave a stale failure marker behind forever. Shares its
+# path/JSON shape with channel.mjs's own writeFailureMarker() (a Discord
+# login failure can also write this same file) so main.cjs's poller only
+# has to watch one path regardless of which layer caught the problem.
+# Atomic write (temp file + mv) so main.cjs's poller never reads a
+# half-written file.
+write_failure() {
+  local reason="$1"
+  # JSON-escape: backslash and quote first (order matters -- backslash
+  # must go first or the backslashes just-inserted for quote-escaping would
+  # themselves get re-escaped), then control characters bash's ${//} can
+  # produce standalone patterns for. Only RESTART_COUNT/UPTIME/EXIT_CODE
+  # (bash-arithmetic integers) reach this today (see the one call site
+  # below), so newline/tab can't actually occur yet -- hardened anyway
+  # (code-review pass, 2026-07-03) since this is a general-purpose helper
+  # and a future caller passing free text would otherwise emit invalid
+  # JSON that main.cjs's JSON.parse (pollFailureMarker()) would throw on.
+  local escaped="${reason//\\/\\\\}"
+  escaped="${escaped//\"/\\\"}"
+  escaped="${escaped//$'\n'/\\n}"
+  escaped="${escaped//$'\r'/\\r}"
+  escaped="${escaped//$'\t'/\\t}"
+  local tmp
+  tmp="$(mktemp "${FAILFILE}.XXXXXX" 2>/dev/null || echo "${FAILFILE}.tmp$$")"
+  printf '{\n  "status": "failed",\n  "reason": "%s",\n  "since": "%s"\n}\n' \
+    "$escaped" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp"
+  mv -f "$tmp" "$FAILFILE"
+}
+
+clear_failure() {
+  rm -f "$FAILFILE"
 }
 
 run_expect() {
@@ -162,6 +203,10 @@ EXPECT_EOF
 
   RESTART_COUNT=0
   LAST_KST_DATE="$(TZ=Asia/Seoul date +%Y-%m-%d)"
+  # Fresh loop start (this bash process's own lifetime) -- don't carry a
+  # failure marker over from a previous life of the supervisor (e.g. the
+  # user fixed a bad key and relaunched the app).
+  clear_failure
 
   while true; do
     if [ -f "$STOPFLAG" ]; then
@@ -194,6 +239,7 @@ EXPECT_EOF
     UPTIME=$(( $(date +%s) - STARTED ))
     if [ "$UPTIME" -gt 300 ]; then
       RESTART_COUNT=0
+      clear_failure
     else
       RESTART_COUNT=$((RESTART_COUNT + 1))
     fi
@@ -205,6 +251,15 @@ EXPECT_EOF
       4)   BACKOFF=40 ;;
       *)   BACKOFF=120 ;;
     esac
+
+    # Critical B: quick-fail streak (3+ restarts that each died inside the
+    # 300s uptime window above) -- surface as a failure marker instead of
+    # silently retrying forever. Re-written each time it re-triggers so the
+    # "since"/reason stay current; main.cjs's poller is mtime-gated so this
+    # doesn't spam repeated setAgentStatus calls.
+    if [ "$RESTART_COUNT" -ge 3 ]; then
+      write_failure "agent restarted ${RESTART_COUNT} times quickly (last uptime ${UPTIME}s, exit code ${EXIT_CODE}) -- likely a bad/revoked provider key or bot token, or an auth hang. Check the BYOK key and Discord bot token in Settings."
+    fi
 
     log "exited (code ${EXIT_CODE}, uptime ${UPTIME}s, restart #${RESTART_COUNT}), retrying in ${BACKOFF}s"
     sleep "$BACKOFF"
@@ -218,6 +273,7 @@ start_agent() {
     exit 0
   fi
   rm -f "$STOPFLAG"
+  clear_failure
   mkdir -p "$MEM/logs"
   nohup "$SCRIPT_DIR/run.sh" __loop >> "$LOGFILE" 2>&1 &
   echo $! > "$PIDFILE"

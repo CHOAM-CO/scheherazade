@@ -1,30 +1,37 @@
 #!/usr/bin/env node
-// test-liveness-marker.mjs — exercises channel.mjs's writeLivenessMarker()
-// path (agent-lifecycle fix, 2026-07-03, PART 4) against a temp cwd.
+// test-liveness-marker.mjs — exercises channel.mjs's writeLivenessMarker()/
+// writeFailureMarker() paths (agent-lifecycle fix, 2026-07-03, PART 4 +
+// 2026-07-03 model-divergent-review follow-up) against a temp DATA_HOME.
 // Run: node scripts/test-liveness-marker.mjs
 //
 // SCOPE: this only proves the marker-WRITE path (the half channel.mjs owns)
-// -- content/shape written to DATA_HOME/.agent-live on ClientReady, callable
-// repeatedly as a heartbeat. It does NOT exercise a real Discord connection
-// (needs live gateway creds, out of scope here) or http-server.cjs's READ
-// side (computeAgentStatus()/isMarkerFresh() there don't need Electron to
-// run and could get their own unit test the same way this one does, but
-// that's not this task's scope). Also does not start a real MCP stdio
-// session or Discord login -- see channel.mjs's own isMainModule guard,
-// which this test relies on to import the file safely.
+// -- content/shape written to DATA_HOME/.agent-live on ClientReady (and as a
+// heartbeat), and DATA_HOME/.agent-failed.json on a missing-token FATAL exit
+// (Critical B / hardening E2). It does NOT exercise a real Discord
+// connection (needs live gateway creds, out of scope here) or
+// http-server.cjs's READ side (computeAgentStatus()/isMarkerFresh()/
+// isPidAlive() there don't need Electron to run and could get their own
+// unit test the same way this one does, but that's not this task's scope).
 //
 // IMPORTANT (mirrors memory/smoke.mjs's own convention): channel.mjs reads
 // DISCORD_BOT_TOKEN/HOME_CHANNEL_ID from process.env at module scope and
-// FATAL-exits if either is missing, and computes LIVENESS_MARKER_PATH from
-// process.cwd() at module scope -- both env vars and the cwd MUST be set
-// BEFORE importing channel.mjs.
+// FATAL-exits if either is missing, and resolves DATA_HOME from
+// AGENT_DATA_HOME (falling back to ~/Documents/Scheherazade if unset --
+// hardening E1, no more process.cwd() trust) -- env vars MUST be set BEFORE
+// importing channel.mjs. AGENT_DATA_HOME in particular MUST be set in this
+// test (to a throwaway temp dir), or a run of this test would silently
+// write real marker files into the user's actual
+// ~/Documents/Scheherazade -- confirmed happened once during this fix's own
+// verification pass before this env var was added below; cleaned up, not a
+// product bug, but real enough to guard against here permanently.
 
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scheherazade-liveness-smoke-'))
-process.chdir(tmpDir)
+process.env.AGENT_DATA_HOME = tmpDir
 process.env.DISCORD_BOT_TOKEN = 'test-token-not-real'
 process.env.HOME_CHANNEL_ID = '123456789012345678'
 process.env.AGENT_NAME = 'smoketest'
@@ -33,7 +40,9 @@ process.env.AGENT_NAME = 'smoketest'
 // it does not attempt mcp.connect()/discord.login() on import.
 
 const channelModulePath = path.join(import.meta.dirname, '..', 'channel.mjs')
-const { writeLivenessMarker, LIVENESS_MARKER_PATH } = await import(channelModulePath)
+const { writeLivenessMarker, LIVENESS_MARKER_PATH, writeFailureMarker, FAILURE_MARKER_PATH, DATA_HOME } = await import(
+  channelModulePath
+)
 
 let pass = 0
 let fail = 0
@@ -47,16 +56,17 @@ function assert(cond, label) {
   }
 }
 
-console.log(`temp cwd: ${tmpDir}`)
+console.log(`temp AGENT_DATA_HOME: ${tmpDir}`)
+console.log(`DATA_HOME resolved by channel.mjs: ${DATA_HOME}`)
 console.log(`LIVENESS_MARKER_PATH resolved by channel.mjs: ${LIVENESS_MARKER_PATH}`)
 // realpathSync on both sides: macOS resolves os.tmpdir()'s /tmp through its
-// /private/tmp symlink by the time channel.mjs's process.cwd() reads it
-// back, so a raw string comparison against the pre-chdir tmpDir would
-// false-fail on a path-resolution quirk that has nothing to do with the
-// code under test.
+// /private/tmp symlink, so a raw string comparison against the pre-resolve
+// tmpDir would false-fail on a path-resolution quirk that has nothing to do
+// with the code under test.
+assert(fs.realpathSync(DATA_HOME) === fs.realpathSync(tmpDir), 'DATA_HOME resolved from AGENT_DATA_HOME env var (hardening E1, not process.cwd())')
 assert(
   fs.realpathSync(path.dirname(LIVENESS_MARKER_PATH)) === fs.realpathSync(tmpDir),
-  'LIVENESS_MARKER_PATH computed from process.cwd() at import time'
+  'LIVENESS_MARKER_PATH computed from DATA_HOME (== AGENT_DATA_HOME here)'
 )
 assert(!fs.existsSync(LIVENESS_MARKER_PATH), 'marker does not exist before first write')
 
@@ -91,6 +101,38 @@ assert(
   Date.parse(secondParsed.lastHeartbeat) > Date.parse(firstParsed.lastHeartbeat),
   'heartbeat refresh advances lastHeartbeat (second write > first write)'
 )
+
+// ── 3. failure marker write (Critical B / hardening E2) ─────────────────
+assert(!fs.existsSync(FAILURE_MARKER_PATH), 'failure marker does not exist before first write')
+await writeFailureMarker('smoke-test synthetic failure reason')
+assert(fs.existsSync(FAILURE_MARKER_PATH), 'failure marker file created by writeFailureMarker()')
+const failParsed = JSON.parse(fs.readFileSync(FAILURE_MARKER_PATH, 'utf8'))
+assert(failParsed.status === 'failed', 'failure marker.status === "failed"')
+assert(failParsed.reason === 'smoke-test synthetic failure reason', 'failure marker.reason carries the given reason')
+assert(typeof failParsed.since === 'string' && !Number.isNaN(Date.parse(failParsed.since)), 'failure marker.since is a valid timestamp')
+
+// ── 4. real subprocess: missing DISCORD_BOT_TOKEN writes a failure marker ──
+// (hardening E2 exact scenario) -- this needs a real child process since
+// channel.mjs's module-scope guard calls process.exit(1), which we can't
+// safely provoke inside THIS process.
+{
+  const subTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scheherazade-liveness-smoke-notoken-'))
+  const result = spawnSync(process.execPath, [channelModulePath], {
+    env: { ...process.env, AGENT_DATA_HOME: subTmpDir, DISCORD_BOT_TOKEN: '', HOME_CHANNEL_ID: '123456789012345678', AGENT_NAME: 'smoketest2' },
+    encoding: 'utf8',
+    timeout: 10_000,
+  })
+  assert(result.status === 1, `missing-DISCORD_BOT_TOKEN subprocess exits 1 (got ${result.status}, stderr: ${result.stderr?.slice(0, 300)})`)
+  assert(/DISCORD_BOT_TOKEN not set/.test(result.stderr || ''), 'subprocess stderr names DISCORD_BOT_TOKEN as the FATAL cause')
+  const subFailPath = path.join(subTmpDir, '.agent-failed.json')
+  assert(fs.existsSync(subFailPath), `subprocess wrote a failure marker at ${subFailPath} instead of just exiting silently`)
+  if (fs.existsSync(subFailPath)) {
+    const subFailParsed = JSON.parse(fs.readFileSync(subFailPath, 'utf8'))
+    assert(subFailParsed.status === 'failed', 'subprocess failure marker.status === "failed"')
+    assert(/DISCORD_BOT_TOKEN/.test(subFailParsed.reason || ''), 'subprocess failure marker.reason names DISCORD_BOT_TOKEN')
+  }
+  fs.rmSync(subTmpDir, { recursive: true, force: true })
+}
 
 // ── cleanup ──────────────────────────────────────────────────────────────
 fs.rmSync(tmpDir, { recursive: true, force: true })
