@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "agent-channel": {
+      "command": "node",
+      "args": ["./channel.mjs"],
+      "cwd": "/Users/narr/Desktop/scheherazade",
+      "env": {
+        "AGENT_NAME": "companion"
+      }
+    }
+  }
+}
