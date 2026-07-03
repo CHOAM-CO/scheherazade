@@ -104,30 +104,30 @@ function createMainWindow(url) {
 // done). This spawns the actual long-lived `claude` CLI agent, per the
 // wiring notes that used to live at the bottom of this file.
 //
-// BLOCKER (2026-07-03, packaging-bugfix task -- see resolveClaudeBin()
-// just below): the `claude` CLI is NOT bundled anywhere in this fork.
-// Confirmed by direct inspection: no `@anthropic-ai/claude-code` entry in
-// package.json dependencies, no such package under node_modules/, no
-// vendored binary anywhere in the repo tree (`find . -iname '*claude*'`
-// under the repo root turns up nothing but this file's own comments and
-// CLAUDE.md). It exists ONLY as whatever the user's machine separately
-// installed globally (setup.sh's `npm install -g @anthropic-ai/claude-code`
-// path, or the native installer -- both land a real platform binary
-// OUTSIDE this repo, e.g. this dev machine's ~/.local/bin/claude, a Mach-O
-// executable). That means: on a clean end-user Mac with nothing installed
-// beyond the Scheherazade.app itself, resolveClaudeBin() below returns
-// null and the real agent CANNOT be spawned -- not a bug in this file, a
-// missing product decision (bundle @anthropic-ai/claude-code via
-// extraResources/asarUnpack -- real network fetch of a native binary per
-// platform at npm-install time, real weight added to the .app -- vs.
-// require users to have `claude` pre-installed). Per instruction, this file
-// does NOT fabricate a fake bundled path to paper over that; it fails loud
-// and skips the spawn (app + onboarding UI stay usable either way) with a
-// clear actionable log line pointing at this comment.
+// RESOLVED (2026-07-03, bundle-claude-cli task -- BLOCKER above from the
+// packaging-bugfix task is closed): `@anthropic-ai/claude-code` is now a
+// real `dependencies` entry in package.json (Mino pre-approved: redistribution
+// terms waived, arm64-only, "max UX so the user never installs anything
+// separately"). Its postinstall (see node_modules/@anthropic-ai/claude-code/
+// install.cjs) detects the platform and hardlinks/copies the matching
+// platform package's (`@anthropic-ai/claude-code-darwin-arm64`) native Mach-O
+// binary over the `bin/claude.exe` placeholder -- after `npm install`,
+// node_modules/@anthropic-ai/claude-code/bin/claude.exe IS the real
+// standalone arm64 executable (confirmed: `file` reports Mach-O 64-bit
+// arm64, runs `--version` with no system node on PATH). electron-builder's
+// `build.extraResources` copies that one file to
+// Contents/Resources/claude-cli/claude at build time (package.json's
+// `build.files` excludes `node_modules/@anthropic-ai/claude-code*/**` from
+// the asar so the ~220MB binary isn't duplicated into app.asar on top of
+// the extraResources copy). resolveClaudeBin() below finds it at exactly
+// that path in a packaged app -- no ELECTRON_RUN_AS_NODE wiring needed here
+// (unlike the MCP server children) since this is a standalone native binary,
+// not a node script.
 function resolveClaudeBin() {
   if (app.isPackaged) {
-    // Where a real bundled copy would land (electron-builder extraResources
-    // target `claude-cli`) -- always absent today, see BLOCKER above.
+    // electron-builder extraResources target -- see package.json's
+    // build.extraResources (`claude-cli/claude`) and the RESOLVED comment
+    // above for how this gets populated at build time.
     const bundled = path.join(process.resourcesPath, 'claude-cli', 'claude')
     if (fs.existsSync(bundled)) {
       try {
@@ -169,10 +169,12 @@ function spawnRealAgentChild() {
   const resolved = resolveClaudeBin()
   if (!resolved) {
     console.error(
-      '[scheherazade/main] BLOCKER: claude CLI not found -- not bundled in this build ' +
-        '(no extraResources/claude-cli, no @anthropic-ai/claude-code dependency) and not on ' +
-        'system PATH. The real agent cannot be spawned. See the resolveClaudeBin() comment ' +
-        'above for the bundling decision this needs. Onboarding UI stays usable.'
+      '[scheherazade/main] BLOCKER: claude CLI not found -- expected the bundled binary at ' +
+        'Resources/claude-cli/claude (electron-builder extraResources, see resolveClaudeBin() ' +
+        'above) to be present and executable, and it is not; system PATH has no `claude` ' +
+        'either. The real agent cannot be spawned. If this fires in a packaged build, the ' +
+        'extraResources copy is missing/corrupt/non-executable -- check the build output. ' +
+        'Onboarding UI stays usable.'
     )
     return null
   }
@@ -276,9 +278,9 @@ process.on('unhandledRejection', (reason) => {
 })
 
 // ── P1 wiring points (where the real pieces plug in) ────────────────────
-// 1. Real `claude` CLI agent child -- DONE this revision, MODULO an open
-//    blocker (see resolveClaudeBin()'s comment above for the full
-//    writeup):
+// 1. Real `claude` CLI agent child -- DONE this revision, including the
+//    bundling blocker from the prior packaging-bugfix task (see
+//    resolveClaudeBin()'s RESOLVED comment above for the full writeup):
 //    - run.sh is DEAD (Mino directive, 2026-07-03) -- its CLI/bash restart
 //      loop is not shelled out to. spawnRealAgentChild() above spawns
 //      `claude` directly. Its exponential-backoff/restart ladder (KST-aware
@@ -290,14 +292,15 @@ process.on('unhandledRejection', (reason) => {
 //      child's own `env: {...}`, alongside readHomeChannelId(). Never
 //      written back to any on-disk config. See spawnRealAgentChild()'s own
 //      comment.
-//    - BLOCKER: the `claude` CLI itself is not bundled in this fork (no
-//      @anthropic-ai/claude-code dependency, no vendored binary --
-//      confirmed by direct inspection). resolveClaudeBin() only finds it
-//      via a future extraResources path (not populated) or the system
-//      PATH (works today only because this dev machine has a global
-//      install; NOT guaranteed on a clean end-user Mac). This is a
-//      packaging decision for the product owner, not something this file
-//      can resolve on its own -- see the packaging-bugfix task report.
+//    - RESOLVED (bundle-claude-cli task, 2026-07-03): `@anthropic-ai/claude-code`
+//      is now a package.json dependency; its postinstall places the real
+//      standalone arm64 Mach-O binary at
+//      node_modules/@anthropic-ai/claude-code/bin/claude.exe, and
+//      electron-builder's build.extraResources copies that file to
+//      Contents/Resources/claude-cli/claude -- exactly the path
+//      resolveClaudeBin() looks for in a packaged app. Verified: DMG builds,
+//      binary is present+executable inside the built .app, and runs
+//      `--version` from that bundled path with no system claude/node needed.
 //
 // 2. Provider proxy child:
 //    - No such process exists yet anywhere in this fork. P1 needs to spawn
