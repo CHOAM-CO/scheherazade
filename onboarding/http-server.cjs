@@ -4,9 +4,13 @@
 // nodeIntegration) and talks to this server purely over same-origin fetch().
 //
 // FAIL LOUD: every handler is wrapped so a thrown error becomes a real 4xx/5xx
-// with the actual error message in the body -- never a silently swallowed
-// catch. This matches memory/server.mjs's own convention (see its
-// CallToolRequestSchema handler).
+// status -- never a silently swallowed catch. The response BODY, however,
+// never carries the raw error message to the client (see respondError below)
+// -- only the server-side log does. This matches memory/server.mjs's own
+// convention (see its CallToolRequestSchema handler) for the "never
+// swallow" half; the "never leak detail onto the wire" half is new
+// (model-divergent/GPT security review, confirmed by direct code read,
+// 2026-07-03).
 //
 // AGENT_NAME is a fixed internal identifier ("scheherazade"), independent of
 // the user-facing display name collected in the wizard (Step 2, Korean by
@@ -14,14 +18,13 @@
 //   1. setup.sh's AGENT_NAME feeds directly into filesystem paths
 //      ($HOME/Documents/$AGENT_NAME) and a shell PKILL_PATTERN in run.sh --
 //      arbitrary user text (Korean, spaces, shell metacharacters) is not
-//      safe there.
-//   2. memory/server.mjs resolves its DB path from process.env.AGENT_NAME at
-//      *module import time* (server.mjs:62-63) with its own default of
-//      'scheherazade' -- matching that default keeps the wizard's writes and
-//      the live agent's future memory MCP server pointed at the same
-//      ~/Documents/scheherazade/memory.db.
+//      safe there. (That's setup.sh's own CLI-launcher deployment path --
+//      separate from this file's DATA_HOME, see below.)
+//   2. memory/server.mjs used to resolve its DB path from AGENT_NAME at
+//      *module import time* -- see DATA_HOME below for why neither this
+//      file nor memory/server.mjs does that anymore.
 // See writeAgentConfig() below for where DISPLAY_NAME (persona-facing) is
-// stored alongside AGENT_NAME (filesystem/db-facing).
+// stored alongside AGENT_NAME (internal identifier).
 
 'use strict'
 
@@ -29,20 +32,123 @@ const http = require('node:http')
 const fs = require('node:fs')
 const path = require('node:path')
 const os = require('node:os')
+const crypto = require('node:crypto')
 const { pathToFileURL } = require('node:url')
 
 const REPO_ROOT = path.join(__dirname, '..')
 const PUBLIC_DIR = path.join(__dirname, 'public')
+const PUBLIC_DIR_RESOLVED = path.resolve(PUBLIC_DIR)
 
 const AGENT_NAME = 'scheherazade'
-const MEM_HOME = path.join(os.homedir(), 'Documents', AGENT_NAME)
-const CREDENTIALS_DIR = path.join(MEM_HOME, '.credentials')
-const AGENT_CONFIG_PATH = path.join(REPO_ROOT, '.agent-config')
-const ENV_PATH = path.join(REPO_ROOT, '.env')
-const MCP_JSON_PATH = path.join(REPO_ROOT, '.mcp.json')
+
+// ── DATA_HOME: fixed, product-keyed data directory ──────────────────────
+// PO correction (2026-07-03), overriding this file's earlier draft: DATA_HOME
+// must NOT be keyed on AGENT_NAME, and definitely not on DISPLAY_NAME.
+// DISPLAY_NAME is user-renameable from the Settings page (see
+// /api/settings/rename below) -- if the on-disk data path were keyed on it,
+// a rename would orphan memory.db (silent total memory loss, the exact
+// opposite of this product's "remembers you" promise). AGENT_NAME today
+// happens to be a fixed internal literal too, but DATA_HOME is pinned
+// independently to the literal product name so it stays stable even if
+// AGENT_NAME itself ever changes (e.g. this codebase gets forked again for
+// another agent). A rename in Settings only ever edits the DISPLAY_NAME
+// *value* inside .agent-config -- it NEVER moves, renames, or otherwise
+// touches DATA_HOME. v1 has no live users, so no migration path is needed.
+//
+// memory/server.mjs's DB_PATH resolves from this exact same fixed
+// directory now (not AGENT_NAME) -- see its own top-of-file comment. Its
+// SCHEHERAZADE_MEMORY_DB env override (used by memory/smoke.mjs) still
+// works unchanged.
+const DATA_HOME = path.join(os.homedir(), 'Documents', 'Scheherazade')
+
+// CONFIG_DIR: where every *writable* runtime config file lives -- the same
+// directory as DATA_HOME/memory.db, kept as a separate name below purely
+// for readability at each call site (config vs. credentials vs. db).
+// Packaged builds ship REPO_ROOT inside app.asar, which is READ-ONLY at
+// runtime -- writing .agent-config/.env/.mcp.json there (the old behavior)
+// was boot-fatal the moment this app was ever actually packaged, since
+// ensureMcpJsonAgentName() below writes .mcp.json unconditionally on every
+// boot. CONFIG_DIR is always a real, writable, unpackaged directory on the
+// user's own disk.
+const CONFIG_DIR = DATA_HOME
+const CREDENTIALS_DIR = path.join(CONFIG_DIR, '.credentials')
+
+// Read-only TEMPLATES checked into the repo (and therefore inside app.asar
+// once packaged -- see package.json's build.files, which now explicitly
+// includes .mcp.json for exactly this reason). Seeded into CONFIG_DIR on
+// first run only, by seedConfigFromTemplates() below; every write after
+// that targets CONFIG_DIR exclusively, and these template paths are never
+// written to. .env and .agent-config have no checked-in template today
+// (both are gitignored, deliberately -- shipping a real .env would leak
+// whatever secrets the person who ran `npm run dist` happened to have on
+// their own machine into every distributed build). Their seed step below
+// is a safe no-op until/unless that changes; first real content comes from
+// the wizard itself (writeAgentConfig / writeEnv).
+const TEMPLATE_MCP_JSON_PATH = path.join(REPO_ROOT, '.mcp.json')
+const TEMPLATE_ENV_PATH = path.join(REPO_ROOT, '.env')
+const TEMPLATE_AGENT_CONFIG_PATH = path.join(REPO_ROOT, '.agent-config')
+
+const AGENT_CONFIG_PATH = path.join(CONFIG_DIR, '.agent-config')
+const ENV_PATH = path.join(CONFIG_DIR, '.env')
+const MCP_JSON_PATH = path.join(CONFIG_DIR, '.mcp.json')
+
+const PROVIDERS = ['claude', 'chatgpt', 'ollama']
 
 function log(...args) {
   console.log(`[scheherazade/onboarding]`, new Date().toISOString(), ...args)
+}
+
+// ── per-launch localhost-auth secret ─────────────────────────────────────
+// Generated fresh every time this module is loaded (= every server boot).
+// Required as the `X-Onboard-Token` header on every mutating (POST/DELETE)
+// /api/ route; injected into every served HTML page as a <meta> tag so
+// client-side JS can read it back and attach it to its own fetch() calls
+// (see public/js/copy.js's getOnboardToken() + each page's api() helper).
+// Paired with the Host/Origin checks in createOnboardingServer() below --
+// together these close the "no auth of any kind on a mutating localhost
+// server" gap (security review, 2026-07-03): before this, any other local
+// process, or a DNS-rebinding page in a browser tab, could POST directly
+// to this server's ephemeral port and, e.g., overwrite .agent-config,
+// trigger a Discord bot-token validation, or delete memory rows.
+const SERVER_TOKEN = crypto.randomBytes(32).toString('hex')
+
+function safeTokenEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false
+  const bufA = Buffer.from(a)
+  const bufB = Buffer.from(b)
+  if (bufA.length !== bufB.length) return false
+  return crypto.timingSafeEqual(bufA, bufB)
+}
+
+function safeOriginHost(origin) {
+  try {
+    return new URL(origin).host
+  } catch (err) {
+    log(`malformed Origin header "${origin}": ${err.message}`)
+    return null
+  }
+}
+
+function ensureConfigDir() {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true })
+}
+
+// Seeds a writable CONFIG_DIR file from its checked-in (read-only, asar-
+// safe) template the first time this app ever runs on a machine. No-op if
+// the target already exists (never clobbers a user's live config) or if
+// there is no template to seed from (see TEMPLATE_* comment above).
+function seedConfigFromTemplate(templatePath, targetPath) {
+  if (fs.existsSync(targetPath)) return
+  if (!fs.existsSync(templatePath)) return
+  ensureConfigDir()
+  fs.copyFileSync(templatePath, targetPath)
+  log(`seeded ${path.basename(targetPath)} into CONFIG_DIR from bundled template`)
+}
+
+function seedConfigFromTemplates() {
+  seedConfigFromTemplate(TEMPLATE_MCP_JSON_PATH, MCP_JSON_PATH)
+  seedConfigFromTemplate(TEMPLATE_ENV_PATH, ENV_PATH)
+  seedConfigFromTemplate(TEMPLATE_AGENT_CONFIG_PATH, AGENT_CONFIG_PATH)
 }
 
 // ── fail-loud JSON helpers ──────────────────────────────────────────────
@@ -115,13 +221,14 @@ function readAgentConfig() {
 }
 
 function writeAgentConfig(fields) {
+  ensureConfigDir()
   const merged = { ...readAgentConfig(), ...fields }
   const lines = Object.entries(merged).map(([k, v]) => `${k}=${shellQuote(v)}`)
   fs.writeFileSync(AGENT_CONFIG_PATH, lines.join('\n') + '\n')
   return merged
 }
 
-// ── .mcp.json AGENT_NAME correction ──────────────────────────────────────
+// ── .mcp.json AGENT_NAME + cwd correction ────────────────────────────────
 // The checked-in .mcp.json (both the "agent-channel" and "memory" MCP
 // server entries) still carries AGENT_NAME=companion, a leftover from the
 // agent-portable fork. memory/server.mjs resolves its DB path from
@@ -131,7 +238,18 @@ function writeAgentConfig(fields) {
 // run.sh) would read a *different* database and never see what the wizard
 // wrote. This is a silent-failure class bug, not cosmetic -- fix it here as
 // part of "config write", not a separate unrelated edit.
+//
+// `cwd` gets the same treatment for the same reason, added 2026-07-03 while
+// wiring the CONFIG_DIR template-seeding fix above: the checked-in
+// .mcp.json's cwd is whatever absolute path the machine that last ran
+// setup.sh (or this function) happened to have this repo checked out at.
+// Once that file is seeded as a bundled TEMPLATE onto a *different* user's
+// machine (the new first-run behavior this revision adds -- see
+// seedConfigFromTemplates()), that stale cwd points at a directory that
+// doesn't exist on their disk at all. Same class of drift as the
+// AGENT_NAME bug, same fix shape: correct it on every boot, not just once.
 function ensureMcpJsonAgentName() {
+  ensureConfigDir()
   let existing = null
   if (fs.existsSync(MCP_JSON_PATH)) {
     try {
@@ -150,9 +268,13 @@ function ensureMcpJsonAgentName() {
   // despite this function running (silently, no error) on every boot.
   const currentText = existing ? JSON.stringify(existing, null, 2) + '\n' : null
   const servers = existing && existing.mcpServers ? existing.mcpServers : {}
+  const KNOWN_SERVERS = new Set(['agent-channel', 'memory'])
   for (const name of Object.keys(servers)) {
     if (servers[name] && servers[name].env) {
       servers[name].env.AGENT_NAME = AGENT_NAME
+    }
+    if (servers[name] && KNOWN_SERVERS.has(name)) {
+      servers[name].cwd = REPO_ROOT
     }
   }
   // If either expected server entry is missing (fresh clone before any
@@ -178,17 +300,20 @@ function ensureMcpJsonAgentName() {
   const nextText = JSON.stringify(next, null, 2) + '\n'
   if (nextText !== currentText) {
     fs.writeFileSync(MCP_JSON_PATH, nextText)
-    log('.mcp.json AGENT_NAME corrected/seeded to', AGENT_NAME)
+    log('.mcp.json AGENT_NAME/cwd corrected/seeded')
   }
 }
 
-// ── .env (Discord token + home channel) ─────────────────────────────────
-// Same three fields, same unquoted KEY=VALUE format setup.sh writes
-// (setup.sh:96-100) -- not routed through safeStorage because this file is
-// already the established convention channel.mjs's dotenv/config reads at
-// boot, and changing that read path is out of scope for this wizard.
-function writeEnv({ discordToken, homeChannelId }) {
-  const lines = [`DISCORD_BOT_TOKEN=${discordToken}`, `HOME_CHANNEL_ID=${homeChannelId}`, `AGENT_NAME=${AGENT_NAME}`]
+// ── .env (home channel only) ─────────────────────────────────────────────
+// channel.mjs's dotenv/config read path is the established convention for
+// HOME_CHANNEL_ID (setup.sh:96-100 shape) -- changing that read path is out
+// of scope for this wizard. DISCORD_BOT_TOKEN used to be written here too,
+// in plaintext; as of the 2026-07-03 security review it is safeStorage-only
+// (see storeDiscordTokenVerified / readDiscordToken below) and is never
+// written to this file.
+function writeEnv({ homeChannelId }) {
+  ensureConfigDir()
+  const lines = [`HOME_CHANNEL_ID=${homeChannelId}`, `AGENT_NAME=${AGENT_NAME}`]
   fs.writeFileSync(ENV_PATH, lines.join('\n') + '\n')
 }
 
@@ -213,7 +338,13 @@ function storeProviderKey(provider, key) {
   const filePath = path.join(CREDENTIALS_DIR, `${provider}.key.enc`)
   fs.writeFileSync(filePath, encrypted)
   fs.chmodSync(filePath, 0o600)
-  const manifestPath = path.join(CREDENTIALS_DIR, 'provider.json')
+  // Per-provider manifest filename (fixed 2026-07-03): this used to be a
+  // single shared CREDENTIALS_DIR/provider.json, which meant validating a
+  // second provider -- or, now, the Discord bot token (see
+  // storeDiscordTokenVerified, which reuses this exact function) -- would
+  // silently clobber the previous provider's record. Each provider now
+  // gets its own manifest file.
+  const manifestPath = path.join(CREDENTIALS_DIR, `${provider}.meta.json`)
   fs.writeFileSync(
     manifestPath,
     JSON.stringify({ provider, keyFile: path.basename(filePath), validatedAt: new Date().toISOString() }, null, 2) + '\n'
@@ -241,6 +372,28 @@ function storeProviderKeyVerified(provider, key) {
     )
   }
   return filePath
+}
+
+// ── Discord bot token: safeStorage-backed, same mechanism as BYOK keys ──
+// Security review (2026-07-03): the bot token used to be written to .env
+// in plaintext alongside HOME_CHANNEL_ID. It now goes through the exact
+// same encrypt -> write -> read-back-verify path as provider keys above,
+// keyed as a pseudo-"provider" named 'discord-bot' so it shares
+// CREDENTIALS_DIR's layout (0o700 dir, 0o600 files, per-name manifest)
+// without inventing a second storage mechanism.
+//
+// SEAM (documented, not wired to a real child process yet -- see main.cjs's
+// P1 wiring notes, item 1: nothing in this repo spawns the `claude`
+// CLI/channel.mjs child yet, that's still open work). Whatever eventually
+// does spawn it must call readDiscordToken() at the moment of spawn and
+// inject the result directly into that child's own `env: {...}` -- it must
+// NEVER be written back out to a .env file or any other on-disk config.
+function storeDiscordTokenVerified(token) {
+  return storeProviderKeyVerified('discord-bot', token)
+}
+
+function readDiscordToken() {
+  return readProviderKey('discord-bot')
 }
 
 // ── BYOK live validation pings ───────────────────────────────────────────
@@ -462,15 +615,42 @@ const MIME = {
 
 function serveStatic(req, res, urlPath) {
   const filePath = path.join(PUBLIC_DIR, urlPath)
-  if (!filePath.startsWith(PUBLIC_DIR)) {
+  const resolved = path.resolve(filePath)
+  // Separator-aware containment check (fixed 2026-07-03, security review).
+  // The old check was `filePath.startsWith(PUBLIC_DIR)`, a raw string
+  // prefix test that (a) never resolved `..` traversal itself -- it relied
+  // entirely on path.join happening to normalize it away first -- and (b)
+  // would wrongly ALLOW a sibling directory whose name happens to start
+  // with PUBLIC_DIR's own path as a string, e.g. a request that resolves
+  // into ".../onboarding/public-evil/secret" passes a naive
+  // startsWith(".../onboarding/public") check even though it is a
+  // different directory entirely. Comparing against the fully resolved
+  // path, requiring either an exact match or a match immediately followed
+  // by path.sep, closes both holes.
+  if (resolved !== PUBLIC_DIR_RESOLVED && !resolved.startsWith(PUBLIC_DIR_RESOLVED + path.sep)) {
     res.writeHead(403, { 'Content-Type': 'text/plain' })
     res.end('forbidden')
     return true
   }
-  if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) return false
-  const ext = path.extname(filePath)
+  if (!fs.existsSync(resolved) || fs.statSync(resolved).isDirectory()) return false
+  const ext = path.extname(resolved)
+  if (ext === '.html') {
+    // Inject the per-launch onboard token as a <meta> tag so client JS can
+    // read it back and attach it to mutating fetch() calls (see
+    // public/js/copy.js's getOnboardToken()). Every page here has a
+    // literal `<head>` opening tag (verified against all 4 templates), so
+    // a plain string replace is exact and doesn't need a real HTML parser.
+    const html = fs.readFileSync(resolved, 'utf8')
+    if (!html.includes('<head>')) {
+      throw new Error(`${resolved} has no literal "<head>" tag to inject the onboard token into -- refusing to serve it without auth wiring`)
+    }
+    const injected = html.replace('<head>', `<head>\n    <meta name="onboard-token" content="${SERVER_TOKEN}">`)
+    res.writeHead(200, { 'Content-Type': MIME[ext] })
+    res.end(injected)
+    return true
+  }
   res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' })
-  fs.createReadStream(filePath).pipe(res)
+  fs.createReadStream(resolved).pipe(res)
   return true
 }
 
@@ -483,7 +663,7 @@ async function handleApi(req, res, pathname) {
 
   if (pathname === '/api/byok/validate' && req.method === 'POST') {
     const { provider, key } = await readJsonBody(req)
-    if (!['claude', 'chatgpt', 'ollama'].includes(provider)) {
+    if (!PROVIDERS.includes(provider)) {
       sendJson(res, 400, { error: `unknown provider: ${provider}` })
       return
     }
@@ -502,6 +682,29 @@ async function handleApi(req, res, pathname) {
     const { displayName, provider, tone, primaryTask, proactiveEnabled, proactiveWindowStart, proactiveWindowEnd } = body
     if (!displayName || !provider || !tone) {
       sendJson(res, 400, { error: 'displayName, provider, and tone are required' })
+      return
+    }
+    if (!PROVIDERS.includes(provider)) {
+      sendJson(res, 400, { error: `unknown provider: ${provider}` })
+      return
+    }
+    // Onboarding-complete gate (security review, 2026-07-03): completing
+    // setup used to accept ANY provider string with no check that its key
+    // was ever actually validated. readProviderKey(provider) can only
+    // return non-null if storeProviderKeyVerified() previously succeeded
+    // for this exact provider -- the only code path that ever writes
+    // CREDENTIALS_DIR/${provider}.key.enc is the /api/byok/validate
+    // success branch above -- so this single check proves BOTH "the key
+    // was validated" AND "a safeStorage credential exists" at once.
+    let credential
+    try {
+      credential = readProviderKey(provider)
+    } catch (err) {
+      console.error('[scheherazade/onboarding] readProviderKey failed during onboarding-complete gate:', err)
+      credential = null // a corrupt/unreadable Keychain entry reads as "not validated yet", not a 500
+    }
+    if (!credential) {
+      sendJson(res, 400, { error: `no validated ${provider} key on file -- validate a key in step 1 before completing setup` })
       return
     }
     ensureMcpJsonAgentName()
@@ -528,7 +731,8 @@ async function handleApi(req, res, pathname) {
       sendJson(res, 200, result)
       return
     }
-    writeEnv({ discordToken: token, homeChannelId: result.channelId })
+    storeDiscordTokenVerified(token) // safeStorage only -- never written to .env in plaintext (security review, 2026-07-03)
+    writeEnv({ homeChannelId: result.channelId })
     writeAgentConfig({ ONBOARDING_STEP: '4', ONBOARDING_COMPLETE: '1', ONBOARDING_COMPLETED_AT: new Date().toISOString() })
     sendJson(res, 200, result)
     return
@@ -602,50 +806,101 @@ const ROUTE_TO_FILE = {
 }
 
 function createOnboardingServer() {
-  ensureMcpJsonAgentName() // correctness fix applied once at boot, independent of wizard progress
+  seedConfigFromTemplates() // first-run only; no-op once CONFIG_DIR has real files
+  ensureMcpJsonAgentName() // correctness fix applied every boot, independent of wizard progress
 
   return new Promise((resolve, reject) => {
-    const server = http.createServer((req, res) => {
-      const parsedUrl = new URL(req.url, 'http://127.0.0.1')
-      const pathname = parsedUrl.pathname
+    let allowedHosts = null // populated once listen() resolves and the real ephemeral port is known
 
+    const server = http.createServer((req, res) => {
       const respondError = (err, status = 500) => {
-        console.error(`[scheherazade/onboarding] ERROR ${req.method} ${pathname}:`, err)
+        // Fail loud SERVER-SIDE (full error incl. stack logged here), but
+        // NEVER put err.message on the wire (security review, 2026-07-03):
+        // it can carry provider-key/token fragments (a safeStorage/
+        // Keychain error, a fetch() failure body, an fs ENOENT path with
+        // credentials in it) that a local HTTP client should never see.
+        console.error(`[scheherazade/onboarding] ERROR ${req.method} ${req.url}:`, err)
         if (!res.headersSent) {
-          sendJson(res, status, { error: err.message || String(err) })
+          sendJson(res, status, { error: 'internal error -- see server log' })
         } else {
           res.end()
         }
       }
 
-      if (pathname.startsWith('/api/')) {
-        handleApi(req, res, pathname).catch((err) => respondError(err))
-        return
-      }
+      try {
+        const parsedUrl = new URL(req.url, 'http://127.0.0.1')
+        const pathname = parsedUrl.pathname
 
-      if (pathname in ROUTE_TO_FILE) {
-        // Once onboarding is complete, "/" is the wizard's job no longer --
-        // land the user in the memory pane, their steady-state home view.
-        if (pathname === '/' || pathname === '/index.html') {
-          const cfg = readAgentConfig()
-          if (cfg.ONBOARDING_COMPLETE === '1') {
-            res.writeHead(302, { Location: '/memory' })
-            res.end()
+        // ── localhost-auth gate (Host / Origin / per-launch token) ──────
+        // Security review, 2026-07-03: before this, the server had no auth
+        // of any kind. Any other local process, or a page in a browser tab
+        // doing DNS rebinding, could reach every route on this ephemeral
+        // port -- including mutating ones.
+        if (!allowedHosts) {
+          respondError(new Error('server not ready'), 503)
+          return
+        }
+        const hostHeader = req.headers.host
+        if (!hostHeader || !allowedHosts.has(hostHeader)) {
+          log(`REJECT bad Host="${hostHeader}" ${req.method} ${pathname}`)
+          res.writeHead(403, { 'Content-Type': 'text/plain' })
+          res.end('forbidden: bad host')
+          return
+        }
+
+        const isMutating = req.method === 'POST' || req.method === 'DELETE'
+        if (isMutating) {
+          const origin = req.headers.origin
+          if (origin) {
+            const originHost = safeOriginHost(origin)
+            if (!originHost || !allowedHosts.has(originHost)) {
+              log(`REJECT cross-origin Origin="${origin}" ${req.method} ${pathname}`)
+              res.writeHead(403, { 'Content-Type': 'text/plain' })
+              res.end('forbidden: bad origin')
+              return
+            }
+          }
+          if (!safeTokenEqual(req.headers['x-onboard-token'], SERVER_TOKEN)) {
+            log(`REJECT missing/invalid X-Onboard-Token ${req.method} ${pathname}`)
+            res.writeHead(403, { 'Content-Type': 'text/plain' })
+            res.end('forbidden: missing or invalid onboard token')
             return
           }
         }
-        if (serveStatic(req, res, ROUTE_TO_FILE[pathname])) return
+
+        if (pathname.startsWith('/api/')) {
+          handleApi(req, res, pathname).catch((err) => respondError(err))
+          return
+        }
+
+        if (pathname in ROUTE_TO_FILE) {
+          // Once onboarding is complete, "/" is the wizard's job no longer
+          // -- land the user in the memory pane, their steady-state home
+          // view.
+          if (pathname === '/' || pathname === '/index.html') {
+            const cfg = readAgentConfig()
+            if (cfg.ONBOARDING_COMPLETE === '1') {
+              res.writeHead(302, { Location: '/memory' })
+              res.end()
+              return
+            }
+          }
+          if (serveStatic(req, res, ROUTE_TO_FILE[pathname])) return
+        }
+
+        if (serveStatic(req, res, pathname)) return
+
+        res.writeHead(404, { 'Content-Type': 'text/plain' })
+        res.end('not found')
+      } catch (err) {
+        respondError(err)
       }
-
-      if (serveStatic(req, res, pathname)) return
-
-      res.writeHead(404, { 'Content-Type': 'text/plain' })
-      res.end('not found')
     })
 
     server.on('error', (err) => reject(err))
     server.listen(0, '127.0.0.1', () => {
       const { port } = server.address()
+      allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`])
       const url = `http://127.0.0.1:${port}/`
       log(`onboarding server listening on ${url}`)
       resolve({ server, url })
@@ -653,4 +908,4 @@ function createOnboardingServer() {
   })
 }
 
-module.exports = { createOnboardingServer, AGENT_NAME, MEM_HOME, readAgentConfig }
+module.exports = { createOnboardingServer, AGENT_NAME, DATA_HOME, readAgentConfig, readDiscordToken }

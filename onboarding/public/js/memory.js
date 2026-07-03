@@ -13,7 +13,14 @@
   function isoDate(iso) { return iso ? String(iso).slice(0, 10) : '' }
 
   async function api(path, options) {
-    const res = await fetch(path, options)
+    const opts = options ? { ...options } : {}
+    // localhost-auth gate (security review, 2026-07-03): every mutating
+    // (non-GET) request must carry the per-launch token the server
+    // injected into this page's <head> -- see copy.js's getOnboardToken().
+    if (opts.method && opts.method !== 'GET') {
+      opts.headers = { ...(opts.headers || {}), 'X-Onboard-Token': window.getOnboardToken() || '' }
+    }
+    const res = await fetch(path, opts)
     let body = {}
     try {
       body = await res.json()

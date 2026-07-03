@@ -60,7 +60,20 @@ for (const [method, prefix] of [['log', ''], ['info', ''], ['debug', ''], ['warn
 
 // ── Config ──────────────────────────────────────────────────────────────
 const AGENT_NAME = process.env.AGENT_NAME || 'scheherazade'
-const DB_PATH = process.env.SCHEHERAZADE_MEMORY_DB || path.join(os.homedir(), 'Documents', AGENT_NAME, 'memory.db')
+// DATA_HOME: fixed, product-keyed data directory -- matches
+// onboarding/http-server.cjs's DATA_HOME exactly (PO correction,
+// 2026-07-03): the DB path must NOT be keyed on AGENT_NAME. AGENT_NAME can
+// legitimately vary per launch context (env override, this file's own
+// smoke.mjs sets it to 'smoketest') but the on-disk database location must
+// never move just because that string changes -- a rename in the
+// onboarding wizard's Settings page only ever edits a DISPLAY_NAME value,
+// and even AGENT_NAME drifting would otherwise silently orphan memory.db
+// (total memory loss). Only SCHEHERAZADE_MEMORY_DB -- an explicit,
+// deliberate override -- may redirect DB_PATH; that's exactly what
+// memory/smoke.mjs still uses to point at a disposable temp db, and it
+// keeps working unchanged below.
+const DATA_HOME = path.join(os.homedir(), 'Documents', 'Scheherazade')
+const DB_PATH = process.env.SCHEHERAZADE_MEMORY_DB || path.join(DATA_HOME, 'memory.db')
 
 const log = (msg) => process.stderr.write(`[memory] ${msg}\n`)
 const nowISO = () => new Date().toISOString()

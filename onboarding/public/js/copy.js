@@ -9,6 +9,19 @@
 // infra-error banner). Written in the same register, flagged here so they
 // are easy to find and replace if Idea/PO writes real copy for them later.
 
+// getOnboardToken() -- reads the per-launch localhost-auth token that
+// onboarding/http-server.cjs's serveStatic() injects into every page's
+// <head> as a <meta name="onboard-token"> tag (security review,
+// 2026-07-03). Every page's local api() helper (wizard.js/memory.js/
+// settings.js) attaches this as the X-Onboard-Token header on mutating
+// (POST/DELETE) requests -- GET requests don't need it. Loaded here (in
+// copy.js, which every page includes first) so all four pages share one
+// definition instead of four copies.
+window.getOnboardToken = function () {
+  const meta = document.querySelector('meta[name="onboard-token"]')
+  return meta ? meta.getAttribute('content') : null
+}
+
 window.COPY = {
   step0: {
     title: '설정을 시작합니다',

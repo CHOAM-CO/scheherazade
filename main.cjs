@@ -186,6 +186,16 @@ process.on('unhandledRejection', (reason) => {
 //      spawn run.sh (which itself expect-wraps claude)? Latter reuses more
 //      of the existing harness; former gives Electron tighter control
 //      over stdout/stdin framing. Not decided in this spike.
+//    - BOT-TOKEN SEAM (security review, 2026-07-03): whatever eventually
+//      spawns `claude`/channel.mjs here MUST NOT read DISCORD_BOT_TOKEN
+//      from a .env file -- it is safeStorage-only now (see
+//      onboarding/http-server.cjs's storeDiscordTokenVerified /
+//      readDiscordToken). Decrypt it at the moment of spawn with
+//      `require('./onboarding/http-server.cjs').readDiscordToken()` and
+//      inject the result directly into that child's own `env: {...}`. It
+//      must never be written back out to a .env file or any other on-disk
+//      config -- that would reintroduce the exact plaintext-at-rest gap
+//      this fix closed.
 //
 // 2. Provider proxy child:
 //    - No such process exists yet anywhere in this fork. P1 needs to spawn
@@ -223,3 +233,19 @@ process.on('unhandledRejection', (reason) => {
 //      writes and the live agent's future memory MCP server point at two
 //      different databases. onboarding/http-server.cjs corrects this at
 //      server boot (see ensureMcpJsonAgentName()).
+//
+// 4. Packaging + localhost-auth hardening (security review, 2026-07-03):
+//    - .agent-config/.env/.mcp.json moved from REPO_ROOT (read-only once
+//      packaged inside app.asar -- writing there was boot-fatal) to
+//      DATA_HOME, a FIXED directory (~/Documents/Scheherazade, pinned to
+//      the literal product name, not to AGENT_NAME or the user-renameable
+//      DISPLAY_NAME) that memory.db already lived in. A rename from the
+//      Settings page edits only a DISPLAY_NAME value inside .agent-config
+//      -- it never moves DATA_HOME. See onboarding/http-server.cjs's
+//      DATA_HOME comment and memory/server.mjs's matching DB_PATH comment.
+//    - The onboarding server now requires a per-launch secret token
+//      (`X-Onboard-Token` header) on every mutating request, rejects
+//      requests whose Host header isn't this server's own
+//      127.0.0.1:<port>/localhost:<port> (DNS-rebinding), and rejects
+//      mutating requests carrying a cross-origin Origin header. See
+//      onboarding/http-server.cjs's createOnboardingServer().

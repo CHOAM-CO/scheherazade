@@ -28,6 +28,7 @@
     "files": [
       "main.cjs",
       "channel.mjs",
+      ".mcp.json",
       "onboarding/**/*",
       "hooks/**/*",
       "scripts/**/*",
