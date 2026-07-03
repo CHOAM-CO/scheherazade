@@ -16,6 +16,9 @@
     tutorialIndex: 0,
     discordGuildId: null,
     discordChannelId: null,
+    // GET /api/config's routerWired -- gates the ChatGPT/Ollama Cloud tabs
+    // in Step 1. Set once in init() before any step renders.
+    routerWired: false,
   }
 
   function $(id) { return document.getElementById(id) }
@@ -61,8 +64,22 @@
     $('s1-body').textContent = C.step1.body
     const tabsEl = $('s1-tabs')
     tabsEl.innerHTML = ''
-    let activeTab = C.step1.tabs[0].id
+    let activeTab = C.step1.tabs[0].id // always 'claude' -- never disabled
     state.provider = activeTab
+
+    // ROUTER_WIRED gate (Melchior 18:26): non-claude providers stay grey +
+    // inert until the router lands server-side (GET /api/config's
+    // routerWired). Defense-in-depth -- the server also rejects non-claude
+    // BYOK validation while unwired, this just keeps the dead choice from
+    // ever being selectable in the first place.
+    const noteEl = $('s1-router-note')
+    if (!state.routerWired) {
+      noteEl.textContent = C.step1.routerDisabledNote
+      noteEl.classList.remove('hidden')
+    } else {
+      noteEl.classList.add('hidden')
+      noteEl.textContent = ''
+    }
 
     function renderHint() {
       const tab = C.step1.tabs.find((t) => t.id === activeTab)
@@ -70,18 +87,21 @@
     }
 
     C.step1.tabs.forEach((tab) => {
+      const disabled = tab.id !== 'claude' && !state.routerWired
       const el = document.createElement('div')
-      el.className = 'tab' + (tab.id === activeTab ? ' active' : '')
-      el.textContent = tab.label
-      el.onclick = () => {
-        activeTab = tab.id
-        state.provider = tab.id
-        tabsEl.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'))
-        el.classList.add('active')
-        renderHint()
-        $('s1-key').value = ''
-        $('s1-status').textContent = ''
-        $('s1-status').className = 'status-line'
+      el.className = 'tab' + (tab.id === activeTab ? ' active' : '') + (disabled ? ' disabled' : '')
+      el.textContent = disabled ? tab.disabledLabel : tab.label
+      if (!disabled) {
+        el.onclick = () => {
+          activeTab = tab.id
+          state.provider = tab.id
+          tabsEl.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'))
+          el.classList.add('active')
+          renderHint()
+          $('s1-key').value = ''
+          $('s1-status').textContent = ''
+          $('s1-status').className = 'status-line'
+        }
       }
       tabsEl.appendChild(el)
     })
@@ -224,7 +244,7 @@
     $('s4-start').textContent = C.step4.startButton
     $('s4-later').textContent = C.step4.laterButton
     $('s4-start').onclick = () => {
-      state.tutorialIndex = 0
+      state.tutorialIndex = -1 // 2FA pre-warning intro, before step 1 of 6
       renderTutorialStep()
       showStep('4b')
     }
@@ -233,10 +253,16 @@
     }
   }
 
-  // ── Step 4b: Discord tutorial (6 steps, last one validates) ─────────
+  // ── Step 4b: Discord tutorial (2FA pre-warning intro + 6 numbered
+  // steps, last one validates) ─────────────────────────────────────────
+  // state.tutorialIndex === -1 is the intro screen (source file's "시작
+  // 전 안내" -- shown before step 1 of 6, not itself a numbered step).
+  // Folding it into the same prev/next index keeps this a single small
+  // state machine instead of a parallel one.
   function renderTutorialStep() {
     const steps = C.discordTutorial.steps
     const idx = state.tutorialIndex
+    const isIntro = idx === -1
     const isLast = idx === steps.length - 1
 
     $('s4b-title').textContent = C.step4.title
@@ -244,25 +270,33 @@
     bodyEl.innerHTML = ''
     const wrap = document.createElement('div')
     wrap.className = 'tutorial-step'
-    const idxEl = document.createElement('div')
-    idxEl.className = 'step-index'
-    idxEl.textContent = `${idx + 1} / ${steps.length}`
-    const textEl = document.createElement('div')
-    textEl.className = 'step-text'
-    textEl.textContent = steps[idx].text(state.displayName)
-    wrap.appendChild(idxEl)
-    wrap.appendChild(textEl)
-    if (steps[idx].shot) {
-      const shot = document.createElement('div')
-      shot.className = 'screenshot-slot'
-      shot.textContent = `[스크린샷 ${idx + 1}: 실제 캡처 예정 — docs/discord-tutorial-shotlist.md 참고]`
-      wrap.appendChild(shot)
+
+    if (isIntro) {
+      const textEl = document.createElement('div')
+      textEl.className = 'step-text'
+      textEl.textContent = C.discordTutorial.preWarning
+      wrap.appendChild(textEl)
+    } else {
+      const idxEl = document.createElement('div')
+      idxEl.className = 'step-index'
+      idxEl.textContent = `${idx + 1} / ${steps.length}`
+      const textEl = document.createElement('div')
+      textEl.className = 'step-text'
+      textEl.textContent = steps[idx].text(state.displayName)
+      wrap.appendChild(idxEl)
+      wrap.appendChild(textEl)
+      if (steps[idx].shot) {
+        const shot = document.createElement('div')
+        shot.className = 'screenshot-slot'
+        shot.textContent = `[스크린샷 ${idx + 1}: 실제 캡처 예정 — docs/discord-tutorial-shotlist.md 참고]`
+        wrap.appendChild(shot)
+      }
     }
     bodyEl.appendChild(wrap)
 
-    $('s4b-progress').textContent = `${idx + 1} / ${steps.length}`
+    $('s4b-progress').textContent = isIntro ? '' : `${idx + 1} / ${steps.length}`
     $('s4b-prev').textContent = C.discordTutorial.prevButton
-    $('s4b-prev').disabled = idx === 0
+    $('s4b-prev').disabled = isIntro
     $('s4b-prev').onclick = () => {
       state.tutorialIndex -= 1
       renderTutorialStep()
@@ -273,7 +307,15 @@
     statusEl.classList.add('hidden')
     statusEl.textContent = ''
 
-    if (isLast) {
+    if (isIntro) {
+      tokenField.classList.add('hidden')
+      $('s4b-action').textContent = C.discordTutorial.nextButton
+      $('s4b-action').disabled = false
+      $('s4b-action').onclick = () => {
+        state.tutorialIndex += 1
+        renderTutorialStep()
+      }
+    } else if (isLast) {
       tokenField.classList.remove('hidden')
       $('s4b-token-label').textContent = C.discordTutorial.tokenFieldLabel
       $('s4b-action').textContent = C.discordTutorial.validateButton
@@ -319,15 +361,18 @@
     }
   }
 
-  // ── Step 5: handoff, liveness-gated ─────────────────────────────────
+  // ── Step 5: handoff, liveness-gated, 3-state ─────────────────────────
   // REQUIREMENT 4 (PO, agent-lifecycle fix 2026-07-03): do not show the
   // "waiting for you in Discord" success copy until the agent is actually
   // confirmed live (GET /api/agent/status, backed by main.cjs's child
   // process state + channel.mjs's DATA_HOME/.agent-live heartbeat marker).
-  // Until then: a "connecting" state. On a confirmed process failure: a
-  // fail-loud state with cause. Copy for both is a placeholder (see
-  // copy.js's step5.connecting*/failed*, marked TODO(PO)) -- the STATE
-  // MACHINE below is this task's scope, not the final wording.
+  // Three states: connecting (state==='connecting') / live (state==='live')
+  // / failed (state==='failed', with a stable `code` enum). The server
+  // never sends a free-form reason string to render -- `result.reason` was
+  // renamed to `result.code` (stable enum, drives the copy.js cause table)
+  // + `result.detail` (free-form debug prose, console-only, never put in
+  // the DOM -- Melchior 2026-07-03: that's the "English leaks into the
+  // user's screen" bug class).
   let s5PollTimer = null
   const S5_POLL_INTERVAL_MS = 2000
 
@@ -338,34 +383,105 @@
     }
   }
 
-  function renderStep5Connecting() {
-    $('s5-title').textContent = C.step5.connectingTitle
-    $('s5-body').textContent = C.step5.connectingBody(state.displayName)
-    $('s5-open').classList.add('hidden')
+  // Renders the step-actions button row. Used by all three states so the
+  // connecting -> live transition can reuse the identical single-button
+  // layout (grey/disabled -> enabled is the "obvious progress" signal;
+  // Melchior impl call 16:44, Idea confirmed) while failed gets its own
+  // cause-specific button set.
+  function renderStep5Buttons(buttons) {
+    const el = $('s5-buttons')
+    el.innerHTML = ''
+    buttons.forEach((b) => {
+      const btn = document.createElement('button')
+      if (b.secondary) btn.className = 'secondary'
+      btn.textContent = b.label
+      btn.disabled = !!b.disabled
+      if (b.title) btn.title = b.title
+      if (b.onClick) btn.onclick = b.onClick
+      el.appendChild(btn)
+    })
   }
 
-  function renderStep5Failed(reason) {
-    $('s5-title').textContent = C.step5.failedTitle
-    $('s5-body').textContent = C.step5.failedBody(state.displayName, reason)
-    $('s5-open').classList.add('hidden')
+  function renderStep5Connecting() {
+    $('s5-title').textContent = C.step5.connecting.title
+    $('s5-body').textContent = C.step5.connecting.body(state.displayName)
+    // Same button, same slot, disabled -- not hidden. Layout doesn't jump
+    // when this flips to live.
+    renderStep5Buttons([{ label: C.step5.connecting.button, disabled: true }])
   }
 
   function renderStep5Live() {
-    $('s5-title').textContent = C.step5.title
-    $('s5-body').textContent = C.step5.body(state.displayName)
-    $('s5-open').classList.remove('hidden')
-    $('s5-open').textContent = C.step5.button
-    $('s5-open').onclick = async () => {
-      try {
-        await api('/api/discord/open', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ guildId: state.discordGuildId, channelId: state.discordChannelId }),
-        })
-      } catch (err) {
-        alert(C.genericError(err.message))
+    $('s5-title').textContent = C.step5.live.title
+    $('s5-body').textContent = C.step5.live.body(state.displayName)
+    renderStep5Buttons([
+      {
+        label: C.step5.live.button,
+        onClick: async () => {
+          try {
+            await api('/api/discord/open', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ guildId: state.discordGuildId, channelId: state.discordChannelId }),
+            })
+          } catch (err) {
+            alert(C.genericError(err.message))
+          }
+        },
+      },
+    ])
+  }
+
+  function renderStep5Failed(code) {
+    const causes = C.step5.failed.causes
+    const row = causes[code] || causes.unknown
+    $('s5-title').textContent = C.step5.failed.title
+    $('s5-body').textContent = `${row.cause(state.displayName)} ${row.action(state.displayName)}`
+
+    const buttons = row.buttons.map((kind) => {
+      if (kind === 'openSettings') {
+        // Real navigation -- /settings is a served static route.
+        return { label: C.step5.buttonLabels.openSettings, secondary: true, onClick: () => { window.location.href = '/settings' } }
       }
-    }
+      if (kind === 'backToToken') {
+        // Real navigation -- back to the tutorial's last (token-paste) step.
+        return {
+          label: C.step5.buttonLabels.backToToken,
+          secondary: true,
+          onClick: () => {
+            stopS5Poll()
+            state.tutorialIndex = C.discordTutorial.steps.length - 1
+            renderTutorialStep()
+            showStep('4b')
+          },
+        }
+      }
+      if (kind === 'retry') {
+        // No respawn endpoint exists yet (source copy file 🔒 #4: "재시도
+        // 배선 TODO" -- respawn is explicitly a future ticket, not this
+        // task's backend). The honest thing the UI can do today: re-enter
+        // connecting and re-poll the real status endpoint. This does not
+        // itself restart the agent process.
+        return {
+          label: C.step5.buttonLabels.retry,
+          secondary: true,
+          onClick: () => renderStep5(),
+        }
+      }
+      // 'openLogs' (and any future unmapped kind): no log-open route, no
+      // exposed log path, no preload/IPC bridge exists anywhere in this
+      // codebase today. Rendered per the copy table (button must be
+      // present) but disabled rather than wired to a dead click -- a dead
+      // click is worse than an honest disabled state. Title text is
+      // AUTHORED (not in the copy file), flagged for whoever wires a real
+      // log-open endpoint.
+      return {
+        label: C.step5.buttonLabels[kind] || kind,
+        secondary: true,
+        disabled: true,
+        title: '로그 열기는 아직 연결되지 않았습니다.',
+      }
+    })
+    renderStep5Buttons(buttons)
   }
 
   async function pollAgentStatus() {
@@ -378,7 +494,10 @@
       }
       if (result.state === 'failed') {
         stopS5Poll()
-        renderStep5Failed(result.reason)
+        // result.detail is free-form debug prose -- log it, never render
+        // it. result.code is the stable enum that drives the cause table.
+        if (result.detail) console.error('agent failed:', result.code, result.detail)
+        renderStep5Failed(result.code)
         return
       }
       renderStep5Connecting()
@@ -397,8 +516,22 @@
     pollAgentStatus()
   }
 
-  // ── init: resume support for the /waiting -> ?step=4 round trip ─────
+  // ── init: routerWired gate + resume support for the /waiting -> ?step=4
+  // round trip ──────────────────────────────────────────────────────────
   async function init() {
+    // Fetched once, up front: Step 1's provider tabs need routerWired
+    // before they render, and the ?step=4 resume path below needs the same
+    // config -- one fetch serves both instead of two.
+    let cfg = null
+    try {
+      cfg = await api('/api/config')
+    } catch (err) {
+      // Fail loud (console); state.routerWired stays at its safe default
+      // (false = non-claude tabs disabled) if config can't be read.
+      console.error('config fetch failed:', err)
+    }
+    state.routerWired = !!(cfg && cfg.routerWired)
+
     renderStep0()
     renderStep1()
     renderStep2()
@@ -406,19 +539,12 @@
 
     const params = new URLSearchParams(window.location.search)
     const resumeStep = params.get('step')
-    if (resumeStep === '4') {
-      try {
-        const cfg = await api('/api/config')
-        state.displayName = cfg.DISPLAY_NAME || C.step2.defaultName
-        state.provider = cfg.PROVIDER || null
-        renderStep4()
-        showStep('4')
-        return
-      } catch (err) {
-        // Fail loud but don't strand the user on a blank page -- fall back
-        // to step 0 and surface the error.
-        console.error(err)
-      }
+    if (resumeStep === '4' && cfg) {
+      state.displayName = cfg.DISPLAY_NAME || C.step2.defaultName
+      state.provider = cfg.PROVIDER || null
+      renderStep4()
+      showStep('4')
+      return
     }
 
     showStep('0')

@@ -115,6 +115,8 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   margin-top: 1.75rem;
 }
 
+.button-row { display: flex; gap: 0.6rem; }
+
 .tabs { display: flex; gap: 0.4rem; margin-bottom: 1.2rem; border-bottom: 1px solid var(--border); }
 .tab {
   padding: 0.55rem 1rem;
@@ -124,6 +126,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   font-size: 0.9rem;
 }
 .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
+.tab.disabled { opacity: 0.45; cursor: default; pointer-events: none; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.5rem; }
 .chip {

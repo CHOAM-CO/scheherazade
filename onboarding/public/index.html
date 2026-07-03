@@ -24,6 +24,7 @@
           <h1 id="s1-title"></h1>
           <p id="s1-body"></p>
           <div class="tabs" id="s1-tabs"></div>
+          <div class="field-hint hidden" id="s1-router-note"></div>
           <div class="field">
             <input type="password" id="s1-key" placeholder="키를 붙여넣으세요" autocomplete="off" />
             <div class="field-hint" id="s1-hint"></div>
@@ -107,13 +108,13 @@
           </div>
         </section>
 
-        <!-- Step 5: handoff -->
+        <!-- Step 5: handoff, 3-state (connecting/live/failed) -->
         <section class="step hidden" data-step="5">
           <h1 id="s5-title"></h1>
           <p id="s5-body"></p>
           <div class="step-actions">
             <span></span>
-            <button id="s5-open"></button>
+            <div class="button-row" id="s5-buttons"></div>
           </div>
         </section>
       </div>
