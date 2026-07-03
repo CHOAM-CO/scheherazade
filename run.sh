@@ -58,7 +58,33 @@ PIDFILE="$MEM/.agent.pid"
 LOGFILE="$MEM/logs/agent.log"
 STOPFLAG="$MEM/.stop_requested"
 FAILFILE="$MEM/.agent-failed.json"
-PKILL_PATTERN="${CLAUDE_BIN} --model ${MODEL} --name ${AGENT_NAME}"
+# Cross-model adversarial review fix (2026-07-03): PKILL_PATTERN used to
+# include "--model ${MODEL}", coupling it to a MUTABLE field. main.cjs's
+# killAgentSupervisor() spawns `run.sh stop` with a FRESHLY-read config --
+# if MODEL changed (e.g. a settings edit) after the supervisor/leaf was
+# spawned, the pattern built here at stop-time embeds the NEW model while
+# the live claude leaf's actual argv (from the expect spawn line below)
+# still has the OLD `--model` value baked in, so `pkill -f "$PKILL_PATTERN"`
+# silently misses it -- orphaning the Discord-connected CLI on quit/fatal.
+# This matters because it's the FALLBACK reaper for exactly that case: the
+# direct group-SIGTERM path is already known-insufficient here (timeout(1)
+# puts expect/claude in their own process group, see run_expect() below),
+# so pkill is the only mechanism actually reaching the leaf.
+# Rebuilt on STABLE discriminators only: AGENT_NAME is product-fixed
+# (onboarding/http-server.cjs's AGENT_NAME, or setup.sh's one-time prompt)
+# and CLAUDE_BIN is stable within an install -- MODEL is the only
+# post-spawn-mutable field of the three, so it's the only one dropped.
+# CLAUDE_BIN can't be re-joined onto "--name ${AGENT_NAME}" as a literal
+# substring either: the actual argv is
+# "$CLAUDE_BIN --model $MODEL --name $AGENT_NAME" (see the expect spawn
+# line below), so anything bridging across the now-variable --model
+# segment would have to be a regex wildcard, not a literal join -- more
+# fragile than just anchoring on the tail. "--name ${AGENT_NAME}" alone is
+# a CONTIGUOUS substring of that argv regardless of MODEL's value, so it
+# always matches the live leaf, and AGENT_NAME is specific enough (a
+# product-fixed or one-time-chosen identifier, not a generic flag value)
+# not to over-match unrelated processes on the same machine.
+PKILL_PATTERN="--name ${AGENT_NAME}"
 
 # Session timeout: forces the expect-wrapped claude process to exit after
 # SESSION_TIMEOUT seconds (default 12h) even if the stream is stuck but
@@ -97,27 +123,44 @@ is_alive() {
 # otherwise make start_agent() silently no-op (thinks the agent is already
 # running) or, worse, make stop_agent() force-kill (`kill -KILL`) a
 # completely unrelated process at the end of its wait loop. Verify
-# IDENTITY via the process's own command line -- require it to contain
-# BOTH this script's own path and the __loop subcommand, the exact
-# signature both start_agent() (`nohup "$SCRIPT_DIR/run.sh" __loop &`) and
-# main.cjs's spawnRealAgentChild() (`spawn(BASH_BIN, [RUN_SH_PATH,
-# '__loop'])`) use to launch it. Fail SAFE: `ps` erroring, being
-# unavailable, or returning nothing (permission, already-exited race) all
-# resolve to "not verified" -- callers must treat that as NOT our
-# supervisor (never trust it as already-running, never force-kill it).
+# IDENTITY via the process's own command line -- require the CONTIGUOUS
+# spawn signature "$SCRIPT_DIR/run.sh __loop", the exact signature both
+# start_agent() (`nohup "$SCRIPT_DIR/run.sh" __loop &`) and main.cjs's
+# spawnRealAgentChild() (`spawn(BASH_BIN, [RUN_SH_PATH, '__loop'])`) use to
+# launch it. Fail SAFE: `ps` erroring, being unavailable, or returning
+# nothing (permission, already-exited race) all resolve to "not verified"
+# -- callers must treat that as NOT our supervisor (never trust it as
+# already-running, never force-kill it).
+#
+# Cross-model adversarial review follow-up (2026-07-03), two compounding
+# bugs fixed together:
+#   Fix A -- `-ww` forces `ps` to print the FULL, un-truncated command
+#     line. Stock BSD/macOS `ps` width-limits its `command=` output by
+#     default; a legit supervisor running from a long install path (e.g.
+#     deep inside a "*.app" bundle) can have `__loop` truncated clean off
+#     the printed line, false-negating a REAL supervisor as unverified --
+#     which then makes start_agent() treat a live agent as stale (double
+#     spawn) and makes stop_agent() skip stopping a live one.
+#   Fix B -- match the CONTIGUOUS substring "$SCRIPT_DIR/run.sh __loop" in
+#     one `case`, instead of a nested double `case` that independently
+#     tested for the script path ANYWHERE and '__loop' ANYWHERE in the
+#     command line. Two independent substring tests pass even when the
+#     two tokens are unrelated (e.g. a recycled pid now held by an
+#     editor/grep/diagnostic process whose argv happens to mention both
+#     tokens separately) -- a false positive that then gets trusted as a
+#     live supervisor or force-killed as one. The actual spawn is always
+#     "$SCRIPT_DIR/run.sh __loop" back-to-back, so matching that exact
+#     contiguous substring is both necessary and sufficient, and depends
+#     on Fix A: without `-ww`, truncation could also sever this same
+#     contiguous match.
 is_our_supervisor() {
   local pid="$1"
   is_alive "$pid" || return 1
   local cmd
-  cmd="$(ps -o command= -p "$pid" 2>/dev/null)" || return 1
+  cmd="$(ps -ww -o command= -p "$pid" 2>/dev/null)" || return 1
   [ -n "$cmd" ] || return 1
   case "$cmd" in
-    *"$SCRIPT_DIR/run.sh"*)
-      case "$cmd" in
-        *__loop*) return 0 ;;
-        *) return 1 ;;
-      esac
-      ;;
+    *"$SCRIPT_DIR/run.sh __loop"*) return 0 ;;
     *) return 1 ;;
   esac
 }

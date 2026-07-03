@@ -290,7 +290,7 @@ function isPidAlive(pid) {
 // UI stuck 'connecting' forever with no clue why), or (b) on quit,
 // SIGTERM an unconfirmed/unrelated process via killAgentSupervisor().
 // Verify PROCESS IDENTITY via its own command line -- require it to
-// contain BOTH the run.sh launcher path and the __loop subcommand, the
+// contain the CONTIGUOUS spawn signature `<RUN_SH_PATH> __loop`, the
 // exact signature spawnRealAgentChild() below uses to spawn it
 // (`spawn(BASH_BIN, [RUN_SH_PATH, '__loop'])`), and the same convention
 // run.sh's own is_our_supervisor() checks on its side of this PIDFILE.
@@ -298,16 +298,38 @@ function isPidAlive(pid) {
 // (permission, already-exited race) all resolve to "not verified" --
 // callers must treat that as if the pid is NOT our supervisor (never
 // trust it as already-running, never signal it).
+//
+// Cross-model adversarial review follow-up (2026-07-03), two compounding
+// bugs fixed together:
+//   Fix A -- `-ww` forces `ps` to print the FULL, un-truncated command
+//     line. Without it, macOS/BSD `ps` width-limits its `command=`
+//     output; a legit supervisor launched from a long install path (e.g.
+//     inside a deeply-nested "*.app" bundle) can have `__loop` truncated
+//     clean off the printed line, false-negating a REAL supervisor as
+//     unverified -- which then makes start_agent() double-spawn a second
+//     live agent and makes killAgentSupervisor() skip signaling a live
+//     one.
+//   Fix B -- match the CONTIGUOUS substring `<RUN_SH_PATH> __loop`
+//     instead of two independent `.includes()` checks. Two separate
+//     substring tests pass if RUN_SH_PATH and '__loop' both appear
+//     ANYWHERE in the command line, even unrelated to each other (e.g. a
+//     recycled pid now held by an editor/grep/diagnostic process whose
+//     argv happens to mention both tokens) -- a false positive that then
+//     gets trusted as a live supervisor or signaled as one. The actual
+//     spawn is always `bash <RUN_SH_PATH> __loop`, so matching the two
+//     tokens back-to-back (space-joined) is both necessary and
+//     sufficient, and depends on Fix A: without `-ww`, truncation could
+//     also sever this exact contiguous match.
 function isOurSupervisor(pid) {
   if (!isPidAlive(pid)) return false
   let commandLine
   try {
-    commandLine = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' })
+    commandLine = execFileSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8' })
   } catch (err) {
     log(`isOurSupervisor(${pid}): ps lookup failed (${err.message}) -- treating as UNVERIFIED, fail-safe`)
     return false
   }
-  return commandLine.includes(RUN_SH_PATH) && commandLine.includes('__loop')
+  return commandLine.includes(`${RUN_SH_PATH} __loop`)
 }
 
 function readPidFromFile(filePath) {
