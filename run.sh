@@ -178,6 +178,13 @@ is_our_supervisor() {
 # has to watch one path regardless of which layer caught the problem.
 # Atomic write (temp file + mv) so main.cjs's poller never reads a
 # half-written file.
+#
+# "code" (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 1): the stable
+# machine-readable cause main.cjs's pollFailureMarker() relays into
+# setAgentStatus(). This function has exactly one call site (the quick-fail
+# streak below), so the code is hardcoded literally rather than threaded
+# through as a parameter -- there is only one thing this function ever
+# reports.
 write_failure() {
   local reason="$1"
   # JSON-escape: backslash and quote first (order matters -- backslash
@@ -206,7 +213,7 @@ write_failure() {
   # diagnostic AND killing the restart ladder in one move. Best-effort: on
   # any failure here, log and move on: this marker write is diagnostic,
   # never load-bearing for the loop's own survival.
-  if ! printf '{\n  "status": "failed",\n  "reason": "%s",\n  "since": "%s"\n}\n' \
+  if ! printf '{\n  "status": "failed",\n  "code": "crash_loop",\n  "reason": "%s",\n  "since": "%s"\n}\n' \
     "$escaped" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp" 2>/dev/null; then
     log "write_failure: could not write ${tmp} (disk full/read-only $MEM?) -- skipping this round's failure marker"
     rm -f "$tmp" 2>/dev/null || true

@@ -112,21 +112,30 @@ async function writeLivenessMarker() {
 // stderr -- main.cjs's agent-status.cjs never saw it, so the onboarding UI
 // stayed on "connecting" forever. This marker is the distinct failure
 // signal main.cjs's failure-marker poller (see main.cjs's
-// pollFailureMarker()) surfaces as setAgentStatus('failed', reason) within
-// a bounded time. Shares its DATA_HOME/.agent-failed.json path + JSON shape
-// with run.sh's own restart-ladder failure write (see run.sh's run_loop()
-// / write_failure()) so main.cjs only needs to poll one file regardless of
-// which layer -- the bash restart loop, or this process's own login
-// failure -- detected the problem first.
-async function writeFailureMarker(reason) {
-  const payload = { status: 'failed', reason, since: new Date().toISOString(), pid: process.pid }
+// pollFailureMarker()) surfaces as setAgentStatus('failed', code, reason)
+// within a bounded time. Shares its DATA_HOME/.agent-failed.json path +
+// JSON shape with run.sh's own restart-ladder failure write (see run.sh's
+// run_loop() / write_failure()) so main.cjs only needs to poll one file
+// regardless of which layer -- the bash restart loop, or this process's
+// own login failure -- detected the problem first.
+//
+// `code` (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 1): the stable
+// machine-readable cause main.cjs's pollFailureMarker() relays into
+// setAgentStatus(). Every current call site below passes 'discord_token_bad'
+// EXCEPT the missing-HOME_CHANNEL_ID guard, which is a distinct config gap
+// (not the bot token itself, and there's no dedicated code for it in the
+// enum) -- it passes 'unknown' rather than mislabeling it as a token
+// problem. Defaults to 'unknown' if a future call site forgets to pass one,
+// so this never silently emits a marker with no code field at all.
+async function writeFailureMarker(reason, code = 'unknown') {
+  const payload = { status: 'failed', reason, code, since: new Date().toISOString(), pid: process.pid }
   await atomicWriteJson(FAILURE_MARKER_PATH, payload)
 }
 
 if (!DISCORD_TOKEN) {
   const reason = 'DISCORD_BOT_TOKEN not set. Check .env (or the .mcp.json env block).'
   process.stderr.write(`[${AGENT_NAME}] FATAL: ${reason}\n`)
-  await writeFailureMarker(reason).catch((err) =>
+  await writeFailureMarker(reason, 'discord_token_bad').catch((err) =>
     process.stderr.write(`[${AGENT_NAME}] also failed to write failure marker: ${err.message}\n`)
   )
   process.exit(1)
@@ -134,6 +143,9 @@ if (!DISCORD_TOKEN) {
 if (!HOME_CHANNEL_ID) {
   const reason = 'HOME_CHANNEL_ID not set. Check .env (or the .mcp.json env block).'
   process.stderr.write(`[${AGENT_NAME}] FATAL: ${reason}\n`)
+  // Not 'discord_token_bad' -- this is a missing channel ID, not a bad/
+  // missing bot token, and the cause-code enum has no dedicated code for
+  // it. 'unknown' (the writeFailureMarker default) is the honest choice.
   await writeFailureMarker(reason).catch((err) =>
     process.stderr.write(`[${AGENT_NAME}] also failed to write failure marker: ${err.message}\n`)
   )
@@ -380,12 +392,14 @@ async function boot() {
   } catch (err) {
     // Critical B: a bad/revoked bot token fails here fast (Discord's REST
     // gateway rejects it in seconds, not a 12h hang) -- write the distinct
-    // failure marker so main.cjs's poller surfaces this as setAgentStatus
-    // ('failed', reason) instead of the UI sitting on "connecting" forever
-    // while run.sh's __loop keeps restarting this process.
+    // failure marker so main.cjs's poller surfaces this as
+    // setAgentStatus('failed', 'discord_token_bad', reason) instead of the
+    // UI sitting on "connecting" forever while run.sh's __loop keeps
+    // restarting this process. Same code as the missing-token guard above
+    // -- same user-facing action either way: fix the Discord bot token.
     const reason = `discord.login failed: ${err.message}`
     process.stderr.write(`[${AGENT_NAME}] FATAL: ${reason}\n`)
-    await writeFailureMarker(reason).catch((markerErr) =>
+    await writeFailureMarker(reason, 'discord_token_bad').catch((markerErr) =>
       process.stderr.write(`[${AGENT_NAME}] also failed to write failure marker: ${markerErr.message}\n`)
     )
     process.exit(1)

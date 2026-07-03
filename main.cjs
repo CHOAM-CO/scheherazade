@@ -381,12 +381,22 @@ function pollFailureMarker() {
     if (stat.mtimeMs === lastFailureMtimeMs) return
     lastFailureMtimeMs = stat.mtimeMs
     const parsed = JSON.parse(fs.readFileSync(AGENT_FAILFILE, 'utf8'))
-    const reason =
+    const detail =
       parsed && typeof parsed.reason === 'string'
         ? parsed.reason
         : 'agent supervisor reported a failure (see run.sh/channel.mjs logs)'
-    console.error(`[scheherazade/main] failure marker detected at ${AGENT_FAILFILE}: ${reason}`)
-    setAgentStatus('failed', reason)
+    // Cause-code wiring (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 1):
+    // the marker is written by two independent emitters -- run.sh's
+    // write_failure() (code: "crash_loop") and channel.mjs's
+    // writeFailureMarker() (code: "discord_token_bad") -- both now stamp a
+    // `code` field into the same JSON shape. Fall back to 'unknown' if it's
+    // absent (an old marker written before this fix, mid-write torn read
+    // that happened to still parse, etc) or malformed (present but not a
+    // non-empty string) -- never guess a more specific code than the
+    // marker actually declares.
+    const code = parsed && typeof parsed.code === 'string' && parsed.code.trim() !== '' ? parsed.code : 'unknown'
+    console.error(`[scheherazade/main] failure marker detected at ${AGENT_FAILFILE}: code=${code} detail=${detail}`)
+    setAgentStatus('failed', code, detail)
   } catch (err) {
     if (err.code !== 'ENOENT') console.error(`[scheherazade/main] pollFailureMarker: failed to read/parse ${AGENT_FAILFILE}:`, err)
     // ENOENT (no marker yet, or since cleared by run.sh's clear_failure()):
@@ -464,14 +474,20 @@ function spawnRealAgentChild() {
         'in a packaged build, the extraResources copy is missing/corrupt/non-executable -- ' +
         'check the build output. Onboarding UI stays usable.'
     )
-    setAgentStatus('failed', reason)
+    // Cause-code wiring (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 1):
+    // no dedicated code exists for "bundled CLI binary missing" -- it isn't
+    // one of the enumerated causes (crash_loop/discord_token_bad/
+    // provider_not_wired/key_error/timeout), so 'unknown' is the honest
+    // fallback rather than overloading a more specific code that doesn't fit.
+    setAgentStatus('failed', 'unknown', reason)
     return null
   }
 
   if (!fs.existsSync(RUN_SH_PATH)) {
     const reason = `internal launcher not found at ${RUN_SH_PATH} (run.sh missing from the packaged/unpacked app -- check build.files/build.asarUnpack)`
     console.error(`[scheherazade/main] BLOCKER: ${reason}`)
-    setAgentStatus('failed', reason)
+    // Same 'unknown' reasoning as the claude-CLI-missing branch above.
+    setAgentStatus('failed', 'unknown', reason)
     return null
   }
 
@@ -498,7 +514,10 @@ function spawnRealAgentChild() {
       providerKey = readProviderKey('claude')
     } catch (err) {
       console.error('[scheherazade/main] readProviderKey(claude) failed, cannot spawn agent:', err)
-      setAgentStatus('failed', `readProviderKey failed: ${err.message}`)
+      // Cause-code wiring, PIECE 1: readProviderKey() throwing is exactly
+      // the 'key_error' case (safeStorage/Keychain decrypt failure, corrupt
+      // credential file, etc).
+      setAgentStatus('failed', 'key_error', `readProviderKey failed: ${err.message}`)
       return null
     }
     if (!providerKey) {
@@ -511,7 +530,14 @@ function spawnRealAgentChild() {
       `provider "${provider}" requires the local Anthropic-inbound router (coming soon), not yet wired -- ` +
       'only "claude" (BYOK Anthropic key forwarded directly to the claude CLI) can spawn today.'
     console.error(`[scheherazade/main] BLOCKER: ${reason}`)
-    setAgentStatus('failed', reason)
+    // Cause-code wiring, PIECE 1: this IS 'provider_not_wired' by definition
+    // -- the router doesn't exist yet. See onboarding/http-server.cjs's
+    // ROUTER_WIRED flag (PIECE 3) for the server-side gate that now stops
+    // this branch from ever being reachable via a validated
+    // chatgpt/ollama onboarding-complete in the first place; this stays as
+    // defense-in-depth for any config file hand-edited directly to a
+    // non-claude PROVIDER.
+    setAgentStatus('failed', 'provider_not_wired', reason)
     return null
   }
 
@@ -520,7 +546,11 @@ function spawnRealAgentChild() {
     token = readDiscordToken()
   } catch (err) {
     console.error('[scheherazade/main] readDiscordToken failed, cannot spawn agent:', err)
-    setAgentStatus('failed', `readDiscordToken failed: ${err.message}`)
+    // No dedicated code for a local safeStorage/Keychain read failure on the
+    // DISCORD token specifically (key_error is reserved for the PROVIDER
+    // key path above, discord_token_bad is reserved for the marker-driven
+    // missing/rejected-token paths in channel.mjs) -- 'unknown' fallback.
+    setAgentStatus('failed', 'unknown', `readDiscordToken failed: ${err.message}`)
     return null
   }
   if (!token) {
@@ -589,6 +619,18 @@ function spawnRealAgentChild() {
 
   agentChild = child
   agentSupervisorPid = child.pid
+  // Timeout backstop (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 2):
+  // this is the SPAWN ATTEMPT moment -- agent-status.cjs's setAgentStatus()
+  // re-stamps `since` on every call, so calling it here (not once at
+  // onboarding-complete, and not conditionally) means `since` always means
+  // "since this exact spawn attempt" and resets cleanly on every relaunch
+  // (quit+reopen, or a future manual respawn) -- see the "existingPid &&
+  // isOurSupervisor(existingPid)" branch above for the one path that does
+  // NOT call this (this process merely discovered an already-alive
+  // supervisor rather than spawning one itself; see that branch's own
+  // comment). http-server.cjs's computeAgentStatus() reads this `since` as
+  // its TIMEOUT_MS backstop input -- no separate connectingSince field
+  // needed, this IS it.
   setAgentStatus('connecting')
 
   // Fix C: participate in run.sh's own PIDFILE convention (see
@@ -612,7 +654,11 @@ function spawnRealAgentChild() {
     // process itself failing to spawn at all, not a claude crash inside
     // run.sh's own loop (that's absorbed by run.sh's restart ladder).
     console.error('[scheherazade/main] agent child spawn error:', err)
-    setAgentStatus('failed', `spawn error: ${err.message}`)
+    // No dedicated code for the launcher process itself failing to spawn
+    // (distinct from run.sh's OWN crash-loop detector, which only fires
+    // once run.sh is actually running and restarting claude inside itself)
+    // -- 'unknown' fallback.
+    setAgentStatus('failed', 'unknown', `spawn error: ${err.message}`)
     agentChild = null
     agentSupervisorPid = null
     stopFailurePoll()
@@ -627,7 +673,9 @@ function spawnRealAgentChild() {
     // one intentional case -- it's still fine to mark 'failed' here since
     // the app is quitting anyway and no UI will read this status again.)
     log(`agent child exited code=${code} signal=${signal}`)
-    setAgentStatus('failed', `agent process exited unexpectedly (code=${code} signal=${signal})`)
+    // Same reasoning as the 'error' handler above -- an unexpected exit of
+    // the SUPERVISOR itself has no dedicated code; 'unknown' fallback.
+    setAgentStatus('failed', 'unknown', `agent process exited unexpectedly (code=${code} signal=${signal})`)
     agentChild = null
     agentSupervisorPid = null
     stopFailurePoll()

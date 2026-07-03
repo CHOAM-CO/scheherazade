@@ -23,17 +23,49 @@
 //   connecting -- child process spawned successfully; Discord-level
 //                 liveness not confirmed yet. Normal for the first several
 //                 seconds after spawn (claude boot + MCP handshake +
-//                 discord.js gateway connect all take real time).
-//   failed     -- the persistent supervisor process itself (bash run.sh
-//                 __loop) failed to spawn or exited unexpectedly. NOT set
-//                 for an individual `claude` crash inside the loop -- those
-//                 are absorbed by run.sh's own restart/backoff ladder and
-//                 never surface here. `reason` carries the cause for
-//                 fail-loud surfacing to the user.
-let status = { state: 'idle', reason: null, since: new Date().toISOString() }
+//                 discord.js gateway connect all take real time). `since`
+//                 is re-stamped every time this state is (re-)entered --
+//                 spawnRealAgentChild() in main.cjs calls
+//                 setAgentStatus('connecting') at the moment of each spawn
+//                 ATTEMPT (not at onboarding-complete), so `since` always
+//                 means "since this spawn attempt", resetting cleanly on
+//                 every relaunch. http-server.cjs's computeAgentStatus()
+//                 uses this exact field as its connecting-timeout backstop
+//                 (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 2) --
+//                 see that function's own comment for the precedence rule.
+//   failed     -- either (a) the persistent supervisor process itself (bash
+//                 run.sh __loop) failed to spawn or exited unexpectedly,
+//                 (b) a pre-spawn blocker in main.cjs (missing CLI binary,
+//                 unwired provider, credential read failure), or (c) a
+//                 failure marker relayed from run.sh's crash-loop detector
+//                 or channel.mjs's Discord-login guard (see main.cjs's
+//                 pollFailureMarker()). NOT set for an individual `claude`
+//                 crash inside the loop -- those are absorbed by run.sh's
+//                 own restart/backoff ladder and never surface here.
+//
+// Cause CODE (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 1): `code` is
+// a STABLE machine-readable value, only meaningful when state === 'failed'.
+// One of:
+//   'crash_loop'          -- run.sh's write_failure() (3+ quick-fail restarts)
+//   'discord_token_bad'   -- channel.mjs's writeFailureMarker() on a missing
+//                            or rejected Discord bot token
+//   'provider_not_wired'  -- main.cjs spawnRealAgentChild()'s non-claude
+//                            branch (chatgpt/ollama have no router yet)
+//   'key_error'           -- main.cjs's readProviderKey() threw
+//   'timeout'             -- http-server.cjs's computeAgentStatus() backstop
+//                            (connecting exceeded TIMEOUT_MS with no live
+//                            marker) -- this module never sets it itself,
+//                            it's computed downstream at read time
+//   'unknown'             -- any other failure path (fallback; never guess a
+//                            more specific code than the emitter actually
+//                            knows)
+// `detail` stays a free-form human-readable string for logs/UI (renamed
+// from the old `reason` field -- same purpose, name changed because `code`
+// is now the stable value and `detail` is explicitly the prose one).
+let status = { state: 'idle', code: null, detail: null, since: new Date().toISOString() }
 
-function setAgentStatus(state, reason = null) {
-  status = { state, reason, since: new Date().toISOString() }
+function setAgentStatus(state, code = null, detail = null) {
+  status = { state, code, detail, since: new Date().toISOString() }
 }
 
 function getAgentStatus() {
