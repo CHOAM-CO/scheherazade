@@ -48,14 +48,35 @@ const HOME_CHANNEL_ID = process.env.HOME_CHANNEL_ID
 // would silently write the marker to the wrong place, and the reader
 // (http-server.cjs's GET /api/agent/status, which computes DATA_HOME
 // independently, see its own DATA_HOME constant) would never see it --
-// permanent false "connecting". AGENT_DATA_HOME mirrors run.sh's own MEM
-// resolution (MEM="${AGENT_DATA_HOME:-$HOME/Documents/$AGENT_NAME}") so a
-// standalone/dev launch with a custom AGENT_DATA_HOME still lands wherever
-// run.sh itself would; the packaged Electron path always sets
+// permanent false "connecting". The packaged Electron path always sets
 // AGENT_DATA_HOME explicitly (main.cjs's spawnRealAgentChild()) to the
 // exact fixed path http-server.cjs's own DATA_HOME constant computes, so
-// the two can't drift.
-const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', 'Scheherazade')
+// the two can't drift THERE regardless of the fallback below.
+//
+// Fallback (AGENT_DATA_HOME unset) matches run.sh's OWN MEM resolution
+// EXACTLY -- `MEM="${AGENT_DATA_HOME:-$HOME/Documents/$AGENT_NAME}"`, same
+// env var, same formula, keyed by AGENT_NAME (not a fixed literal) --
+// FIXED here (code-review pass, 2026-07-03) after two real bugs an
+// independent review caught in the first version of this fix, which used
+// a fixed `~/Documents/Scheherazade` fallback:
+//   1. `npm start` (package.json's "start": "node channel.mjs") runs this
+//      file directly with no AGENT_DATA_HOME set. A fixed fallback meant
+//      local dev would read/write the SAME marker files
+//      (DATA_HOME/.agent-live, .agent-failed.json) the real packaged,
+//      onboarded app uses at ~/Documents/Scheherazade -- corrupting
+//      production liveness/failure state from a dev run. (Confirmed this
+//      exact failure mode once already during this fix's own verification
+//      pass, on scripts/test-liveness-marker.mjs -- see that file's own
+//      comment -- and initially only guarded there, not here.) Now, with
+//      no AGENT_DATA_HOME, it resolves to ~/Documents/agent (AGENT_NAME's
+//      own default, line above) instead -- nowhere near the real app's
+//      fixed path, so a `npm start` dev run can no longer collide with it.
+//   2. This fallback used to disagree with run.sh's OWN fallback for the
+//      exact same no-AGENT_DATA_HOME case (a standalone/non-Electron CLI
+//      deployment) -- run.sh writes its own write_failure()/clear_failure()
+//      markers to $HOME/Documents/$AGENT_NAME, channel.mjs was writing its
+//      markers to a DIFFERENT fixed directory. Now identical.
+const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', AGENT_NAME)
 
 // ── liveness + failure markers (agent-lifecycle fix, 2026-07-03) ───────────
 // Declared here, before the DISCORD_TOKEN/HOME_CHANNEL_ID guards below, so a

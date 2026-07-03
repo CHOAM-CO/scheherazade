@@ -120,13 +120,28 @@ write_failure() {
   escaped="${escaped//$'\t'/\\t}"
   local tmp
   tmp="$(mktemp "${FAILFILE}.XXXXXX" 2>/dev/null || echo "${FAILFILE}.tmp$$")"
-  printf '{\n  "status": "failed",\n  "reason": "%s",\n  "since": "%s"\n}\n' \
-    "$escaped" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp"
-  mv -f "$tmp" "$FAILFILE"
+  # set -e safety (code-review pass, 2026-07-03): this whole file runs under
+  # `set -euo pipefail`, and write_failure() is called from a plain if-BODY
+  # (see the call site below) -- bodies are NOT exempt from -e the way a
+  # condition is. Without the explicit `|| ...` guards below, a write
+  # failure here (e.g. $MEM out of disk or gone read-only) would abort the
+  # entire supervisor process -- exactly while it's trying to report the
+  # bad-key/bad-token failure this feature exists for, losing the
+  # diagnostic AND killing the restart ladder in one move. Best-effort: on
+  # any failure here, log and move on: this marker write is diagnostic,
+  # never load-bearing for the loop's own survival.
+  if ! printf '{\n  "status": "failed",\n  "reason": "%s",\n  "since": "%s"\n}\n' \
+    "$escaped" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp" 2>/dev/null; then
+    log "write_failure: could not write ${tmp} (disk full/read-only $MEM?) -- skipping this round's failure marker"
+    rm -f "$tmp" 2>/dev/null || true
+    return 0
+  fi
+  mv -f "$tmp" "$FAILFILE" 2>/dev/null || log "write_failure: could not move ${tmp} -> ${FAILFILE}"
+  return 0
 }
 
 clear_failure() {
-  rm -f "$FAILFILE"
+  rm -f "$FAILFILE" 2>/dev/null || true
 }
 
 run_expect() {
