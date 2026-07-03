@@ -65,7 +65,7 @@
         }
       ],
       "category": "public.app-category.developer-tools",
-      "identity": null,
+      "identity": "-",
       "hardenedRuntime": false,
       "gatekeeperAssess": false
     },
