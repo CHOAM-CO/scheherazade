@@ -16,6 +16,7 @@ import { Client, GatewayIntentBits, Events } from 'discord.js'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import os from 'node:os'
 import https from 'node:https'
 import http from 'node:http'
 import { fileURLToPath } from 'node:url'
@@ -37,12 +38,105 @@ const AGENT_NAME = process.env.AGENT_NAME || 'agent'
 const DISCORD_TOKEN = process.env.DISCORD_BOT_TOKEN
 const HOME_CHANNEL_ID = process.env.HOME_CHANNEL_ID
 
+// ── DATA_HOME (agent-lifecycle fix, 2026-07-03, hardening item E1) ─────────
+// Resolved EXPLICITLY here rather than trusting process.cwd(). Previously,
+// LIVENESS_MARKER_PATH was `path.join(process.cwd(), '.agent-live')`, which
+// only worked because .mcp.json's agent-channel entry happens to set
+// cwd: DATA_HOME (see onboarding/http-server.cjs's ensureMcpJsonAgentName())
+// -- a coincidence, not a guarantee. Any future change to how this process
+// gets spawned (different cwd, a manual `node channel.mjs` from elsewhere)
+// would silently write the marker to the wrong place, and the reader
+// (http-server.cjs's GET /api/agent/status, which computes DATA_HOME
+// independently, see its own DATA_HOME constant) would never see it --
+// permanent false "connecting". The packaged Electron path always sets
+// AGENT_DATA_HOME explicitly (main.cjs's spawnRealAgentChild()) to the
+// exact fixed path http-server.cjs's own DATA_HOME constant computes, so
+// the two can't drift THERE regardless of the fallback below.
+//
+// Fallback (AGENT_DATA_HOME unset) matches run.sh's OWN MEM resolution
+// EXACTLY -- `MEM="${AGENT_DATA_HOME:-$HOME/Documents/$AGENT_NAME}"`, same
+// env var, same formula, keyed by AGENT_NAME (not a fixed literal) --
+// FIXED here (code-review pass, 2026-07-03) after two real bugs an
+// independent review caught in the first version of this fix, which used
+// a fixed `~/Documents/Scheherazade` fallback:
+//   1. `npm start` (package.json's "start": "node channel.mjs") runs this
+//      file directly with no AGENT_DATA_HOME set. A fixed fallback meant
+//      local dev would read/write the SAME marker files
+//      (DATA_HOME/.agent-live, .agent-failed.json) the real packaged,
+//      onboarded app uses at ~/Documents/Scheherazade -- corrupting
+//      production liveness/failure state from a dev run. (Confirmed this
+//      exact failure mode once already during this fix's own verification
+//      pass, on scripts/test-liveness-marker.mjs -- see that file's own
+//      comment -- and initially only guarded there, not here.) Now, with
+//      no AGENT_DATA_HOME, it resolves to ~/Documents/agent (AGENT_NAME's
+//      own default, line above) instead -- nowhere near the real app's
+//      fixed path, so a `npm start` dev run can no longer collide with it.
+//   2. This fallback used to disagree with run.sh's OWN fallback for the
+//      exact same no-AGENT_DATA_HOME case (a standalone/non-Electron CLI
+//      deployment) -- run.sh writes its own write_failure()/clear_failure()
+//      markers to $HOME/Documents/$AGENT_NAME, channel.mjs was writing its
+//      markers to a DIFFERENT fixed directory. Now identical.
+const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', AGENT_NAME)
+
+// ── liveness + failure markers (agent-lifecycle fix, 2026-07-03) ───────────
+// Declared here, before the DISCORD_TOKEN/HOME_CHANNEL_ID guards below, so a
+// missing-token FATAL exit can itself write a failure marker instead of
+// just dying into run.sh's restart loop with nothing but a stderr line --
+// see Critical B.
+const LIVENESS_MARKER_PATH = path.join(DATA_HOME, '.agent-live')
+const LIVENESS_HEARTBEAT_MS = 60_000 // http-server.cjs's LIVENESS_FRESH_MS (150s) tolerates one missed beat
+const FAILURE_MARKER_PATH = path.join(DATA_HOME, '.agent-failed.json')
+
+// Atomic write (temp file + rename): matches run.sh's own write_failure()
+// (code-review pass, 2026-07-03 -- that function's own comment explicitly
+// calls out atomic-write as necessary "so main.cjs's poller never reads a
+// half-written file"; this one shares the exact same consumer
+// (pollFailureMarker()) and file, and a plain writeFile() here left a real,
+// if self-healing, window where a 3s poll tick landing mid-write would hit
+// a JSON.parse error on a truncated read). fs.rename is atomic on the same
+// filesystem, which a temp file in the same directory always is.
+async function atomicWriteJson(filePath, payload) {
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
+  await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2) + '\n')
+  await fs.rename(tmpPath, filePath)
+}
+
+async function writeLivenessMarker() {
+  const payload = { status: 'live', lastHeartbeat: new Date().toISOString(), pid: process.pid }
+  await atomicWriteJson(LIVENESS_MARKER_PATH, payload)
+}
+
+// Critical B (agent-lifecycle model-divergent review, 2026-07-03): a bad/
+// revoked Discord token or a missing-token boot used to just exit this
+// process into run.sh's own restart loop with no on-disk signal beyond
+// stderr -- main.cjs's agent-status.cjs never saw it, so the onboarding UI
+// stayed on "connecting" forever. This marker is the distinct failure
+// signal main.cjs's failure-marker poller (see main.cjs's
+// pollFailureMarker()) surfaces as setAgentStatus('failed', reason) within
+// a bounded time. Shares its DATA_HOME/.agent-failed.json path + JSON shape
+// with run.sh's own restart-ladder failure write (see run.sh's run_loop()
+// / write_failure()) so main.cjs only needs to poll one file regardless of
+// which layer -- the bash restart loop, or this process's own login
+// failure -- detected the problem first.
+async function writeFailureMarker(reason) {
+  const payload = { status: 'failed', reason, since: new Date().toISOString(), pid: process.pid }
+  await atomicWriteJson(FAILURE_MARKER_PATH, payload)
+}
+
 if (!DISCORD_TOKEN) {
-  process.stderr.write(`[${AGENT_NAME}] FATAL: DISCORD_BOT_TOKEN not set. Check .env (or the .mcp.json env block).\n`)
+  const reason = 'DISCORD_BOT_TOKEN not set. Check .env (or the .mcp.json env block).'
+  process.stderr.write(`[${AGENT_NAME}] FATAL: ${reason}\n`)
+  await writeFailureMarker(reason).catch((err) =>
+    process.stderr.write(`[${AGENT_NAME}] also failed to write failure marker: ${err.message}\n`)
+  )
   process.exit(1)
 }
 if (!HOME_CHANNEL_ID) {
-  process.stderr.write(`[${AGENT_NAME}] FATAL: HOME_CHANNEL_ID not set. Check .env (or the .mcp.json env block).\n`)
+  const reason = 'HOME_CHANNEL_ID not set. Check .env (or the .mcp.json env block).'
+  process.stderr.write(`[${AGENT_NAME}] FATAL: ${reason}\n`)
+  await writeFailureMarker(reason).catch((err) =>
+    process.stderr.write(`[${AGENT_NAME}] also failed to write failure marker: ${err.message}\n`)
+  )
   process.exit(1)
 }
 
@@ -218,24 +312,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   throw new Error(`unknown tool: ${name}`)
 })
 
-// ── liveness marker (agent-lifecycle fix, 2026-07-03, PART 4) ──────────────
-// Written to DATA_HOME (== process.cwd() here: .mcp.json's agent-channel
-// entry sets cwd: DATA_HOME, see onboarding/http-server.cjs's
-// ensureMcpJsonAgentName()) on the discord.js ClientReady event, and
-// refreshed as a heartbeat afterward. onboarding/http-server.cjs's GET
-// /api/agent/status polls this file's freshness to gate the onboarding
-// wizard's Step 5 success screen on REAL Discord-level liveness, not just
-// the ONBOARDING_COMPLETE flag flip (which only proves the token validated,
-// not that the agent ever actually connected).
-const LIVENESS_MARKER_PATH = path.join(process.cwd(), '.agent-live')
-const LIVENESS_HEARTBEAT_MS = 60_000 // http-server.cjs's LIVENESS_FRESH_MS (150s) tolerates one missed beat
-
-async function writeLivenessMarker() {
-  const payload = { status: 'live', lastHeartbeat: new Date().toISOString(), pid: process.pid }
-  await fs.writeFile(LIVENESS_MARKER_PATH, JSON.stringify(payload, null, 2) + '\n')
-}
-
 // ── Discord event handlers ──────────────────────────────────────────────────
+// (LIVENESS_MARKER_PATH / writeLivenessMarker() / FAILURE_MARKER_PATH /
+// writeFailureMarker() are declared up near the DATA_HOME/config block above
+// -- moved there, 2026-07-03, so the DISCORD_TOKEN/HOME_CHANNEL_ID FATAL
+// guards can call writeFailureMarker() before exiting. GET
+// /api/agent/status polls the liveness marker's freshness to gate the
+// onboarding wizard's Step 5 success screen on REAL Discord-level liveness,
+// not just the ONBOARDING_COMPLETE flag flip.)
 discord.once(Events.ClientReady, (c) => {
   log(`Discord ready as ${c.user.tag}`)
   writeLivenessMarker().catch((err) => log(`liveness marker write failed: ${err.message}`))
@@ -294,12 +378,21 @@ async function boot() {
   try {
     await discord.login(DISCORD_TOKEN)
   } catch (err) {
-    process.stderr.write(`[${AGENT_NAME}] FATAL: discord.login failed: ${err.message}\n`)
+    // Critical B: a bad/revoked bot token fails here fast (Discord's REST
+    // gateway rejects it in seconds, not a 12h hang) -- write the distinct
+    // failure marker so main.cjs's poller surfaces this as setAgentStatus
+    // ('failed', reason) instead of the UI sitting on "connecting" forever
+    // while run.sh's __loop keeps restarting this process.
+    const reason = `discord.login failed: ${err.message}`
+    process.stderr.write(`[${AGENT_NAME}] FATAL: ${reason}\n`)
+    await writeFailureMarker(reason).catch((markerErr) =>
+      process.stderr.write(`[${AGENT_NAME}] also failed to write failure marker: ${markerErr.message}\n`)
+    )
     process.exit(1)
   }
 }
 
-export { writeLivenessMarker, LIVENESS_MARKER_PATH }
+export { writeLivenessMarker, LIVENESS_MARKER_PATH, writeFailureMarker, FAILURE_MARKER_PATH, DATA_HOME }
 
 if (isMainModule) {
   await boot()

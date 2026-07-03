@@ -125,8 +125,28 @@ function readLivenessMarker() {
   }
 }
 
+// Fix D (agent-lifecycle model-divergent review, 2026-07-03): the marker's
+// timestamp freshness alone is not enough -- a dead/replaced process's last
+// recent heartbeat can outlive it by up to LIVENESS_FRESH_MS (150s) and get
+// reported "live" for a broken agent. channel.mjs's writeLivenessMarker()
+// stamps its own process.pid into the marker (see channel.mjs); this checks
+// that pid is actually still alive on this machine before trusting the
+// timestamp at all. Uses the same kill(pid, 0)-probe idiom run.sh's own
+// is_alive() uses, just from Node -- ESRCH means dead, EPERM means alive but
+// owned by another user (still "alive" for our purposes, just not ours).
+function isPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return err.code === 'EPERM'
+  }
+}
+
 function isMarkerFresh(marker) {
   if (!marker) return false
+  if (!isPidAlive(marker.pid)) return false
   const ageMs = Date.now() - Date.parse(marker.lastHeartbeat)
   return Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= LIVENESS_FRESH_MS
 }
@@ -1072,4 +1092,23 @@ module.exports = {
   // already solved for CHANNEL_SCRIPT_PATH/MEMORY_SERVER_SCRIPT_PATH above,
   // reused as-is rather than re-implemented in main.cjs.
   toUnpackedPath,
+  // Exported for Critical A (agent-lifecycle model-divergent review,
+  // 2026-07-03): spawnRealAgentChild() needs to read the validated BYOK
+  // provider key back out of safeStorage at spawn time to inject
+  // ANTHROPIC_API_KEY into the claude child's own env (a fresh Mac that
+  // never ran `claude login` otherwise has no credentials and the CLI
+  // hangs at its own auth prompt forever). Never written to any file --
+  // decrypted in-memory only, same as this function's existing callers
+  // here (storeProviderKeyVerified's round-trip check, readDiscordToken).
+  readProviderKey,
+  // Exported for Fix D verification (agent-lifecycle model-divergent
+  // review, 2026-07-03): pure functions, no Electron dependency (see this
+  // file's own getElectron() comment -- "stays requireable/testable
+  // outside a running Electron main process"), so a plain-node test
+  // harness can exercise the pid-liveness gate directly without spinning
+  // up Electron.
+  isMarkerFresh,
+  readLivenessMarker,
+  computeAgentStatus,
+  isPidAlive,
 }
