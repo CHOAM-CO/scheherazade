@@ -228,26 +228,57 @@ function writeAgentConfig(fields) {
   return merged
 }
 
-// ── .mcp.json AGENT_NAME + cwd correction ────────────────────────────────
+// ── unpacked-path mapping for spawned (ELECTRON_RUN_AS_NODE) children ────
+// Packaging bugfix (model-divergent/GPT review, 2026-07-03, high-severity):
+// the bundled Claude CLI reads this .mcp.json and spawns each server as a
+// child process. A child spawned with ELECTRON_RUN_AS_NODE does NOT get
+// Electron's asar fs patch -- that patch lives in Electron's own process,
+// not in a bare-node child -- so channel.mjs / memory/server.mjs and every
+// node_modules import they make must resolve to REAL files on disk, never
+// a path inside app.asar. package.json's build.asarUnpack mirrors
+// memory/**, channel.mjs, and node_modules/** into
+// <app>/Contents/Resources/app.asar.unpacked/... at build time (a REAL
+// directory); this maps any REPO_ROOT-relative absolute path to that
+// unpacked twin. No-op in dev -- REPO_ROOT never contains the literal
+// "app.asar" path segment there, so dev keeps working unchanged.
+function toUnpackedPath(p) {
+  const marker = `${path.sep}app.asar${path.sep}`
+  if (!p.includes(marker)) return p
+  return p.replace(marker, `${path.sep}app.asar.unpacked${path.sep}`)
+}
+
+const CHANNEL_SCRIPT_PATH = toUnpackedPath(path.join(REPO_ROOT, 'channel.mjs'))
+const MEMORY_SERVER_SCRIPT_PATH = toUnpackedPath(path.join(REPO_ROOT, 'memory', 'server.mjs'))
+
+// ── .mcp.json AGENT_NAME + command/args/cwd correction ──────────────────
 // The checked-in .mcp.json (both the "agent-channel" and "memory" MCP
 // server entries) still carries AGENT_NAME=companion, a leftover from the
 // agent-portable fork. memory/server.mjs resolves its DB path from
 // process.env.AGENT_NAME at import time -- if this wizard writes preference
 // rows under AGENT_NAME=scheherazade while .mcp.json still says
-// "companion", the live agent's memory MCP server (started later via
-// run.sh) would read a *different* database and never see what the wizard
-// wrote. This is a silent-failure class bug, not cosmetic -- fix it here as
-// part of "config write", not a separate unrelated edit.
+// "companion", the live agent's memory MCP server would read a *different*
+// database and never see what the wizard wrote. This is a silent-failure
+// class bug, not cosmetic -- fix it here as part of "config write", not a
+// separate unrelated edit.
 //
-// `cwd` gets the same treatment for the same reason, added 2026-07-03 while
-// wiring the CONFIG_DIR template-seeding fix above: the checked-in
-// .mcp.json's cwd is whatever absolute path the machine that last ran
-// setup.sh (or this function) happened to have this repo checked out at.
-// Once that file is seeded as a bundled TEMPLATE onto a *different* user's
-// machine (the new first-run behavior this revision adds -- see
-// seedConfigFromTemplates()), that stale cwd points at a directory that
-// doesn't exist on their disk at all. Same class of drift as the
-// AGENT_NAME bug, same fix shape: correct it on every boot, not just once.
+// command/args/cwd get the same "correct on every boot" treatment, for two
+// packaging bugs found in the same model-divergent review (2026-07-03,
+// both high-severity, confirmed by direct code read):
+//   BUG 1 (cwd): the old cwd=REPO_ROOT is inside app.asar once packaged --
+//     not a real OS directory, so a plain spawned process can't read files
+//     there. cwd is now DATA_HOME, which is always a real, writable
+//     directory (also happens to fix channel.mjs's HOME_CHANNEL_ID pickup:
+//     its `dotenv/config` import loads .env relative to cwd, and
+//     DATA_HOME/.env is exactly where writeEnv() below puts it).
+//   BUG 2 (command/args): command was the literal string "node" with no
+//     bundled node runtime -- ENOENT on a clean Mac with no system node.
+//     command is now process.execPath (the bundled Electron binary itself)
+//     with ELECTRON_RUN_AS_NODE:'1' in env, the same pattern main.cjs's
+//     child-process supervision already uses -- see main.cjs's comment on
+//     that env var. args now point at the absolute UNPACKED path of the
+//     target .mjs (see toUnpackedPath above) instead of a REPO_ROOT-
+//     relative "./channel.mjs" that only ever resolved correctly when cwd
+//     was REPO_ROOT.
 function ensureMcpJsonAgentName() {
   ensureConfigDir()
   let existing = null
@@ -268,39 +299,47 @@ function ensureMcpJsonAgentName() {
   // despite this function running (silently, no error) on every boot.
   const currentText = existing ? JSON.stringify(existing, null, 2) + '\n' : null
   const servers = existing && existing.mcpServers ? existing.mcpServers : {}
-  const KNOWN_SERVERS = new Set(['agent-channel', 'memory'])
-  for (const name of Object.keys(servers)) {
-    if (servers[name] && servers[name].env) {
-      servers[name].env.AGENT_NAME = AGENT_NAME
-    }
-    if (servers[name] && KNOWN_SERVERS.has(name)) {
-      servers[name].cwd = REPO_ROOT
-    }
+  const KNOWN_SERVERS = { 'agent-channel': CHANNEL_SCRIPT_PATH, memory: MEMORY_SERVER_SCRIPT_PATH }
+  for (const name of Object.keys(KNOWN_SERVERS)) {
+    if (!servers[name]) continue
+    servers[name].command = process.execPath
+    servers[name].args = [KNOWN_SERVERS[name]]
+    servers[name].cwd = DATA_HOME
+    servers[name].env = { ...(servers[name].env || {}), AGENT_NAME, ELECTRON_RUN_AS_NODE: '1' }
   }
   // If either expected server entry is missing (fresh clone before any
-  // setup.sh run), seed it with the same shape setup.sh / the P0 memory
-  // spike already established.
+  // setup.sh run), seed it with the same corrected shape.
   if (!servers['agent-channel']) {
     servers['agent-channel'] = {
-      command: 'node',
-      args: ['./channel.mjs'],
-      cwd: REPO_ROOT,
-      env: { AGENT_NAME },
+      command: process.execPath,
+      args: [CHANNEL_SCRIPT_PATH],
+      cwd: DATA_HOME,
+      env: { AGENT_NAME, ELECTRON_RUN_AS_NODE: '1' },
     }
   }
   if (!servers['memory']) {
     servers['memory'] = {
-      command: 'node',
-      args: ['./memory/server.mjs'],
-      cwd: REPO_ROOT,
-      env: { AGENT_NAME },
+      command: process.execPath,
+      args: [MEMORY_SERVER_SCRIPT_PATH],
+      cwd: DATA_HOME,
+      env: { AGENT_NAME, ELECTRON_RUN_AS_NODE: '1' },
     }
   }
+  // BUG 3 (bot-token seam, security review 2026-07-03): DISCORD_BOT_TOKEN
+  // must NEVER be written here. It is safeStorage-only (see
+  // storeDiscordTokenVerified / readDiscordToken below) -- writing it into
+  // this on-disk JSON file would reintroduce the exact plaintext-at-rest
+  // gap that fix closed. Whatever spawns the real `claude` CLI child
+  // (main.cjs) decrypts it at spawn time and injects it into THAT child's
+  // own env -- the CLI inherits it, and inherits it again down to
+  // channel.mjs when the CLI spawns this .mcp.json's "agent-channel"
+  // entry as an MCP server. Never add a token field to KNOWN_SERVERS' env
+  // above.
   const next = { mcpServers: servers }
   const nextText = JSON.stringify(next, null, 2) + '\n'
   if (nextText !== currentText) {
     fs.writeFileSync(MCP_JSON_PATH, nextText)
-    log('.mcp.json AGENT_NAME/cwd corrected/seeded')
+    log('.mcp.json AGENT_NAME/command/args/cwd corrected/seeded')
   }
 }
 
@@ -315,6 +354,21 @@ function writeEnv({ homeChannelId }) {
   ensureConfigDir()
   const lines = [`HOME_CHANNEL_ID=${homeChannelId}`, `AGENT_NAME=${AGENT_NAME}`]
   fs.writeFileSync(ENV_PATH, lines.join('\n') + '\n')
+}
+
+// Read-back for HOME_CHANNEL_ID, mirroring readAgentConfig()'s simple
+// KEY=VALUE parse (no quoting needed -- writeEnv() never quotes;
+// HOME_CHANNEL_ID is always a plain numeric snowflake). Added for the
+// BOT-TOKEN SEAM (main.cjs P1 wiring, security review 2026-07-03):
+// whatever spawns the real agent child needs HOME_CHANNEL_ID injected into
+// its env alongside the decrypted token, so main.cjs can validate it's
+// present (and skip the spawn with a clear log line if not) rather than
+// spawning blind and letting channel.mjs FATAL-exit deep in the child.
+function readHomeChannelId() {
+  if (!fs.existsSync(ENV_PATH)) return null
+  const text = fs.readFileSync(ENV_PATH, 'utf8')
+  const m = text.match(/^HOME_CHANNEL_ID=(.*)$/m)
+  return m ? m[1].trim() : null
 }
 
 // ── safeStorage-backed BYOK credential store ─────────────────────────────
@@ -908,4 +962,4 @@ function createOnboardingServer() {
   })
 }
 
-module.exports = { createOnboardingServer, AGENT_NAME, DATA_HOME, readAgentConfig, readDiscordToken }
+module.exports = { createOnboardingServer, AGENT_NAME, DATA_HOME, readAgentConfig, readDiscordToken, readHomeChannelId }

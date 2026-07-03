@@ -34,7 +34,16 @@
 
 const { app, BrowserWindow } = require('electron')
 const { spawn } = require('node:child_process')
-const { createOnboardingServer } = require('./onboarding/http-server.cjs')
+const path = require('node:path')
+const fs = require('node:fs')
+const {
+  createOnboardingServer,
+  readAgentConfig,
+  readDiscordToken,
+  readHomeChannelId,
+  AGENT_NAME: FIXED_AGENT_NAME,
+  DATA_HOME,
+} = require('./onboarding/http-server.cjs')
 
 // ── stdout/stderr hygiene ───────────────────────────────────────────────
 // Electron's main process log is just the terminal it was launched from
@@ -89,46 +98,136 @@ function createMainWindow(url) {
   return win
 }
 
-// ── (c) child-process supervision demo ──────────────────────────────────
-// Proves the shape that will later supervise:
-//   - the `claude` CLI agent child (run.sh's job today, done in-process here)
-//   - a provider proxy child
-// Both are long-lived daemons in the real product; this demo child is
-// deliberately trivial (one line, exits immediately) to isolate "can
-// Electron main spawn + capture + reap a child" from "can it manage a
-// long-lived one" -- the latter is P1 (backoff/restart logic already
-// exists in run.sh and should be ported, not reinvented, from there).
-function demoChildProcessSupervision() {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['-e', "console.log('child alive')"], {
-      // ELECTRON_RUN_AS_NODE lets the bundled Electron binary act as a
-      // plain Node runtime for this child -- avoids assuming a system
-      // `node` is on PATH once packaged, which the real claude-CLI/proxy
-      // children will also need to reckon with (P1 concern, noted below).
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-
-    let stdout = ''
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString()
-    })
-    child.stderr.on('data', (chunk) => {
-      // Fail loud: surface child stderr immediately, don't buffer-and-drop.
-      console.error(`[scheherazade/child stderr] ${chunk.toString()}`)
-    })
-
-    child.on('error', (err) => reject(err)) // e.g. ENOENT -- never swallow
-
-    child.on('exit', (code, signal) => {
-      log(`child-process demo exited code=${code} signal=${signal} stdout=${JSON.stringify(stdout.trim())}`)
-      if (code !== 0) {
-        reject(new Error(`demo child exited non-zero: code=${code} signal=${signal}`))
-        return
+// ── (c) real agent child spawn ──────────────────────────────────────────
+// Replaces the old demoChildProcessSupervision() one-shot spike (proved
+// "can Electron main spawn+capture+reap a child" -- now retired, its job
+// done). This spawns the actual long-lived `claude` CLI agent, per the
+// wiring notes that used to live at the bottom of this file.
+//
+// BLOCKER (2026-07-03, packaging-bugfix task -- see resolveClaudeBin()
+// just below): the `claude` CLI is NOT bundled anywhere in this fork.
+// Confirmed by direct inspection: no `@anthropic-ai/claude-code` entry in
+// package.json dependencies, no such package under node_modules/, no
+// vendored binary anywhere in the repo tree (`find . -iname '*claude*'`
+// under the repo root turns up nothing but this file's own comments and
+// CLAUDE.md). It exists ONLY as whatever the user's machine separately
+// installed globally (setup.sh's `npm install -g @anthropic-ai/claude-code`
+// path, or the native installer -- both land a real platform binary
+// OUTSIDE this repo, e.g. this dev machine's ~/.local/bin/claude, a Mach-O
+// executable). That means: on a clean end-user Mac with nothing installed
+// beyond the Scheherazade.app itself, resolveClaudeBin() below returns
+// null and the real agent CANNOT be spawned -- not a bug in this file, a
+// missing product decision (bundle @anthropic-ai/claude-code via
+// extraResources/asarUnpack -- real network fetch of a native binary per
+// platform at npm-install time, real weight added to the .app -- vs.
+// require users to have `claude` pre-installed). Per instruction, this file
+// does NOT fabricate a fake bundled path to paper over that; it fails loud
+// and skips the spawn (app + onboarding UI stay usable either way) with a
+// clear actionable log line pointing at this comment.
+function resolveClaudeBin() {
+  if (app.isPackaged) {
+    // Where a real bundled copy would land (electron-builder extraResources
+    // target `claude-cli`) -- always absent today, see BLOCKER above.
+    const bundled = path.join(process.resourcesPath, 'claude-cli', 'claude')
+    if (fs.existsSync(bundled)) {
+      try {
+        fs.accessSync(bundled, fs.constants.X_OK)
+        return { bin: bundled, source: 'bundled' }
+      } catch {
+        // present but not executable -- fall through to PATH
       }
-      resolve({ code, stdout: stdout.trim() })
-    })
+    }
+  }
+  const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean)
+  for (const dir of dirs) {
+    const candidate = path.join(dir, 'claude')
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK)
+      return { bin: candidate, source: 'system-path' }
+    } catch {
+      // not here, keep looking
+    }
+  }
+  return null
+}
+
+// Spawns the real agent as a long-lived background child -- unlike the old
+// demo, this does NOT return a promise that resolves on exit (that would
+// block the boot sequence for the agent's entire lifetime). It spawns (or
+// logs a clear reason + returns null if it can't) and returns immediately;
+// exit/error are handled by listeners for logging only. No restart/backoff
+// loop yet -- porting run.sh's exponential-backoff ladder (5/10/20/40/120s,
+// KST-date-rollover reset) is still separate, open P1 work, not fabricated
+// here.
+function spawnRealAgentChild() {
+  const config = readAgentConfig()
+  if (config.ONBOARDING_COMPLETE !== '1') {
+    log('agent spawn skipped: onboarding not complete yet (no validated provider/Discord token on file)')
+    return null
+  }
+
+  const resolved = resolveClaudeBin()
+  if (!resolved) {
+    console.error(
+      '[scheherazade/main] BLOCKER: claude CLI not found -- not bundled in this build ' +
+        '(no extraResources/claude-cli, no @anthropic-ai/claude-code dependency) and not on ' +
+        'system PATH. The real agent cannot be spawned. See the resolveClaudeBin() comment ' +
+        'above for the bundling decision this needs. Onboarding UI stays usable.'
+    )
+    return null
+  }
+
+  let token
+  try {
+    token = readDiscordToken()
+  } catch (err) {
+    console.error('[scheherazade/main] readDiscordToken failed, cannot spawn agent:', err)
+    return null
+  }
+  if (!token) {
+    log('agent spawn skipped: no validated Discord bot token on file yet')
+    return null
+  }
+
+  const homeChannelId = readHomeChannelId()
+  if (!homeChannelId) {
+    log('agent spawn skipped: no HOME_CHANNEL_ID on file yet')
+    return null
+  }
+
+  const agentName = config.AGENT_NAME || FIXED_AGENT_NAME
+  const model = config.MODEL || 'claude-opus-4-6' // same default as agent-portable's run.sh
+
+  log(`spawning real agent: bin=${resolved.bin} (${resolved.source}) model=${model} name=${agentName} cwd=${DATA_HOME}`)
+
+  // BOT-TOKEN SEAM (security review, 2026-07-03): decrypted here, at the
+  // moment of spawn, and injected directly into this child's own env --
+  // never written back to any on-disk config. The `claude` CLI inherits
+  // DISCORD_BOT_TOKEN/HOME_CHANNEL_ID/AGENT_NAME, and inherits them again
+  // down to channel.mjs when the CLI spawns it as an MCP server per
+  // .mcp.json (see onboarding/http-server.cjs's ensureMcpJsonAgentName --
+  // that file's generated .mcp.json deliberately carries no token field).
+  // --dangerously-skip-permissions is intentionally NOT used here, matching
+  // run.sh's own reasoning (see agent-portable/run.sh's header comment):
+  // .claude/settings.local.json's permissions.allow already scopes this
+  // agent's tools without a blanket bypass.
+  const child = spawn(resolved.bin, ['--model', model, '--name', agentName], {
+    cwd: DATA_HOME,
+    env: { ...process.env, DISCORD_BOT_TOKEN: token, HOME_CHANNEL_ID: homeChannelId, AGENT_NAME: agentName },
+    stdio: ['ignore', 'pipe', 'pipe'],
   })
+
+  child.stdout.on('data', (chunk) => log(`[agent stdout] ${chunk.toString().trim()}`))
+  child.stderr.on('data', (chunk) => {
+    // Fail loud: surface child stderr immediately, don't buffer-and-drop.
+    console.error(`[scheherazade/agent stderr] ${chunk.toString()}`)
+  })
+  child.on('error', (err) => console.error('[scheherazade/main] agent child spawn error:', err)) // e.g. ENOENT -- never swallow
+  child.on('exit', (code, signal) => {
+    log(`agent child exited code=${code} signal=${signal} -- no restart/backoff loop wired yet (separate P1)`)
+  })
+
+  return child
 }
 
 // ── boot sequence ────────────────────────────────────────────────────────
@@ -137,8 +236,11 @@ app.whenReady().then(async () => {
     const { url } = await startOnboardingServer()
     createMainWindow(url)
 
-    const { stdout } = await demoChildProcessSupervision()
-    log(`child-process supervision OK, captured stdout: ${JSON.stringify(stdout)}`)
+    // Long-lived; deliberately not awaited to exit -- see
+    // spawnRealAgentChild()'s own comment. Returns null (onboarding
+    // incomplete, no token yet, or claude CLI not found) without throwing;
+    // only a real error inside the function body should reach fatal().
+    spawnRealAgentChild()
   } catch (err) {
     fatal('boot sequence failed', err)
   }
@@ -174,28 +276,28 @@ process.on('unhandledRejection', (reason) => {
 })
 
 // ── P1 wiring points (where the real pieces plug in) ────────────────────
-// 1. Real `claude` CLI agent child:
-//    - Replace demoChildProcessSupervision()'s spawn() call with the
-//      run.sh restart-loop logic (expect-wrapped `claude --model M --name
-//      N`, exponential backoff, trust-prompt handling) ported to JS, OR
-//      shell out to run.sh itself and supervise *that* process tree.
-//    - run.sh already has KST-aware backoff + PIDFILE/STOPFLAG/LOGFILE
-//      conventions (see ~/Desktop/scheherazade/run.sh) -- port those, do
-//      not reinvent.
-//    - Needs a decision: does Electron main spawn `claude` directly, or
-//      spawn run.sh (which itself expect-wraps claude)? Latter reuses more
-//      of the existing harness; former gives Electron tighter control
-//      over stdout/stdin framing. Not decided in this spike.
-//    - BOT-TOKEN SEAM (security review, 2026-07-03): whatever eventually
-//      spawns `claude`/channel.mjs here MUST NOT read DISCORD_BOT_TOKEN
-//      from a .env file -- it is safeStorage-only now (see
-//      onboarding/http-server.cjs's storeDiscordTokenVerified /
-//      readDiscordToken). Decrypt it at the moment of spawn with
-//      `require('./onboarding/http-server.cjs').readDiscordToken()` and
-//      inject the result directly into that child's own `env: {...}`. It
-//      must never be written back out to a .env file or any other on-disk
-//      config -- that would reintroduce the exact plaintext-at-rest gap
-//      this fix closed.
+// 1. Real `claude` CLI agent child -- DONE this revision, MODULO an open
+//    blocker (see resolveClaudeBin()'s comment above for the full
+//    writeup):
+//    - run.sh is DEAD (Mino directive, 2026-07-03) -- its CLI/bash restart
+//      loop is not shelled out to. spawnRealAgentChild() above spawns
+//      `claude` directly. Its exponential-backoff/restart ladder (KST-aware
+//      reset, 5/10/20/40/120s) is NOT ported yet -- still separate, open P1
+//      work, deliberately not fabricated here since a single spawn +
+//      exit-logging was the scope of this revision's bugfix task.
+//    - BOT-TOKEN SEAM (security review, 2026-07-03) -- WIRED: readDiscordToken()
+//      is decrypted at the moment of spawn and injected directly into the
+//      child's own `env: {...}`, alongside readHomeChannelId(). Never
+//      written back to any on-disk config. See spawnRealAgentChild()'s own
+//      comment.
+//    - BLOCKER: the `claude` CLI itself is not bundled in this fork (no
+//      @anthropic-ai/claude-code dependency, no vendored binary --
+//      confirmed by direct inspection). resolveClaudeBin() only finds it
+//      via a future extraResources path (not populated) or the system
+//      PATH (works today only because this dev machine has a global
+//      install; NOT guaranteed on a clean end-user Mac). This is a
+//      packaging decision for the product owner, not something this file
+//      can resolve on its own -- see the packaging-bugfix task report.
 //
 // 2. Provider proxy child:
 //    - No such process exists yet anywhere in this fork. P1 needs to spawn

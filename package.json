@@ -39,6 +39,11 @@
       "!node_modules/electron/**/*",
       "!node_modules/electron-builder/**/*"
     ],
+    "asarUnpack": [
+      "node_modules/**",
+      "memory/**",
+      "channel.mjs"
+    ],
     "mac": {
       "target": [
         {
