@@ -319,10 +319,41 @@
     }
   }
 
-  // ── Step 5: handoff ──────────────────────────────────────────────────
-  function renderStep5() {
+  // ── Step 5: handoff, liveness-gated ─────────────────────────────────
+  // REQUIREMENT 4 (PO, agent-lifecycle fix 2026-07-03): do not show the
+  // "waiting for you in Discord" success copy until the agent is actually
+  // confirmed live (GET /api/agent/status, backed by main.cjs's child
+  // process state + channel.mjs's DATA_HOME/.agent-live heartbeat marker).
+  // Until then: a "connecting" state. On a confirmed process failure: a
+  // fail-loud state with cause. Copy for both is a placeholder (see
+  // copy.js's step5.connecting*/failed*, marked TODO(PO)) -- the STATE
+  // MACHINE below is this task's scope, not the final wording.
+  let s5PollTimer = null
+  const S5_POLL_INTERVAL_MS = 2000
+
+  function stopS5Poll() {
+    if (s5PollTimer) {
+      clearTimeout(s5PollTimer)
+      s5PollTimer = null
+    }
+  }
+
+  function renderStep5Connecting() {
+    $('s5-title').textContent = C.step5.connectingTitle
+    $('s5-body').textContent = C.step5.connectingBody(state.displayName)
+    $('s5-open').classList.add('hidden')
+  }
+
+  function renderStep5Failed(reason) {
+    $('s5-title').textContent = C.step5.failedTitle
+    $('s5-body').textContent = C.step5.failedBody(state.displayName, reason)
+    $('s5-open').classList.add('hidden')
+  }
+
+  function renderStep5Live() {
     $('s5-title').textContent = C.step5.title
     $('s5-body').textContent = C.step5.body(state.displayName)
+    $('s5-open').classList.remove('hidden')
     $('s5-open').textContent = C.step5.button
     $('s5-open').onclick = async () => {
       try {
@@ -335,6 +366,35 @@
         alert(C.genericError(err.message))
       }
     }
+  }
+
+  async function pollAgentStatus() {
+    try {
+      const result = await api('/api/agent/status')
+      if (result.state === 'live') {
+        stopS5Poll()
+        renderStep5Live()
+        return
+      }
+      if (result.state === 'failed') {
+        stopS5Poll()
+        renderStep5Failed(result.reason)
+        return
+      }
+      renderStep5Connecting()
+    } catch (err) {
+      // Fail loud (console), but don't hard-stop polling on one transient
+      // fetch error against our own localhost server -- the connecting
+      // screen already correctly reflects "not confirmed live yet".
+      console.error('agent status poll failed:', err)
+    }
+    s5PollTimer = setTimeout(pollAgentStatus, S5_POLL_INTERVAL_MS)
+  }
+
+  function renderStep5() {
+    renderStep5Connecting()
+    stopS5Poll()
+    pollAgentStatus()
   }
 
   // ── init: resume support for the /waiting -> ?step=4 round trip ─────

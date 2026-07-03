@@ -41,9 +41,11 @@ const {
   readAgentConfig,
   readDiscordToken,
   readHomeChannelId,
+  toUnpackedPath,
   AGENT_NAME: FIXED_AGENT_NAME,
   DATA_HOME,
 } = require('./onboarding/http-server.cjs')
+const { setAgentStatus } = require('./onboarding/agent-status.cjs')
 
 // ── stdout/stderr hygiene ───────────────────────────────────────────────
 // Electron's main process log is just the terminal it was launched from
@@ -120,9 +122,35 @@ function createMainWindow(url) {
 // `build.files` excludes `node_modules/@anthropic-ai/claude-code*/**` from
 // the asar so the ~220MB binary isn't duplicated into app.asar on top of
 // the extraResources copy). resolveClaudeBin() below finds it at exactly
-// that path in a packaged app -- no ELECTRON_RUN_AS_NODE wiring needed here
-// (unlike the MCP server children) since this is a standalone native binary,
-// not a node script.
+// that path in a packaged app.
+//
+// AGENT-LIFECYCLE FIX (2026-07-03, model-divergent/GPT review -- four
+// verified bugs, this revision closes all four):
+//   BUG 1 (trigger): spawnRealAgentChild() used to run ONCE at
+//     app.whenReady, before ONBOARDING_COMPLETE could possibly be '1' on a
+//     fresh install -- it skipped, and nothing ever called it again until
+//     the next full app restart. createOnboardingServer() now takes an
+//     onOnboardingComplete callback (see boot sequence below) fired
+//     synchronously from the /api/discord/validate success path, the exact
+//     moment ONBOARDING_COMPLETE flips.
+//   BUG 2 (persistent run): this used to spawn `claude` directly with
+//     stdio ['ignore','pipe','pipe'] -- no TTY, so Claude Code runs in
+//     --print mode, which exits immediately without a prompt/stdin. Fixed
+//     by reviving run.sh as an INTERNAL bundled launcher (see RUN_SH_PATH
+//     below) instead of spawning the claude binary directly: run.sh's
+//     `__loop` mode runs it under /usr/bin/expect (a real PTY) with the
+//     proven exponential-backoff restart ladder and trust-prompt handling
+//     already battle-tested elsewhere in this fork's lineage. An earlier
+//     pass here left a comment calling run.sh "DEAD (Mino directive)" on a
+//     mis-read of that directive; reviving it as an internal launcher (the
+//     user never touches a CLI, they double-click the .app -- run.sh is an
+//     implementation detail, not a CLI surface) is intended and approved.
+//   BUG 3 (token forward): empirically confirmed, NOT a bug -- see
+//     spawnRealAgentChild()'s BOT-TOKEN SEAM comment below for the test and
+//     result.
+//   REQUIREMENT 4 (liveness gate): see onboarding/agent-status.cjs (process
+//     side) + http-server.cjs's GET /api/agent/status (combines that with
+//     channel.mjs's DATA_HOME/.agent-live Discord-heartbeat marker).
 function resolveClaudeBin() {
   if (app.isPackaged) {
     // electron-builder extraResources target -- see package.json's
@@ -151,15 +179,38 @@ function resolveClaudeBin() {
   return null
 }
 
+// run.sh as an INTERNAL bundled launcher (BUG 2 fix, see comment block
+// above). toUnpackedPath (reused from onboarding/http-server.cjs, same
+// helper CHANNEL_SCRIPT_PATH/MEMORY_SERVER_SCRIPT_PATH there use) maps this
+// to the real on-disk unpacked copy in a packaged app -- see package.json's
+// build.files/build.asarUnpack, both of which now list run.sh. No-op in
+// dev (REPO_ROOT never contains "/app.asar/" there).
+const RUN_SH_PATH = toUnpackedPath(path.join(__dirname, 'run.sh'))
+const BASH_BIN = '/bin/bash' // confirmed present on stock macOS; hardcoded rather than PATH-resolved since a packaged app's PATH can be minimal
+
+// Tracks the currently-live agent child (the persistent run.sh __loop
+// supervisor process, not an individual `claude` crash inside it -- those
+// are absorbed by run.sh's own restart/backoff ladder and never reach
+// here). Guards against double-spawn (PART 1 requirement): both the
+// boot-time call and the onOnboardingComplete callback can legitimately
+// race/overlap (e.g. a returning already-onboarded user who somehow also
+// re-triggers validate), and spawning two supervisors for the same agent
+// would fight over the same Discord token/MCP servers.
+let agentChild = null
+
 // Spawns the real agent as a long-lived background child -- unlike the old
 // demo, this does NOT return a promise that resolves on exit (that would
 // block the boot sequence for the agent's entire lifetime). It spawns (or
 // logs a clear reason + returns null if it can't) and returns immediately;
-// exit/error are handled by listeners for logging only. No restart/backoff
-// loop yet -- porting run.sh's exponential-backoff ladder (5/10/20/40/120s,
-// KST-date-rollover reset) is still separate, open P1 work, not fabricated
-// here.
+// exit/error update onboarding/agent-status.cjs's shared status (read by
+// http-server.cjs's GET /api/agent/status) for fail-loud surfacing to the
+// UI, in addition to the existing console logging.
 function spawnRealAgentChild() {
+  if (agentChild) {
+    log(`agent spawn skipped: a child is already alive (pid=${agentChild.pid})`)
+    return agentChild
+  }
+
   const config = readAgentConfig()
   if (config.ONBOARDING_COMPLETE !== '1') {
     log('agent spawn skipped: onboarding not complete yet (no validated provider/Discord token on file)')
@@ -168,14 +219,23 @@ function spawnRealAgentChild() {
 
   const resolved = resolveClaudeBin()
   if (!resolved) {
+    const reason =
+      'claude CLI not found -- expected the bundled binary at Resources/claude-cli/claude ' +
+      '(electron-builder extraResources, see resolveClaudeBin() above) to be present and ' +
+      'executable, and it is not; system PATH has no `claude` either.'
     console.error(
-      '[scheherazade/main] BLOCKER: claude CLI not found -- expected the bundled binary at ' +
-        'Resources/claude-cli/claude (electron-builder extraResources, see resolveClaudeBin() ' +
-        'above) to be present and executable, and it is not; system PATH has no `claude` ' +
-        'either. The real agent cannot be spawned. If this fires in a packaged build, the ' +
-        'extraResources copy is missing/corrupt/non-executable -- check the build output. ' +
-        'Onboarding UI stays usable.'
+      `[scheherazade/main] BLOCKER: ${reason} The real agent cannot be spawned. If this fires ` +
+        'in a packaged build, the extraResources copy is missing/corrupt/non-executable -- ' +
+        'check the build output. Onboarding UI stays usable.'
     )
+    setAgentStatus('failed', reason)
+    return null
+  }
+
+  if (!fs.existsSync(RUN_SH_PATH)) {
+    const reason = `internal launcher not found at ${RUN_SH_PATH} (run.sh missing from the packaged/unpacked app -- check build.files/build.asarUnpack)`
+    console.error(`[scheherazade/main] BLOCKER: ${reason}`)
+    setAgentStatus('failed', reason)
     return null
   }
 
@@ -184,6 +244,7 @@ function spawnRealAgentChild() {
     token = readDiscordToken()
   } catch (err) {
     console.error('[scheherazade/main] readDiscordToken failed, cannot spawn agent:', err)
+    setAgentStatus('failed', `readDiscordToken failed: ${err.message}`)
     return null
   }
   if (!token) {
@@ -198,50 +259,106 @@ function spawnRealAgentChild() {
   }
 
   const agentName = config.AGENT_NAME || FIXED_AGENT_NAME
-  const model = config.MODEL || 'claude-opus-4-6' // same default as agent-portable's run.sh
+  const model = config.MODEL || 'claude-opus-4-6' // same default as run.sh's own MODEL fallback
 
-  log(`spawning real agent: bin=${resolved.bin} (${resolved.source}) model=${model} name=${agentName} cwd=${DATA_HOME}`)
+  log(
+    `spawning real agent via internal launcher: launcher=${RUN_SH_PATH} bin=${resolved.bin} ` +
+      `(${resolved.source}) model=${model} name=${agentName} dataHome=${DATA_HOME}`
+  )
 
-  // BOT-TOKEN SEAM (security review, 2026-07-03): decrypted here, at the
-  // moment of spawn, and injected directly into this child's own env --
-  // never written back to any on-disk config. The `claude` CLI inherits
-  // DISCORD_BOT_TOKEN/HOME_CHANNEL_ID/AGENT_NAME, and inherits them again
-  // down to channel.mjs when the CLI spawns it as an MCP server per
-  // .mcp.json (see onboarding/http-server.cjs's ensureMcpJsonAgentName --
-  // that file's generated .mcp.json deliberately carries no token field).
+  // BOT-TOKEN SEAM (security review, 2026-07-03; forwarding EMPIRICALLY
+  // CONFIRMED, 2026-07-03, agent-lifecycle fix PART 3): decrypted here, at
+  // the moment of spawn, and injected directly into this child's own env --
+  // never written back to any on-disk config. Confirmed by direct test
+  // (bundled claude.exe + a scratch .mcp.json whose env block deliberately
+  // carried NO token, matching production's ensureMcpJsonAgentName() shape,
+  // + a throwaway MCP child that echoed its own process.env back to a
+  // receipt file): the `claude` CLI forwards its FULL parent env (151
+  // inherited keys, +1 = 152 when DISCORD_BOT_TOKEN was set; 0 when it
+  // wasn't -- positive/negative control, repeated) to every MCP server
+  // child it spawns, merged with (not replaced by) that server's own
+  // declared `env` block in .mcp.json. So DISCORD_BOT_TOKEN set on THIS
+  // child's env below reaches channel.mjs unchanged, with no code change
+  // needed here and no token ever touching .mcp.json or any other on-disk
+  // file. run.sh's `run_loop` re-exports CLAUDE_CMD/AGENT_NAME/MEM for its
+  // own use but never touches or logs DISCORD_BOT_TOKEN, so it passes
+  // through run.sh -> expect -> claude -> channel.mjs untouched at every
+  // hop.
   // --dangerously-skip-permissions is intentionally NOT used here, matching
-  // run.sh's own reasoning (see agent-portable/run.sh's header comment):
-  // .claude/settings.local.json's permissions.allow already scopes this
-  // agent's tools without a blanket bypass.
-  const child = spawn(resolved.bin, ['--model', model, '--name', agentName], {
+  // run.sh's own header-comment reasoning: .claude/settings.local.json's
+  // permissions.allow already scopes this agent's tools without a blanket
+  // bypass.
+  const child = spawn(BASH_BIN, [RUN_SH_PATH, '__loop'], {
     cwd: DATA_HOME,
-    env: { ...process.env, DISCORD_BOT_TOKEN: token, HOME_CHANNEL_ID: homeChannelId, AGENT_NAME: agentName },
+    env: {
+      ...process.env,
+      DISCORD_BOT_TOKEN: token,
+      HOME_CHANNEL_ID: homeChannelId,
+      AGENT_NAME: agentName,
+      MODEL: model,
+      CLAUDE_BIN: resolved.bin,
+      AGENT_DATA_HOME: DATA_HOME, // see run.sh's own comment: MEM = AGENT_DATA_HOME override
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+
+  agentChild = child
+  setAgentStatus('connecting')
 
   child.stdout.on('data', (chunk) => log(`[agent stdout] ${chunk.toString().trim()}`))
   child.stderr.on('data', (chunk) => {
     // Fail loud: surface child stderr immediately, don't buffer-and-drop.
     console.error(`[scheherazade/agent stderr] ${chunk.toString()}`)
   })
-  child.on('error', (err) => console.error('[scheherazade/main] agent child spawn error:', err)) // e.g. ENOENT -- never swallow
+  child.on('error', (err) => {
+    // e.g. ENOENT on BASH_BIN -- never swallow. This is the launcher
+    // process itself failing to spawn at all, not a claude crash inside
+    // run.sh's own loop (that's absorbed by run.sh's restart ladder).
+    console.error('[scheherazade/main] agent child spawn error:', err)
+    setAgentStatus('failed', `spawn error: ${err.message}`)
+    agentChild = null
+  })
   child.on('exit', (code, signal) => {
-    log(`agent child exited code=${code} signal=${signal} -- no restart/backoff loop wired yet (separate P1)`)
+    // run.sh's run_loop() only exits on SIGTERM/SIGINT (trapped, clean) or
+    // an internal `set -euo pipefail` failure -- there is no intentional
+    // "stop the agent" path anywhere in this app yet, so ANY exit here is
+    // unexpected and worth surfacing as failed, not silently re-idle.
+    log(`agent child exited code=${code} signal=${signal}`)
+    setAgentStatus('failed', `agent process exited unexpectedly (code=${code} signal=${signal})`)
+    agentChild = null
   })
 
   return child
 }
 
+// BUG 1 fix (agent-lifecycle, 2026-07-03): passed to every
+// startOnboardingServer() call below. spawnRealAgentChild() is itself a
+// no-op-with-a-clear-log-line if onboarding isn't complete / no token yet /
+// claude CLI missing -- safe to hand this callback in unconditionally,
+// including on the very first boot-time call, since ONBOARDING_COMPLETE is
+// checked fresh (readAgentConfig()) every time spawnRealAgentChild() runs,
+// not just once at boot.
+const onOnboardingComplete = () => {
+  log('onboarding-complete callback fired -- attempting agent spawn')
+  spawnRealAgentChild()
+}
+
 // ── boot sequence ────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
   try {
-    const { url } = await startOnboardingServer()
+    const { url } = await startOnboardingServer(onOnboardingComplete)
     createMainWindow(url)
 
     // Long-lived; deliberately not awaited to exit -- see
     // spawnRealAgentChild()'s own comment. Returns null (onboarding
     // incomplete, no token yet, or claude CLI not found) without throwing;
-    // only a real error inside the function body should reach fatal().
+    // only a real error inside the function body should reach fatal(). This
+    // is the "returning already-onboarded user" path -- ONBOARDING_COMPLETE
+    // is already '1' on disk from a prior run, so this spawns immediately.
+    // A FRESH-onboarding user's spawn instead happens later, via the
+    // onOnboardingComplete callback above, the moment they finish the
+    // Discord step -- see onboarding/http-server.cjs's /api/discord/validate
+    // handler.
     spawnRealAgentChild()
   } catch (err) {
     fatal('boot sequence failed', err)
@@ -252,7 +369,7 @@ app.whenReady().then(async () => {
     // re-shows one. Not exercised by this headless spike, kept for
     // correctness since electron-builder targets mac.
     if (BrowserWindow.getAllWindows().length === 0) {
-      startOnboardingServer()
+      startOnboardingServer(onOnboardingComplete)
         .then(({ url }) => createMainWindow(url))
         .catch((err) => fatal('activate: failed to reopen window', err))
     }
@@ -280,18 +397,25 @@ process.on('unhandledRejection', (reason) => {
 // ── P1 wiring points (where the real pieces plug in) ────────────────────
 // 1. Real `claude` CLI agent child -- DONE this revision, including the
 //    bundling blocker from the prior packaging-bugfix task (see
-//    resolveClaudeBin()'s RESOLVED comment above for the full writeup):
-//    - run.sh is DEAD (Mino directive, 2026-07-03) -- its CLI/bash restart
-//      loop is not shelled out to. spawnRealAgentChild() above spawns
-//      `claude` directly. Its exponential-backoff/restart ladder (KST-aware
-//      reset, 5/10/20/40/120s) is NOT ported yet -- still separate, open P1
-//      work, deliberately not fabricated here since a single spawn +
-//      exit-logging was the scope of this revision's bugfix task.
-//    - BOT-TOKEN SEAM (security review, 2026-07-03) -- WIRED: readDiscordToken()
-//      is decrypted at the moment of spawn and injected directly into the
-//      child's own `env: {...}`, alongside readHomeChannelId(). Never
-//      written back to any on-disk config. See spawnRealAgentChild()'s own
-//      comment.
+//    resolveClaudeBin()'s RESOLVED comment above for the full writeup) AND
+//    the agent-lifecycle fix (2026-07-03, model-divergent/GPT review, see
+//    the big comment block above resolveClaudeBin() for the full BUG
+//    1-3/REQUIREMENT 4 writeup):
+//    - run.sh is REVIVED as an internal bundled launcher (this revision
+//      corrects a prior comment here that called it "DEAD" on a mis-read
+//      directive -- reviving it as an internal launcher, never exposed as a
+//      CLI surface to the user, is intended and approved). run_loop()'s
+//      proven exponential-backoff restart ladder (KST-aware reset,
+//      5/10/20/40/120s) + /usr/bin/expect PTY + trust-prompt handling is
+//      what actually keeps the agent alive now -- spawnRealAgentChild()
+//      spawns `bash run.sh __loop` (RUN_SH_PATH), not `claude` directly.
+//    - BOT-TOKEN SEAM (security review, 2026-07-03) -- WIRED, and env
+//      forwarding through claude -> its MCP children EMPIRICALLY CONFIRMED
+//      (2026-07-03): readDiscordToken() is decrypted at the moment of spawn
+//      and injected directly into the child's own `env: {...}`, alongside
+//      readHomeChannelId(). Never written back to any on-disk config. See
+//      spawnRealAgentChild()'s own BOT-TOKEN SEAM comment for the test
+//      methodology and result.
 //    - RESOLVED (bundle-claude-cli task, 2026-07-03): `@anthropic-ai/claude-code`
 //      is now a package.json dependency; its postinstall places the real
 //      standalone arm64 Mach-O binary at
@@ -301,6 +425,15 @@ process.on('unhandledRejection', (reason) => {
 //      resolveClaudeBin() looks for in a packaged app. Verified: DMG builds,
 //      binary is present+executable inside the built .app, and runs
 //      `--version` from that bundled path with no system claude/node needed.
+//    - Liveness gate (REQUIREMENT 4) -- WIRED: onboarding/agent-status.cjs
+//      tracks this child's spawn/error/exit; http-server.cjs's
+//      GET /api/agent/status combines that with channel.mjs's
+//      DATA_HOME/.agent-live Discord-heartbeat marker for the Step 5 UI to
+//      poll. NOT yet wired: killing this child on app quit (window-all-
+//      closed intentionally leaves it running, matching the daemon-survives
+//      pattern noted below -- but a full Cmd+Q quit currently leaves it
+//      orphaned rather than gracefully stopped; open follow-up, not part of
+//      this revision's four-bug scope).
 //
 // 2. Provider proxy child:
 //    - No such process exists yet anywhere in this fork. P1 needs to spawn

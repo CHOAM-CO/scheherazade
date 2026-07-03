@@ -103,6 +103,20 @@ window.COPY = {
     title: '끝났습니다',
     body: (name) => `${name}가 Discord에서 기다립니다. 첫 인사는 방금 입력한 설정을 이미 반영하고 있습니다.`,
     button: 'Discord 열기',
+    // AUTHORED (not in copy file) -- TODO(PO): agent-lifecycle fix,
+    // 2026-07-03, REQUIREMENT 4. Step 5 used to show the strings above the
+    // instant the Discord token validated, before the agent had actually
+    // connected -- if the user opened Discord right then, sometimes nobody
+    // was there yet ("silence = broken promise"). It's now gated on a real
+    // liveness poll (GET /api/agent/status); these two states need copy the
+    // wizard didn't specify. Deliberately plain/utilitarian placeholders --
+    // replace with real copy in the same register (간결 존댓말, no
+    // emoji/exclamation) before ship.
+    connectingTitle: '연결하는 중',
+    connectingBody: (name) => `${name}를 Discord에 연결하고 있습니다. 잠시 기다려 주세요.`,
+    failedTitle: '연결하지 못했습니다',
+    failedBody: (name, reason) =>
+      `${name}를 시작하지 못했습니다.${reason ? ` (${reason})` : ''} 앱을 다시 시작하면 다시 시도합니다.`,
   },
 
   memoryPane: {

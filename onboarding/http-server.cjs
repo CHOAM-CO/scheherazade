@@ -92,6 +92,70 @@ const AGENT_CONFIG_PATH = path.join(CONFIG_DIR, '.agent-config')
 const ENV_PATH = path.join(CONFIG_DIR, '.env')
 const MCP_JSON_PATH = path.join(CONFIG_DIR, '.mcp.json')
 
+// Process-side liveness status (spawned/failed), written by main.cjs's
+// child-process lifecycle. See onboarding/agent-status.cjs's own header for
+// why this is a plain shared require() rather than IPC.
+const { getAgentStatus } = require('./agent-status.cjs')
+
+// Discord-side liveness marker (agent-lifecycle fix, 2026-07-03, PART 4):
+// channel.mjs writes this file to DATA_HOME (its cwd, per .mcp.json's
+// agent-channel entry) on the discord.js ClientReady event, and refreshes
+// it as a heartbeat afterward -- see channel.mjs's own
+// writeLivenessMarker()/LIVENESS_HEARTBEAT_MS. Read-side lives here, not in
+// agent-status.cjs, because it's a filesystem fact (DATA_HOME/.agent-live),
+// not process-lifecycle state; agent-status.cjs deliberately has no fs
+// dependency. Filename/shape is a plain documented convention shared
+// between the two files (one is ESM, one CJS -- not worth a shared module
+// for a two-field JSON contract).
+const LIVENESS_MARKER_PATH = path.join(DATA_HOME, '.agent-live')
+// Generous vs. channel.mjs's 60s heartbeat interval -- tolerates one missed
+// beat before calling the marker stale, without ever letting a real dead
+// agent's LAST marker read as perpetually "live".
+const LIVENESS_FRESH_MS = 150_000
+
+function readLivenessMarker() {
+  try {
+    const text = fs.readFileSync(LIVENESS_MARKER_PATH, 'utf8')
+    const parsed = JSON.parse(text)
+    if (!parsed || typeof parsed.lastHeartbeat !== 'string') return null
+    return parsed
+  } catch (err) {
+    if (err.code !== 'ENOENT') log(`readLivenessMarker: unexpected error reading ${LIVENESS_MARKER_PATH}: ${err.message}`)
+    return null
+  }
+}
+
+function isMarkerFresh(marker) {
+  if (!marker) return false
+  const ageMs = Date.now() - Date.parse(marker.lastHeartbeat)
+  return Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= LIVENESS_FRESH_MS
+}
+
+// GET /api/agent/status -- REQUIREMENT 4 (PO, agent-lifecycle fix,
+// 2026-07-03): combines the process-side state (agent-status.cjs, written
+// by main.cjs) with the Discord-side heartbeat marker (this file's own
+// read) into ONE state the Step 5 UI can poll and gate its success screen
+// on, instead of showing "waiting in Discord" the instant
+// ONBOARDING_COMPLETE flips.
+//   state: 'connecting' -- process spawned (or not attempted yet), marker
+//          absent/stale. Normal transient state.
+//   state: 'live'       -- marker fresh. Real, confirmed Discord liveness.
+//   state: 'failed'     -- the persistent supervisor process itself died or
+//          never spawned; `reason` carries the cause. Takes priority over
+//          marker freshness -- a stale marker plus a dead process is
+//          unambiguously "failed", not "connecting".
+function computeAgentStatus() {
+  const proc = getAgentStatus()
+  const marker = readLivenessMarker()
+  if (proc.state === 'failed') {
+    return { state: 'failed', reason: proc.reason, lastHeartbeat: marker ? marker.lastHeartbeat : null }
+  }
+  if (isMarkerFresh(marker)) {
+    return { state: 'live', reason: null, lastHeartbeat: marker.lastHeartbeat }
+  }
+  return { state: 'connecting', reason: null, lastHeartbeat: marker ? marker.lastHeartbeat : null }
+}
+
 const PROVIDERS = ['claude', 'chatgpt', 'ollama']
 
 function log(...args) {
@@ -709,7 +773,7 @@ function serveStatic(req, res, urlPath) {
 }
 
 // ── route dispatch ────────────────────────────────────────────────────────
-async function handleApi(req, res, pathname) {
+async function handleApi(req, res, pathname, onOnboardingComplete) {
   if (pathname === '/api/config' && req.method === 'GET') {
     sendJson(res, 200, readAgentConfig())
     return
@@ -788,7 +852,33 @@ async function handleApi(req, res, pathname) {
     storeDiscordTokenVerified(token) // safeStorage only -- never written to .env in plaintext (security review, 2026-07-03)
     writeEnv({ homeChannelId: result.channelId })
     writeAgentConfig({ ONBOARDING_STEP: '4', ONBOARDING_COMPLETE: '1', ONBOARDING_COMPLETED_AT: new Date().toISOString() })
+    // BUG 1 fix (agent-lifecycle, 2026-07-03): this is the ONLY place
+    // ONBOARDING_COMPLETE flips from unset -> '1' outside of an app
+    // restart. Before this fix there was no callback into main.cjs here,
+    // so spawnRealAgentChild() (which requires ONBOARDING_COMPLETE==='1'
+    // to proceed) only ever ran again on the NEXT app launch -- a
+    // fresh-onboarding user's agent silently never started until they
+    // quit and reopened the app. Fired synchronously, before the response
+    // is sent, so by the time the client's poll for Step 5 liveness
+    // begins the spawn attempt has already happened (see
+    // GET /api/agent/status below).
+    if (typeof onOnboardingComplete === 'function') {
+      try {
+        onOnboardingComplete()
+      } catch (err) {
+        // Never let a spawn-side failure break the validate response --
+        // the token IS valid and IS stored; the agent-status endpoint
+        // (not this response) is the fail-loud surface for spawn
+        // problems. Still log loud, never swallow silently.
+        console.error('[scheherazade/onboarding] onOnboardingComplete callback threw:', err)
+      }
+    }
     sendJson(res, 200, result)
+    return
+  }
+
+  if (pathname === '/api/agent/status' && req.method === 'GET') {
+    sendJson(res, 200, computeAgentStatus())
     return
   }
 
@@ -859,7 +949,15 @@ const ROUTE_TO_FILE = {
   '/waiting': 'waiting.html',
 }
 
-function createOnboardingServer() {
+// createOnboardingServer(onOnboardingComplete) -- onOnboardingComplete is an
+// OPTIONAL callback (agent-lifecycle fix, 2026-07-03, PART 1) invoked
+// synchronously, exactly once per successful /api/discord/validate, right
+// after ONBOARDING_COMPLETE flips to '1' and before that request's response
+// is sent. main.cjs passes spawnRealAgentChild here so a fresh-onboarding
+// user's agent starts immediately instead of waiting for the next app
+// launch. Optional (not required) so this file stays independently
+// testable/requireable without an Electron main process wired up.
+function createOnboardingServer(onOnboardingComplete) {
   seedConfigFromTemplates() // first-run only; no-op once CONFIG_DIR has real files
   ensureMcpJsonAgentName() // correctness fix applied every boot, independent of wizard progress
 
@@ -923,7 +1021,7 @@ function createOnboardingServer() {
         }
 
         if (pathname.startsWith('/api/')) {
-          handleApi(req, res, pathname).catch((err) => respondError(err))
+          handleApi(req, res, pathname, onOnboardingComplete).catch((err) => respondError(err))
           return
         }
 
@@ -962,4 +1060,16 @@ function createOnboardingServer() {
   })
 }
 
-module.exports = { createOnboardingServer, AGENT_NAME, DATA_HOME, readAgentConfig, readDiscordToken, readHomeChannelId }
+module.exports = {
+  createOnboardingServer,
+  AGENT_NAME,
+  DATA_HOME,
+  readAgentConfig,
+  readDiscordToken,
+  readHomeChannelId,
+  // Exported for main.cjs's RUN_SH_PATH resolution (agent-lifecycle fix,
+  // 2026-07-03) -- same asar/asarUnpack path-mapping problem this file
+  // already solved for CHANNEL_SCRIPT_PATH/MEMORY_SERVER_SCRIPT_PATH above,
+  // reused as-is rather than re-implemented in main.cjs.
+  toUnpackedPath,
+}

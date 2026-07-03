@@ -18,6 +18,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import https from 'node:https'
 import http from 'node:http'
+import { fileURLToPath } from 'node:url'
 
 // ── stdout hygiene ─────────────────────────────────────────────────────────
 // MCP stdio transport reserves stdout exclusively for JSON-RPC. Any stray
@@ -217,8 +218,33 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   throw new Error(`unknown tool: ${name}`)
 })
 
+// ── liveness marker (agent-lifecycle fix, 2026-07-03, PART 4) ──────────────
+// Written to DATA_HOME (== process.cwd() here: .mcp.json's agent-channel
+// entry sets cwd: DATA_HOME, see onboarding/http-server.cjs's
+// ensureMcpJsonAgentName()) on the discord.js ClientReady event, and
+// refreshed as a heartbeat afterward. onboarding/http-server.cjs's GET
+// /api/agent/status polls this file's freshness to gate the onboarding
+// wizard's Step 5 success screen on REAL Discord-level liveness, not just
+// the ONBOARDING_COMPLETE flag flip (which only proves the token validated,
+// not that the agent ever actually connected).
+const LIVENESS_MARKER_PATH = path.join(process.cwd(), '.agent-live')
+const LIVENESS_HEARTBEAT_MS = 60_000 // http-server.cjs's LIVENESS_FRESH_MS (150s) tolerates one missed beat
+
+async function writeLivenessMarker() {
+  const payload = { status: 'live', lastHeartbeat: new Date().toISOString(), pid: process.pid }
+  await fs.writeFile(LIVENESS_MARKER_PATH, JSON.stringify(payload, null, 2) + '\n')
+}
+
 // ── Discord event handlers ──────────────────────────────────────────────────
-discord.once(Events.ClientReady, (c) => log(`Discord ready as ${c.user.tag}`))
+discord.once(Events.ClientReady, (c) => {
+  log(`Discord ready as ${c.user.tag}`)
+  writeLivenessMarker().catch((err) => log(`liveness marker write failed: ${err.message}`))
+  // .unref() -- this heartbeat must never be the reason the process stays
+  // alive; it should only run while everything else keeps it alive anyway.
+  setInterval(() => {
+    writeLivenessMarker().catch((err) => log(`liveness heartbeat write failed: ${err.message}`))
+  }, LIVENESS_HEARTBEAT_MS).unref()
+})
 discord.on(Events.Error, (err) => log('Discord client error:', err.message))
 
 discord.on(Events.MessageCreate, async (message) => {
@@ -251,12 +277,30 @@ discord.on(Events.MessageCreate, async (message) => {
 })
 
 // ── boot ─────────────────────────────────────────────────────────────────
-await mcp.connect(new StdioServerTransport())
-log(`MCP server up (${AGENT_NAME})`)
+// Guarded behind an "am I the entry point" check (agent-lifecycle fix,
+// 2026-07-03) so this file can be `import`-ed by a test harness (see
+// scripts/test-liveness-marker.mjs) to exercise writeLivenessMarker()
+// without also connecting real stdio/MCP transport or attempting a real
+// Discord login -- mirrors memory/smoke.mjs's existing convention of
+// setting env vars before importing a script that has module-scope side
+// effects. When run directly (`node channel.mjs`, or as spawned by the
+// claude CLI per .mcp.json), this still boots exactly as before.
+const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])
 
-try {
-  await discord.login(DISCORD_TOKEN)
-} catch (err) {
-  process.stderr.write(`[${AGENT_NAME}] FATAL: discord.login failed: ${err.message}\n`)
-  process.exit(1)
+async function boot() {
+  await mcp.connect(new StdioServerTransport())
+  log(`MCP server up (${AGENT_NAME})`)
+
+  try {
+    await discord.login(DISCORD_TOKEN)
+  } catch (err) {
+    process.stderr.write(`[${AGENT_NAME}] FATAL: discord.login failed: ${err.message}\n`)
+    process.exit(1)
+  }
+}
+
+export { writeLivenessMarker, LIVENESS_MARKER_PATH }
+
+if (isMainModule) {
+  await boot()
 }

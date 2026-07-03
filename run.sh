@@ -16,17 +16,33 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_FILE="$SCRIPT_DIR/.agent-config"
+# AGENT_CONFIG_FILE / AGENT_DATA_HOME overrides (agent-lifecycle fix,
+# 2026-07-03): this script now has TWO callers with different filesystem
+# shapes.
+#   1. Standalone CLI (setup.sh's own deployment path, agent-portable fork,
+#      this repo's own top-level use): .agent-config lives next to run.sh
+#      itself, at $SCRIPT_DIR/.agent-config -- unchanged default below.
+#   2. Electron-bundled internal launcher (main.cjs's spawnRealAgentChild):
+#      a packaged app's run.sh lives inside
+#      Contents/Resources/app.asar.unpacked/ (see main.cjs's RUN_SH_PATH /
+#      toUnpackedPath), nowhere near DATA_HOME
+#      (~/Documents/Scheherazade), which is where the onboarding wizard's
+#      .agent-config, .mcp.json, and memory.db actually live. main.cjs
+#      pre-exports AGENT_NAME/CLAUDE_BIN/MODEL/AGENT_DATA_HOME directly into
+#      this process's own env instead of relying on a config file this
+#      script's own directory doesn't have.
+CONFIG_FILE="${AGENT_CONFIG_FILE:-$SCRIPT_DIR/.agent-config}"
 
-if [ ! -f "$CONFIG_FILE" ]; then
-  echo "no .agent-config found -- run ./setup.sh first" >&2
+if [ -f "$CONFIG_FILE" ]; then
+  # shellcheck source=/dev/null
+  source "$CONFIG_FILE"
+elif [ -z "${AGENT_NAME:-}" ]; then
+  echo "no .agent-config found at $CONFIG_FILE, and AGENT_NAME is not already set in the environment -- run ./setup.sh first, or invoke with AGENT_NAME (and optionally CLAUDE_BIN/MODEL/AGENT_DATA_HOME) pre-exported" >&2
   exit 1
 fi
-# shellcheck source=/dev/null
-source "$CONFIG_FILE"
-AGENT_NAME="${AGENT_NAME:?AGENT_NAME missing from .agent-config}"
+AGENT_NAME="${AGENT_NAME:?AGENT_NAME missing from config/env}"
 
-MEM="$HOME/Documents/$AGENT_NAME"
+MEM="${AGENT_DATA_HOME:-$HOME/Documents/$AGENT_NAME}"
 MODEL="${MODEL:-claude-opus-4-6}"
 CLAUDE_BIN="${CLAUDE_BIN:-claude}"
 
