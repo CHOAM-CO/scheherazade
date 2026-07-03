@@ -1,26 +1,31 @@
-// main.cjs — Electron main process, P0 packaging-shell spike.
+// main.cjs — Electron main process.
 //
 // GOAL of this file: retire the #1 project risk (can we ship a Mac-native
 // .app/.dmg that supervises child processes and serves a localhost
-// onboarding page?) as early as possible. This is a stub, not the product.
+// onboarding page?) as early as possible, then grow the localhost page into
+// the real product surface. The P0 packaging-shell spike proved the shape;
+// this revision replaces its PLACEHOLDER_HTML with the real onboarding
+// wizard + memory pane + settings, served from onboarding/http-server.cjs.
 //
 // CommonJS on purpose even though the rest of the repo (channel.mjs) is
 // ESM ("type": "module" in package.json) -- Electron's main-process ESM
 // support is still version-sensitive/experimental in places, and a `.cjs`
 // extension always forces CommonJS regardless of the package.json "type"
-// field. For a risk-retiring spike, the boring/safe choice wins.
+// field. For a risk-retiring spike, the boring/safe choice wins, and it
+// still holds now that the server has real logic in it.
 //
-// Three things this file proves, each isolated in its own function so a
-// P1 implementation can lift them out wholesale:
-//   1. startOnboardingServer() -- plain node:http server on an ephemeral
-//      port, serving a placeholder onboarding page. P1: replace the HTML
-//      string with the real onboarding wizard (see docs/ARCHITECTURE.md
-//      wiring notes at the bottom of this file).
+// Three things this file wires together, each isolated in its own function:
+//   1. startOnboardingServer() (= createOnboardingServer from
+//      onboarding/http-server.cjs) -- plain node:http server on an
+//      ephemeral port, serving the wizard/pane/settings static files + a
+//      small JSON API (BYOK validation + safeStorage, config write,
+//      Discord bot validation, memory_query/memory_delete bridge).
 //   2. createMainWindow(url) -- BrowserWindow that loads that localhost URL.
 //   3. demoChildProcessSupervision() -- spawns a trivial child, captures
-//      stdout, logs its exit code. P1: this is the exact shape that will
-//      later supervise (a) the `claude` CLI agent process and (b) a
-//      provider proxy process -- see wiring notes at bottom.
+//      stdout, logs its exit code. Still a P1 item: this is the exact shape
+//      that will later supervise (a) the `claude` CLI agent process and (b)
+//      a provider proxy process -- see wiring notes at bottom. Not part of
+//      this revision's scope (onboarding UI only).
 //
 // FAIL LOUD: no empty catches anywhere below. Every error path either
 // rethrows, logs to stderr and exits non-zero, or is a fatal dialog.
@@ -28,8 +33,8 @@
 'use strict'
 
 const { app, BrowserWindow } = require('electron')
-const http = require('node:http')
 const { spawn } = require('node:child_process')
+const { createOnboardingServer } = require('./onboarding/http-server.cjs')
 
 // ── stdout/stderr hygiene ───────────────────────────────────────────────
 // Electron's main process log is just the terminal it was launched from
@@ -47,77 +52,28 @@ function fatal(msg, err) {
 }
 
 // ── (b) localhost onboarding server ─────────────────────────────────────
-// Ephemeral port (0 = OS picks a free one) -- P1 will likely pin this or
-// keep it ephemeral-and-discovered, undecided; either way the pattern
-// (listen, read the OS-assigned port off the server object, hand that URL
-// to the BrowserWindow) carries forward unchanged.
-const PLACEHOLDER_HTML = `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>Scheherazade Onboarding (placeholder)</title>
-    <style>
-      body { font-family: -apple-system, system-ui, sans-serif; background: #111; color: #eee;
-             display: flex; flex-direction: column; align-items: center; justify-content: center;
-             height: 100vh; margin: 0; gap: 1rem; }
-      button { font-size: 1rem; padding: 0.6rem 1.4rem; border-radius: 8px; border: none;
-               background: #5b8dee; color: white; cursor: pointer; }
-      button:hover { background: #4877d6; }
-      p { color: #999; font-size: 0.85rem; max-width: 32rem; text-align: center; }
-    </style>
-  </head>
-  <body>
-    <h1>Scheherazade onboarding</h1>
-    <p>P0 spike placeholder. Served from an in-process localhost HTTP server,
-       loaded into a real BrowserWindow. The real onboarding wizard (API key
-       entry, provider choice, first-run agent bootstrap) replaces this page
-       in P1 -- see main.cjs wiring notes.</p>
-    <button id="next">Next</button>
-    <p id="status">child-process demo runs in the terminal this app was launched from (or Console.app once packaged) -- check main-process logs.</p>
-    <script>
-      document.getElementById('next').addEventListener('click', () => {
-        document.getElementById('status').textContent = 'Next clicked (placeholder -- no step 2 yet).'
-      })
-    </script>
-  </body>
-</html>`
-
-function startOnboardingServer() {
-  return new Promise((resolve, reject) => {
-    const server = http.createServer((req, res) => {
-      if (req.url === '/' || req.url === '/index.html') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-        res.end(PLACEHOLDER_HTML)
-        return
-      }
-      res.writeHead(404, { 'Content-Type': 'text/plain' })
-      res.end('not found')
-    })
-
-    server.on('error', (err) => reject(err)) // fail loud, no swallow
-
-    // port 0 = OS-assigned ephemeral port
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address()
-      const url = `http://127.0.0.1:${port}/`
-      log(`onboarding server listening on ${url}`)
-      resolve({ server, url })
-    })
-  })
-}
+// Real implementation lives in onboarding/http-server.cjs: the wizard
+// (BYOK + safeStorage, name/persona, Discord bot tutorial + gateway-connect
+// validation, handoff) plus the read-only memory pane and a minimal
+// settings page, all served as static files + a small JSON API over the
+// same ephemeral-port pattern the P0 spike established (listen(0, ...),
+// read the OS-assigned port off the server object, hand that URL to the
+// BrowserWindow). No preload/IPC needed -- the renderer stays fully
+// sandboxed and talks to this server over same-origin fetch() only.
+const startOnboardingServer = createOnboardingServer
 
 // ── (a) BrowserWindow ────────────────────────────────────────────────────
 function createMainWindow(url) {
   const win = new BrowserWindow({
-    width: 900,
-    height: 640,
+    width: 980,
+    height: 760,
     title: 'Scheherazade',
     webPreferences: {
-      // No preload / no Node integration in the renderer -- the placeholder
-      // page needs zero Node/Electron APIs. P1's real onboarding wizard
-      // will need a preload.js + contextBridge for e.g. "save API key"
-      // IPC calls back to main; that preload does not exist yet (see
-      // wiring notes at bottom of this file).
+      // No preload / no Node integration in the renderer -- every wizard
+      // and memory-pane action (safeStorage, memory tool, Discord REST
+      // calls, shell.openExternal) runs server-side in
+      // onboarding/http-server.cjs and is reached over plain fetch(), so
+      // the renderer never needs Node/Electron APIs directly.
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -241,16 +197,29 @@ process.on('unhandledRejection', (reason) => {
 //      server.address().port) so it doesn't collide with the onboarding
 //      server or a second app instance.
 //
-// 3. Real onboarding wizard replacing PLACEHOLDER_HTML:
-//    - Swap the inline HTML string in startOnboardingServer() for either
-//      (a) static files under a new onboarding/ directory served via
-//      node:http + a tiny static-file router, or (b) a proper bundler
-//      output (Vite/esbuild) if the wizard grows interactive state.
-//    - Needs a preload.js + contextBridge (currently absent -- see
-//      createMainWindow()'s webPreferences comment) once the wizard needs
-//      to call back into main (e.g. "save API key to keychain", "launch
-//      setup.sh", "write .env").
-//    - setup.sh already asks for the exact fields (Discord token, home
-//      channel ID, agent name) an onboarding wizard would collect --
-//      the wizard's job is to become setup.sh's GUI front-end, not to
-//      duplicate its logic.
+// 3. Real onboarding wizard -- DONE (this revision):
+//    - Static files under onboarding/public/ served via node:http + a tiny
+//      static-file router (onboarding/http-server.cjs), option (a) from the
+//      original note here. No preload/contextBridge needed after all --
+//      "call back into main" turned out to fit entirely inside the
+//      localhost server's own JSON API (fetch() from the sandboxed
+//      renderer), so the BrowserWindow stays contextIsolation/no-Node/
+//      sandboxed exactly as the P0 spike had it.
+//    - BYOK key storage uses Electron safeStorage (Keychain-backed), not a
+//      write-to-.env pattern -- deliberately, to keep provider keys off
+//      disk in plaintext.
+//    - Config write DOES extend setup.sh's .agent-config format (now
+//      multi-key + quoted) rather than duplicate setup.sh's full bootstrap
+//      (CLAUDE.md/settings.local.json rendering, self_persona.md,
+//      checkpoint.md creation) -- that fuller bootstrap is still setup.sh's
+//      job and out of this revision's scope. Discord token + home channel
+//      still land in .env, matching setup.sh's existing field names exactly
+//      so a later setup.sh run or run.sh launch reads them unchanged.
+//    - Fixed a latent config-drift bug while wiring this up: the checked-in
+//      .mcp.json had AGENT_NAME=companion (leftover from the agent-portable
+//      fork) for both its "agent-channel" and "memory" MCP server entries.
+//      Since memory/server.mjs resolves its DB path from AGENT_NAME at
+//      import time, that mismatch would have made the wizard's memory
+//      writes and the live agent's future memory MCP server point at two
+//      different databases. onboarding/http-server.cjs corrects this at
+//      server boot (see ensureMcpJsonAgentName()).

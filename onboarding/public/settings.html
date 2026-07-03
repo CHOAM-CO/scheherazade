@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Scheherazade — 설정</title>
+    <link rel="stylesheet" href="/css/app.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <div class="page-header">
+        <h1 id="set-title"></h1>
+        <div class="page-nav">
+          <a href="/memory" id="set-back-link"></a>
+        </div>
+      </div>
+
+      <div class="field">
+        <label id="set-rename-label"></label>
+        <input type="text" id="set-rename-input" />
+        <div class="field-hint hidden" id="set-rename-status"></div>
+      </div>
+      <div class="step-actions">
+        <span></span>
+        <button id="set-rename-save"></button>
+      </div>
+
+      <div class="banner" style="margin-top: 2.5rem">
+        <div class="entry-row" style="border-bottom: none; padding: 0">
+          <div class="entry-main">
+            <div class="entry-value" id="set-slack-label"></div>
+            <div class="entry-meta" id="set-slack-note"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast" id="set-toast"></div>
+
+    <script src="/js/copy.js"></script>
+    <script src="/js/settings.js"></script>
+  </body>
+</html>

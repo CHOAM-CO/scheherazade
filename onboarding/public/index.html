@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Scheherazade — 설정</title>
+    <link rel="stylesheet" href="/css/app.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <div class="card" id="wizard-card">
+        <!-- Step 0 -->
+        <section class="step" data-step="0">
+          <h1 id="s0-title"></h1>
+          <p id="s0-body"></p>
+          <div class="step-actions">
+            <span></span>
+            <button id="s0-next"></button>
+          </div>
+        </section>
+
+        <!-- Step 1: BYOK -->
+        <section class="step hidden" data-step="1">
+          <h1 id="s1-title"></h1>
+          <p id="s1-body"></p>
+          <div class="tabs" id="s1-tabs"></div>
+          <div class="field">
+            <input type="password" id="s1-key" placeholder="키를 붙여넣으세요" autocomplete="off" />
+            <div class="field-hint" id="s1-hint"></div>
+          </div>
+          <div class="status-line" id="s1-status"></div>
+          <div class="step-actions">
+            <span></span>
+            <button id="s1-next"></button>
+          </div>
+        </section>
+
+        <!-- Step 2: name -->
+        <section class="step hidden" data-step="2">
+          <h1 id="s2-title"></h1>
+          <p id="s2-body"></p>
+          <div class="field">
+            <input type="text" id="s2-name" />
+          </div>
+          <div class="step-actions">
+            <span></span>
+            <button id="s2-next"></button>
+          </div>
+        </section>
+
+        <!-- Step 3: persona -->
+        <section class="step hidden" data-step="3">
+          <h1 id="s3-title"></h1>
+          <div class="field">
+            <label id="s3-q1-label"></label>
+            <div class="radio-row" id="s3-q1-options"></div>
+          </div>
+          <div class="field">
+            <label id="s3-q2-label"></label>
+            <input type="text" id="s3-q2-text" />
+            <div class="chips" id="s3-q2-chips"></div>
+          </div>
+          <div class="field">
+            <label id="s3-q3-label"></label>
+            <div class="radio-row">
+              <label><input type="radio" name="s3-q3" value="yes" /> <span id="s3-q3-yes-prefix"></span></label>
+              <input type="time" id="s3-q3-start" value="09:00" style="width: auto" />
+              <span>~</span>
+              <input type="time" id="s3-q3-end" value="22:00" style="width: auto" />
+              <span id="s3-q3-yes-suffix"></span>
+              <label><input type="radio" name="s3-q3" value="no" /> <span id="s3-q3-no"></span></label>
+            </div>
+            <div class="field-hint" id="s3-q3-note"></div>
+          </div>
+          <div class="status-line failure hidden" id="s3-status"></div>
+          <div class="step-actions">
+            <span></span>
+            <button id="s3-next"></button>
+          </div>
+        </section>
+
+        <!-- Step 4: Discord intro -->
+        <section class="step hidden" data-step="4">
+          <h1 id="s4-title"></h1>
+          <p id="s4-body"></p>
+          <div class="step-actions">
+            <button class="link" id="s4-later"></button>
+            <button id="s4-start"></button>
+          </div>
+        </section>
+
+        <!-- Step 4b: Discord tutorial -->
+        <section class="step hidden" data-step="4b">
+          <h1 id="s4b-title"></h1>
+          <div id="s4b-tutorial-body"></div>
+          <div id="s4b-token-field" class="field hidden">
+            <label id="s4b-token-label"></label>
+            <input type="password" id="s4b-token" autocomplete="off" />
+          </div>
+          <div class="status-line hidden" id="s4b-status"></div>
+          <div class="tutorial-nav">
+            <span class="tutorial-progress" id="s4b-progress"></span>
+            <div>
+              <button class="secondary" id="s4b-prev"></button>
+              <button id="s4b-action"></button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Step 5: handoff -->
+        <section class="step hidden" data-step="5">
+          <h1 id="s5-title"></h1>
+          <p id="s5-body"></p>
+          <div class="step-actions">
+            <span></span>
+            <button id="s5-open"></button>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <script src="/js/copy.js"></script>
+    <script src="/js/wizard.js"></script>
+  </body>
+</html>

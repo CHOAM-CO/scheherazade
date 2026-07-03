@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Scheherazade — 대기 중</title>
+    <link rel="stylesheet" href="/css/app.css" />
+  </head>
+  <body>
+    <!-- Step 4 "나중에 하기" fallback: a temporary minimal local window +
+         a connect-Discord nag banner. Deliberately NOT a chat body -- no
+         message list, no input box. -->
+    <div class="app-shell">
+      <div class="card">
+        <h1 id="w-title"></h1>
+        <div class="banner" id="w-banner"></div>
+        <div class="step-actions">
+          <span></span>
+          <button id="w-resume"></button>
+        </div>
+      </div>
+    </div>
+
+    <script src="/js/copy.js"></script>
+    <script src="/js/waiting.js"></script>
+  </body>
+</html>

@@ -2,18 +2,22 @@
   "mcpServers": {
     "agent-channel": {
       "command": "node",
-      "args": ["./channel.mjs"],
+      "args": [
+        "./channel.mjs"
+      ],
       "cwd": "/Users/narr/Desktop/scheherazade",
       "env": {
-        "AGENT_NAME": "companion"
+        "AGENT_NAME": "scheherazade"
       }
     },
     "memory": {
       "command": "node",
-      "args": ["./memory/server.mjs"],
+      "args": [
+        "./memory/server.mjs"
+      ],
       "cwd": "/Users/narr/Desktop/scheherazade",
       "env": {
-        "AGENT_NAME": "companion"
+        "AGENT_NAME": "scheherazade"
       }
     }
   }

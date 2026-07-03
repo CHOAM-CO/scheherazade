@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Scheherazade — 기억</title>
+    <link rel="stylesheet" href="/css/app.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <div class="page-header">
+        <h1 id="m-title"></h1>
+        <div class="page-nav">
+          <a href="/settings" id="m-settings-link"></a>
+        </div>
+      </div>
+      <p class="subtitle" id="m-subtitle"></p>
+
+      <div id="m-session-group" class="session-group hidden">
+        <div class="category-label" id="m-session-label"></div>
+        <div id="m-session-list"></div>
+      </div>
+
+      <div class="category" id="cat-user_facts">
+        <div class="category-label" id="cat-user_facts-label"></div>
+        <div class="entries" id="cat-user_facts-entries"></div>
+      </div>
+      <div class="category" id="cat-open_threads">
+        <div class="category-label" id="cat-open_threads-label"></div>
+        <div class="entries" id="cat-open_threads-entries"></div>
+      </div>
+      <div class="category" id="cat-corrections">
+        <div class="category-label" id="cat-corrections-label"></div>
+        <div class="entries" id="cat-corrections-entries"></div>
+      </div>
+      <div class="category" id="cat-preferences">
+        <div class="category-label" id="cat-preferences-label"></div>
+        <div class="entries" id="cat-preferences-entries"></div>
+      </div>
+    </div>
+
+    <div class="dialog-backdrop hidden" id="m-dialog">
+      <div class="dialog-box">
+        <p id="m-dialog-text"></p>
+        <div class="dialog-actions">
+          <button class="secondary" id="m-dialog-cancel"></button>
+          <button class="danger" id="m-dialog-confirm"></button>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast" id="m-toast"></div>
+
+    <script src="/js/copy.js"></script>
+    <script src="/js/memory.js"></script>
+  </body>
+</html>
