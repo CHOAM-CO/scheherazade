@@ -167,7 +167,7 @@ window.COPY = {
       causes: {
         crash_loop: {
           cause: (name) => `${name} 프로세스가 반복해서 종료되고 있습니다. 정확한 원인은 확인되지 않았습니다.`,
-          action: () => '설정에서 모델 키와 인증 정보를 확인해주세요. 반복되면 로그를 보내주세요.',
+          action: () => '설정에서 모델 키와 인증 정보를 확인한 뒤, 앱을 종료했다가 다시 실행해주세요.',
           buttons: ['openSettings', 'openLogs'],
         },
         discord_token_bad: {
@@ -177,24 +177,24 @@ window.COPY = {
         },
         provider_not_wired: {
           cause: () => '선택한 모델 연결이 아직 준비되지 않았습니다.',
-          action: () => '설정에서 모델을 Claude로 변경해주세요.',
+          action: () => '설정에서 모델을 Claude로 변경한 뒤, 앱을 종료했다가 다시 실행해주세요.',
           buttons: ['openSettings', 'openLogs'],
         },
         key_error: {
           cause: () => '저장된 키를 읽지 못했습니다.',
-          action: () => '다시 시도해주세요. 반복되면 설정에서 키를 다시 입력해주세요.',
-          buttons: ['retry', 'openLogs'],
+          action: () => '설정에서 키를 다시 입력한 뒤, 앱을 종료했다가 다시 실행해주세요.',
+          buttons: ['openSettings', 'openLogs'],
         },
         timeout: {
           cause: (name) => `${name}가 시작됐는지 확인되지 않습니다.`,
-          action: () => '다시 시도를 누르고, 반복되면 로그를 보내주세요.',
+          action: () => '잠시 후 상태 다시 확인을 눌러주세요.',
           buttons: ['retry', 'openLogs'],
         },
         // Fallback row -- any code not in this table (including a literal
         // "unknown") lands here.
         unknown: {
           cause: (name) => `${name}를 시작하지 못했습니다.`,
-          action: () => '다시 시도를 누르고, 반복되면 로그를 보내주세요.',
+          action: () => '잠시 후 상태 다시 확인을 누르고, 반복되면 앱을 종료했다가 다시 실행해주세요.',
           buttons: ['retry', 'openLogs'],
         },
       },
@@ -207,7 +207,7 @@ window.COPY = {
       openSettings: '설정 열기',
       openLogs: '로그 열기',
       backToToken: '토큰 단계로 돌아가기',
-      retry: '다시 시도',
+      retry: '상태 다시 확인',
     },
   },
 
