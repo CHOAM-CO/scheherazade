@@ -85,12 +85,13 @@ window.COPY = {
     q3YesPrefix: '예,',
     q3YesSuffix: '사이에만',
     q3No: '아니요',
-    // ON version (proactive 사이클 검증 완료 시 착지). The source file also
-    // specifies an OFF version ("지금은 동의만 저장됩니다...") gated on a
-    // server-side proactive-feature flag -- that flag isn't part of this
-    // build's API surface (only routerWired is), so this build ships the ON
-    // version unchanged. Flagged, not silently resolved.
-    q3Note: '허락한 시간대에만 먼저 연락합니다. 언제든 끌 수 있습니다.',
+    // Flag-follows-copy (Idea copy spec, her lines 46-48): the note has an ON
+    // and an OFF version, and it must track the proactive-feature flag so no
+    // landing lies. That flag ships default OFF (proactive cycle is not wired
+    // this build; only routerWired is in the API surface), so the OFF copy is
+    // the truthful landing. Earlier build shipped the ON copy, which promised
+    // proactive contact the build will not perform.
+    q3Note: '지금은 동의만 저장됩니다. 먼저 연락하는 기능이 켜지면 이 설정을 그대로 따릅니다. 설정에서 언제든 바꿀 수 있습니다.',
     button: '다음',
   },
 
