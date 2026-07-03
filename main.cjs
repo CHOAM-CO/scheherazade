@@ -33,7 +33,7 @@
 'use strict'
 
 const { app, BrowserWindow } = require('electron')
-const { spawn } = require('node:child_process')
+const { spawn, execFileSync } = require('node:child_process')
 const path = require('node:path')
 const fs = require('node:fs')
 const {
@@ -92,6 +92,28 @@ function log(...args) {
 }
 function fatal(msg, err) {
   console.error(`[scheherazade/main] FATAL: ${msg}`, err ?? '')
+  // Bug 2 fix (agent-lifecycle, 2026-07-03, cross-model adversarial
+  // review): app.exit(1) below force-exits WITHOUT emitting 'before-quit',
+  // so the killAgentSupervisor('SIGTERM') wired there (see app.on('before-
+  // quit', ...) further down) is bypassed entirely. fatal() is wired to
+  // uncaughtException/unhandledRejection, so ANY uncaught error after the
+  // agent has spawned would otherwise orphan the whole run.sh -> expect ->
+  // claude tree, still holding the Discord token, with no cleanup at all.
+  // Best-effort, belt-and-suspenders: the synchronous group-SIGTERM inside
+  // killAgentSupervisor() is the part that reliably fires before app.exit()
+  // tears this process down; the async 'run.sh stop' child it also spawns
+  // may or may not survive the immediate exit below, which is fine here --
+  // it's the secondary/reliable path for the ORDINARY quit case, not this
+  // crash-path's only line of defense. Wrapped in try/catch so a failure
+  // in cleanup can NEVER mask the original fatal error or block the exit;
+  // no-ops safely via killAgentSupervisor()'s own
+  // `if (agentSupervisorPid == null) return` guard when fatal() fires
+  // before any agent has ever spawned.
+  try {
+    killAgentSupervisor('SIGTERM')
+  } catch (cleanupErr) {
+    console.error('[scheherazade/main] fatal(): killAgentSupervisor cleanup itself failed (masking nothing, proceeding to exit):', cleanupErr)
+  }
   // Fail loud: a spike that silently limps along teaches us nothing about
   // whether the real thing will work. Exit non-zero so CI/manual runs see
   // a clear failure instead of a window that just never showed up.
@@ -259,6 +281,35 @@ function isPidAlive(pid) {
   }
 }
 
+// Bug 1 fix (agent-lifecycle, 2026-07-03, cross-model adversarial review):
+// isPidAlive() alone is IDENTITY-BLIND -- it only proves *some* process
+// holds this pid right now, not that it's OUR run.sh __loop supervisor. A
+// stale PIDFILE surviving a crash/reboot, combined with macOS recycling
+// that pid to an unrelated process, would otherwise make this app either
+// (a) silently never spawn its own agent (isPidAlive() true -> skip spawn,
+// UI stuck 'connecting' forever with no clue why), or (b) on quit,
+// SIGTERM an unconfirmed/unrelated process via killAgentSupervisor().
+// Verify PROCESS IDENTITY via its own command line -- require it to
+// contain BOTH the run.sh launcher path and the __loop subcommand, the
+// exact signature spawnRealAgentChild() below uses to spawn it
+// (`spawn(BASH_BIN, [RUN_SH_PATH, '__loop'])`), and the same convention
+// run.sh's own is_our_supervisor() checks on its side of this PIDFILE.
+// Fail SAFE: `ps` erroring, being unavailable, or returning nothing
+// (permission, already-exited race) all resolve to "not verified" --
+// callers must treat that as if the pid is NOT our supervisor (never
+// trust it as already-running, never signal it).
+function isOurSupervisor(pid) {
+  if (!isPidAlive(pid)) return false
+  let commandLine
+  try {
+    commandLine = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' })
+  } catch (err) {
+    log(`isOurSupervisor(${pid}): ps lookup failed (${err.message}) -- treating as UNVERIFIED, fail-safe`)
+    return false
+  }
+  return commandLine.includes(RUN_SH_PATH) && commandLine.includes('__loop')
+}
+
 function readPidFromFile(filePath) {
   try {
     const raw = fs.readFileSync(filePath, 'utf8').trim()
@@ -359,14 +410,18 @@ function spawnRealAgentChild() {
   // run.sh's own start_agent()/stop_agent() use before spawning a second
   // one.
   const existingPid = readPidFromFile(AGENT_PIDFILE)
-  if (existingPid && isPidAlive(existingPid)) {
-    log(`agent spawn skipped: a supervisor is already running per ${AGENT_PIDFILE} (pid=${existingPid})`)
+  if (existingPid && isOurSupervisor(existingPid)) {
+    log(`agent spawn skipped: a supervisor is already running per ${AGENT_PIDFILE} (pid=${existingPid}, identity verified via ps)`)
     agentSupervisorPid = existingPid // so app-quit still cleans this up, see killAgentSupervisor()
     startFailurePoll() // still watch for failures even though we didn't spawn this run
     return null
   }
   if (existingPid) {
-    log(`stale PIDFILE at ${AGENT_PIDFILE} (pid=${existingPid} not alive), clearing before spawn`)
+    // Bug 1 fix: either dead, or alive-but-not-ours (pid recycled by
+    // macOS to an unrelated process) -- both cases are "stale" from this
+    // PIDFILE's perspective. Clear it and spawn fresh rather than silently
+    // trusting an unverified pid.
+    log(`stale/unverified PIDFILE at ${AGENT_PIDFILE} (pid=${existingPid} not confirmed as our supervisor -- dead, or pid recycled to an unrelated process), clearing before spawn`)
     fs.rmSync(AGENT_PIDFILE, { force: true })
   }
 
@@ -598,11 +653,22 @@ function killAgentSupervisor(signal = 'SIGTERM') {
   if (agentSupervisorPid == null) return
   try {
     if (agentChild) {
+      // Our own live child -- Node's own bookkeeping guarantees this pid
+      // hasn't been reaped/recycled since we still hold the ChildProcess
+      // handle and haven't seen its 'exit' event, so it's safe to
+      // group-signal without an extra identity re-check.
       process.kill(-agentSupervisorPid, signal)
       log(`sent ${signal} to agent supervisor process group (pgid=${agentSupervisorPid}) -- best-effort fast path`)
-    } else {
+    } else if (isOurSupervisor(agentSupervisorPid)) {
+      // Bug 1 fix: this pid was DISCOVERED via AGENT_PIDFILE (not spawned
+      // by this process instance), so re-verify identity right before
+      // signaling -- time may have passed since discovery, and a bare
+      // isPidAlive() re-check alone would still be identity-blind to a
+      // since-recycled pid.
       process.kill(agentSupervisorPid, signal)
-      log(`sent ${signal} to discovered agent supervisor (pid=${agentSupervisorPid}) -- best-effort fast path`)
+      log(`sent ${signal} to discovered agent supervisor (pid=${agentSupervisorPid}, identity re-verified via ps) -- best-effort fast path`)
+    } else {
+      log(`skipping direct signal to agentSupervisorPid=${agentSupervisorPid}: no longer verifiable as our supervisor (dead, or pid recycled) -- relying on the 'run.sh stop' cleanup path below instead, which is identity-safe via PKILL_PATTERN command-line matching`)
     }
   } catch (err) {
     if (err.code !== 'ESRCH') console.error('[scheherazade/main] failed to signal agent supervisor process group:', err)

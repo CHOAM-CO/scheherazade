@@ -89,6 +89,39 @@ is_alive() {
   [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null
 }
 
+# Bug 1 fix (agent-lifecycle, 2026-07-03, cross-model adversarial review):
+# is_alive() alone is IDENTITY-BLIND -- kill -0 only proves *some* process
+# holds this pid right now, not that it's actually this AGENT_NAME's own
+# run.sh __loop supervisor. A stale PIDFILE surviving a crash/reboot,
+# combined with macOS recycling that pid to an unrelated process, would
+# otherwise make start_agent() silently no-op (thinks the agent is already
+# running) or, worse, make stop_agent() force-kill (`kill -KILL`) a
+# completely unrelated process at the end of its wait loop. Verify
+# IDENTITY via the process's own command line -- require it to contain
+# BOTH this script's own path and the __loop subcommand, the exact
+# signature both start_agent() (`nohup "$SCRIPT_DIR/run.sh" __loop &`) and
+# main.cjs's spawnRealAgentChild() (`spawn(BASH_BIN, [RUN_SH_PATH,
+# '__loop'])`) use to launch it. Fail SAFE: `ps` erroring, being
+# unavailable, or returning nothing (permission, already-exited race) all
+# resolve to "not verified" -- callers must treat that as NOT our
+# supervisor (never trust it as already-running, never force-kill it).
+is_our_supervisor() {
+  local pid="$1"
+  is_alive "$pid" || return 1
+  local cmd
+  cmd="$(ps -o command= -p "$pid" 2>/dev/null)" || return 1
+  [ -n "$cmd" ] || return 1
+  case "$cmd" in
+    *"$SCRIPT_DIR/run.sh"*)
+      case "$cmd" in
+        *__loop*) return 0 ;;
+        *) return 1 ;;
+      esac
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 # Critical B (agent-lifecycle model-divergent review, 2026-07-03): a bad/
 # revoked provider key or bot token makes claude/the MCP handshake fail
 # near-instantly every time, so run_loop() below restarts it forever with
@@ -192,8 +225,18 @@ run_loop() {
 
   mkdir -p "$MEM/logs"
   cd "$MEM"
-  export AGENT_NAME MEM
-  export CLAUDE_CMD="${CLAUDE_BIN} --model ${MODEL} --name ${AGENT_NAME}"
+  # Bug 3 fix (agent-lifecycle, 2026-07-03, cross-model adversarial
+  # review, EMPIRICALLY REPRODUCED): CLAUDE_CMD used to flatten
+  # CLAUDE_BIN/MODEL/AGENT_NAME into ONE whitespace-joined string, and the
+  # expect script below Tcl-split it on whitespace via
+  # `{*}$env(CLAUDE_CMD)` -- a bundled CLI installed under any spaced path
+  # (Google Drive, an external volume, "My Apps") splits mid-path, expect's
+  # `spawn` gets a garbage argv[0], and the agent dies in a permanent
+  # restart loop. Export CLAUDE_BIN/MODEL as their OWN env vars (AGENT_NAME
+  # already was) so each stays exactly one Tcl word regardless of embedded
+  # spaces; the spawn line below now references them individually instead
+  # of splitting a flattened string.
+  export AGENT_NAME MEM CLAUDE_BIN MODEL
 
   EXPECT_SCRIPT="$(mktemp "${TMPDIR:-/tmp}/agent-portable-expect.XXXXXX")"
   trap 'rm -f "$EXPECT_SCRIPT"' EXIT
@@ -201,7 +244,7 @@ run_loop() {
     log_user 1
     set env(TERM) xterm-256color
     set stty_init "rows 50 cols 200"
-    spawn -noecho {*}$env(CLAUDE_CMD)
+    spawn -noecho $env(CLAUDE_BIN) --model $env(MODEL) --name $env(AGENT_NAME)
     set timeout 25
     expect {
       -re "trust"             { send "\r"; exp_continue }
@@ -283,9 +326,15 @@ EXPECT_EOF
 
 start_agent() {
   require_claude
-  if [ -f "$PIDFILE" ] && is_alive "$(cat "$PIDFILE" 2>/dev/null)"; then
+  if [ -f "$PIDFILE" ] && is_our_supervisor "$(cat "$PIDFILE" 2>/dev/null)"; then
     echo "${AGENT_NAME} already running (pid $(cat "$PIDFILE"))"
     exit 0
+  elif [ -f "$PIDFILE" ]; then
+    # Bug 1 fix: dead, or alive-but-not-ours (pid recycled) -- either way
+    # stale from this PIDFILE's perspective. Clear it rather than silently
+    # trusting an unverified pid to mean "already running".
+    echo "stale/unverified PIDFILE (pid $(cat "$PIDFILE" 2>/dev/null) is dead, or was recycled to an unrelated process) -- clearing before start"
+    rm -f "$PIDFILE"
   fi
   rm -f "$STOPFLAG"
   clear_failure
@@ -303,8 +352,11 @@ stop_agent() {
     exit 0
   fi
   PID="$(cat "$PIDFILE" 2>/dev/null || true)"
-  if ! is_alive "$PID"; then
-    echo "stale pidfile, cleaning up"
+  if ! is_our_supervisor "$PID"; then
+    # Bug 1 fix: covers both "dead" and "alive but pid recycled to an
+    # unrelated process" -- clean-exit as stale either way, never proceed
+    # to the kill path below on an unverified pid.
+    echo "stale/unverified pidfile (pid ${PID} is dead, or was recycled to an unrelated process), cleaning up"
     rm -f "$PIDFILE"
     exit 0
   fi
@@ -318,8 +370,19 @@ stop_agent() {
     sleep 1
   done
 
-  echo "did not stop in time, forcing"
-  kill -KILL "$PID" 2>/dev/null || true
+  # Bug 1 fix: re-verify identity before the raw kill -KILL below -- up to
+  # 15s has elapsed since the is_our_supervisor check above, enough time
+  # for the process to have died and its pid been recycled by macOS to an
+  # unrelated process. Fail SAFE: only force-kill a pid still confirmed as
+  # our supervisor; otherwise skip the direct kill and rely on the
+  # identity-safe `pkill -f "$PKILL_PATTERN"` below (command-line pattern
+  # match, unaffected by pid recycling) plus stale-state cleanup.
+  if is_our_supervisor "$PID"; then
+    echo "did not stop in time, forcing"
+    kill -KILL "$PID" 2>/dev/null || true
+  else
+    echo "pid ${PID} no longer identifies as ${AGENT_NAME} supervisor (exited and recycled?) -- skipping force-kill of an unconfirmed pid"
+  fi
   pkill -f "$PKILL_PATTERN" 2>/dev/null || true
   rm -f "$PIDFILE" "$STOPFLAG"
 }
