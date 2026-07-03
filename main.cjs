@@ -445,6 +445,23 @@ function spawnRealAgentChild() {
   if (existingPid && isOurSupervisor(existingPid)) {
     log(`agent spawn skipped: a supervisor is already running per ${AGENT_PIDFILE} (pid=${existingPid}, identity verified via ps)`)
     agentSupervisorPid = existingPid // so app-quit still cleans this up, see killAgentSupervisor()
+    // Timeout-backstop gap fix (Step 5 onboarding-wiring, cross-model codex
+    // review follow-up, 2026-07-03): stamp 'connecting' on THIS attach path
+    // too, not just the fresh-spawn path below. Without it, reopening the
+    // app onto an alive-but-HUNG supervisor (alive per PIDFILE, but stuck
+    // before channel.mjs's Discord ClientReady -- no fresh .agent-live
+    // marker, and no .agent-failed.json either) left proc.state at 'idle',
+    // and computeAgentStatus()'s TIMEOUT_MS backstop only fires from
+    // 'connecting' -- so it fell through to 'connecting' FOREVER, the exact
+    // stuck-connecting the backstop exists to catch, bypassed by the attach
+    // path. With this stamp, `since` is set now: a HEALTHY attached
+    // supervisor still resolves to 'live' the instant its fresh marker is
+    // read (live beats the connecting-timeout in computeAgentStatus's
+    // precedence), and only a HUNG one falls through to a 60s timeout ->
+    // failed code=timeout. Placed BEFORE startFailurePoll() (order doesn't
+    // matter -- neither reads the other's effect -- but keeps the "declare
+    // we're connecting, then start watching" reading).
+    setAgentStatus('connecting')
     startFailurePoll() // still watch for failures even though we didn't spawn this run
     return null
   }
