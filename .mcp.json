@@ -7,6 +7,14 @@
       "env": {
         "AGENT_NAME": "companion"
       }
+    },
+    "memory": {
+      "command": "node",
+      "args": ["./memory/server.mjs"],
+      "cwd": "/Users/narr/Desktop/scheherazade",
+      "env": {
+        "AGENT_NAME": "companion"
+      }
     }
   }
 }
