@@ -323,7 +323,7 @@ EXPECT_EOF
       LAST_KST_DATE="$CURRENT_KST_DATE"
     fi
 
-    pkill -f "$PKILL_PATTERN" 2>/dev/null || true
+    pkill -f -- "$PKILL_PATTERN" 2>/dev/null || true
     STARTED="$(date +%s)"
 
     set +e
@@ -406,7 +406,7 @@ stop_agent() {
 
   echo "stopping ${AGENT_NAME} (pid ${PID})..."
   touch "$STOPFLAG"
-  pkill -f "$PKILL_PATTERN" 2>/dev/null || true
+  pkill -f -- "$PKILL_PATTERN" 2>/dev/null || true
 
   for _ in $(seq 1 15); do
     is_alive "$PID" || { echo "stopped"; rm -f "$STOPFLAG"; exit 0; }
@@ -426,7 +426,7 @@ stop_agent() {
   else
     echo "pid ${PID} no longer identifies as ${AGENT_NAME} supervisor (exited and recycled?) -- skipping force-kill of an unconfirmed pid"
   fi
-  pkill -f "$PKILL_PATTERN" 2>/dev/null || true
+  pkill -f -- "$PKILL_PATTERN" 2>/dev/null || true
   rm -f "$PIDFILE" "$STOPFLAG"
 }
 
