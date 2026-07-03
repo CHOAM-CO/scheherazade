@@ -195,6 +195,126 @@ try {
   console.log(`INFO  gap demo failed to run: ${err.message}`)
 }
 
+// ── 9. v1 fixes (model-divergent/GPT review, 2026-07-03) ──────────────
+
+// (a) atomicity: a forced audit-insert failure must roll back the primary
+// mutation too — no memory_events row with no matching mutation, and (this
+// direction) no mutation with no matching memory_events row.
+db.exec(`
+  CREATE TRIGGER smoke_force_audit_fail
+  BEFORE INSERT ON memory_events
+  WHEN NEW.session = 'FORCE_AUDIT_FAIL'
+  BEGIN SELECT RAISE(ABORT, 'smoke: forced audit-insert failure'); END;
+`)
+assertThrows(
+  () =>
+    memoryWrite(db, {
+      table: 'user_facts',
+      data: { subject: 'rollback-test', predicate: 'x', value: 'y', source_session: 'FORCE_AUDIT_FAIL' },
+    }),
+  'atomicity: memory_write throws when the audit-log insert is forced to fail',
+)
+const rollbackLeftover = memoryQuery(db, { table: 'user_facts', filter: { subject: 'rollback-test' } })
+assert(rollbackLeftover.count === 0, 'atomicity: forced audit failure left NO partial user_facts row (mutation rolled back)')
+const rollbackEvents = memoryQuery(db, { table: 'memory_events', filter: { session: 'FORCE_AUDIT_FAIL' } })
+assert(rollbackEvents.count === 0, 'atomicity: forced audit failure left NO memory_events row either (the failing insert itself rolled back)')
+db.exec('DROP TRIGGER smoke_force_audit_fail')
+
+// same rollback guarantee via memory_confirm and memory_delete's own audit log
+const atomicityThread = memoryWrite(db, {
+  table: 'open_threads',
+  data: { summary: 'atomicity-confirm-delete probe thread', opened_session: 'sess-atomic' },
+})
+db.exec(`
+  CREATE TRIGGER smoke_force_audit_fail2
+  BEFORE INSERT ON memory_events
+  WHEN NEW.session = 'FORCE_AUDIT_FAIL2'
+  BEGIN SELECT RAISE(ABORT, 'smoke: forced audit-insert failure 2'); END;
+`)
+const beforeConfirmAtomic = memoryQuery(db, { table: 'open_threads', filter: { id: atomicityThread.id } }).rows[0]
+assertThrows(
+  () => memoryConfirm(db, { table: 'open_threads', id: atomicityThread.id, session: 'FORCE_AUDIT_FAIL2' }),
+  'atomicity: memory_confirm throws when its audit-log insert is forced to fail',
+)
+const afterConfirmAtomic = memoryQuery(db, { table: 'open_threads', filter: { id: atomicityThread.id } }).rows[0]
+assert(
+  afterConfirmAtomic.last_touched_at === beforeConfirmAtomic.last_touched_at,
+  'atomicity: memory_confirm did NOT bump last_touched_at when its audit insert was forced to fail (rolled back)',
+)
+assertThrows(
+  () => memoryDelete(db, { table: 'open_threads', id: atomicityThread.id, session: 'FORCE_AUDIT_FAIL2' }),
+  'atomicity: memory_delete throws when its audit-log insert is forced to fail',
+)
+const stillThere = memoryQuery(db, { table: 'open_threads', filter: { id: atomicityThread.id } })
+assert(stillThere.count === 1, 'atomicity: memory_delete did NOT remove the row when its audit insert was forced to fail (rolled back)')
+db.exec('DROP TRIGGER smoke_force_audit_fail2')
+
+// (b) unknown column now THROWS instead of being silently dropped
+assertThrows(
+  () =>
+    memoryWrite(db, {
+      table: 'user_facts',
+      data: { subject: 'typo-test', predicate: 'y', value: 'z', source_session: 'sess-typo', last_tuoched_at: 'oops' },
+    }),
+  'reject-unknown-column: memory_write throws on a typo\'d field ("last_tuoched_at") instead of silently dropping it',
+)
+const typoLeftover = memoryQuery(db, { table: 'user_facts', filter: { subject: 'typo-test' } })
+assert(typoLeftover.count === 0, 'reject-unknown-column: the throwing write did not partially insert a row')
+assertThrows(
+  () => memoryWrite(db, { table: 'open_threads', data: { id: 999999, bogus_col: 'x' } }),
+  'reject-unknown-column: memory_write (update-by-id path) also throws on an unknown column',
+)
+
+// (c) secure delete: after a delete, the deleted plaintext must not survive
+// on disk in either the main db file or the -wal file.
+const secretValue = `SECRET_MARKER_${Math.random().toString(36).slice(2)}`
+const secretWrite = memoryWrite(db, {
+  table: 'user_facts',
+  data: { subject: 'secure-delete-probe', predicate: 'secret', value: secretValue, source_session: 'sess-secure' },
+})
+memoryDelete(db, { table: 'user_facts', id: secretWrite.id })
+const mainDbBytes = fs.readFileSync(tmpDb)
+assert(!mainDbBytes.includes(secretValue), 'secure delete: deleted value is NOT present anywhere in the main db file bytes')
+const walPath = `${tmpDb}-wal`
+const walBytes = fs.existsSync(walPath) ? fs.readFileSync(walPath) : Buffer.alloc(0)
+assert(
+  walBytes.length === 0 || !walBytes.includes(secretValue),
+  `secure delete: deleted value is NOT present in the -wal file bytes (wal length=${walBytes.length})`,
+)
+
+// (d) AUTOINCREMENT prevents rowid reuse across delete+insert
+const beforeAutoinc = memoryWrite(db, {
+  table: 'preferences',
+  data: { key: 'autoincrement-probe-a', value: 'v1', source_session: 'sess-ai' },
+})
+memoryDelete(db, { table: 'preferences', id: beforeAutoinc.id })
+const afterAutoinc = memoryWrite(db, {
+  table: 'preferences',
+  data: { key: 'autoincrement-probe-b', value: 'v2', source_session: 'sess-ai' },
+})
+assert(
+  afterAutoinc.id > beforeAutoinc.id,
+  `rowid stability: id after delete+insert (${afterAutoinc.id}) is greater than the deleted id (${beforeAutoinc.id}) — AUTOINCREMENT prevented reuse`,
+)
+
+// (e) optional session flows into memory_confirm / memory_delete audit rows
+const sessionProbeThread = memoryWrite(db, {
+  table: 'open_threads',
+  data: { summary: 'session-attribution probe thread', opened_session: 'sess-orig' },
+})
+const confirmWithSession = memoryConfirm(db, { table: 'open_threads', id: sessionProbeThread.id, session: 'sess-confirm-abc' })
+assert(confirmWithSession.session === 'sess-confirm-abc', 'session attribution: memory_confirm return value carries the passed session')
+const confirmEventWithSession = memoryQuery(db, { table: 'memory_events', filter: { event: 'confirm', row_id: sessionProbeThread.id } }).rows[0]
+assert(confirmEventWithSession?.session === 'sess-confirm-abc', 'session attribution: memory_confirm audit row carries the passed session')
+
+const confirmNoSession = memoryConfirm(db, { table: 'open_threads', id: sessionProbeThread.id })
+assert(confirmNoSession.session === null, 'session attribution: memory_confirm without a session still defaults to null (backward-compatible)')
+
+const deleteWithSession = memoryDelete(db, { table: 'open_threads', id: sessionProbeThread.id, session: 'sess-delete-xyz' })
+assert(deleteWithSession.session === 'sess-delete-xyz', 'session attribution: memory_delete return value carries the passed session')
+const deleteEventWithSession = memoryQuery(db, { table: 'memory_events', filter: { event: 'delete', row_id: sessionProbeThread.id } }).rows[0]
+assert(deleteEventWithSession?.session === 'sess-delete-xyz', 'session attribution: memory_delete audit row carries the passed session')
+
 // ── cleanup ──────────────────────────────────────────────────────────
 db.close()
 fs.rmSync(tmpDir, { recursive: true, force: true })

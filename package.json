@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Mac-native local AI agent. Forked from agent-portable (Claude Code single-agent harness); P0 spike layers an Electron packaging shell on top.",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=24.0.0"
   },
   "main": "main.cjs",
   "scripts": {
@@ -31,6 +31,7 @@
       "hooks/**/*",
       "scripts/**/*",
       "docs/**/*",
+      "memory/**/*",
       "CLAUDE.md",
       "README.md",
       "!node_modules/electron/**/*",
