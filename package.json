@@ -7,13 +7,56 @@
   "engines": {
     "node": ">=18.0.0"
   },
+  "main": "main.cjs",
   "scripts": {
-    "start": "node channel.mjs"
+    "start": "node channel.mjs",
+    "electron:dev": "electron .",
+    "dist": "electron-builder --mac dmg"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "discord.js": "^14.26.4",
     "dotenv": "^17.4.2",
     "zod": "^4.4.3"
+  },
+  "build": {
+    "appId": "com.choam.scheherazade",
+    "productName": "Scheherazade",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.cjs",
+      "channel.mjs",
+      "hooks/**/*",
+      "scripts/**/*",
+      "docs/**/*",
+      "CLAUDE.md",
+      "README.md",
+      "!node_modules/electron/**/*",
+      "!node_modules/electron-builder/**/*"
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.developer-tools",
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "sign": false
+    },
+    "asar": true
+  },
+  "devDependencies": {
+    "electron": "^43.0.0",
+    "electron-builder": "^26.15.3"
   }
 }
