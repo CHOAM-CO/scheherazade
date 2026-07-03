@@ -67,7 +67,10 @@
       "category": "public.app-category.developer-tools",
       "identity": "-",
       "hardenedRuntime": false,
-      "gatekeeperAssess": false
+      "gatekeeperAssess": false,
+      "extendInfo": {
+        "NSDocumentsFolderUsageDescription": "세헤라자드가 companion의 지속 기억을 Documents/Scheherazade 폴더에 저장합니다."
+      }
     },
     "dmg": {
       "sign": false
