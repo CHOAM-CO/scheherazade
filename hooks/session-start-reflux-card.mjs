@@ -70,7 +70,7 @@ const DB_PATH = process.env.SCHEHERAZADE_MEMORY_DB || path.join(DATA_HOME, 'memo
 // 초안 원칙(설계 문서 §1-3): 존댓말, 이모지/느낌표 금지, "기능"으로 읽히는 톤.
 const GATE_COPY = {
   header: (n) => `아직 반영되지 않은 교정이 ${n}건 쌓여 있습니다.`,
-  body: '같은 교정이 반복되고 있다면, 자기 노트(self_notes.md)에 원칙으로 승격할지 판단해 주세요.',
+  body: '같은 교정이 반복되고 있다면, 자기 서술(self_persona.md)에 원칙으로 승격할지 판단해 주세요.', // PO 확정: 신규 파일 발명 대신 setup.sh가 부트스트랩하는 실존 파일로 (07-05 02:3x)
   footer: '자동으로 반영되지 않습니다. 판단과 집필은 직접 해 주세요.',
 }
 

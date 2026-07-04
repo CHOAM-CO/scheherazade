@@ -30,38 +30,129 @@ window.getOnboardToken = function () {
 window.COPY = {
   step0: {
     title: '설정을 시작합니다',
-    body: '3분이면 끝납니다. 모든 정보는 이 컴퓨터에만 저장됩니다.',
+    // Full-autonomy disclosure (Mino 2026-07-04 16:26 "에이전트한테 권한 다
+    // 주기" + 2026-07-05 02:12 "권한 최대한 열어주기, 반박 안받음"): the old
+    // macOS-protected-folders sentence was REMOVED on Mino's direct order --
+    // onboarding now requests Documents/Downloads/Desktop TCC grants, so
+    // that sentence would be false. The folder line below states the new
+    // reality honestly. FDA still deferred (not requested at setup). Source
+    // doc §Step 0 updated in the same pass -- keep verbatim-synced.
+    body: '3분이면 끝납니다. 모든 정보는 이 컴퓨터에만 저장됩니다. 완성된 에이전트는 매번 허락을 묻지 않고 스스로 일합니다. 문서, 다운로드, 데스크톱 폴더는 에이전트가 직접 읽고 씁니다.',
     button: '시작',
   },
 
+  // Step 1 v2 (source file §Step 1, 2026-07-04 01:20 redesign): each
+  // provider's PRIMARY path is now account login (subscription billing),
+  // API key is a folded-away fallback. Ground: key issuance was the
+  // highest-friction point in onboarding, and the wrong billing axis for
+  // Max/Plus subscribers -- Mino himself dropped off at Step 1 (01:09) and
+  // NEO logs showed existing subscription OAuth silently beating an
+  // injected key anyway.
+  //
+  // UI-SCOPE NOTE (2026-07-04 06:xx, Idea/Melchior): the backend's
+  // ROUTER_WIRED flag flipped true overnight (own-infra-first found no
+  // router build is needed, direct env wiring suffices) -- but that is a
+  // BACKEND capability fact, separate from the 22:02 Mino-approved UI scope
+  // lock (Claude-only ships v1, chatgpt/ollama = v1.1). Do not wire tab
+  // visibility straight off GET /api/config's routerWired field. Both the
+  // real primary-path copy AND the disabled/coming-soon copy are included
+  // below for every tab so wizard.js can render whichever the UI-scope
+  // decision calls for without another copy pass either way.
   step1: {
     title: '사용할 모델을 연결하세요',
-    // Sirin red-team #5: verification itself is a real POST to the
-    // provider's server, so "외부로 전송되지 않습니다" was a false claim.
-    // This is the corrected/honest version.
-    body: '아래 중 하나의 API 키가 필요합니다. 키는 macOS 키체인에만 저장됩니다. 입력한 제공사에 인증을 확인하는 것 외에는 어디로도 보내거나 수집하지 않습니다.',
+    body: '쓰고 있는 계정으로 로그인하면 됩니다. 구독 요금제가 그대로 적용되고, 로그인 정보는 이 Mac에만 저장됩니다.',
     tabs: [
-      { id: 'claude', label: 'Claude', hint: 'console.anthropic.com에서 발급. sk-ant-로 시작합니다.' },
+      {
+        id: 'claude',
+        label: 'Claude',
+        // v1 = paste flow (confirmed 2026-07-04 03:2x): earlier copy
+        // promised an in-app browser launch ("브라우저가 한 번 열립니다 / 키
+        // 입력 불필요"), but the actual mechanism is a terminal command +
+        // paste. Same "don't imply one-click" principle as the Ollama
+        // honesty note below -- copy corrected to match implementation.
+        primary: {
+          // validating/failure (2026-07-04 06:4x, Melchior's wizard.js gate
+          // caught this): the submit handler is shared between this
+          // sub-mode (provider=claude-subscription, pasting an OAuth token)
+          // and the fallback sub-mode (provider=claude, pasting an x-api-key)
+          // -- wizard.js had nothing under step1.tabs[claude].primary to
+          // reach for and reused step1.fallback.validating/failure for both,
+          // which says "키" (key). Wrong noun for a token. Branch wizard.js's
+          // handler on state.provider === 'claude-subscription' to pull
+          // these instead of fallback.*; fallback.* stays correct as-is for
+          // the actual key-paste path. success stays shared (fallback.success
+          // = plain '연결됐습니다', no wrong noun in it either way) --
+          // step1-level loginSuccess below is NOT currently wired to
+          // anything (no {plan} field confirmed on the validate response
+          // yet); leaving it in place for whenever that lands, not a v1
+          // blocker.
+          validating: '토큰을 확인하는 중입니다',
+          failure: (reason) => `토큰이 거부됐습니다 (원인: ${reason}). 명령어를 다시 실행해 새 토큰을 붙여넣어주세요.`,
+          precondition: 'Claude Pro 또는 Max 구독과 claude 명령어 설치가 필요합니다.',
+          steps: [
+            '터미널에서 claude setup-token을 실행하세요',
+            '브라우저에서 Claude 계정으로 로그인하세요',
+            '터미널에 표시된 토큰을 아래 칸에 붙여넣으세요',
+          ],
+          copyCommand: 'claude setup-token',
+          subtext: 'API 키 발급이 필요 없습니다. 구독이 그대로 적용되고, 토큰은 이 Mac의 키체인에만 저장됩니다.',
+          button: '연결 확인',
+        },
+      },
       {
         id: 'chatgpt',
         label: 'ChatGPT',
         disabledLabel: 'ChatGPT (곧 지원)',
-        hint: 'platform.openai.com에서 발급. sk-로 시작합니다.',
+        primary: {
+          button: '로컬 Codex에 연결',
+          precondition: 'Codex 설치와 codex login (ChatGPT 계정 브라우저 인증)이 필요합니다.',
+          subtext: '이 Mac의 Codex가 계정 인증을 대신합니다. 앱에 키를 저장하지 않습니다.',
+        },
       },
       {
         id: 'ollama',
         label: 'Ollama Cloud',
         disabledLabel: 'Ollama Cloud (곧 지원)',
-        hint: 'ollama.com 계정 설정에서 발급.',
+        primary: {
+          button: '로컬 Ollama에 연결 (클라우드 모델)',
+          precondition: 'Ollama 앱이 설치되어 있고 ollama signin을 마친 상태여야 합니다.',
+          subtext: '이 Mac의 Ollama가 계정 서명을 대신합니다. 앱에 키를 저장하지 않습니다.',
+          // Honesty note (source file): Path A is friction-moved, not
+          // friction-removed (install+signin happen outside the app) --
+          // copy must not imply one-click. In-app signin (Path B) = v1.1.
+          failures: {
+            not_running: 'Ollama가 실행 중이 아닙니다. Ollama 앱을 켜고 다시 시도해주세요.',
+            not_signed_in: 'Ollama 계정 로그인이 안 되어 있습니다. 터미널에서 ollama signin을 실행한 뒤 다시 시도해주세요.',
+          },
+        },
       },
     ],
-    // Shown once beneath the tab row whenever routerWired is false (GET
-    // /api/config). Same subtext for either disabled tab, per the source
-    // file's 폴백 B copy -- no date promise, no implying a choice was made.
+    loginWaiting: '브라우저에서 로그인을 마치면 이 화면이 바뀝니다.',
+    loginSuccess: (plan) => `연결됐습니다. ${plan} 요금제로 동작합니다.`,
+    loginFailure: '로그인이 완료되지 않았습니다. 다시 시도하거나, 아래에서 API 키로 연결할 수 있습니다.',
+    // Folded-away fallback path. Field-level hint text is unchanged from
+    // the pre-v2 copy (still accurate -- only its position in the flow
+    // moved from primary to fallback).
+    fallback: {
+      toggleLabel: 'API 키로 연결하기',
+      // Sirin red-team #5: verification itself is a real POST to the
+      // provider's server, so "외부로 전송되지 않습니다" was a false claim.
+      // This is the corrected/honest version.
+      body: 'API 키가 있다면 직접 연결할 수 있습니다. 키는 macOS 키체인에만 저장됩니다. 입력한 제공사에 인증을 확인하는 것 외에는 어디로도 보내거나 수집하지 않습니다.',
+      tabs: [
+        { id: 'claude', hint: 'console.anthropic.com에서 발급. sk-ant-로 시작합니다.' },
+        { id: 'chatgpt', hint: 'platform.openai.com에서 발급. sk-로 시작합니다.' },
+        { id: 'ollama', hint: 'ollama.com 계정 설정에서 발급.' },
+      ],
+      validating: '키를 확인하는 중입니다',
+      success: '연결됐습니다',
+      failure: (reason) => `키가 거부됐습니다 (원인: ${reason}). 키를 다시 확인하거나 다른 제공사를 선택하세요.`,
+    },
+    // Shown beneath a tab whenever that tab is rendered disabled (UI-scope
+    // decision, not directly the routerWired field -- see note above). Same
+    // subtext for either disabled tab, per the source file's 폴백 B copy --
+    // no date promise, no implying a choice was made.
     routerDisabledNote: '다음 업데이트에서 연결됩니다. 지금은 Claude로 시작할 수 있습니다.',
-    validating: '키를 확인하는 중입니다',
-    success: '연결됐습니다',
-    failure: (reason) => `키가 거부됐습니다 (원인: ${reason}). 키를 다시 확인하거나 다른 제공사를 선택하세요.`,
     button: '다음',
   },
 
@@ -157,17 +248,41 @@ window.COPY = {
       body: (name) => `${name}를 시작하고 있습니다. Discord 연결이 확인되면 이 화면이 바뀝니다.`,
       button: 'Discord 열기',
     },
+    // channelName (2026-07-04 06:35, Melchior raw-verified http-server.cjs:940
+    // -- validateAndInvite's return already carried channelId/guildId, this
+    // adds homeChannel.name, a real field on the Discord API channel object,
+    // no extra fetch). DM positive-exposure (source file §상태2 정정,
+    // 2026-07-04 06:2x): DM is a v1-mandatory, already-shipped path (Mino
+    // 01:24 directive, Melchior 02:23 12/12 tests) -- staying silent about a
+    // working required feature is its own copy/implementation gap, same
+    // class as promising something that doesn't work, just inverted. Home
+    // channel stays the headline (that's where the onboarding funnel points
+    // and where the 첫 발화 스펙 is written for); DM is a short second line,
+    // not equal billing.
     live: {
       title: '끝났습니다',
-      body: (name) => `${name}가 Discord에서 기다립니다. 첫 인사는 방금 입력한 설정을 이미 반영하고 있습니다.`,
-      button: 'Discord 열기',
+      body: (name, channelName) => `${name}가 Discord의 #${channelName}에서 기다립니다. DM도 받습니다. 첫 인사는 방금 입력한 설정을 이미 반영하고 있습니다.`,
+      // Deep link via POST /api/discord/open { guildId, channelId } --
+      // http-server.cjs:1234-1244, confirmed live (source file's own
+      // http-server.cjs:1011 citation was stale, code moved).
+      button: (channelName) => `#${channelName} 열기`,
     },
     failed: {
       title: '시작하지 못했습니다',
       causes: {
+        // action text (2026-07-04 06:5x, Melchior's wizard.js gate caught
+        // this): settings.js is rename+Slack-placeholder only -- no real
+        // key/model repair UI exists (http-server.cjs:1208 says so in its
+        // own comment: "no re-onboarding/provider-switch UI today"). The
+        // old action text promised a fix settings can't perform, and this
+        // cause is actually reachable now (a junk setup-token passes Step 1
+        // and crash-loops at spawn). Real settings repair UI = v1.1 flag
+        // (Melchior's call, separate from this copy fix). Button left as-is
+        // -- opening settings is harmless, just not sufficient, and the v1.1
+        // repair UI will land on the same button without another copy pass.
         crash_loop: {
           cause: (name) => `${name} 프로세스가 반복해서 종료되고 있습니다. 정확한 원인은 확인되지 않았습니다.`,
-          action: () => '설정에서 모델 키와 인증 정보를 확인한 뒤, 앱을 종료했다가 다시 실행해주세요.',
+          action: () => '앱을 종료했다가 다시 실행해주세요. 반복되면 처음 입력한 값이 정확한지 다시 확인해주세요.',
           buttons: ['openSettings', 'openLogs'],
         },
         discord_token_bad: {
@@ -180,9 +295,11 @@ window.COPY = {
           action: () => '설정에서 모델을 Claude로 변경한 뒤, 앱을 종료했다가 다시 실행해주세요.',
           buttons: ['openSettings', 'openLogs'],
         },
+        // action text: same fix as crash_loop above, same reason (no real
+        // settings repair UI to send the user to).
         key_error: {
           cause: () => '저장된 키를 읽지 못했습니다.',
-          action: () => '설정에서 키를 다시 입력한 뒤, 앱을 종료했다가 다시 실행해주세요.',
+          action: () => '앱을 종료했다가 다시 실행해주세요. 반복되면 처음 입력한 값이 정확한지 다시 확인해주세요.',
           buttons: ['openSettings', 'openLogs'],
         },
         timeout: {
