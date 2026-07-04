@@ -307,16 +307,22 @@ run_loop() {
     # and is NOT suppressed by --dangerously-skip-permissions (empirically
     # confirmed vs claude-code 2.1.199 -- that flag gates a separate dialog).
     # The old `-re "Yes, use this"` pattern matched NO string in the binary,
-    # so this dialog sat until the 25s timeout, then proceeded with focus on
-    # the default "No" -> key rejected -> agent dead. Real dialog is
-    # "Do you want to use this API key? 1. Yes  2. No (recommended)", cursor
-    # defaults to No, so we send "1" (select Yes) + Enter, NOT a bare Enter.
+    # so this dialog sat until the 25s timeout, then defaulted to "No" ->
+    # key rejected -> agent dead. Real dialog is
+    # "Do you want to use this API key? 1. Yes  2. No (recommended)".
+    # KEYSTROKE: send bare "1" with NO trailing \r. Empirically settled
+    # (oracle, 2026-07-05, deterministic re-runs): "1" is a hotkey that fires
+    # the confirm handler -> approved. A trailing "\r" INDEPENDENTLY selects
+    # the default focus (No) -> rejected, so "1\r" fires BOTH handlers and
+    # writes the key into approved AND rejected at once (corrupt state that
+    # re-triggers the freeze). "1" alone lands cleanly in approved (3/3);
+    # "1\r" lands in both (2/2). So: send "1", not "1\r".
     expect {
       -re "trust"             { send "\r"; exp_continue }
       -re "confirm"           { send "\r"; exp_continue }
       -re "local development" { send "\r"; exp_continue }
       -re "text style"        { send "\r"; exp_continue }
-      -re "Do you want to use this API key" { send "1\r"; exp_continue }
+      -re "Do you want to use this API key" { send "1"; exp_continue }
       timeout {}
     }
     trap exit {SIGTERM SIGINT}
