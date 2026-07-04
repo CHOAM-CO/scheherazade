@@ -27,7 +27,7 @@ const REPLY_TOOL = 'mcp__agent-channel__reply'
 // 초안 원칙(설계 문서 §1-3): 존댓말, 이모지/느낌표 금지, "기능"으로 읽히는 톤.
 const GATE_COPY = {
   message: (words) =>
-    `⏰ 시간 표현이 감지되었습니다: '${words.join("', '")}'. 직접 확인하지 않은 시간 추정은 사실과 다를 수 있습니다. 파일 시각이나 실제 기록을 확인한 뒤 답해 주세요.`,
+    `[시간 표현 확인] 시간 표현이 감지되었습니다: '${words.join("', '")}'. 직접 확인하지 않은 시간 추정은 사실과 다를 수 있습니다. 파일 시각이나 실제 기록을 확인한 뒤 답해 주세요.`,
 }
 
 // Claims that carry their own verifiable timestamp — never need the nudge.

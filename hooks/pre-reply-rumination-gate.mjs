@@ -62,7 +62,8 @@ const GATE_COPY = {
     '방금 메시지에 "이미 처리했다"는 표현이 있습니다. 실제로 확인한 내용인가요, 아니면 그럴 것이라고 짐작한 내용인가요. 확인한 내용이면 지금 그대로 다시 보내면 통과됩니다. 아직 확인하지 않았다면, 확인한 뒤에 다시 보내 주세요.',
   absenceClaim:
     '방금 메시지에 "기억이 없다" 또는 "기록이 없다"는 표현이 있습니다. 실제로 찾아본 뒤에 하는 말인가요. 아직 찾아보지 않았다면 세션 기록을 먼저 확인한 뒤 다시 보내 주세요.',
-  footer: '같은 내용을 그대로 다시 보내면 통과됩니다 (10분 이내).',
+  footer:
+    '확인을 마쳤다면 같은 내용 그대로, 또는 고친 내용으로 다시 보내 주세요. 이번 한 번은 그대로 전송됩니다 (10분 이내). 이 확인은 오류가 아니라, 에이전트가 사실과 다른 보고를 하지 않도록 돕는 절차입니다.',
 }
 
 // CLASS_A: completion/verification claims. Curated action-verb stems, not a
@@ -75,9 +76,14 @@ const CLASS_A =
   /(보냈어|보냈습니다|보내놨|저장했|저장했습니다|등록했|예약했|취소했|정리했|찾았어|찾아냈|완료했|완료됐|끝냈어|끝났어|처리했|처리됐|반영했|반영됐|적용했|적용됐|수정했|고쳤어|고쳤습니다|바꿔놨|바꿨어|설정했|생성했|만들어놨|만들었어|확인했|검증했|점검했)/
 
 // CLASS_B: memory/absence claims — asserting "no memory of this" or "no
-// record of this" without having actually looked.
+// record of this" without having actually looked. Scoped to claims that are
+// FALSIFIABLE BY LOOKUP (a record/memory search can prove them wrong).
+// Bare epistemic states ("모르겠어요") and novelty remarks ("처음 들어요")
+// were deliberately removed (PO decision, v1.1): they are legitimate
+// conversational answers, often true, and bouncing them reads as breakage —
+// the exact false-positive UX named as top risk in the design doc §4.
 const CLASS_B =
-  /(기억\s*안\s*나|기억이\s*안\s*나|기록.{0,3}없|없었어|없더라|그런\s*적\s*없|한\s*적\s*없|안\s*했었|처음이야|처음\s*들어|모르겠어|모르겠는데|모르겠다)/
+  /(기억\s*안\s*나|기억이\s*안\s*나|기록.{0,3}없|없었어|없더라|그런\s*적\s*없|한\s*적\s*없|안\s*했었)/
 
 function allow() {
   process.exit(0)
@@ -167,7 +173,7 @@ try {
     failLoud('marker write', e)
   }
 
-  const lines = [`🔁 ${GATE_COPY.header}`, '']
+  const lines = [`[확인 절차] ${GATE_COPY.header}`, ''] // bracket label, not emoji — copy-register rule (no emoji) applies to gate strings too
   if (hitA) lines.push(GATE_COPY.completionClaim)
   if (hitB) lines.push(GATE_COPY.absenceClaim)
   lines.push('', GATE_COPY.footer)

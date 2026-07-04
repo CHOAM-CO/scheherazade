@@ -114,7 +114,7 @@ try {
 
   if (!rows || rows.length === 0) succeedEmpty()
 
-  const lines = [`📌 ${GATE_COPY.header}`, '']
+  const lines = [`[기억된 교정] ${GATE_COPY.header}`, ''] // bracket label, not emoji — copy-register rule
   for (const r of rows) {
     const date = typeof r.corrected_at === 'string' ? r.corrected_at.slice(0, 10) : ''
     lines.push(`- ${r.what_was_wrong} -> ${r.correct_behavior}${date ? ` (${date})` : ''}`)
