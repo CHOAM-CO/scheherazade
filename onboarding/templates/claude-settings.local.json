@@ -1,0 +1,65 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "mcp__agent-channel__reply",
+      "mcp__agent-channel__read_channel_history",
+      "mcp__memory__memory_write",
+      "mcp__memory__memory_query",
+      "mcp__memory__memory_confirm",
+      "mcp__memory__memory_delete",
+      "mcp__memory__memory_recall_material"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash {AGENT_DIR}/hooks/session-start.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "mcp__agent-channel__reply",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node {AGENT_DIR}/hooks/pre-reply-rumination-gate.mjs"
+          },
+          {
+            "type": "command",
+            "command": "node {AGENT_DIR}/hooks/pre-reply-corrections-context.mjs"
+          },
+          {
+            "type": "command",
+            "command": "node {AGENT_DIR}/hooks/pre-reply-time-adverb-guard.mjs"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash {AGENT_DIR}/hooks/felt-check.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash {AGENT_DIR}/hooks/checkpoint-nudge.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
