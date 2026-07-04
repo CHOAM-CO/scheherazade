@@ -29,6 +29,8 @@
     "files": [
       "main.cjs",
       "channel.mjs",
+      "provider-env.cjs",
+      "tcc-probe.cjs",
       "run.sh",
       ".mcp.json",
       "onboarding/**/*",
@@ -47,7 +49,8 @@
       "node_modules/**",
       "memory/**",
       "channel.mjs",
-      "run.sh"
+      "run.sh",
+      "hooks/**"
     ],
     "extraResources": [
       {
@@ -69,7 +72,9 @@
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
       "extendInfo": {
-        "NSDocumentsFolderUsageDescription": "세헤라자드가 companion의 지속 기억을 Documents/Scheherazade 폴더에 저장합니다."
+        "NSDocumentsFolderUsageDescription": "세헤라자드가 companion의 지속 기억을 Documents/Scheherazade 폴더에 저장합니다.",
+        "NSDownloadsFolderUsageDescription": "세헤라자드가 companion 에이전트를 위해 Downloads 폴더의 파일을 읽고 씁니다.",
+        "NSDesktopFolderUsageDescription": "세헤라자드가 companion 에이전트를 위해 Desktop 폴더의 파일을 읽고 씁니다."
       }
     },
     "dmg": {

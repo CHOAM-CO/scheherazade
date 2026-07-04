@@ -36,6 +36,7 @@ const { app, BrowserWindow } = require('electron')
 const { spawn, execFileSync } = require('node:child_process')
 const path = require('node:path')
 const fs = require('node:fs')
+const os = require('node:os')
 const {
   createOnboardingServer,
   readAgentConfig,
@@ -47,6 +48,8 @@ const {
   DATA_HOME,
 } = require('./onboarding/http-server.cjs')
 const { setAgentStatus } = require('./onboarding/agent-status.cjs')
+const { buildProviderEnv } = require('./provider-env.cjs')
+const { probeUserFolders } = require('./tcc-probe.cjs')
 
 // Fix C, closing the residual gap (code-review pass, 2026-07-03): the
 // AGENT_PIDFILE check in spawnRealAgentChild() below handles the
@@ -518,42 +521,35 @@ function spawnRealAgentChild() {
   // there); readProviderKey() decrypts the safeStorage-encrypted key
   // in-memory only -- see this function's own doc comment in
   // http-server.cjs -- and it is injected directly into THIS child's env
-  // below, never written to any file. Only the 'claude' provider can spawn
-  // today: 'chatgpt'/'ollama' need an Anthropic-inbound local router that
-  // does not exist yet (separate task) -- faking ANTHROPIC_API_KEY for
-  // those would silently send the wrong-shaped credential and hang exactly
-  // like the bug this fix closes, so they fail loud instead.
+  // below, never written to any file.
+  //
+  // 4-provider-mode wiring (2026-07-04): all 4 onboarding-selectable
+  // PROVIDERS values (claude, claude-subscription, chatgpt, ollama) now
+  // route through buildProviderEnv() (provider-env.cjs) -- a pure,
+  // Electron-free function so it can be unit-tested standalone (see
+  // scripts/test-provider-env.mjs). This function stays a flat if/else on
+  // buildProviderEnv()'s return shape; see provider-env.cjs's own doc
+  // comment on `buildProviderEnv` for the full contract (env fields to
+  // spread over the base env, and the 3 error.kind values below).
   const provider = config.PROVIDER || 'claude'
-  let anthropicApiKey
-  if (provider === 'claude') {
-    let providerKey
-    try {
-      providerKey = readProviderKey('claude')
-    } catch (err) {
-      console.error('[scheherazade/main] readProviderKey(claude) failed, cannot spawn agent:', err)
-      // Cause-code wiring, PIECE 1: readProviderKey() throwing is exactly
-      // the 'key_error' case (safeStorage/Keychain decrypt failure, corrupt
-      // credential file, etc).
-      setAgentStatus('failed', 'key_error', `readProviderKey failed: ${err.message}`)
+  const providerEnvResult = buildProviderEnv(provider, config, { readProviderKey })
+  if (providerEnvResult.error) {
+    const { kind, reason } = providerEnvResult.error
+    if (kind === 'key_error') {
+      console.error(`[scheherazade/main] buildProviderEnv(${provider}) key_error, cannot spawn agent: ${reason}`)
+      setAgentStatus('failed', 'key_error', reason)
       return null
     }
-    if (!providerKey) {
-      log('agent spawn skipped: onboarding says PROVIDER=claude but no validated key is on file yet')
+    if (kind === 'not_ready') {
+      // Quiet skip, matching this codebase's existing "no key yet" behavior
+      // -- no setAgentStatus call, see provider-env.cjs's own doc comment on
+      // this error.kind.
+      log(`agent spawn skipped: ${reason}`)
       return null
     }
-    anthropicApiKey = providerKey
-  } else {
-    const reason =
-      `provider "${provider}" requires the local Anthropic-inbound router (coming soon), not yet wired -- ` +
-      'only "claude" (BYOK Anthropic key forwarded directly to the claude CLI) can spawn today.'
-    console.error(`[scheherazade/main] BLOCKER: ${reason}`)
-    // Cause-code wiring, PIECE 1: this IS 'provider_not_wired' by definition
-    // -- the router doesn't exist yet. See onboarding/http-server.cjs's
-    // ROUTER_WIRED flag (PIECE 3) for the server-side gate that now stops
-    // this branch from ever being reachable via a validated
-    // chatgpt/ollama onboarding-complete in the first place; this stays as
-    // defense-in-depth for any config file hand-edited directly to a
-    // non-claude PROVIDER.
+    // 'provider_not_wired' (or any future unrecognized kind -- defense in
+    // depth, same fallback this codebase's pre-existing `else` branch used).
+    console.error(`[scheherazade/main] BLOCKER: buildProviderEnv(${provider}) provider_not_wired: ${reason}`)
     setAgentStatus('failed', 'provider_not_wired', reason)
     return null
   }
@@ -607,10 +603,16 @@ function spawnRealAgentChild() {
   // own use but never touches or logs DISCORD_BOT_TOKEN, so it passes
   // through run.sh -> expect -> claude -> channel.mjs untouched at every
   // hop.
-  // --dangerously-skip-permissions is intentionally NOT used here, matching
-  // run.sh's own header-comment reasoning: .claude/settings.local.json's
-  // permissions.allow already scopes this agent's tools without a blanket
-  // bypass.
+  // --dangerously-skip-permissions is NOT set here -- and correctly so: this
+  // spawn() call's target is BASH_BIN (bash running run.sh), not the
+  // `claude` CLI binary itself, and the flag only means anything on the
+  // `claude` command line. run.sh owns the actual claude invocation (its own
+  // /usr/bin/expect-wrapped CLI spawn) and, per Mino's 2026-07-04 directive,
+  // now passes --dangerously-skip-permissions THERE (see run.sh's own
+  // comment on its claude invocation for the current reasoning -- this
+  // comment previously and incorrectly claimed the flag was deliberately
+  // unused system-wide; that was true of run.sh's OLD behavior, not its
+  // current one, and never described this spawn() call either way).
   const child = spawn(BASH_BIN, [RUN_SH_PATH, '__loop'], {
     cwd: DATA_HOME,
     env: {
@@ -621,7 +623,14 @@ function spawnRealAgentChild() {
       MODEL: model,
       CLAUDE_BIN: resolved.bin,
       AGENT_DATA_HOME: DATA_HOME, // see run.sh's own comment: MEM = AGENT_DATA_HOME override
-      ANTHROPIC_API_KEY: anthropicApiKey, // Critical A -- see comment block above
+      // 4-provider-mode wiring (2026-07-04): spread LAST so buildProviderEnv()'s
+      // fields (provider-env.cjs, computed above as providerEnvResult.env)
+      // win over both ...process.env AND this object's own MODEL field --
+      // e.g. ollama mode returns its own MODEL (a real Ollama model tag,
+      // never the generic Anthropic-model default set above). See
+      // provider-env.cjs's own doc comment on `env` for the full merge-order
+      // contract, including `undefined`-valued keys meaning "actively unset".
+      ...providerEnvResult.env,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     // Fix C: own process group (setsid-equivalent), so the app-quit handler
@@ -800,6 +809,18 @@ const onOnboardingComplete = () => {
 // ── boot sequence ────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
   try {
+    // TCC folder-permission trigger (Mino directive, 2026-07-05): actually
+    // touch Documents/Downloads/Desktop on this very first post-ready tick,
+    // BEFORE the onboarding window even opens, so macOS's native TCC prompts
+    // for all 3 folders fire at first launch = onboarding entry (not
+    // whenever some later code path happens to touch one of them, which
+    // would surprise the user mid-flow with no context). Idempotent + safe
+    // every boot (see tcc-probe.cjs's own doc comment) -- a denied/failed
+    // folder is fail-loud logged here but never throws, so a user who denies
+    // one prompt does not lose the rest of app boot.
+    const tccResults = probeUserFolders({ homedir: os.homedir(), log })
+    log(`tcc-probe summary: ${JSON.stringify(tccResults)}`)
+
     const { url } = await startOnboardingServer(onOnboardingComplete)
     createMainWindow(url)
 

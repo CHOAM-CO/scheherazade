@@ -7,11 +7,15 @@
 # the restart-loop/expect shape. Backoff numbers here (5/10/20/40/120) are
 # a simpler ladder than MAGI's production values (3/30/120/300/600) --
 # deliberate simplification for a single lightweight agent, not a copy
-# error. --dangerously-skip-permissions is intentionally NOT used here;
-# .claude/settings.local.json's permissions.allow already covers the only
-# tools this agent needs (Bash/Read/Write/Edit), more scoped than a
-# blanket bypass, and the CLI itself recommends that flag only for
-# no-internet sandboxes -- not this use case.
+# error. --dangerously-skip-permissions IS used here (REVERSAL, Mino
+# directive 2026-07-04 16:26 "bypass까지만 바로 되도록": product concept =
+# full agent autonomy inside its own DATA_HOME, no permission popups;
+# Full Disk Access deliberately NOT requested at setup -- deferred to
+# feature-need time, see Idea's 16:2x home-channel verdict). The previous
+# stance (settings.local.json permissions.allow as the narrower scope)
+# still ships as a harmless belt, but the flag is now the product
+# behavior; the honest disclosure line lives in onboarding copy
+# (copy.js / scheherazade_onboarding_copy_v0 source doc, kept in sync).
 
 set -euo pipefail
 
@@ -294,14 +298,25 @@ run_loop() {
     log_user 1
     set env(TERM) xterm-256color
     set stty_init "rows 50 cols 200"
-    spawn -noecho $env(CLAUDE_BIN) --model $env(MODEL) --name $env(AGENT_NAME)
+    spawn -noecho $env(CLAUDE_BIN) --model $env(MODEL) --name $env(AGENT_NAME) --dangerously-skip-permissions
     set timeout 25
+    # 2026-07-05 freeze fix (comment kept OUTSIDE expect{} on purpose: a #
+    # inside an expect body is parsed as a pattern, not a comment). The BYOK
+    # "Do you want to use this API key?" dialog fires whenever
+    # ANTHROPIC_API_KEY is a never-before-approved key (every first launch)
+    # and is NOT suppressed by --dangerously-skip-permissions (empirically
+    # confirmed vs claude-code 2.1.199 -- that flag gates a separate dialog).
+    # The old `-re "Yes, use this"` pattern matched NO string in the binary,
+    # so this dialog sat until the 25s timeout, then proceeded with focus on
+    # the default "No" -> key rejected -> agent dead. Real dialog is
+    # "Do you want to use this API key? 1. Yes  2. No (recommended)", cursor
+    # defaults to No, so we send "1" (select Yes) + Enter, NOT a bare Enter.
     expect {
       -re "trust"             { send "\r"; exp_continue }
       -re "confirm"           { send "\r"; exp_continue }
       -re "local development" { send "\r"; exp_continue }
       -re "text style"        { send "\r"; exp_continue }
-      -re "Yes, use this"     { send "\r"; exp_continue }
+      -re "Do you want to use this API key" { send "1\r"; exp_continue }
       timeout {}
     }
     trap exit {SIGTERM SIGINT}
