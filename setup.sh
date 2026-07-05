@@ -132,7 +132,12 @@ render() {
 }
 
 render "$SCRIPT_DIR/CLAUDE.md" "$MEM/CLAUDE.md"
-render "$SCRIPT_DIR/.claude/settings.local.json" "$MEM/.claude/settings.local.json"
+# settings.local.json template moved to onboarding/templates/ (a tracked
+# path): a global gitignore rule (**/.claude/settings.local.json) would
+# otherwise mark a repo-root .claude/ copy untracked -> missing from a fresh
+# clone. render() substitutes {AGENT_DIR} so the seeded hooks resolve to
+# real, chmod+x'd scripts under $SCRIPT_DIR/hooks (see chmod below).
+render "$SCRIPT_DIR/onboarding/templates/claude-settings.local.json" "$MEM/.claude/settings.local.json"
 
 if [ ! -f "$MEM/self_persona.md" ]; then
   cat > "$MEM/self_persona.md" <<EOF
@@ -194,6 +199,14 @@ cat > "$SCRIPT_DIR/.mcp.json" <<MCPEOF
     "agent-channel": {
       "command": "node",
       "args": ["./channel.mjs"],
+      "cwd": "$SCRIPT_DIR",
+      "env": {
+        "AGENT_NAME": "$AGENT_NAME"
+      }
+    },
+    "memory": {
+      "command": "node",
+      "args": ["./memory/server.mjs"],
       "cwd": "$SCRIPT_DIR",
       "env": {
         "AGENT_NAME": "$AGENT_NAME"

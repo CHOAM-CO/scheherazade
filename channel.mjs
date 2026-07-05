@@ -12,7 +12,7 @@ import 'dotenv/config'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
-import { Client, GatewayIntentBits, Events } from 'discord.js'
+import { Client, GatewayIntentBits, Events, Partials } from 'discord.js'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -226,7 +226,8 @@ function toSnowflake(v) {
 // Developer Portal page (Bot tab -> Privileged Gateway Intents) or every
 // incoming message.content arrives empty.
 const discord = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages],
+  partials: [Partials.Channel, Partials.Message],
 })
 
 async function fetchTextChannel(channelId) {
@@ -346,7 +347,7 @@ discord.on(Events.Error, (err) => log('Discord client error:', err.message))
 discord.on(Events.MessageCreate, async (message) => {
   try {
     if (message.author.bot) return
-    if (message.channelId !== HOME_CHANNEL_ID) return
+    if (!message.channel.isDMBased() && message.channelId !== HOME_CHANNEL_ID) return
 
     const localPaths = []
     for (const img of extractImages(message)) {

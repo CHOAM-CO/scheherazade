@@ -5,6 +5,28 @@
 ;(function () {
   const C = window.COPY
 
+  // CHANGE A (UI-scope lock, decoupled from the backend's routerWired
+  // capability flag): which of the backend's 4 real PROVIDERS
+  // ('claude','claude-subscription','chatgpt','ollama') this BUILD exposes
+  // as a clickable tab. ROUTER_WIRED flipped true server-side 2026-07-04
+  // (own-infra-first found no router build was needed, direct env wiring
+  // suffices) -- that is a BACKEND capability fact, separate from the
+  // 22:02 Mino-approved UI-scope lock (Claude-only ships v1, chatgpt/ollama
+  // = v1.1). Gating tab-enable on routerWired would wrongly ENABLE those
+  // two tabs the instant the server flag flips, regardless of UI-scope
+  // intent -- this const is the single place that decision lives instead.
+  // Flip it (v1.1) to expose more tabs; no other wizard.js change needed.
+  const EXPOSED_PROVIDERS = ['claude']
+
+  // AUTHORED (not in copy.js): the frozen copy file's 2026-07-04 §Step 1
+  // redesign added `copyCommand` (the literal string to copy) but defines
+  // no button label for the copy-command widget itself. Minimal placeholder
+  // in the same spirit as copy.js's own "AUTHORED (not in copy file)"
+  // entries -- flagged here, replace if a real copy pass adds a sourced
+  // string for this.
+  const COPY_BUTTON_LABEL = '복사'
+  const COPY_BUTTON_COPIED_LABEL = '복사됨'
+
   const state = {
     provider: null,
     displayName: null,
@@ -16,9 +38,17 @@
     tutorialIndex: 0,
     discordGuildId: null,
     discordChannelId: null,
-    // GET /api/config's routerWired -- gates the ChatGPT/Ollama Cloud tabs
-    // in Step 1. Set once in init() before any step renders.
-    routerWired: false,
+    // Discord home-channel name, populated from /api/discord/validate's
+    // result.channelName (CHANGE D). Consumed by renderStep5Live(); guarded
+    // there in case it's ever missing/empty.
+    discordChannelName: null,
+    // model/proxyPort (4-provider-mode wiring, CHANGE C): dormant in v1 --
+    // no Step 1 UI sets these yet, chatgpt/ollama tabs are UI-scope disabled
+    // (see EXPOSED_PROVIDERS) -- but the fields exist here so the
+    // /api/onboarding/complete POST body builder (renderStep3) has a stable
+    // shape to read from, zero rework once a v1.1 UI populates them.
+    model: null,
+    proxyPort: null,
   }
 
   function $(id) { return document.getElementById(id) }
@@ -58,22 +88,33 @@
     $('s0-next').onclick = () => showStep('1')
   }
 
-  // ── Step 1: BYOK ─────────────────────────────────────────────────────
+  // ── Step 1: provider connect ─────────────────────────────────────────
+  // v2 (2026-07-04 copy.js §Step 1 redesign): claude's tab has two
+  // sub-modes -- PRIMARY (claude setup-token) and a collapsible BYOK
+  // fallback (sk-ant paste). THIS IS THE FIX FOR CODEX FINDING #3: the two
+  // sub-modes MUST submit under distinct provider ids -- routing a
+  // setup-token as an Anthropic x-api-key fails outright. Contract (verified
+  // in this task's report): primary submits provider:'claude-subscription',
+  // fallback submits provider:'claude'. See renderClaudeArea() below, the
+  // single place state.provider is set for this tab.
   function renderStep1() {
     $('s1-title').textContent = C.step1.title
     $('s1-body').textContent = C.step1.body
     const tabsEl = $('s1-tabs')
     tabsEl.innerHTML = ''
-    let activeTab = C.step1.tabs[0].id // always 'claude' -- never disabled
-    state.provider = activeTab
+    let activeTab = EXPOSED_PROVIDERS[0] // 'claude' -- the only v1-exposed tab, so also the only ever-active one
+    let claudeSubMode = 'primary' // 'primary' (setup-token) | 'fallback' (sk-ant BYOK) -- claude tab only
 
-    // ROUTER_WIRED gate (Melchior 18:26): non-claude providers stay grey +
-    // inert until the router lands server-side (GET /api/config's
-    // routerWired). Defense-in-depth -- the server also rejects non-claude
-    // BYOK validation while unwired, this just keeps the dead choice from
-    // ever being selectable in the first place.
+    const claudeTab = C.step1.tabs.find((t) => t.id === 'claude')
+    const claudeFallbackHint = C.step1.fallback.tabs.find((t) => t.id === 'claude')
+
+    // CHANGE A: tab enable/disable is UI-scope only (EXPOSED_PROVIDERS),
+    // never the server's routerWired capability flag (see that const's own
+    // header comment for why). Note text below the tab bar follows the same
+    // UI-scope decision, not routerWired.
     const noteEl = $('s1-router-note')
-    if (!state.routerWired) {
+    const anyTabDisabled = C.step1.tabs.some((t) => !EXPOSED_PROVIDERS.includes(t.id))
+    if (anyTabDisabled) {
       noteEl.textContent = C.step1.routerDisabledNote
       noteEl.classList.remove('hidden')
     } else {
@@ -81,36 +122,135 @@
       noteEl.textContent = ''
     }
 
-    function renderHint() {
-      const tab = C.step1.tabs.find((t) => t.id === activeTab)
-      $('s1-hint').textContent = tab.hint
+    const keyFieldWrap = $('s1-key').parentElement
+    let extraEl = null // lazily-mounted container for claude's primary-panel + fallback-toggle; inserted once, right before keyFieldWrap
+
+    // Renders Step 1's lower half for the current activeTab/claudeSubMode.
+    // claude gets the two-submode UI (this is the load-bearing branch).
+    // Any other tab (unreachable while EXPOSED_PROVIDERS = ['claude'], since
+    // those tabs render disabled below -- kept correct for v1.1) gets the
+    // old flat single-field BYOK UI, provider = the tab's own id.
+    function renderClaudeArea() {
+      const keyInput = $('s1-key')
+      const hintEl = $('s1-hint')
+      const nextBtn = $('s1-next')
+
+      if (!extraEl) {
+        extraEl = document.createElement('div')
+        keyFieldWrap.parentElement.insertBefore(extraEl, keyFieldWrap)
+      }
+      extraEl.innerHTML = ''
+
+      if (activeTab !== 'claude') {
+        const tab = C.step1.fallback.tabs.find((t) => t.id === activeTab)
+        hintEl.textContent = tab ? tab.hint : ''
+        keyInput.placeholder = '키를 붙여넣으세요'
+        nextBtn.textContent = C.step1.button
+        state.provider = activeTab
+      } else if (claudeSubMode === 'primary') {
+        const primary = claudeTab.primary
+        const panel = document.createElement('div')
+
+        const precondEl = document.createElement('p')
+        precondEl.textContent = primary.precondition
+        panel.appendChild(precondEl)
+
+        const stepsEl = document.createElement('ol')
+        primary.steps.forEach((stepText) => {
+          const li = document.createElement('li')
+          li.textContent = stepText
+          stepsEl.appendChild(li)
+        })
+        panel.appendChild(stepsEl)
+
+        // Command-copy widget. AUTHORED button label (see COPY_BUTTON_LABEL's
+        // own header comment) -- copy.js's redesign added `copyCommand` (the
+        // literal string to copy) but defines no button text for the widget.
+        const cmdRow = document.createElement('div')
+        cmdRow.className = 'field'
+        const cmdInner = document.createElement('div')
+        cmdInner.className = 'step-actions'
+        const cmdText = document.createElement('div')
+        cmdText.className = 'field-hint'
+        cmdText.textContent = primary.copyCommand
+        const copyBtn = document.createElement('button')
+        copyBtn.type = 'button'
+        copyBtn.className = 'secondary'
+        copyBtn.textContent = COPY_BUTTON_LABEL
+        copyBtn.onclick = async () => {
+          try {
+            await navigator.clipboard.writeText(primary.copyCommand)
+            copyBtn.textContent = COPY_BUTTON_COPIED_LABEL
+            setTimeout(() => { copyBtn.textContent = COPY_BUTTON_LABEL }, 1500)
+          } catch (err) {
+            console.error('clipboard write failed:', err)
+          }
+        }
+        cmdInner.appendChild(cmdText)
+        cmdInner.appendChild(copyBtn)
+        cmdRow.appendChild(cmdInner)
+        panel.appendChild(cmdRow)
+
+        const subtextEl = document.createElement('p')
+        subtextEl.className = 'field-hint'
+        subtextEl.textContent = primary.subtext
+        panel.appendChild(subtextEl)
+
+        extraEl.appendChild(panel)
+
+        const toggleBtn = document.createElement('button')
+        toggleBtn.type = 'button'
+        toggleBtn.className = 'link'
+        toggleBtn.textContent = C.step1.fallback.toggleLabel
+        toggleBtn.onclick = () => {
+          claudeSubMode = 'fallback'
+          renderClaudeArea()
+        }
+        extraEl.appendChild(toggleBtn)
+
+        hintEl.textContent = ''
+        keyInput.placeholder = '토큰을 붙여넣으세요'
+        // ACCEPTANCE TEST CONTRACT: primary (setup-token) sub-mode submits
+        // provider:'claude-subscription' -- never 'claude'.
+        nextBtn.textContent = primary.button
+        state.provider = 'claude-subscription'
+      } else {
+        // claude, fallback (BYOK sk-ant) sub-mode
+        const introEl = document.createElement('p')
+        introEl.textContent = C.step1.fallback.body
+        extraEl.appendChild(introEl)
+
+        hintEl.textContent = claudeFallbackHint ? claudeFallbackHint.hint : ''
+        keyInput.placeholder = '키를 붙여넣으세요'
+        // ACCEPTANCE TEST CONTRACT: fallback (sk-ant BYOK) sub-mode submits
+        // provider:'claude' -- never 'claude-subscription'.
+        nextBtn.textContent = C.step1.button
+        state.provider = 'claude'
+      }
+
+      keyInput.value = ''
+      $('s1-status').textContent = ''
+      $('s1-status').className = 'status-line'
     }
 
     C.step1.tabs.forEach((tab) => {
-      const disabled = tab.id !== 'claude' && !state.routerWired
+      const disabled = !EXPOSED_PROVIDERS.includes(tab.id)
       const el = document.createElement('div')
       el.className = 'tab' + (tab.id === activeTab ? ' active' : '') + (disabled ? ' disabled' : '')
       el.textContent = disabled ? tab.disabledLabel : tab.label
       if (!disabled) {
         el.onclick = () => {
           activeTab = tab.id
-          state.provider = tab.id
+          claudeSubMode = 'primary'
           tabsEl.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'))
           el.classList.add('active')
-          renderHint()
-          $('s1-key').value = ''
-          $('s1-status').textContent = ''
-          $('s1-status').className = 'status-line'
+          renderClaudeArea()
         }
       }
       tabsEl.appendChild(el)
     })
-    renderHint()
 
-    $('s1-next').textContent = C.step1.button
-    $('s1-status').textContent = ''
-    $('s1-status').className = 'status-line'
-    $('s1-key').value = ''
+    renderClaudeArea()
 
     $('s1-next').onclick = async () => {
       const key = $('s1-key').value.trim()
@@ -118,7 +258,13 @@
       const btn = $('s1-next')
       btn.disabled = true
       statusEl.className = 'status-line pending'
-      statusEl.textContent = C.step1.validating
+      // Status copy branches by sub-mode (Codex front-end finding #3 fix,
+      // Idea sourced primary.validating/.failure 2026-07-04): setup-token
+      // (claude-subscription) uses token-worded primary.* strings; sk-ant
+      // BYOK (claude) keeps the key-worded fallback.* strings. success is
+      // shared: fallback.success ("연결됐습니다") is provider-agnostic.
+      const isSub = state.provider === 'claude-subscription'
+      statusEl.textContent = isSub ? claudeTab.primary.validating : C.step1.fallback.validating
       try {
         const result = await api('/api/byok/validate', {
           method: 'POST',
@@ -127,11 +273,13 @@
         })
         if (result.ok) {
           statusEl.className = 'status-line success'
-          statusEl.textContent = C.step1.success
+          statusEl.textContent = C.step1.fallback.success
           showStep('2')
         } else {
           statusEl.className = 'status-line failure'
-          statusEl.textContent = C.step1.failure(result.reason || '알 수 없는 오류')
+          statusEl.textContent = isSub
+            ? claudeTab.primary.failure(result.reason || '알 수 없는 오류')
+            : C.step1.fallback.failure(result.reason || '알 수 없는 오류')
         }
       } catch (err) {
         statusEl.className = 'status-line failure'
@@ -211,19 +359,28 @@
 
       const btn = $('s3-next')
       btn.disabled = true
+      // CHANGE C: mode-specific fields, only for the provider that needs
+      // them -- never sent for claude/claude-subscription. Dormant in v1
+      // (state.model/state.proxyPort are always null -- those tabs are
+      // UI-scope disabled, see EXPOSED_PROVIDERS) but structurally wired so
+      // the direct-API path and a v1.1 chatgpt/ollama config UI need zero
+      // backend-contract rework.
+      const completeBody = {
+        displayName: state.displayName,
+        provider: state.provider,
+        tone: state.tone,
+        primaryTask: state.primaryTask,
+        proactiveEnabled: state.proactiveEnabled,
+        proactiveWindowStart: state.proactiveWindowStart,
+        proactiveWindowEnd: state.proactiveWindowEnd,
+      }
+      if (state.provider === 'ollama') completeBody.model = state.model
+      if (state.provider === 'chatgpt') completeBody.proxyPort = state.proxyPort
       try {
         await api('/api/onboarding/complete', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            displayName: state.displayName,
-            provider: state.provider,
-            tone: state.tone,
-            primaryTask: state.primaryTask,
-            proactiveEnabled: state.proactiveEnabled,
-            proactiveWindowStart: state.proactiveWindowStart,
-            proactiveWindowEnd: state.proactiveWindowEnd,
-          }),
+          body: JSON.stringify(completeBody),
         })
         renderStep4()
         showStep('4')
@@ -335,6 +492,11 @@
           if (result.ok) {
             state.discordGuildId = result.guildId
             state.discordChannelId = result.channelId
+            // CHANGE D: result.channelName (2026-07-04, http-server.cjs:940)
+            // -- consumed on the Step 5 live/success screen, see
+            // renderStep5Live(). '' rather than undefined/null so downstream
+            // truthiness checks there stay a simple falsy check.
+            state.discordChannelName = result.channelName || ''
             statusEl.className = 'status-line success'
             statusEl.textContent = C.discordTutorial.success(state.displayName)
             renderStep5()
@@ -412,10 +574,25 @@
 
   function renderStep5Live() {
     $('s5-title').textContent = C.step5.live.title
-    $('s5-body').textContent = C.step5.live.body(state.displayName)
+    // CHANGE D (coordinator directive 2026-07-04, copy.js finalized after
+    // this file's first read): step5.live.body is now `(name, channelName)`
+    // and already contains the DM-exposure line -- do not append DM text
+    // here. step5.live.button is now `(channelName) => ...`. Both hard-embed
+    // `#${channelName}` with no separate "generic, no channel" variant, so a
+    // missing/empty channelName is guarded here (not inside copy.js) to
+    // avoid ever rendering a bare "#" or "undefined". Should be unreachable
+    // off a real successful /api/discord/validate (channelName is always
+    // present there -- see s4b-action's capture) -- defensive only.
+    const channelName = state.discordChannelName
+    if (channelName) {
+      $('s5-body').textContent = C.step5.live.body(state.displayName, channelName)
+    } else {
+      // AUTHORED fallback (not sourced from copy.js -- see comment above).
+      $('s5-body').textContent = `${state.displayName}가 Discord에서 기다립니다. DM도 받습니다. 첫 인사는 방금 입력한 설정을 이미 반영하고 있습니다.`
+    }
     renderStep5Buttons([
       {
-        label: C.step5.live.button,
+        label: channelName ? C.step5.live.button(channelName) : C.step5.connecting.button,
         onClick: async () => {
           try {
             await api('/api/discord/open', {
@@ -516,21 +693,20 @@
     pollAgentStatus()
   }
 
-  // ── init: routerWired gate + resume support for the /waiting -> ?step=4
-  // round trip ──────────────────────────────────────────────────────────
+  // ── init: resume support for the /waiting -> ?step=4 round trip ───────
+  // CHANGE A: Step 1's tab enable/disable no longer depends on this fetch's
+  // cfg.routerWired (see EXPOSED_PROVIDERS) -- config is still fetched once,
+  // up front, purely for the ?step=4 resume path below (DISPLAY_NAME/
+  // PROVIDER), so renderStep1() itself no longer needs to wait on it.
   async function init() {
-    // Fetched once, up front: Step 1's provider tabs need routerWired
-    // before they render, and the ?step=4 resume path below needs the same
-    // config -- one fetch serves both instead of two.
     let cfg = null
     try {
       cfg = await api('/api/config')
     } catch (err) {
-      // Fail loud (console); state.routerWired stays at its safe default
-      // (false = non-claude tabs disabled) if config can't be read.
+      // Fail loud (console); the ?step=4 resume path below just no-ops if
+      // config can't be read (falls through to showStep('0')).
       console.error('config fetch failed:', err)
     }
-    state.routerWired = !!(cfg && cfg.routerWired)
 
     renderStep0()
     renderStep1()

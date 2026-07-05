@@ -34,6 +34,22 @@ const path = require('node:path')
 const os = require('node:os')
 const crypto = require('node:crypto')
 const { pathToFileURL } = require('node:url')
+// 4-provider-mode wiring (2026-07-04): single source of truth for "which
+// PROVIDERS values need a stored credential before onboarding-complete",
+// shared with main.cjs's spawn-time env building -- see provider-env.cjs's
+// own header comment. Zero Electron dependency, safe to require from here.
+// OLLAMA_BASE_URL added (server-side validate fix, 2026-07-04): reused here
+// too so the local-liveness ping below checks the EXACT SAME URL
+// buildProviderEnv() actually spawns the agent against, single source of
+// truth, not a second hardcoded copy.
+// resolveChatgptProxyPort added (Codex finding #5 fix, 2026-07-04): the same
+// digits-only + 1-65535 TCP-range guard provider-env.cjs's buildProviderEnv()
+// applies at spawn-time (including its CHATGPT_PROXY_DEFAULT_PORT fallback,
+// applied internally -- no separate import of that constant needed here
+// anymore), now shared so this file's liveness ping below can never drift
+// out of sync with it again (see that function's own header comment for the
+// concrete SSRF gap this closes).
+const { PROVIDERS_REQUIRING_STORED_CREDENTIAL, resolveChatgptProxyPort, OLLAMA_BASE_URL } = require('../provider-env.cjs')
 
 const REPO_ROOT = path.join(__dirname, '..')
 const PUBLIC_DIR = path.join(__dirname, 'public')
@@ -87,10 +103,31 @@ const CREDENTIALS_DIR = path.join(CONFIG_DIR, '.credentials')
 const TEMPLATE_MCP_JSON_PATH = path.join(REPO_ROOT, '.mcp.json')
 const TEMPLATE_ENV_PATH = path.join(REPO_ROOT, '.env')
 const TEMPLATE_AGENT_CONFIG_PATH = path.join(REPO_ROOT, '.agent-config')
+// Pre-approves the tool surface the headless brain needs (Bash/Read/Edit/
+// Write/Glob/Grep + both bundled MCP servers' tools) plus
+// enableAllProjectMcpServers -- without this, claude's first headless spawn
+// (run.sh -> expect -> claude, cwd == CONFIG_DIR) shows an interactive "New
+// MCP server found -- approve?" trust prompt with no one to answer it, and
+// the expect script's timeout/pattern list doesn't cover that prompt text
+// (see run.sh's own EXPECT_EOF block), so the agent hangs forever instead
+// of ever reaching channel.mjs. Also carries the SessionStart/Stop hook
+// wiring docs/ARCHITECTURE.md's Hook System section describes (memory
+// restore + felt/checkpoint nudges) -- see seedSettingsLocal() for the
+// {AGENT_DIR} render that makes those hook paths resolve in both the
+// packaged and CLI deployments. Deliberately lives under onboarding/
+// templates/ and NOT at a real .claude/settings.local.json path: a common
+// GLOBAL gitignore rule (`**/.claude/settings.local.json`, e.g. in
+// ~/.config/git/ignore) would silently mark a repo-root .claude/ copy as
+// untracked -- shipping fine from a dev's working tree tonight but MISSING
+// from a fresh clone / CI checkout, silently no-op-ing the seed and
+// re-hanging. onboarding/** is already in package.json's build.files, so
+// this tracked path ships with no extra build wiring.
+const TEMPLATE_SETTINGS_LOCAL_PATH = path.join(REPO_ROOT, 'onboarding', 'templates', 'claude-settings.local.json')
 
 const AGENT_CONFIG_PATH = path.join(CONFIG_DIR, '.agent-config')
 const ENV_PATH = path.join(CONFIG_DIR, '.env')
 const MCP_JSON_PATH = path.join(CONFIG_DIR, '.mcp.json')
+const SETTINGS_LOCAL_PATH = path.join(CONFIG_DIR, '.claude', 'settings.local.json')
 
 // Process-side liveness status (spawned/failed), written by main.cjs's
 // child-process lifecycle. See onboarding/agent-status.cjs's own header for
@@ -217,27 +254,47 @@ function computeAgentStatus() {
   return { state: 'connecting', code: null, detail: null, lastHeartbeat: marker ? marker.lastHeartbeat : null }
 }
 
-const PROVIDERS = ['claude', 'chatgpt', 'ollama']
+// claude-subscription (4-provider-mode wiring, 2026-07-04): NEW mode, added
+// rather than a rename of the existing 'claude' (BYOK) value -- see
+// provider-env.cjs's header + this task's own report for why ADD was chosen
+// over renaming 'claude'->'claude-byok' (the rename would have rippled into
+// onboarding/public/js/{copy,wizard}.js's hardcoded 'claude' tab id and the
+// externally-governed copy-source file copy.js is sourced from verbatim --
+// out of scope here, and a materially bigger/riskier diff for the same
+// outcome).
+const PROVIDERS = ['claude', 'claude-subscription', 'chatgpt', 'ollama']
 
-// ROUTER_WIRED (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 3): only the
-// 'claude' provider (BYOK Anthropic key forwarded directly to the claude
-// CLI) actually spawns today -- see main.cjs's spawnRealAgentChild()
-// non-claude branch, which fails loud with code 'provider_not_wired'.
-// 'chatgpt'/'ollama' are listed in PROVIDERS (so BYOK-key validation and
-// storage against their own live APIs still works, e.g. for a future
-// router to consume) but have no local Anthropic-inbound router yet. This
-// single flag is the one place that fact lives; flip it to true once the
-// router exists. Two consumers:
+// ROUTER_WIRED (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 3; flipped
+// 2026-07-04, 4-provider-mode wiring): all 4 PROVIDERS values now actually
+// spawn -- see main.cjs's spawnRealAgentChild() -> provider-env.cjs's
+// buildProviderEnv(), which wires 'claude' (BYOK), 'claude-subscription'
+// (OAuth token), 'chatgpt' (local codex-as-api proxy, :18080 default), and
+// 'ollama' (local daemon, :11434) -- so the "not yet wired" premise this
+// flag encoded is gone for every currently-listed provider. Left in place
+// (rather than deleted outright) as a single kill-switch: flipping it back
+// to `false` would re-block every non-claude provider at both consumers
+// below without touching call sites, e.g. if a future non-claude provider
+// gets added to PROVIDERS before its own routing actually exists. Two
+// consumers:
 //   1. Exposed read-only via GET /api/config (see the routerWired field
-//      added to that handler below) so a future UI can gray out/disable
-//      non-claude provider tabs instead of letting the user hit the dead
-//      end at spawn time.
+//      added to that handler below) so the UI can gray out/enable
+//      non-claude provider tabs correctly.
 //   2. SERVER-SIDE ENFORCEMENT (the important half, security-relevant, not
 //      just UX polish) -- rejectIfRouterNotWired() below, called from every
 //      endpoint that accepts a provider choice, so a crafted request (or a
 //      future settings-page provider switch) can't select a non-wired
 //      provider regardless of what the client-side UI shows/hides.
-const ROUTER_WIRED = false
+//
+// NOT touched by this flip: onboarding/public/js/{copy,wizard}.js still
+// only render a 'claude' tab (chatgpt/ollama show as "곧 지원"/coming-soon,
+// framed as needing a REAL platform.openai.com / ollama.com cloud key, and
+// there is no wizard UI at all yet for claude-subscription's token-paste
+// field or chatgpt/ollama's proxy-port/model-name fields) -- see this
+// task's own report, flagged as an explicit out-of-scope conflict, not
+// silently forced. Today the only way to actually drive
+// chatgpt/ollama/claude-subscription onboarding is a direct API POST, not
+// the shipped wizard.
+const ROUTER_WIRED = true
 
 // Shared 4xx guard for every endpoint that accepts a `provider` field
 // (PIECE 3). Returns true (and has already sent the response) if the
@@ -306,10 +363,99 @@ function seedConfigFromTemplate(templatePath, targetPath) {
   log(`seeded ${path.basename(targetPath)} into CONFIG_DIR from bundled template`)
 }
 
+// settings.local.json gets its own seeder (not the plain copy above) for two
+// reasons: (1) it nests one level deeper at CONFIG_DIR/.claude/, and (2) its
+// hook commands carry a {AGENT_DIR} placeholder that has to be rendered to a
+// real, executable hook-script location. {AGENT_DIR} -> toUnpackedPath(
+// REPO_ROOT): in a packaged build REPO_ROOT is inside app.asar (read-only,
+// and bash cannot exec a script from the asar virtual FS), so it is mapped
+// to app.asar.unpacked, where package.json's asarUnpack now ships hooks/**
+// as real files. Off-asar (dev / CLI) toUnpackedPath() is a no-op and this
+// resolves to the plain repo root. setup.sh's own render() applies the exact
+// same {AGENT_DIR} substitution for its CLI-deployment copy, so both seed
+// paths produce working absolute hook paths. Seeds only when absent -- never
+// clobbers a user's edited hooks/permissions.
+function seedSettingsLocal() {
+  if (fs.existsSync(SETTINGS_LOCAL_PATH)) return
+  if (!fs.existsSync(TEMPLATE_SETTINGS_LOCAL_PATH)) return
+  const rendered = fs
+    .readFileSync(TEMPLATE_SETTINGS_LOCAL_PATH, 'utf8')
+    .split('{AGENT_DIR}')
+    .join(toUnpackedPath(REPO_ROOT))
+  fs.mkdirSync(path.dirname(SETTINGS_LOCAL_PATH), { recursive: true })
+  fs.writeFileSync(SETTINGS_LOCAL_PATH, rendered)
+  log('seeded settings.local.json into CONFIG_DIR/.claude (hook paths rendered) from bundled template')
+}
+
 function seedConfigFromTemplates() {
   seedConfigFromTemplate(TEMPLATE_MCP_JSON_PATH, MCP_JSON_PATH)
   seedConfigFromTemplate(TEMPLATE_ENV_PATH, ENV_PATH)
   seedConfigFromTemplate(TEMPLATE_AGENT_CONFIG_PATH, AGENT_CONFIG_PATH)
+  seedSettingsLocal()
+}
+
+// Global Claude Code CLI first-run state -- NOT part of CONFIG_DIR, and NOT
+// covered by seedConfigFromTemplate()'s copy-a-template shape. run.sh's
+// headless spawn sets no CLAUDE_CONFIG_DIR/HOME override (confirmed:
+// neither appears anywhere in run.sh or spawnRealAgentChild()'s env block
+// above, unlike e.g. doze-portable's launcher.sh, which isolates
+// CLAUDE_CONFIG_DIR specifically because it runs in a fresh container), so
+// the spawned `claude` reads/writes the REAL user's own ~/.claude.json. On
+// a machine where the person has ever run `claude` interactively before,
+// hasCompletedOnboarding (and theme) are already set there and this is a
+// no-op. On a genuinely first-ever `claude` invocation (the exact machine
+// state setup.sh's own auto-install path can produce -- it `npm install -g
+// @anthropic-ai/claude-code`'s the CLI but never runs it interactively),
+// EMPIRICALLY REPRODUCED (2026-07-03, self-test with an isolated fresh
+// $HOME): the CLI's own first-run "Choose the text style that looks best
+// with your terminal" picker hangs the headless expect spawn indefinitely
+// -- run.sh's `-re "text style"` pattern matches that prompt's text and
+// sends \r, but the picker does not advance on a bare \r (repeated
+// exp_continue matches just re-send \r into the same screen for the whole
+// 25s window, then expect falls through to `expect eof` with no one left
+// to answer). Same failure shape as the settings.local.json gap above, one
+// step earlier in the sequence. MERGE-ONLY: never overwrites a real,
+// existing ~/.claude.json wholesale (it can hold the user's own separate
+// interactive Claude Code state -- OAuth account info, project trust list,
+// history -- this only fills in the three keys that gate the first-run
+// prompts, and only when they aren't already satisfied).
+const REAL_CLAUDE_JSON_PATH = path.join(os.homedir(), '.claude.json')
+
+function ensureClaudeOnboardingDone() {
+  let existing = {}
+  if (fs.existsSync(REAL_CLAUDE_JSON_PATH)) {
+    try {
+      existing = JSON.parse(fs.readFileSync(REAL_CLAUDE_JSON_PATH, 'utf8'))
+    } catch (err) {
+      log(`ensureClaudeOnboardingDone: existing ~/.claude.json is not valid JSON, leaving it untouched: ${err.message}`)
+      return
+    }
+    // No-op only when ALL THREE first-run gates are already satisfied. The
+    // fullscreen upsell has its OWN gate, independent of onboarding/theme:
+    // claude skips the "Try the new fullscreen renderer?" prompt only when
+    // (fullscreenUpsellSeenCount ?? 0) >= 3 (verified against the bundled CLI
+    // binary: `fullscreenUpsellSeenCount??0)>=uos)return!1`, uos===3), and
+    // run.sh's expect list covers none of that prompt's labels ("Yes, try
+    // it"/"Not now"). So a merge that set only hasCompletedOnboarding+theme
+    // still hung there on a real terminal (the pty self-test happened not to
+    // surface it; a genuine TTY did). All three keys required.
+    if (existing.hasCompletedOnboarding && existing.theme && (existing.fullscreenUpsellSeenCount ?? 0) >= 3) return
+  }
+  const merged = { ...existing, hasCompletedOnboarding: true }
+  if (!merged.theme) merged.theme = 'dark'
+  merged.fullscreenUpsellSeenCount = Math.max(existing.fullscreenUpsellSeenCount ?? 0, 3)
+  // Atomic write: temp file in the SAME directory (so rename() is a
+  // same-filesystem atomic swap) + rename, never an in-place writeFileSync.
+  // A crash or a concurrent external `claude` writing this same file
+  // mid-write would otherwise leave a torn/partial ~/.claude.json that
+  // claude's own JSON.parse chokes on -- turning a first-run convenience
+  // into a boot-fatal corruption. This does not lock against a concurrent
+  // writer's lost update (inherent to a read-modify-write merge), but it
+  // guarantees the file on disk is always one whole valid JSON or the other.
+  const tmp = `${REAL_CLAUDE_JSON_PATH}.tmp-${process.pid}`
+  fs.writeFileSync(tmp, JSON.stringify(merged, null, 2) + '\n')
+  fs.renameSync(tmp, REAL_CLAUDE_JSON_PATH)
+  log('seeded hasCompletedOnboarding/theme/fullscreenUpsellSeenCount into ~/.claude.json (first-run claude gates)')
 }
 
 // ── fail-loud JSON helpers ──────────────────────────────────────────────
@@ -611,8 +757,79 @@ function readDiscordToken() {
   return readProviderKey('discord-bot')
 }
 
+// ── Local liveness ping (chatgpt/ollama, no-secret local-proxy modes) ────
+// NON-BLOCKING BY DESIGN: both callers below always return `ok: true`
+// regardless of what this reports. chatgpt/ollama route the spawned agent
+// to a LOCAL proxy/daemon with no stored user secret at all (provider-env.
+// cjs's buildProviderEnv() never reads a stored credential for either
+// mode) -- the user may well not have started the proxy/daemon yet at the
+// point they click through onboarding Step 1, and that must not block
+// setup. `reachable` is purely informational (for whatever UI surfaces it
+// later -- see this task's report, wizard.js is out of scope here and does
+// not read this field yet).
+//
+// AbortSignal.timeout() requires no extra dependency (global since Node
+// 17.3, this app's bundled Electron/Node is v24 -- confirmed via `node
+// --version` at fix time) and keeps a firewalled/hung local port from
+// stalling the validate response; a plain ECONNREFUSED on an unbound
+// localhost port resolves near-instantly on its own, this timeout only
+// guards the non-instant edge cases.
+const LOCAL_LIVENESS_TIMEOUT_MS = 1500
+
+async function checkLocalLiveness(url, label) {
+  try {
+    await fetch(url, { signal: AbortSignal.timeout(LOCAL_LIVENESS_TIMEOUT_MS) })
+    // Any HTTP response at all (2xx/4xx/5xx alike) proves something is
+    // listening on the port -- that is all "reachable" claims here, not
+    // that it is correctly configured or actually the right process.
+    return { ok: true, reachable: true, detail: `${label} is reachable at ${url}` }
+  } catch (err) {
+    // Connection refused / timeout -- NOT a validation failure. Informational.
+    return {
+      ok: true,
+      reachable: false,
+      detail: `${label} not detected at ${url} yet -- you can start it after finishing setup (${err.message})`,
+    }
+  }
+}
+
 // ── BYOK live validation pings ───────────────────────────────────────────
-async function validateProviderKey(provider, key) {
+// `opts.proxyPort` is optional (only 'chatgpt' consults it) -- lets a future
+// wizard step pass the same custom port field /api/onboarding/complete
+// already accepts, without requiring it; defaults to the identical constant
+// buildProviderEnv() itself falls back to (provider-env.cjs).
+async function validateProviderKey(provider, key, opts = {}) {
+  // chatgpt/ollama: NO user secret needed at all -- skip the generic
+  // empty-key guard below entirely for these two (an empty/untouched "key"
+  // input is expected and irrelevant for local-proxy modes) and go straight
+  // to the local liveness ping instead of validating anything against an
+  // external cloud API. Security/correctness fix (2026-07-04): the previous
+  // code validated the pasted value against api.openai.com / ollama.com --
+  // wrong on two counts for these modes: (1) misleading, since
+  // provider-env.cjs's buildProviderEnv() never sends that pasted value
+  // anywhere (chatgpt gets a fixed placeholder key, ollama gets the literal
+  // string 'ollama') -- a real OpenAI/ollama.com cloud credential the
+  // runtime then silently ignores; (2) it shipped whatever the user typed
+  // to an external cloud API for a mode explicitly designed to need no
+  // secret and stay fully local.
+  if (provider === 'chatgpt') {
+    // Validation-time must reject exactly the same proxyPort values
+    // spawn-time rejects, and must NEVER build a liveness URL whose host
+    // isn't localhost (Codex finding #5 fix, 2026-07-04) -- shared guard,
+    // see resolveChatgptProxyPort()'s own header comment (provider-env.cjs).
+    const portResult = resolveChatgptProxyPort(opts.proxyPort)
+    if (portResult.error) {
+      // Non-blocking, consistent with checkLocalLiveness()'s own shape below
+      // -- an invalid port is reported as "not reachable", never thrown, and
+      // no fetch() is attempted (so no URL is ever built from the bad input).
+      return { ok: true, reachable: false, detail: `codex-as-api proxy port is invalid -- ${portResult.error}` }
+    }
+    return checkLocalLiveness(`http://localhost:${portResult.port}`, 'codex-as-api proxy')
+  }
+  if (provider === 'ollama') {
+    return checkLocalLiveness(OLLAMA_BASE_URL, 'Ollama daemon')
+  }
+
   if (!key || typeof key !== 'string' || key.trim() === '') {
     return { ok: false, reason: '키가 비어 있습니다' }
   }
@@ -635,43 +852,21 @@ async function validateProviderKey(provider, key) {
       const body = await res.json().catch(() => ({}))
       return { ok: false, reason: (body && body.error && body.error.message) || `HTTP ${res.status}` }
     }
-    if (provider === 'chatgpt') {
-      const res = await fetch('https://api.openai.com/v1/models', {
-        headers: { Authorization: `Bearer ${key}` },
-      })
-      if (res.ok) return { ok: true }
-      const body = await res.json().catch(() => ({}))
-      return { ok: false, reason: (body && body.error && body.error.message) || `HTTP ${res.status}` }
-    }
-    if (provider === 'ollama') {
-      // NOT `GET /v1/models` (the task brief's suggested check) -- verified
-      // empirically that endpoint is public and unauthenticated: it returns
-      // 200 with the full model catalog for ANY bearer token, including no
-      // token at all, which cannot fail loud on a bad key by construction.
-      // `POST /v1/chat/completions` (OpenAI-compatible surface, same shape
-      // as the Claude 1-token ping) does enforce auth and returns a real
-      // 401 {"error":"Unauthorized"} on a bad/garbage key -- confirmed live
-      // against api at verification time.
-      const res = await fetch('https://ollama.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${key}`,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'gpt-oss:20b',
-          messages: [{ role: 'user', content: 'hi' }],
-          max_tokens: 1,
-        }),
-      })
-      if (res.ok) return { ok: true }
-      const body = await res.json().catch(() => ({}))
-      const reason =
-        (body && body.error && typeof body.error === 'object' && body.error.message) ||
-        (body && typeof body.error === 'string' && body.error) ||
-        (body && body.message) ||
-        `HTTP ${res.status}`
-      return { ok: false, reason }
+    if (provider === 'claude-subscription') {
+      // NEW mode (4-provider-mode wiring, 2026-07-04): the pasted value here
+      // is a `claude setup-token` 1-year OAuth token, not an x-api-key --
+      // it is NOT a valid credential for a plain x-api-key REST ping against
+      // /v1/messages the way the 'claude' (BYOK) branch above validates, and
+      // the LOCKED design explicitly says not to build an interactive-pty
+      // `setup-token` driver just to exercise it live. So this is a
+      // LOCAL-ONLY check (non-empty) -- the actual proof this credential
+      // works is the storeProviderKeyVerified() round-trip the caller does
+      // right after this returns {ok:true} (below, /api/byok/validate), plus
+      // whatever happens the first time the real agent spawns with it.
+      // Already covered by the empty-key guard at the top of this function;
+      // this branch exists so 'claude-subscription' doesn't fall through to
+      // the "알 수 없는 제공사" (unknown provider) case below.
+      return { ok: true }
     }
     return { ok: false, reason: `알 수 없는 제공사: ${provider}` }
   } catch (err) {
@@ -742,7 +937,7 @@ async function validateDiscordToken(token) {
     throw new Error(`Guild ${guild.id} (${guild.name || 'unnamed'}) has no text channels -- cannot pick a home channel.`)
   }
   const homeChannel = textChannels[0]
-  return { ok: true, guildId: guild.id, guildName: guild.name, channelId: homeChannel.id }
+  return { ok: true, guildId: guild.id, guildName: guild.name, channelId: homeChannel.id, channelName: homeChannel.name }
 }
 
 // ── memory tool bridge (bypasses MCP stdio, direct dynamic import) ───────
@@ -884,7 +1079,11 @@ async function handleApi(req, res, pathname, onOnboardingComplete) {
   }
 
   if (pathname === '/api/byok/validate' && req.method === 'POST') {
-    const { provider, key } = await readJsonBody(req)
+    // proxyPort added (server-side validate fix, 2026-07-04): optional,
+    // only consulted for provider === 'chatgpt' (see validateProviderKey).
+    // Not sent by today's wizard.js (out of scope here) -- defaults to
+    // CHATGPT_PROXY_DEFAULT_PORT when absent, additive/forward-compatible.
+    const { provider, key, proxyPort } = await readJsonBody(req)
     if (!PROVIDERS.includes(provider)) {
       sendJson(res, 400, { error: `unknown provider: ${provider}` })
       return
@@ -895,25 +1094,57 @@ async function handleApi(req, res, pathname, onOnboardingComplete) {
     // closes the backdoor at its source rather than only at
     // onboarding-complete.
     if (rejectIfRouterNotWired(res, provider)) return
-    const result = await validateProviderKey(provider, key)
+    const result = await validateProviderKey(provider, key, { proxyPort })
     if (!result.ok) {
       sendJson(res, 200, result)
       return
     }
-    storeProviderKeyVerified(provider, key) // throws (fail loud) on storage failure -> caught by outer handler -> 500
-    sendJson(res, 200, { ok: true })
+    // Only store a credential for providers that actually need one on disk
+    // (Codex finding #2 fix, 2026-07-04). chatgpt/ollama are no-secret local
+    // modes -- buildProviderEnv() never calls readProviderKey() for either
+    // (chatgpt gets a fixed placeholder key, ollama gets the literal string
+    // 'ollama'; see provider-env.cjs), so storing whatever was pasted/left
+    // in the `key` field for them just persists an unused, never-read-back
+    // value. PROVIDERS_REQUIRING_STORED_CREDENTIAL is the single source of
+    // truth shared with /api/onboarding/complete's own credential gate below.
+    if (PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes(provider)) {
+      storeProviderKeyVerified(provider, key) // throws (fail loud) on storage failure -> caught by outer handler -> 500
+    }
+    // Spread `result` rather than a hardcoded `{ ok: true }` (server-side
+    // validate fix, 2026-07-04): for 'claude'/'claude-subscription' this is
+    // still exactly `{ ok: true }` (unchanged shape), but for 'chatgpt'/
+    // 'ollama' it now also carries the informational `reachable`/`detail`
+    // local-liveness fields from checkLocalLiveness() -- additive, backward
+    // compatible with wizard.js's existing `if (result.ok) {...}` check,
+    // which ignores unknown extra fields.
+    sendJson(res, 200, result)
     return
   }
 
   if (pathname === '/api/onboarding/complete' && req.method === 'POST') {
     const body = await readJsonBody(req)
-    const { displayName, provider, tone, primaryTask, proactiveEnabled, proactiveWindowStart, proactiveWindowEnd } = body
+    // proxyPort/model added (4-provider-mode wiring, 2026-07-04): chatgpt's
+    // optional local-proxy port and ollama's required local model tag --
+    // see provider-env.cjs's buildProviderEnv() for how these feed the
+    // spawned child's env.
+    const { displayName, provider, tone, primaryTask, proactiveEnabled, proactiveWindowStart, proactiveWindowEnd, proxyPort, model } = body
     if (!displayName || !provider || !tone) {
       sendJson(res, 400, { error: 'displayName, provider, and tone are required' })
       return
     }
     if (!PROVIDERS.includes(provider)) {
       sendJson(res, 400, { error: `unknown provider: ${provider}` })
+      return
+    }
+    // 4-provider-mode wiring (2026-07-04): ollama has no user secret, but
+    // DOES need a real local model tag -- unlike the credential check below
+    // (which chatgpt/ollama are exempt from), this is provider-specific and
+    // fails loud here rather than letting main.cjs's buildProviderEnv()
+    // discover it missing at spawn time (see that function's 'not_ready'
+    // guard for ollama, which this mirrors at the earlier, more useful
+    // moment).
+    if (provider === 'ollama' && (!model || !String(model).trim())) {
+      sendJson(res, 400, { error: 'ollama provider requires a model name' })
       return
     }
     // PIECE 3 enforcement, defense-in-depth: /api/byok/validate above
@@ -925,24 +1156,33 @@ async function handleApi(req, res, pathname, onOnboardingComplete) {
     // would already catch that case too). Belt-and-suspenders: check
     // ROUTER_WIRED here as well so this endpoint alone is never the gap.
     if (rejectIfRouterNotWired(res, provider)) return
-    // Onboarding-complete gate (security review, 2026-07-03): completing
-    // setup used to accept ANY provider string with no check that its key
-    // was ever actually validated. readProviderKey(provider) can only
-    // return non-null if storeProviderKeyVerified() previously succeeded
-    // for this exact provider -- the only code path that ever writes
-    // CREDENTIALS_DIR/${provider}.key.enc is the /api/byok/validate
-    // success branch above -- so this single check proves BOTH "the key
-    // was validated" AND "a safeStorage credential exists" at once.
-    let credential
-    try {
-      credential = readProviderKey(provider)
-    } catch (err) {
-      console.error('[scheherazade/onboarding] readProviderKey failed during onboarding-complete gate:', err)
-      credential = null // a corrupt/unreadable Keychain entry reads as "not validated yet", not a 500
-    }
-    if (!credential) {
-      sendJson(res, 400, { error: `no validated ${provider} key on file -- validate a key in step 1 before completing setup` })
-      return
+    // Onboarding-complete gate (security review, 2026-07-03; relaxed
+    // 2026-07-04, 4-provider-mode wiring): completing setup used to accept
+    // ANY provider string with no check that its key was ever actually
+    // validated. readProviderKey(provider) can only return non-null if
+    // storeProviderKeyVerified() previously succeeded for this exact
+    // provider -- the only code path that ever writes
+    // CREDENTIALS_DIR/${provider}.key.enc is the /api/byok/validate success
+    // branch above -- so this single check proves BOTH "the key was
+    // validated" AND "a safeStorage credential exists" at once.
+    // ONLY applies to PROVIDERS_REQUIRING_STORED_CREDENTIAL (claude,
+    // claude-subscription) -- chatgpt/ollama route to a local proxy/daemon
+    // with NO user secret at all (provider-env.cjs), so nothing is ever
+    // stored for them via /api/byok/validate; gating their completion on a
+    // credential that will never exist would deadlock those two providers
+    // forever.
+    if (PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes(provider)) {
+      let credential
+      try {
+        credential = readProviderKey(provider)
+      } catch (err) {
+        console.error('[scheherazade/onboarding] readProviderKey failed during onboarding-complete gate:', err)
+        credential = null // a corrupt/unreadable Keychain entry reads as "not validated yet", not a 500
+      }
+      if (!credential) {
+        sendJson(res, 400, { error: `no validated ${provider} key on file -- validate a key in step 1 before completing setup` })
+        return
+      }
     }
     ensureMcpJsonAgentName()
     writeAgentConfig({
@@ -955,6 +1195,22 @@ async function handleApi(req, res, pathname, onOnboardingComplete) {
       PROACTIVE_WINDOW_START: proactiveEnabled ? proactiveWindowStart || '' : '',
       PROACTIVE_WINDOW_END: proactiveEnabled ? proactiveWindowEnd || '' : '',
       ONBOARDING_STEP: '3',
+      // 4-provider-mode wiring (2026-07-04): written unconditionally (as ''
+      // when not applicable) so a provider SWITCH away from chatgpt/ollama
+      // doesn't leave a stale port/model value silently readable under the
+      // new provider -- writeAgentConfig() merges onto existing fields, so
+      // an omitted key here would otherwise never get cleared. MODEL in
+      // particular: main.cjs's `config.MODEL || 'claude-opus-4-6'` fallback
+      // treats '' the same as unset, so clearing it here on a non-ollama
+      // provider is safe and prevents a stale ollama model tag (e.g.
+      // "llama3.1:8b") from silently surviving a later switch back to
+      // claude/claude-subscription and getting sent as an Anthropic model
+      // id (this codebase has no re-onboarding/provider-switch UI today --
+      // see this task's report -- but onboarding-complete is a POST
+      // endpoint any client could call twice, so this is cheap defense
+      // regardless).
+      CHATGPT_PROXY_PORT: provider === 'chatgpt' && proxyPort ? String(proxyPort).trim() : '',
+      MODEL: provider === 'ollama' ? String(model).trim() : '',
     })
     await writePersonaPreferences({ tone, primaryTask, proactiveEnabled, proactiveWindowStart, proactiveWindowEnd })
     sendJson(res, 200, { ok: true })
@@ -1079,6 +1335,7 @@ const ROUTE_TO_FILE = {
 function createOnboardingServer(onOnboardingComplete) {
   seedConfigFromTemplates() // first-run only; no-op once CONFIG_DIR has real files
   ensureMcpJsonAgentName() // correctness fix applied every boot, independent of wizard progress
+  ensureClaudeOnboardingDone() // first-ever-claude-run only; no-op once ~/.claude.json already has it
 
   return new Promise((resolve, reject) => {
     let allowedHosts = null // populated once listen() resolves and the real ephemeral port is known
