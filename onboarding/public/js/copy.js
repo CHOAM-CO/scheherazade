@@ -130,6 +130,31 @@ window.COPY = {
     loginWaiting: '브라우저에서 로그인을 마치면 이 화면이 바뀝니다.',
     loginSuccess: (plan) => `연결됐습니다. ${plan} 요금제로 동작합니다.`,
     loginFailure: '로그인이 완료되지 않았습니다. 다시 시도하거나, 아래에서 API 키로 연결할 수 있습니다.',
+    // AUTHORED (not in copy source file) -- in-app login shell-out UI
+    // strings (Path B, 2026-07-07): the app now runs `codex login` /
+    // `ollama signin` itself, so these tabs show a login button instead of
+    // a key field. The precondition strings above describe the old Path-A
+    // (Terminal pre-run) flow and are superseded inside the login area;
+    // kept untouched for a future copy pass to reconcile. Flagged per the
+    // COPY_BUTTON_LABEL precedent (wizard.js).
+    login: {
+      chatgpt: {
+        button: 'ChatGPT 계정으로 로그인',
+        lead: '버튼을 누르면 브라우저에서 ChatGPT 로그인이 열립니다. 키를 붙여넣을 필요가 없습니다.',
+      },
+      ollama: {
+        button: 'Ollama 계정으로 로그인',
+        lead: '버튼을 누르면 Ollama 계정 로그인이 진행됩니다. 키를 붙여넣을 필요가 없습니다.',
+        modelLabel: '사용할 클라우드 모델',
+        modelPlaceholder: '모델 이름을 입력하세요',
+        modelHint: 'ollama.com의 모델 목록에서 이름을 복사해 넣으세요.',
+      },
+      successNoPlan: '연결됐습니다. 로그인 정보는 이 Mac에만 저장됩니다.',
+      starting: '로그인을 시작하는 중입니다',
+      cancelled: '로그인을 취소했습니다. 다시 시도할 수 있습니다.',
+      timeout: '로그인 대기 시간이 지났습니다. 다시 시도해주세요.',
+      reloginLabel: '다른 계정으로 로그인',
+    },
     // Folded-away fallback path. Field-level hint text is unchanged from
     // the pre-v2 copy (still accurate -- only its position in the flow
     // moved from primary to fallback).

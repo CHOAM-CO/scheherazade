@@ -15,8 +15,10 @@
   // = v1.1). Gating tab-enable on routerWired would wrongly ENABLE those
   // two tabs the instant the server flag flips, regardless of UI-scope
   // intent -- this const is the single place that decision lives instead.
-  // Flip it (v1.1) to expose more tabs; no other wizard.js change needed.
-  const EXPOSED_PROVIDERS = ['claude']
+  // v1.1 FLIP (2026-07-07, login shell-out): chatgpt/ollama exposed. Their
+  // Step-1 area is the in-app LOGIN flow (renderLoginArea below -- button
+  // driving POST /api/onboarding/login/:provider), not the key field.
+  const EXPOSED_PROVIDERS = ['claude', 'chatgpt', 'ollama']
 
   // AUTHORED (not in copy.js): the frozen copy file's 2026-07-04 §Step 1
   // redesign added `copyCommand` (the literal string to copy) but defines
@@ -125,11 +127,145 @@
     const keyFieldWrap = $('s1-key').parentElement
     let extraEl = null // lazily-mounted container for claude's primary-panel + fallback-toggle; inserted once, right before keyFieldWrap
 
+    // ── login shell-out poll plumbing (v1.1, 2026-07-07) ────────────────
+    let loginPollTimer = null
+    function stopLoginPoll() {
+      if (loginPollTimer) {
+        clearInterval(loginPollTimer)
+        loginPollTimer = null
+      }
+    }
+
+    // chatgpt/ollama Step-1 area: an in-app login button (the server runs
+    // `codex login` / `ollama signin` for the user -- backend commit
+    // d628e22), a 2s status poll (S5_POLL pattern), and for ollama the
+    // required cloud-model field (provider-env.cjs demands MODEL). The key
+    // field is hidden -- these are no-secret providers; nothing is pasted
+    // or stored. Next is gated on login success (+ model for ollama) and
+    // goes straight to Step 2: /api/byok/validate would store nothing for
+    // these providers anyway (PROVIDERS_REQUIRING_STORED_CREDENTIAL).
+    function renderLoginArea(provider) {
+      const L = C.step1.login
+      const P = L[provider]
+      const nextBtn = $('s1-next')
+      const statusEl = $('s1-status')
+      state.provider = provider
+      keyFieldWrap.classList.add('hidden')
+      nextBtn.textContent = C.step1.button
+      nextBtn.disabled = true
+
+      const panel = document.createElement('div')
+      const leadEl = document.createElement('p')
+      leadEl.textContent = P.lead
+      panel.appendChild(leadEl)
+
+      const loginBtn = document.createElement('button')
+      loginBtn.type = 'button'
+      loginBtn.textContent = P.button
+      panel.appendChild(loginBtn)
+
+      const reloginBtn = document.createElement('button')
+      reloginBtn.type = 'button'
+      reloginBtn.className = 'link hidden'
+      reloginBtn.textContent = L.reloginLabel
+      panel.appendChild(reloginBtn)
+
+      let modelInput = null
+      if (provider === 'ollama') {
+        const field = document.createElement('div')
+        field.className = 'field'
+        const label = document.createElement('label')
+        label.textContent = P.modelLabel
+        modelInput = document.createElement('input')
+        modelInput.type = 'text'
+        modelInput.placeholder = P.modelPlaceholder
+        modelInput.value = state.model || ''
+        const hint = document.createElement('div')
+        hint.className = 'field-hint'
+        hint.textContent = P.modelHint
+        field.appendChild(label)
+        field.appendChild(modelInput)
+        field.appendChild(hint)
+        panel.appendChild(field)
+        modelInput.oninput = updateNextGate
+      }
+      extraEl.appendChild(panel)
+
+      let loginState = 'idle'
+      function updateNextGate() {
+        const modelOk = provider !== 'ollama' || Boolean(modelInput && modelInput.value.trim())
+        nextBtn.disabled = !(loginState === 'success' && modelOk)
+      }
+
+      function applyStatus(s) {
+        loginState = s.state
+        if (s.state === 'running') {
+          statusEl.className = 'status-line pending'
+          statusEl.textContent = C.step1.loginWaiting
+        } else if (s.state === 'success') {
+          stopLoginPoll()
+          statusEl.className = 'status-line success'
+          statusEl.textContent = L.successNoPlan
+          reloginBtn.classList.remove('hidden')
+        } else if (s.state === 'failed') {
+          stopLoginPoll()
+          statusEl.className = 'status-line failure'
+          // cli_missing carries the server's Korean install pointer in
+          // `detail`; every other failure detail is deliberately coarse
+          // server-side (stderr never rides the wire), so map by code.
+          if (s.code === 'cli_missing') statusEl.textContent = s.detail || C.step1.loginFailure
+          else if (s.code === 'cancelled') statusEl.textContent = L.cancelled
+          else if (s.code === 'timeout') statusEl.textContent = L.timeout
+          else statusEl.textContent = C.step1.loginFailure
+        }
+        updateNextGate()
+      }
+
+      async function startLogin(force) {
+        statusEl.className = 'status-line pending'
+        statusEl.textContent = L.starting
+        try {
+          const s = await api(`/api/onboarding/login/${provider}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(force ? { force: true } : {}),
+          })
+          applyStatus(s)
+          if (s.state === 'running') {
+            stopLoginPoll()
+            loginPollTimer = setInterval(async () => {
+              try {
+                applyStatus(await api(`/api/onboarding/login/${provider}/status`))
+              } catch (err) {
+                // transient poll failure: keep polling, terminal states
+                // arrive from the server on the next tick
+              }
+            }, 2000)
+          }
+        } catch (err) {
+          statusEl.className = 'status-line failure'
+          statusEl.textContent = C.genericError(err.message)
+        }
+      }
+
+      loginBtn.onclick = () => startLogin(false)
+      reloginBtn.onclick = () => startLogin(true)
+
+      nextBtn.onclick = () => {
+        if (provider === 'ollama') state.model = modelInput.value.trim()
+        state.provider = provider
+        showStep('2')
+      }
+
+      // On tab entry, surface where we already stand -- a prior success
+      // (or an already-logged-in fast path from a previous visit) renders
+      // immediately without spawning anything.
+      api(`/api/onboarding/login/${provider}/status`).then(applyStatus).catch(() => {})
+    }
+
     // Renders Step 1's lower half for the current activeTab/claudeSubMode.
-    // claude gets the two-submode UI (this is the load-bearing branch).
-    // Any other tab (unreachable while EXPOSED_PROVIDERS = ['claude'], since
-    // those tabs render disabled below -- kept correct for v1.1) gets the
-    // old flat single-field BYOK UI, provider = the tab's own id.
+    // claude gets the two-submode UI (this is the load-bearing branch);
+    // chatgpt/ollama get the login-button area (renderLoginArea above).
     function renderClaudeArea() {
       const keyInput = $('s1-key')
       const hintEl = $('s1-hint')
@@ -140,14 +276,24 @@
         keyFieldWrap.parentElement.insertBefore(extraEl, keyFieldWrap)
       }
       extraEl.innerHTML = ''
+      // Reset shared surfaces on every tab/submode re-render: stop any
+      // login poll, restore the key field + status line + next button that
+      // a login tab may have hidden/overridden.
+      stopLoginPoll()
+      keyFieldWrap.classList.remove('hidden')
+      nextBtn.disabled = false
+      keyInput.value = ''
+      $('s1-status').textContent = ''
+      $('s1-status').className = 'status-line'
 
-      if (activeTab !== 'claude') {
-        const tab = C.step1.fallback.tabs.find((t) => t.id === activeTab)
-        hintEl.textContent = tab ? tab.hint : ''
-        keyInput.placeholder = '키를 붙여넣으세요'
-        nextBtn.textContent = C.step1.button
-        state.provider = activeTab
-      } else if (claudeSubMode === 'primary') {
+      if (activeTab === 'chatgpt' || activeTab === 'ollama') {
+        renderLoginArea(activeTab)
+        return
+      }
+      // claude tab from here down -- both submodes re-wire the key-validate
+      // next handler (the login area installs its own).
+      wireValidateNext()
+      if (claudeSubMode === 'primary') {
         const primary = claudeTab.primary
         const panel = document.createElement('div')
 
@@ -227,10 +373,6 @@
         nextBtn.textContent = C.step1.button
         state.provider = 'claude'
       }
-
-      keyInput.value = ''
-      $('s1-status').textContent = ''
-      $('s1-status').className = 'status-line'
     }
 
     C.step1.tabs.forEach((tab) => {
@@ -250,9 +392,16 @@
       tabsEl.appendChild(el)
     })
 
-    renderClaudeArea()
-
-    $('s1-next').onclick = async () => {
+    // Key-validate next handler, (re-)installed by renderClaudeArea for the
+    // claude tab's submodes -- extracted into a function (2026-07-07)
+    // because the login tabs install their own next handler, so switching
+    // back to claude must restore this one. NOTE: the initial
+    // renderClaudeArea() call sits BELOW validateNextHandler's const
+    // declaration (TDZ) -- do not move it back above.
+    function wireValidateNext() {
+      $('s1-next').onclick = validateNextHandler
+    }
+    const validateNextHandler = async () => {
       const key = $('s1-key').value.trim()
       const statusEl = $('s1-status')
       const btn = $('s1-next')
@@ -288,6 +437,10 @@
         btn.disabled = false
       }
     }
+
+    // Initial render -- MUST stay below validateNextHandler (TDZ; see
+    // wireValidateNext's comment).
+    renderClaudeArea()
   }
 
   // ── Step 2: name ─────────────────────────────────────────────────────
