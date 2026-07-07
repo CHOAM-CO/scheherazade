@@ -291,6 +291,16 @@ run_loop() {
   # spaces; the spawn line below now references them individually instead
   # of splitting a flattened string.
   export AGENT_NAME MEM CLAUDE_BIN MODEL
+  # Custom personality prompt (2026-07-08): rides ABOVE the Claude Code
+  # default system prompt via --append-system-prompt-file. Rendered by
+  # setup.sh (CLI path) or onboarding-complete (app path) into
+  # $MEM/system_prompt.md. Guarded: a missing file must not become a CLI
+  # arg error, so the flag is only added when the file exists (see the
+  # expect-side extra_args branch). Own env var = one Tcl word, same
+  # spaced-path reasoning as CLAUDE_BIN/MODEL above.
+  if [ -f "$MEM/system_prompt.md" ]; then
+    export SYSTEM_PROMPT_FILE="$MEM/system_prompt.md"
+  fi
 
   EXPECT_SCRIPT="$(mktemp "${TMPDIR:-/tmp}/agent-portable-expect.XXXXXX")"
   trap 'rm -f "$EXPECT_SCRIPT"' EXIT
@@ -298,7 +308,11 @@ run_loop() {
     log_user 1
     set env(TERM) xterm-256color
     set stty_init "rows 50 cols 200"
-    spawn -noecho $env(CLAUDE_BIN) --model $env(MODEL) --name $env(AGENT_NAME) --dangerously-skip-permissions --dangerously-load-development-channels server:agent-channel
+    set extra_args {}
+    if {[info exists env(SYSTEM_PROMPT_FILE)]} {
+      lappend extra_args --append-system-prompt-file $env(SYSTEM_PROMPT_FILE)
+    }
+    spawn -noecho $env(CLAUDE_BIN) --model $env(MODEL) --name $env(AGENT_NAME) {*}$extra_args --dangerously-skip-permissions --dangerously-load-development-channels server:agent-channel
     set timeout 25
     # 2026-07-05 freeze fix (comment kept OUTSIDE expect{} on purpose: a #
     # inside an expect body is parsed as a pattern, not a comment). The BYOK

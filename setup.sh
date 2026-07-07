@@ -123,7 +123,19 @@ render() {
   local src="$1"
   local dst="$2"
   local rendered
-  rendered="$(sed "s|{AGENT_DIR}|${SCRIPT_DIR}|g; s|{AGENT_NAME}|${AGENT_NAME}|g" "$src")"
+  # node instead of sed: sed replacement strings corrupt on &, \, | in the
+  # substituted values (paths with those chars, user-chosen names). node is
+  # already a hard dependency of this script. (Codex catch, 2026-07-08.)
+  rendered="$(node -e '
+    const fs = require("fs")
+    const [src, agentDir, agentName, memDir] = process.argv.slice(1)
+    process.stdout.write(
+      fs.readFileSync(src, "utf8")
+        .replaceAll("{AGENT_DIR}", agentDir)
+        .replaceAll("{AGENT_NAME}", agentName)
+        .replaceAll("{MEMORY_DIR}", memDir)
+    )
+  ' "$src" "$SCRIPT_DIR" "$AGENT_NAME" "$MEM")"
   if [ -f "$dst" ] && [ "$(cat "$dst")" != "$rendered" ]; then
     cp "$dst" "${dst}.bak"
     echo "existing $(basename "$dst") differed -- backed up to $(basename "$dst").bak"
@@ -132,6 +144,29 @@ render() {
 }
 
 render "$SCRIPT_DIR/CLAUDE.md" "$MEM/CLAUDE.md"
+render "$SCRIPT_DIR/ONTOLOGY_GUIDE.md" "$MEM/ONTOLOGY_GUIDE.md"
+
+# Custom system prompt (feature: agent personality rides ABOVE the Claude
+# Code default prompt via --append-system-prompt-file in run.sh -- same
+# mechanism as the MAGI fleet's personas). The wizard (app path) renders
+# this with the user's chosen tone/task at onboarding-complete; this CLI
+# path uses .agent-config values when present, defaults otherwise.
+DISPLAY_NAME="${DISPLAY_NAME:-$AGENT_NAME}"
+TONE="${TONE:-따뜻한 반말, 친한 친구처럼}"
+PRIMARY_TASK="${PRIMARY_TASK:-일상 대화와 기록}"
+node -e '
+  const fs = require("fs")
+  const [src, dst, displayName, tone, primaryTask] = process.argv.slice(1)
+  fs.writeFileSync(
+    dst,
+    fs.readFileSync(src, "utf8")
+      .replaceAll("{DISPLAY_NAME}", displayName)
+      .replaceAll("{TONE}", tone)
+      .replaceAll("{PRIMARY_TASK}", primaryTask)
+  )
+' "$SCRIPT_DIR/onboarding/templates/agent-system-prompt.md" "$MEM/system_prompt.md" \
+  "$DISPLAY_NAME" "$TONE" "$PRIMARY_TASK"
+echo "rendered system_prompt.md"
 # settings.local.json template moved to onboarding/templates/ (a tracked
 # path): a global gitignore rule (**/.claude/settings.local.json) would
 # otherwise mark a repo-root .claude/ copy untracked -> missing from a fresh

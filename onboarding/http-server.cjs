@@ -563,8 +563,13 @@ function writeAgentConfig(fields) {
 // "app.asar" path segment there, so dev keeps working unchanged.
 function toUnpackedPath(p) {
   const marker = `${path.sep}app.asar${path.sep}`
-  if (!p.includes(marker)) return p
-  return p.replace(marker, `${path.sep}app.asar.unpacked${path.sep}`)
+  if (p.includes(marker)) return p.replace(marker, `${path.sep}app.asar.unpacked${path.sep}`)
+  // REPO_ROOT itself IS the asar root in a packaged app (path.join(__dirname,
+  // '..') = ".../app.asar", no trailing separator) -- the marker above never
+  // matches it, so a rendered {AGENT_DIR} would point cycle scripts INSIDE
+  // the archive, which bash cannot exec. (Codex catch, 2026-07-08.)
+  if (p.endsWith(`${path.sep}app.asar`)) return `${p}.unpacked`
+  return p
 }
 
 const CHANNEL_SCRIPT_PATH = toUnpackedPath(path.join(REPO_ROOT, 'channel.mjs'))
@@ -991,6 +996,102 @@ async function writePersonaPreferences({ tone, primaryTask, proactiveEnabled, pr
     if (value === undefined || value === null || value === '') continue
     mod.memoryWrite(db, { table: 'preferences', data: { key, value, source_session: session } })
   }
+}
+
+// ── agent substrate rendering (app-path parity with setup.sh, 2026-07-08) ─
+// setup.sh's fuller bootstrap (CLAUDE.md / ONTOLOGY_GUIDE.md /
+// self_persona.md / checkpoint.md / memory dirs) never ran in the packaged
+// app path, so a DMG-installed agent booted with NO substrate at all: no
+// restore procedure, no dream cycle, no self-doubt loop -- just the bare
+// Claude Code default behavior. This renders the same templates setup.sh
+// renders, at onboarding-complete time, with the same
+// create-if-absent/re-render split setup.sh uses: CLAUDE.md,
+// ONTOLOGY_GUIDE.md, and system_prompt.md are harness (always re-rendered);
+// self_persona.md and checkpoint.md are the agent's own history (never
+// overwritten). {AGENT_DIR} renders to the UNPACKED repo root -- the agent
+// invokes cycle scripts with bash by absolute path, and bash cannot exec a
+// file inside app.asar (same class as the toUnpackedPath comment above).
+function renderAgentSubstrate({ displayName, tone, primaryTask }) {
+  const agentDir = toUnpackedPath(REPO_ROOT)
+  const renderHarness = (srcName, dstName) => {
+    const src = fs.readFileSync(path.join(REPO_ROOT, srcName), 'utf8')
+    const rendered = src
+      .replaceAll('{AGENT_DIR}', agentDir)
+      .replaceAll('{AGENT_NAME}', AGENT_NAME)
+      .replaceAll('{MEMORY_DIR}', DATA_HOME)
+    fs.writeFileSync(path.join(DATA_HOME, dstName), rendered)
+  }
+
+  for (const dir of ['session_notes/.archive', 'journals', 'dreams', 'logs', '.review']) {
+    fs.mkdirSync(path.join(DATA_HOME, dir), { recursive: true })
+  }
+
+  renderHarness('CLAUDE.md', 'CLAUDE.md')
+  renderHarness('ONTOLOGY_GUIDE.md', 'ONTOLOGY_GUIDE.md')
+
+  const promptSrc = fs.readFileSync(
+    path.join(REPO_ROOT, 'onboarding', 'templates', 'agent-system-prompt.md'),
+    'utf8'
+  )
+  const prompt = promptSrc
+    .replaceAll('{DISPLAY_NAME}', displayName)
+    .replaceAll('{TONE}', tone)
+    .replaceAll('{PRIMARY_TASK}', primaryTask || '일상 대화와 기록')
+  fs.writeFileSync(path.join(DATA_HOME, 'system_prompt.md'), prompt)
+
+  const personaPath = path.join(DATA_HOME, 'self_persona.md')
+  if (!fs.existsSync(personaPath)) {
+    const today = new Date().toISOString().slice(0, 10)
+    fs.writeFileSync(
+      personaPath,
+      [
+        `# ${displayName} -- Self Persona`,
+        '',
+        '> Identity, not instructions. CLAUDE.md governs behavior; this file',
+        '> governs who is behaving. It changes only through the persona reflux',
+        '> cycle (see CLAUDE.md §4 and scripts/persona-reflux.sh) -- never edited',
+        '> on impulse.',
+        '',
+        '## Identity',
+        '',
+        '(Nothing here yet. This fills in from lived sessions, not from invention',
+        '-- leave it blank until there is real history to draw from.)',
+        '',
+        '## Voice',
+        '',
+        `(How ${displayName} actually talks, once there is enough of a record to say.)`,
+        '',
+        '## Values',
+        '',
+        `(What ${displayName} holds to, learned from friction -- not declared up front.)`,
+        '',
+        '## Evolution Log',
+        '',
+        `- ${today} -- persona created from template. No lived history yet.`,
+        '',
+      ].join('\n')
+    )
+  }
+
+  const checkpointPath = path.join(DATA_HOME, 'checkpoint.md')
+  if (!fs.existsSync(checkpointPath)) {
+    fs.writeFileSync(
+      checkpointPath,
+      [
+        '# Checkpoint',
+        '',
+        '> Cross-session handoff. Overwritten on significant state changes -- a',
+        '> snapshot, not a log. For history, see session_notes/ and journals/.',
+        '',
+        '## Status',
+        '',
+        '(First session has not happened yet.)',
+        '',
+      ].join('\n')
+    )
+  }
+
+  log('rendered agent substrate into DATA_HOME (CLAUDE.md, ONTOLOGY_GUIDE.md, system_prompt.md; persona/checkpoint seeded if absent)')
 }
 
 // "이번 세션에서 기억한 것" -- grouped by calendar date of the most recent
@@ -1497,6 +1598,7 @@ async function handleApi(req, res, pathname, onOnboardingComplete) {
       MODEL: provider === 'ollama' ? String(model).trim() : '',
     })
     await writePersonaPreferences({ tone, primaryTask, proactiveEnabled, proactiveWindowStart, proactiveWindowEnd })
+    renderAgentSubstrate({ displayName, tone, primaryTask })
     sendJson(res, 200, { ok: true })
     return
   }

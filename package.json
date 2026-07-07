@@ -40,6 +40,7 @@
       "docs/**/*",
       "memory/**/*",
       "CLAUDE.md",
+      "ONTOLOGY_GUIDE.md",
       "README.md",
       "!node_modules/electron/**/*",
       "!node_modules/electron-builder/**/*",
@@ -51,7 +52,8 @@
       "memory/**",
       "channel.mjs",
       "run.sh",
-      "hooks/**"
+      "hooks/**",
+      "scripts/**"
     ],
     "extraResources": [
       {
