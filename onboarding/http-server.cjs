@@ -59,6 +59,10 @@ const { PROVIDERS_REQUIRING_STORED_CREDENTIAL, resolveChatgptProxyPort, OLLAMA_B
 // table is the single existing site.
 const { spawn, execFile } = require('node:child_process')
 const { LOGIN_PROVIDERS, setLoginStatus, getLoginStatus } = require('./login-status.cjs')
+// Fresh-Mac dependency bootstrap (2026-07-07): app-managed download/install
+// of the codex/ollama CLIs into DATA_HOME/bin + sha256 manifest. See
+// bootstrap.cjs's header for the full design (brew-free, 0 admin prompts).
+const { BOOTSTRAP_DEPS, startBootstrap, getBootstrapStatus, verifyManagedBin } = require('./bootstrap.cjs')
 
 const REPO_ROOT = path.join(__dirname, '..')
 const PUBLIC_DIR = path.join(__dirname, 'public')
@@ -1223,6 +1227,14 @@ async function startProviderLoginLocked(provider, { force }) {
     setLoginStatus(provider, 'failed', 'cli_missing', spec.installHint)
     return
   }
+  // Pre-spawn tamper recheck for app-managed binaries (bootstrap.cjs sha256
+  // manifest -- Codex round-3 hardening, landed with the bootstrap step).
+  // Non-managed locations (brew dirs) pass through; only a managed file
+  // that stopped matching its install-time hash is refused.
+  if (!verifyManagedBin(binPath)) {
+    setLoginStatus(provider, 'failed', 'unknown', '설치된 실행 파일이 검증에 실패했습니다. 설치 단계를 다시 실행해주세요.')
+    return
+  }
   // `force` (re-login) skips the probe so the user can switch accounts.
   if (!force && (await probeAlreadyLoggedIn(provider, binPath))) {
     setLoginStatus(provider, 'success', null, spec.probe ? 'already logged in' : 'existing identity key found')
@@ -1556,6 +1568,76 @@ async function handleApi(req, res, pathname, onOnboardingComplete) {
       return
     }
     // fall through to the 404 below for anything else (e.g. PUT)
+  }
+
+  // ── dependency-bootstrap routes (2026-07-07, see bootstrap.cjs) ────────
+  // GET  /api/onboarding/bootstrap/status -- all deps: install-flow state
+  //      + `present` (resolveBin says a usable binary already exists, e.g.
+  //      brew/dev machines -- the wizard skips the download for those).
+  // POST /api/onboarding/bootstrap/:dep   -- start download+install.
+  if (pathname === '/api/onboarding/bootstrap/status' && req.method === 'GET') {
+    const out = {}
+    for (const dep of BOOTSTRAP_DEPS) {
+      out[dep] = { ...getBootstrapStatus(dep), present: Boolean(resolveBin(dep)) }
+    }
+    sendJson(res, 200, out)
+    return
+  }
+  const bootstrapMatch = pathname.match(/^\/api\/onboarding\/bootstrap\/([a-z-]+)$/)
+  if (bootstrapMatch && req.method === 'POST') {
+    const dep = bootstrapMatch[1]
+    if (!BOOTSTRAP_DEPS.includes(dep)) {
+      sendJson(res, 400, { error: `unknown bootstrap dependency: ${dep}` })
+      return
+    }
+    // Fire-and-poll like the login flow: the response is the CURRENT
+    // status, completion arrives via the status route.
+    startBootstrap(dep).catch((err) => {
+      console.error(`[scheherazade/onboarding] startBootstrap(${dep}) rejected unexpectedly:`, err)
+    })
+    sendJson(res, 200, { dep, ...getBootstrapStatus(dep) })
+    return
+  }
+
+  // ── Full Disk Access onboarding routes (2026-07-07) ────────────────────
+  // No official FDA-status API exists (Apple DTS: "attempt the operation
+  // and handle the error"), so `granted` is a HEURISTIC probe: read a
+  // TCC-protected file. TimeMachine.plist chosen over TCC.db (the latter
+  // false-negatives on 700-permission systems). Grant takes effect only
+  // after APP RELAUNCH (TCC caches at process launch) -- hence /relaunch.
+  if (pathname === '/api/onboarding/fda/status' && req.method === 'GET') {
+    let granted = false
+    try {
+      fs.readFileSync('/Library/Preferences/com.apple.TimeMachine.plist')
+      granted = true
+    } catch {
+      granted = false
+    }
+    sendJson(res, 200, { granted, heuristic: true })
+    return
+  }
+  if (pathname === '/api/onboarding/fda/open' && req.method === 'POST') {
+    const { shell } = getElectron()
+    // Legacy pane URL -- still honored on macOS 14/15 per community docs;
+    // Sequoia anchors are flaky, so fire twice with a beat between (the
+    // documented workaround), harmless when the first one lands.
+    const paneUrl = 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'
+    await shell.openExternal(paneUrl)
+    setTimeout(() => {
+      shell.openExternal(paneUrl).catch(() => {})
+    }, 1000)
+    sendJson(res, 200, { ok: true })
+    return
+  }
+  if (pathname === '/api/onboarding/fda/relaunch' && req.method === 'POST') {
+    const { app } = getElectron()
+    sendJson(res, 200, { ok: true })
+    // Give the response a beat to flush before the process dies.
+    setTimeout(() => {
+      app.relaunch()
+      app.exit(0)
+    }, 300)
+    return
   }
 
   if (pathname === '/api/memory/session-events' && req.method === 'GET') {
