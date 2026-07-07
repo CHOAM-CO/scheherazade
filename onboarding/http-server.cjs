@@ -50,6 +50,14 @@ const { pathToFileURL } = require('node:url')
 // out of sync with it again (see that function's own header comment for the
 // concrete SSRF gap this closes).
 const { PROVIDERS_REQUIRING_STORED_CREDENTIAL, resolveChatgptProxyPort, OLLAMA_BASE_URL } = require('../provider-env.cjs')
+// Login shell-out (2026-07-07): spawn/execFile for `codex login` /
+// `ollama signin` children -- the FIRST non-claude binary spawn sites in
+// this codebase (verified by repo-wide grep at design time). Rule for any
+// FUTURE external-binary spawn (Codex security review, 2026-07-07): resolve
+// via resolveBin() below and use a FIXED argv -- the two existing sites are
+// the LOGIN_SPECS table here and main.cjs's ensureCodexProxy().
+const { spawn, execFile } = require('node:child_process')
+const { LOGIN_PROVIDERS, setLoginStatus, getLoginStatus } = require('./login-status.cjs')
 
 const REPO_ROOT = path.join(__dirname, '..')
 const PUBLIC_DIR = path.join(__dirname, 'public')
@@ -1065,6 +1073,249 @@ function serveStatic(req, res, urlPath) {
 }
 
 // ── route dispatch ────────────────────────────────────────────────────────
+// ── login shell-out (chatgpt/ollama, 2026-07-07) ─────────────────────────
+// In-app trigger for the provider CLIs' own login flows ("로그인 한 번 →
+// 알아서 셋업"): POST /api/onboarding/login/:provider spawns `codex login` /
+// `ollama signin` on the user's behalf instead of sending them to Terminal.
+// No credential ever transits HTTP or gets stored by us -- the CLIs write
+// their own artifacts (~/.codex/auth.json / ~/.ollama/id_ed25519, 0600) and
+// the provider modes read those directly (placeholder-key design, see
+// provider-env.cjs). This server only reports state.
+//
+// SECURITY ENVELOPE (new spawn surface -- model-divergent review gate
+// applies before any commit touching this section):
+//   - provider strings are matched against the LOGIN_SPECS allowlist; no
+//     request data ever reaches an argv (argv arrays below are FIXED).
+//   - binaries resolve ONLY from fixed absolute locations (resolveBin
+//     below -- app-managed DATA_HOME/bin + well-known admin-owned install
+//     dirs; NO PATH consultation at all, so a poisoned launch PATH cannot
+//     pick the binary). A bare name is never handed to spawn.
+//   - the request-level localhost-auth gate (Host/Origin/X-Onboard-Token,
+//     createOnboardingServer below) already covers these routes: POST and
+//     DELETE are mutating methods, so the per-launch token is required.
+//   - rejectIfRouterNotWired() guards the start route like every other
+//     provider-accepting endpoint.
+//   - children are spawned detached (own process group) so timeout/cancel
+//     can SIGTERM the whole group (browser-opener grandchildren included),
+//     mirroring main.cjs's supervisor spawn/kill pattern.
+const LOGIN_TIMEOUT_MS = 180_000 // human browser-OAuth pace; deliberately NOT the 60s agent TIMEOUT_MS
+const LOGIN_PROBE_TIMEOUT_MS = 10_000 // `codex login status` fast-path cap
+
+// Allowlist of login flows. `argv` fixed; `probe` = cheap already-logged-in
+// check run before spawning a real login child; `artifact` = the file the
+// CLI writes on success (completion is exit 0 AND artifact present --
+// trusting exit code alone was rejected at design time, spec v0.2).
+const LOGIN_SPECS = {
+  chatgpt: {
+    bin: 'codex',
+    argv: ['login'],
+    probe: { argv: ['login', 'status'] }, // exit 0 = already logged in (verified: prints "Logged in using ChatGPT")
+    artifact: () => path.join(os.homedir(), '.codex', 'auth.json'),
+    installHint: 'codex CLI가 없습니다. https://github.com/openai/codex 에서 설치 후 다시 시도해주세요.',
+  },
+  ollama: {
+    bin: 'ollama',
+    argv: ['signin'],
+    // No `ollama login status` equivalent exists (verified against the CLI
+    // 2026-07-07: subcommands are signin/signout only) -- the identity-key
+    // heuristic below is the honest best available. It can false-positive
+    // on a key that was never linked to an account; the wizard copy keeps
+    // the existing "터미널에서 ollama signin" fallback wording for that case.
+    probe: null,
+    artifact: () => path.join(os.homedir(), '.ollama', 'id_ed25519'),
+    installHint: 'Ollama 앱이 설치되어 있지 않습니다. https://ollama.com 에서 설치 후 다시 시도해주세요.',
+  },
+}
+
+// provider -> live ChildProcess while a login child runs. Also the
+// ownership token: only children WE spawned are ever signaled -- see
+// cancelProviderLogin(). (Same ownership discipline as main.cjs's proxy
+// child handling; on a machine where an external login flow happens to be
+// running, we can't and don't touch it.)
+const loginChildren = { chatgpt: null, ollama: null }
+const loginTimers = { chatgpt: null, ollama: null }
+// Double-spawn race guard (Codex security review finding #4, 2026-07-07):
+// startProviderLogin's "already running?" check and its child-handle
+// assignment are separated by an awaited probe -- two concurrent POSTs
+// could both pass the check and spawn two OAuth flows, with only the later
+// child still cancellable. This flag is set/checked SYNCHRONOUSLY at entry.
+const loginStarting = { chatgpt: false, ollama: false }
+
+// External-binary resolution (hardened per Codex security review finding
+// #2 + re-review finding #3, 2026-07-07). FIXED absolute locations ONLY --
+// NO PATH walk at all: a poisoned launch PATH must never pick the binary
+// (Codex: "logging does not mitigate execution"), and Finder-launched apps
+// get a minimal PATH anyway, so the walk was mostly useless for exactly
+// the double-click users this app targets. Order:
+//   1. DATA_HOME/bin -- the app-managed dependency dir (the dependency-
+//      bootstrap step downloads CLIs here; same trust domain as the app's
+//      own data). Residual, documented: a same-uid process can replace
+//      these files -- hash verification at bootstrap-download time + a
+//      pre-spawn recheck is the planned hardening in the bootstrap step.
+//   2. Well-known admin-owned install locations (brew arm64 / brew intel +
+//      historical /usr/local) -- fixed absolute paths, not request- or
+//      env-controlled.
+// A dev box with the CLI in some custom prefix can symlink it into
+// DATA_HOME/bin; consumer installs get it there via bootstrap.
+function resolveBin(name) {
+  const fixed = [
+    path.join(DATA_HOME, 'bin', name),
+    `/opt/homebrew/bin/${name}`,
+    `/usr/local/bin/${name}`,
+  ]
+  for (const candidate of fixed) {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK)
+      return candidate
+    } catch {
+      // not here, keep looking
+    }
+  }
+  return null
+}
+
+function clearLoginChild(provider) {
+  loginChildren[provider] = null
+  if (loginTimers[provider]) {
+    clearTimeout(loginTimers[provider])
+    loginTimers[provider] = null
+  }
+}
+
+// Fast-path probe: resolves true if the provider is ALREADY logged in and
+// no real login child needs to run. Never rejects -- probe failure just
+// means "run the real login".
+function probeAlreadyLoggedIn(provider, binPath) {
+  const spec = LOGIN_SPECS[provider]
+  if (!spec.probe) {
+    // ollama: identity-key heuristic (see LOGIN_SPECS comment).
+    return Promise.resolve(fs.existsSync(spec.artifact()))
+  }
+  return new Promise((resolve) => {
+    execFile(binPath, spec.probe.argv, { timeout: LOGIN_PROBE_TIMEOUT_MS }, (err) => resolve(!err))
+  })
+}
+
+async function startProviderLogin(provider, { force = false } = {}) {
+  if (loginStarting[provider] || loginChildren[provider]) {
+    // Idempotent: a login is already starting/in flight; report it rather
+    // than double-spawning (two browser tabs fighting over one OAuth flow).
+    // loginStarting closes the check-vs-assign race across the awaited
+    // probe below (Codex finding #4).
+    return
+  }
+  loginStarting[provider] = true
+  try {
+    await startProviderLoginLocked(provider, { force })
+  } finally {
+    // By here either a child handle is set (spawn path) or the flow ended
+    // (fast-path/failure) -- loginChildren[] takes over as the in-flight
+    // marker, so the starting flag always drops.
+    loginStarting[provider] = false
+  }
+}
+
+async function startProviderLoginLocked(provider, { force }) {
+  const spec = LOGIN_SPECS[provider]
+  const binPath = resolveBin(spec.bin)
+  if (!binPath) {
+    setLoginStatus(provider, 'failed', 'cli_missing', spec.installHint)
+    return
+  }
+  // `force` (re-login) skips the probe so the user can switch accounts.
+  if (!force && (await probeAlreadyLoggedIn(provider, binPath))) {
+    setLoginStatus(provider, 'success', null, spec.probe ? 'already logged in' : 'existing identity key found')
+    return
+  }
+
+  setLoginStatus(provider, 'running', null, `${spec.bin} ${spec.argv.join(' ')} started -- complete the flow in your browser`)
+  log(`login shell-out: spawning ${binPath} ${spec.argv.join(' ')} (provider=${provider}, timeout=${LOGIN_TIMEOUT_MS}ms)`)
+  const child = spawn(binPath, spec.argv, {
+    detached: true, // own pgroup -> group-SIGTERM reaps browser-opener grandchildren too
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  loginChildren[provider] = child
+
+  let stderrTail = ''
+  child.stderr.on('data', (chunk) => {
+    // Bounded tail, SERVER-SIDE LOG ONLY (Codex finding #5, 2026-07-07):
+    // login-CLI stderr can carry OAuth URLs/device codes; the GET status
+    // route is deliberately non-mutating (no token required), so raw child
+    // output must never ride the wire in `detail`. Matches this file's
+    // existing respondError() convention (log the detail, send the class).
+    stderrTail = (stderrTail + chunk.toString()).slice(-400)
+  })
+  child.stdout.resume() // drain so the child never blocks on a full pipe
+
+  child.on('error', (err) => {
+    // spawn-level failure (ENOENT raced away, EACCES, ...) -- close may
+    // never fire with a meaningful code.
+    if (getLoginStatus(provider).state === 'running') {
+      setLoginStatus(provider, 'failed', 'unknown', `spawn failed: ${err.message}`)
+    }
+    clearLoginChild(provider)
+  })
+
+  loginTimers[provider] = setTimeout(() => {
+    if (getLoginStatus(provider).state !== 'running') return
+    setLoginStatus(provider, 'failed', 'timeout', `login did not complete within ${LOGIN_TIMEOUT_MS / 1000}s`)
+    try {
+      process.kill(-child.pid, 'SIGTERM')
+    } catch (err) {
+      log(`login shell-out: timeout SIGTERM to pgid=${child.pid} failed: ${err.message}`)
+    }
+  }, LOGIN_TIMEOUT_MS)
+
+  child.on('close', (code) => {
+    // Only transition if still 'running' -- timeout/cancel set their state
+    // FIRST and then kill, so this handler must not overwrite them.
+    if (getLoginStatus(provider).state === 'running') {
+      if (code === 0 && fs.existsSync(spec.artifact())) {
+        setLoginStatus(provider, 'success', null, 'login completed')
+      } else if (code === 0) {
+        setLoginStatus(provider, 'failed', 'unknown', 'login finished but no credential was written -- try again')
+      } else {
+        // Coarse client-facing message only; the raw exit code + stderr
+        // tail go to the server log below (Codex finding #5).
+        setLoginStatus(provider, 'failed', 'exit_nonzero', 'login process exited with an error -- see the app log')
+      }
+    }
+    log(`login shell-out: ${provider} child exited (code=${code}) -> ${getLoginStatus(provider).state}${stderrTail ? ` | stderr tail: ${stderrTail.trim()}` : ''}`)
+    clearLoginChild(provider)
+  })
+}
+
+function cancelProviderLogin(provider) {
+  const child = loginChildren[provider]
+  if (!child) return // nothing in flight; DELETE is idempotent
+  setLoginStatus(provider, 'failed', 'cancelled', 'cancelled by user')
+  try {
+    process.kill(-child.pid, 'SIGTERM')
+  } catch (err) {
+    log(`login shell-out: cancel SIGTERM to pgid=${child.pid} failed: ${err.message}`)
+  }
+}
+
+// App-quit/fatal cleanup (Codex security review finding #3, 2026-07-07):
+// login children are detached (own pgroup), so without this they outlive
+// the Electron process -- an orphaned `codex login` could finish its OAuth
+// exchange and write credentials after the app (and its timeout/cancel
+// supervision) is gone. Called from main.cjs's before-quit AND fatal()
+// paths, mirroring killAgentSupervisor()/killCodexProxy().
+function killAllLoginChildren(signal = 'SIGTERM') {
+  for (const provider of LOGIN_PROVIDERS) {
+    const child = loginChildren[provider]
+    if (!child) continue
+    try {
+      process.kill(-child.pid, signal)
+      log(`killAllLoginChildren: sent ${signal} to ${provider} login pgroup (pgid=${child.pid})`)
+    } catch (err) {
+      log(`killAllLoginChildren: ${signal} to ${provider} pgid=${child.pid} failed (${err.message}) -- likely already gone`)
+    }
+    loginChildren[provider] = null
+  }
+}
+
 async function handleApi(req, res, pathname, onOnboardingComplete) {
   if (pathname === '/api/config' && req.method === 'GET') {
     // routerWired (PIECE 3, consumer 1): a static capability flag, not
@@ -1267,6 +1518,43 @@ async function handleApi(req, res, pathname, onOnboardingComplete) {
     await shell.openExternal(`https://discord.com/channels/${guildId}/${channelId}`)
     sendJson(res, 200, { ok: true })
     return
+  }
+
+  // ── login shell-out routes (2026-07-07, see engine above handleApi) ────
+  // POST   /api/onboarding/login/:provider        -- start (body: {force?})
+  // GET    /api/onboarding/login/:provider/status -- poll (S5_POLL pattern)
+  // DELETE /api/onboarding/login/:provider        -- cancel
+  const loginMatch = pathname.match(/^\/api\/onboarding\/login\/([a-z-]+)(\/status)?$/)
+  if (loginMatch) {
+    const provider = loginMatch[1]
+    const isStatusPath = Boolean(loginMatch[2])
+    // Allowlist FIRST (before even the router gate): only login-capable
+    // providers exist here at all. 'claude'/'claude-subscription' are not
+    // login-shell-out providers (claude-subscription is an explicit defer,
+    // spec v0.2 Q3) -- 400, not 404, to make the contract loud.
+    if (!LOGIN_PROVIDERS.includes(provider)) {
+      sendJson(res, 400, { error: `unknown login provider: ${provider}` })
+      return
+    }
+    if (isStatusPath && req.method === 'GET') {
+      sendJson(res, 200, { provider, ...getLoginStatus(provider) })
+      return
+    }
+    if (!isStatusPath && req.method === 'POST') {
+      // Same PIECE 3 enforcement as /api/byok/validate: never start a
+      // login flow for a provider the build can't select.
+      if (rejectIfRouterNotWired(res, provider)) return
+      const body = await readJsonBody(req)
+      await startProviderLogin(provider, { force: Boolean(body && body.force) })
+      sendJson(res, 200, { provider, ...getLoginStatus(provider) })
+      return
+    }
+    if (!isStatusPath && req.method === 'DELETE') {
+      cancelProviderLogin(provider)
+      sendJson(res, 200, { provider, ...getLoginStatus(provider) })
+      return
+    }
+    // fall through to the 404 below for anything else (e.g. PUT)
   }
 
   if (pathname === '/api/memory/session-events' && req.method === 'GET') {
@@ -1474,4 +1762,12 @@ module.exports = {
   // directly.
   TIMEOUT_MS,
   ROUTER_WIRED,
+  // Login shell-out (2026-07-07): same testability rationale as the two
+  // above -- plain const, no Electron dependency. resolveBin is shared with
+  // main.cjs's ensureCodexProxy() (single resolution implementation, not a
+  // second drifting copy); killAllLoginChildren is main.cjs's quit/fatal
+  // cleanup hook (Codex finding #3).
+  LOGIN_TIMEOUT_MS,
+  resolveBin,
+  killAllLoginChildren,
 }
