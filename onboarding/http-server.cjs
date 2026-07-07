@@ -51,11 +51,12 @@ const { pathToFileURL } = require('node:url')
 // concrete SSRF gap this closes).
 const { PROVIDERS_REQUIRING_STORED_CREDENTIAL, resolveChatgptProxyPort, OLLAMA_BASE_URL } = require('../provider-env.cjs')
 // Login shell-out (2026-07-07): spawn/execFile for `codex login` /
-// `ollama signin` children -- the FIRST non-claude binary spawn sites in
-// this codebase (verified by repo-wide grep at design time). Rule for any
-// FUTURE external-binary spawn (Codex security review, 2026-07-07): resolve
-// via resolveBin() below and use a FIXED argv -- the two existing sites are
-// the LOGIN_SPECS table here and main.cjs's ensureCodexProxy().
+// `ollama signin` children -- the ONLY non-claude binary spawn sites in
+// this codebase (verified by repo-wide grep at design time; the chatgpt
+// proxy runs IN-PROCESS via the codex-as-api package, no spawn). Rule for
+// any FUTURE external-binary spawn (Codex security review, 2026-07-07):
+// resolve via resolveBin() below and use a FIXED argv -- the LOGIN_SPECS
+// table is the single existing site.
 const { spawn, execFile } = require('node:child_process')
 const { LOGIN_PROVIDERS, setLoginStatus, getLoginStatus } = require('./login-status.cjs')
 
@@ -1763,10 +1764,11 @@ module.exports = {
   TIMEOUT_MS,
   ROUTER_WIRED,
   // Login shell-out (2026-07-07): same testability rationale as the two
-  // above -- plain const, no Electron dependency. resolveBin is shared with
-  // main.cjs's ensureCodexProxy() (single resolution implementation, not a
-  // second drifting copy); killAllLoginChildren is main.cjs's quit/fatal
-  // cleanup hook (Codex finding #3).
+  // above -- plain const, no Electron dependency. resolveBin exported for
+  // the test harness and any future in-repo consumer (main.cjs's proxy
+  // went in-process and no longer resolves a binary);
+  // killAllLoginChildren is main.cjs's quit/fatal cleanup hook (Codex
+  // finding #3).
   LOGIN_TIMEOUT_MS,
   resolveBin,
   killAllLoginChildren,

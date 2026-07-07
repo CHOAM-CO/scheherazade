@@ -44,7 +44,6 @@ const {
   readHomeChannelId,
   readProviderKey,
   toUnpackedPath,
-  resolveBin,
   killAllLoginChildren,
   AGENT_NAME: FIXED_AGENT_NAME,
   DATA_HOME,
@@ -119,12 +118,13 @@ function fatal(msg, err) {
   } catch (cleanupErr) {
     console.error('[scheherazade/main] fatal(): killAgentSupervisor cleanup itself failed (masking nothing, proceeding to exit):', cleanupErr)
   }
-  // Same Bug-2 reasoning for OUR codex-as-api proxy child (2026-07-07):
-  // app.exit(1) bypasses before-quit, and an orphaned proxy would keep the
-  // port bound across app restarts. No-ops when we never spawned one
-  // (reused/external proxies are never signaled -- ownership token).
+  // Same Bug-2 reasoning for OUR in-process codex-as-api proxy server
+  // (2026-07-07): close it cleanly on the crash path too (it dies with the
+  // process regardless -- this is belt-and-suspenders port release).
+  // No-ops when we never started one; external/reused proxies are
+  // untouchable by construction (in-process handle only).
   try {
-    killCodexProxy('SIGTERM')
+    killCodexProxy()
   } catch (cleanupErr) {
     console.error('[scheherazade/main] fatal(): killCodexProxy cleanup itself failed (masking nothing, proceeding to exit):', cleanupErr)
   }
@@ -389,15 +389,16 @@ let lastFailureMtimeMs = 0
 // else's process).
 let agentSupervisorPid = null
 
-// codex-as-api proxy child (login shell-out / chatgpt provider, 2026-07-07).
-// OWNERSHIP TOKEN: non-null ONLY for a proxy THIS process spawned. A proxy
-// that was already answering on the port (e.g. an externally-supervised
-// instance on a dev machine -- on the MAGI machine, proxy-supervisor.sh runs
-// one 24/7 that other agents depend on) is REUSED and this stays null, so
-// killCodexProxy() can never signal a process we don't own. Same
-// dual-supervisor mutual-kill class as the 07-06 run-agent incident, guarded
-// by construction rather than by a check.
-let codexProxyChild = null
+// codex-as-api proxy, IN-PROCESS (login shell-out / chatgpt provider,
+// 2026-07-07; reworked same day from a spawned child to an in-process
+// express server after confirming the npm package exports createApp()).
+// Non-null ONLY for the http.Server THIS process started via
+// createApp().listen() -- ownership is in-process by construction, so
+// there is no external process we could ever signal by mistake (the
+// dual-supervisor mutual-kill class from the 07-06 run-agent incident is
+// structurally impossible here), no orphan on crash (server dies with the
+// process), and no binary resolution/spawn surface at all.
+let codexProxyServer = null
 
 // Critical B: polls AGENT_FAILFILE (written by run.sh's write_failure() on
 // a quick-fail restart streak, or by channel.mjs's writeFailureMarker() on
@@ -460,30 +461,29 @@ function stopFailurePoll() {
 // exit/error update onboarding/agent-status.cjs's shared status (read by
 // http-server.cjs's GET /api/agent/status) for fail-loud surfacing to the
 // UI, in addition to the existing console logging.
-// ── codex-as-api proxy supervision (chatgpt provider, 2026-07-07) ────────
+// ── codex-as-api proxy, in-process (chatgpt provider, 2026-07-07) ────────
 // The chatgpt provider mode routes the agent at http://localhost:<port>
 // (provider-env.cjs), assuming a codex-as-api proxy is listening. On MAGI's
 // machine that proxy is an always-on external daemon; an end-user Mac has
-// none -- so the app spawns one itself, making "login once -> auto-setup"
-// actually true for chatgpt. Rules:
-//   - FAIL-CLOSED ON UNKNOWN LISTENERS (Codex security review finding #1,
-//     2026-07-07 -- replaces the earlier reuse-first draft): the agent's
-//     entire conversation stream goes to whatever answers on this port, so
-//     an unrecognized listener on the DEFAULT port is treated as hostile
-//     and blocks the agent spawn (returns false), loudly. Reuse is allowed
-//     ONLY when the user EXPLICITLY configured CHATGPT_PROXY_PORT (wizard
-//     advanced field) -- an explicit port is an informed opt-in ("my proxy
-//     lives there"), same trust class as a BYOK base URL. This also keeps
-//     the co-located-MAGI case working (dev sets 18080 explicitly) without
-//     ever signaling or health-checking that external proxy.
-//   - OWNERSHIP: see codexProxyChild's ownership-token comment above. No
-//     teardown/health-restart of anything we didn't spawn, ever.
-//   - NO AUTO-RESPAWN in v1.1: if OUR proxy dies, the agent's calls fail
-//     visibly and run.sh's own restart/backoff ladder re-attempts; next
-//     spawnRealAgentChild() pass re-runs this. Loud log, no silent loop.
-//   - AWAITED by spawnRealAgentChild() (Codex finding #1 follow-through):
-//     returns true only when a proxy we trust (ours, confirmed listening,
-//     or explicit-port opt-in) is up; the agent does not spawn on false.
+// none -- so the app runs one ITSELF, in-process, via the codex-as-api npm
+// package's createApp() (pinned dependency; it reads/refreshes
+// ~/.codex/auth.json on its own). Making "login once -> auto-setup"
+// actually true for chatgpt with ZERO new spawn surface. Rules:
+//   - BIND-FIRST FAIL-CLOSED (supersedes the round-2 lsof identity dance
+//     for our own proxy): we do not pre-check then bind (TOCTOU) -- we
+//     just bind. The kernel arbitrates atomically: EADDRINUSE means
+//     someone else owns the port, and ONLY an explicitly-configured
+//     CHATGPT_PROXY_PORT (informed opt-in, same trust class as a BYOK
+//     base URL) may then be reused after a loopback liveness check;
+//     an occupied DEFAULT port blocks the agent spawn, loudly. lsof is
+//     kept for the diagnostic message only, never for the decision.
+//     This keeps the co-located-MAGI case working (dev opts in to the
+//     fleet proxy explicitly) without ever signaling that external proxy.
+//   - NO AUTO-RESTART in v1.1: if our in-process server errors, the
+//     agent's calls fail visibly and the next spawnRealAgentChild() pass
+//     re-runs this. Loud log, no silent loop.
+//   - AWAITED by spawnRealAgentChild(): returns true only when a proxy we
+//     trust is up; the agent does not spawn on false.
 async function ensureCodexProxy(config) {
   const rawPort = config.CHATGPT_PROXY_PORT
   const explicitPort = rawPort != null && String(rawPort).trim() !== ''
@@ -494,7 +494,7 @@ async function ensureCodexProxy(config) {
     console.error(`[scheherazade/main] ensureCodexProxy: bad port config: ${portResult.error.reason}`)
     return false
   }
-  const port = portResult.port
+  const port = Number(portResult.port)
   const url = `http://localhost:${port}`
   const alive = async () => {
     try {
@@ -504,141 +504,83 @@ async function ensureCodexProxy(config) {
       return false
     }
   }
-  // Listener IDENTITY check (Codex re-review finding #1, 2026-07-07): an
-  // HTTP response is NOT identity -- between our free-port pre-check and
-  // our child's bind, a hostile process can win the port and answer. The
-  // decisive question is "which PID owns the LISTEN socket", asked of the
-  // OS (lsof) AFTER binding, and compared against the child WE hold. This
-  // closes the bind-race TOCTOU: attacker binds first -> lsof pid != our
-  // child pid -> fail closed. Residual (documented, accepted): a same-uid
-  // attacker using SO_REUSEPORT tricks -- but a same-uid attacker can read
-  // ~/.codex/auth.json directly, so that boundary is already gone.
-  const listenerPid = () => {
+  // Diagnostics ONLY (never a decision input -- see BIND-FIRST above).
+  const listenerPidsForLog = () => {
     try {
       const out = execFileSync('/usr/sbin/lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {
         encoding: 'utf8',
         timeout: 3000,
       })
-      const pids = out.split('\n').map((s) => s.trim()).filter(Boolean).map(Number)
-      return pids.length ? pids : null
+      const pids = out.split('\n').map((s) => s.trim()).filter(Boolean)
+      return pids.length ? pids.join(',') : 'unknown'
     } catch {
-      return null // no listener (lsof exits 1) or lsof failed -- treated as "nobody"
+      return 'unknown'
     }
   }
-  if (codexProxyChild) {
-    const pids = listenerPid()
-    if (pids && pids.includes(codexProxyChild.pid) && (await alive())) {
-      log(`ensureCodexProxy: our own proxy child (pid=${codexProxyChild.pid}) owns ${url}`)
+
+  if (codexProxyServer) {
+    if (codexProxyServer.listening && (await alive())) {
+      log(`ensureCodexProxy: our in-process proxy already serves ${url}`)
       return true
     }
-    console.error(
-      `[scheherazade/main] ensureCodexProxy: proxy child handle exists (pid=${codexProxyChild.pid}) but the ${url} listener is ` +
-        `${pids ? `pid(s) ${pids.join(',')}` : 'absent'} -- identity mismatch, not routing the agent at it`
-    )
+    log('ensureCodexProxy: stale in-process proxy server handle -- closing and re-creating')
+    killCodexProxy()
+  }
+
+  let createApp
+  try {
+    ;({ createApp } = require('codex-as-api'))
+  } catch (err) {
+    console.error('[scheherazade/main] ensureCodexProxy: codex-as-api package failed to load (bundling problem?):', err)
     return false
   }
-  {
-    const pids = listenerPid()
-    if (pids) {
+
+  try {
+    codexProxyServer = await new Promise((resolve, reject) => {
+      // Loopback-only bind, deliberately narrower than the CLI's default.
+      const srv = createApp().listen(port, '127.0.0.1')
+      srv.once('listening', () => resolve(srv))
+      srv.once('error', reject)
+    })
+  } catch (err) {
+    if (err && err.code === 'EADDRINUSE') {
       if (explicitPort) {
-        // Opt-in reuse still requires the route to actually answer on
-        // loopback (Codex round-3 finding #1: lsof seeing a listener does
-        // not prove localhost reachability).
         if (await alive()) {
-          log(`ensureCodexProxy: reusing EXPLICITLY-CONFIGURED proxy at ${url} (user opt-in; owning nothing, never signaling it)`)
+          log(`ensureCodexProxy: port ${port} taken; reusing EXPLICITLY-CONFIGURED proxy at ${url} (user opt-in; owning nothing, never signaling it)`)
           return true
         }
-        console.error(`[scheherazade/main] ensureCodexProxy: explicit-port listener (pid(s) ${pids.join(',')}) does not answer at ${url} -- not routing the agent at it`)
+        console.error(`[scheherazade/main] ensureCodexProxy: explicit-port listener (pid(s) ${listenerPidsForLog()}) does not answer at ${url} -- not routing the agent at it`)
         return false
       }
       console.error(
-        `[scheherazade/main] ensureCodexProxy: BLOCKED -- pid(s) ${pids.join(',')} already listen on the default proxy port (${url}) ` +
-          'and were not spawned by this app. Routing the agent at an unrecognized local service would hand it the whole ' +
-          'conversation stream. If that listener is YOUR codex-as-api, set the proxy port explicitly in settings to opt in; ' +
-          'otherwise quit the other process and relaunch.'
+        `[scheherazade/main] ensureCodexProxy: BLOCKED -- pid(s) ${listenerPidsForLog()} already listen on the default proxy port (${url}) ` +
+          'and are not this app. Routing the agent at an unrecognized local service would hand it the whole conversation ' +
+          'stream. If that listener is YOUR codex-as-api, set the proxy port explicitly in settings to opt in; otherwise ' +
+          'quit the other process and relaunch.'
       )
       return false
     }
-  }
-  const binPath = resolveBin('codex-as-api')
-  if (!binPath) {
-    // Honest Path-A failure: no proxy binary anywhere we trust. The
-    // dependency-bootstrap step (or the wizard's install pointer) is the
-    // fix; the agent does not spawn into a dead route.
-    console.error(
-      `[scheherazade/main] ensureCodexProxy: no proxy answering at ${url} and no codex-as-api binary found ` +
-        '(app-managed bin dir, well-known install locations, PATH). The chatgpt-provider agent cannot reach a model until one exists.'
-    )
+    console.error('[scheherazade/main] ensureCodexProxy: in-process proxy failed to start:', err)
     return false
   }
-  log(`ensureCodexProxy: spawning ${binPath} (CODEX_AS_API_PORT=${port})`)
-  const child = spawn(binPath, [], {
-    env: { ...process.env, CODEX_AS_API_PORT: String(port) },
-    stdio: ['ignore', 'pipe', 'pipe'],
-    detached: true, // own pgroup: our SIGTERM at quit reaps it + descendants, and the agent supervisor's group signals never catch it
+
+  // Track post-listen errors loudly (NO AUTO-RESTART rule above).
+  codexProxyServer.on('error', (err) => {
+    console.error('[scheherazade/main] ensureCodexProxy: in-process proxy server error:', err)
   })
-  codexProxyChild = child
-  child.stdout.resume()
-  child.stderr.resume()
-  child.on('error', (err) => {
-    console.error('[scheherazade/main] ensureCodexProxy: spawn failed:', err)
-    if (codexProxyChild === child) codexProxyChild = null
-  })
-  child.on('close', (code) => {
-    log(`ensureCodexProxy: our proxy child exited (code=${code})`)
-    if (codexProxyChild === child) codexProxyChild = null
-  })
-  // Bind confirmation, bounded: poll up to 10s. IDENTITY-checked (Codex
-  // re-review finding #1): the socket owner must be OUR child's pid, not
-  // just "something answering" -- if an attacker won the bind race, our
-  // child dies with EADDRINUSE and this loop fail-closes on the pid
-  // mismatch instead of trusting the attacker's HTTP response.
-  for (let i = 0; i < 20; i++) {
-    const pids = listenerPid()
-    if (pids && pids.includes(child.pid)) {
-      if (await alive()) {
-        log(`ensureCodexProxy: our proxy (pid=${child.pid}) is up at ${url}`)
-        return true
-      }
-    } else if (pids) {
-      console.error(
-        `[scheherazade/main] ensureCodexProxy: BLOCKED -- spawned pid=${child.pid} but pid(s) ${pids.join(',')} own the ${url} listener ` +
-          '(bind race lost / port hijack). Not routing the agent at it.'
-      )
-      reapFailedProxyChild(child)
-      return false
-    }
-    await new Promise((r) => setTimeout(r, 500))
-  }
-  console.error(`[scheherazade/main] ensureCodexProxy: spawned ${binPath} but ${url} still not confirmed after 10s -- not routing the agent at it; check its stderr in the app log`)
-  reapFailedProxyChild(child)
-  return false
+  log(`ensureCodexProxy: in-process proxy up at ${url}`)
+  return true
 }
 
-// Post-spawn failure cleanup (Codex round-3 finding #2): a spawned-but-
-// unconfirmed proxy child must not linger as a stale handle -- it would
-// wedge every future ensureCodexProxy() pass into the handle-vs-listener
-// mismatch branch until app quit. Only ever signals the child WE spawned
-// this pass (ownership token discipline unchanged).
-function reapFailedProxyChild(child) {
+function killCodexProxy() {
+  if (!codexProxyServer) return // in-process only -- an external/reused proxy is never ours to touch
   try {
-    process.kill(-child.pid, 'SIGTERM')
-    log(`reapFailedProxyChild: sent SIGTERM to unconfirmed proxy pgroup (pgid=${child.pid})`)
+    codexProxyServer.close()
+    log('killCodexProxy: in-process proxy server closed')
   } catch (err) {
-    log(`reapFailedProxyChild: SIGTERM to pgid=${child.pid} failed (${err.message}) -- likely already gone`)
+    log(`killCodexProxy: close failed (${err.message}) -- proceeding`)
   }
-  if (codexProxyChild === child) codexProxyChild = null
-}
-
-function killCodexProxy(signal = 'SIGTERM') {
-  if (!codexProxyChild) return // never signals a reused/external proxy -- ownership token is the child handle itself
-  try {
-    process.kill(-codexProxyChild.pid, signal)
-    log(`killCodexProxy: sent ${signal} to our proxy process group (pgid=${codexProxyChild.pid})`)
-  } catch (err) {
-    log(`killCodexProxy: ${signal} to pgid=${codexProxyChild.pid} failed (${err.message}) -- likely already gone`)
-  }
-  codexProxyChild = null
+  codexProxyServer = null
 }
 
 // Reentrancy sentinel (Codex re-review finding #2, 2026-07-07): the awaited
@@ -1130,7 +1072,7 @@ app.on('window-all-closed', () => {
 // side).
 app.on('before-quit', () => {
   killAgentSupervisor('SIGTERM')
-  killCodexProxy('SIGTERM') // no-ops unless WE spawned a proxy (ownership token = child handle)
+  killCodexProxy() // closes OUR in-process proxy server only; external/reused proxies are untouchable by construction
   killAllLoginChildren('SIGTERM') // detached login children must not outlive the app (Codex finding #3)
 })
 
