@@ -362,4 +362,9 @@ module.exports = {
   getBootstrapStatus,
   verifyManagedBin,
   MANAGED_BIN_DIR,
+  // Exported for onboarding/ollama-daemon.cjs (2026-07-07): the reuse-path
+  // identity check verifies an already-listening daemon's executable
+  // against the same pinned Team ID this installer pins at install time --
+  // one identity fact, one place.
+  verifySignedByPinnedTeam,
 }

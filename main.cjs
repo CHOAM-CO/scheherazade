@@ -49,6 +49,7 @@ const {
   DATA_HOME,
 } = require('./onboarding/http-server.cjs')
 const { setAgentStatus } = require('./onboarding/agent-status.cjs')
+const { ensureOllamaDaemon, killOllamaDaemon } = require('./onboarding/ollama-daemon.cjs')
 const { buildProviderEnv, resolveChatgptProxyPort } = require('./provider-env.cjs')
 const { probeUserFolders } = require('./tcc-probe.cjs')
 
@@ -135,6 +136,14 @@ function fatal(msg, err) {
     killAllLoginChildren('SIGTERM')
   } catch (cleanupErr) {
     console.error('[scheherazade/main] fatal(): killAllLoginChildren cleanup itself failed (masking nothing, proceeding to exit):', cleanupErr)
+  }
+  // And for OUR managed ollama daemon child (2026-07-07): unlike the
+  // in-process proxy it would genuinely outlive the process as an orphan.
+  // No-ops when we only REUSED an external daemon (handle stays null).
+  try {
+    killOllamaDaemon('SIGTERM')
+  } catch (cleanupErr) {
+    console.error('[scheherazade/main] fatal(): killOllamaDaemon cleanup itself failed (masking nothing, proceeding to exit):', cleanupErr)
   }
   // Fail loud: a spike that silently limps along teaches us nothing about
   // whether the real thing will work. Exit non-zero so CI/manual runs see
@@ -745,6 +754,24 @@ async function spawnRealAgentChildLocked() {
     }
   }
 
+  // ollama provider: same gate shape as chatgpt above -- a trusted daemon
+  // must be CONFIRMED up before the agent spawns (a bootstrap-installed
+  // Ollama.app has no launched GUI, so nothing else ever starts one; see
+  // onboarding/ollama-daemon.cjs's header for the full rules). Awaited,
+  // fail-closed, 'unknown' code per the enum's never-guess rule.
+  if (provider === 'ollama') {
+    let daemonOk = false
+    try {
+      daemonOk = await ensureOllamaDaemon()
+    } catch (err) {
+      console.error('[scheherazade/main] ensureOllamaDaemon threw unexpectedly:', err)
+    }
+    if (!daemonOk) {
+      setAgentStatus('failed', 'unknown', 'no trusted ollama daemon is available (see app log) -- agent not spawned')
+      return null
+    }
+  }
+
   let token
   try {
     token = readDiscordToken()
@@ -1074,6 +1101,7 @@ app.on('before-quit', () => {
   killAgentSupervisor('SIGTERM')
   killCodexProxy() // closes OUR in-process proxy server only; external/reused proxies are untouchable by construction
   killAllLoginChildren('SIGTERM') // detached login children must not outlive the app (Codex finding #3)
+  killOllamaDaemon('SIGTERM') // OUR managed daemon child only; a reused external daemon is never ours to touch
 })
 
 process.on('uncaughtException', (err) => {
