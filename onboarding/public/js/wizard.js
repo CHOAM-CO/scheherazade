@@ -87,7 +87,101 @@
     $('s0-title').textContent = C.step0.title
     $('s0-body').textContent = C.step0.body
     $('s0-next').textContent = C.step0.button
-    $('s0-next').onclick = () => showStep('1')
+    $('s0-next').onclick = () => {
+      stopFdaPoll() // don't keep polling FDA status after leaving Step 0
+      showStep('1')
+    }
+    renderFdaCard()
+  }
+
+  // ── Full Disk Access card (Step 0, 2026-07-07) ──────────────────────────
+  // macOS offers no programmatic grant and no official status API: the
+  // server's /api/onboarding/fda/status is an explicit heuristic, the pane
+  // deep-link is the most the app can do, and a grant only applies after
+  // relaunch (TCC caches at launch). Step 0's next button is NEVER blocked
+  // on this -- the heuristic can false-negative, and wedging onboarding on
+  // an unverifiable check would be worse than proceeding.
+  let fdaPollTimer = null
+  function stopFdaPoll() {
+    if (fdaPollTimer) {
+      clearInterval(fdaPollTimer)
+      fdaPollTimer = null
+    }
+  }
+  function renderFdaCard() {
+    const F = C.step0.fda
+    const section = document.querySelector('section[data-step="0"]')
+    let card = $('s0-fda-card')
+    if (!card) {
+      card = document.createElement('div')
+      card.id = 's0-fda-card'
+      card.className = 'field'
+      section.insertBefore(card, section.querySelector('.step-actions'))
+    }
+
+    // paneOpened distinguishes "granted since before" (no restart needed
+    // -- the running process was launched under the grant) from "granted
+    // during this session via the pane" (restart required for TCC).
+    let paneOpened = false
+    function paint(granted) {
+      card.innerHTML = ''
+      const title = document.createElement('strong')
+      title.textContent = F.title
+      card.appendChild(title)
+      const body = document.createElement('p')
+      body.className = 'field-hint'
+      card.appendChild(body)
+
+      if (granted && !paneOpened) {
+        body.textContent = F.bodyGranted
+        stopFdaPoll()
+        return
+      }
+      if (granted && paneOpened) {
+        body.textContent = F.bodyGrantedPendingRestart
+        const relaunchBtn = document.createElement('button')
+        relaunchBtn.type = 'button'
+        relaunchBtn.textContent = F.relaunchButton
+        relaunchBtn.onclick = () => {
+          api('/api/onboarding/fda/relaunch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {})
+        }
+        card.appendChild(relaunchBtn)
+        stopFdaPoll()
+        return
+      }
+      body.textContent = F.bodyMissing
+      const openBtn = document.createElement('button')
+      openBtn.type = 'button'
+      openBtn.textContent = F.openButton
+      openBtn.onclick = async () => {
+        paneOpened = true
+        try {
+          await api('/api/onboarding/fda/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+        } catch (err) {
+          console.error('fda/open failed:', err)
+        }
+        // Watch for the toggle flipping while the user is in System
+        // Settings; repaint into the restart prompt when it does.
+        stopFdaPoll()
+        fdaPollTimer = setInterval(async () => {
+          try {
+            const s = await api('/api/onboarding/fda/status')
+            if (s.granted) paint(true)
+          } catch (err) {
+            // transient; keep polling
+          }
+        }, 3000)
+      }
+      card.appendChild(openBtn)
+      const skip = document.createElement('div')
+      skip.className = 'field-hint'
+      skip.textContent = F.skipHint
+      card.appendChild(skip)
+    }
+
+    api('/api/onboarding/fda/status')
+      .then((s) => paint(Boolean(s.granted)))
+      .catch(() => paint(false))
   }
 
   // ── Step 1: provider connect ─────────────────────────────────────────
@@ -154,7 +248,80 @@
       nextBtn.textContent = C.step1.button
       nextBtn.disabled = true
 
-      const panel = document.createElement('div')
+      // Lazy dependency bootstrap (2026-07-07): the provider's CLI is only
+      // downloaded when the user actually picks this tab -- a Claude-only
+      // user never sees a download at all. Dep mapping: chatgpt needs the
+      // codex CLI, ollama needs Ollama.app's CLI.
+      const DEP = provider === 'chatgpt' ? 'codex' : 'ollama'
+      const DEP_DISPLAY = provider === 'chatgpt' ? 'Codex' : 'Ollama'
+      const areaEl = document.createElement('div')
+      extraEl.appendChild(areaEl)
+
+      api('/api/onboarding/bootstrap/status')
+        .then((bs) => {
+          const dep = bs[DEP]
+          if (dep && (dep.present || dep.state === 'installed')) buildLoginUI()
+          else buildInstallUI()
+        })
+        .catch(() => buildLoginUI()) // status probe failed: fall through to login UI; its cli_missing path still guards
+
+      function buildInstallUI() {
+        areaEl.innerHTML = ''
+        const lead = document.createElement('p')
+        lead.textContent = L.install.needed(DEP_DISPLAY)
+        areaEl.appendChild(lead)
+        const installBtn = document.createElement('button')
+        installBtn.type = 'button'
+        installBtn.textContent = L.install.button
+        areaEl.appendChild(installBtn)
+
+        installBtn.onclick = async () => {
+          installBtn.disabled = true
+          statusEl.className = 'status-line pending'
+          statusEl.textContent = L.install.downloading(null)
+          try {
+            await api(`/api/onboarding/bootstrap/${DEP}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+          } catch (err) {
+            statusEl.className = 'status-line failure'
+            statusEl.textContent = C.genericError(err.message)
+            installBtn.disabled = false
+            installBtn.textContent = L.install.retryButton
+            return
+          }
+          stopLoginPoll()
+          loginPollTimer = setInterval(async () => {
+            try {
+              const bs = await api('/api/onboarding/bootstrap/status')
+              const dep = bs[DEP]
+              if (!dep) return
+              if (dep.state === 'downloading') {
+                statusEl.className = 'status-line pending'
+                statusEl.textContent = L.install.downloading(dep.progress)
+              } else if (dep.state === 'installing') {
+                statusEl.className = 'status-line pending'
+                statusEl.textContent = L.install.installing
+              } else if (dep.state === 'installed') {
+                stopLoginPoll()
+                statusEl.className = 'status-line success'
+                statusEl.textContent = L.install.done
+                buildLoginUI()
+              } else if (dep.state === 'failed') {
+                stopLoginPoll()
+                statusEl.className = 'status-line failure'
+                statusEl.textContent = dep.detail || L.install.failed
+                installBtn.disabled = false
+                installBtn.textContent = L.install.retryButton
+              }
+            } catch (err) {
+              // transient poll failure: keep polling
+            }
+          }, 2000)
+        }
+      }
+
+      function buildLoginUI() {
+      areaEl.innerHTML = ''
+      const panel = areaEl
       const leadEl = document.createElement('p')
       leadEl.textContent = P.lead
       panel.appendChild(leadEl)
@@ -189,7 +356,6 @@
         panel.appendChild(field)
         modelInput.oninput = updateNextGate
       }
-      extraEl.appendChild(panel)
 
       let loginState = 'idle'
       function updateNextGate() {
@@ -261,6 +427,7 @@
       // (or an already-logged-in fast path from a previous visit) renders
       // immediately without spawning anything.
       api(`/api/onboarding/login/${provider}/status`).then(applyStatus).catch(() => {})
+      } // end buildLoginUI
     }
 
     // Renders Step 1's lower half for the current activeTab/claudeSubMode.

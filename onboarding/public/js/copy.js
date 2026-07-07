@@ -35,10 +35,26 @@ window.COPY = {
     // macOS-protected-folders sentence was REMOVED on Mino's direct order --
     // onboarding now requests Documents/Downloads/Desktop TCC grants, so
     // that sentence would be false. The folder line below states the new
-    // reality honestly. FDA still deferred (not requested at setup). Source
-    // doc §Step 0 updated in the same pass -- keep verbatim-synced.
+    // reality honestly. FDA: no longer deferred -- requested at setup via
+    // the Step-0 card below (Mino 2026-07-07 16:58 "full disk access도
+    // 온보딩중에 그냥 설정창 켜버리고 받아버리셈"). Source doc §Step 0
+    // updated in the same pass -- keep verbatim-synced.
     body: '3분이면 끝납니다. 모든 정보는 이 컴퓨터에만 저장됩니다. 완성된 에이전트는 매번 허락을 묻지 않고 스스로 일합니다. 문서, 다운로드, 데스크톱 폴더는 에이전트가 직접 읽고 씁니다.',
     button: '시작',
+    // AUTHORED (not in copy source file) -- Full Disk Access card
+    // (2026-07-07, Mino directive above). Honest about the two macOS
+    // constraints: the toggle itself must be clicked by the user (no
+    // programmatic grant exists), and the grant needs an app restart
+    // (TCC caches at process launch).
+    fda: {
+      title: '전체 디스크 접근',
+      bodyMissing: '에이전트가 Mac의 파일을 제대로 다루려면 전체 디스크 접근 권한이 필요합니다. 버튼을 누르면 설정 화면이 열립니다. 목록에서 Scheherazade를 켜주세요.',
+      bodyGrantedPendingRestart: '권한이 켜진 것 같습니다. 적용하려면 앱을 다시 시작해야 합니다.',
+      bodyGranted: '전체 디스크 접근이 켜져 있습니다.',
+      openButton: '설정 열기',
+      relaunchButton: '앱 다시 시작',
+      skipHint: '나중에 설정에서도 켤 수 있습니다.',
+    },
   },
 
   // Step 1 v2 (source file §Step 1, 2026-07-04 01:20 redesign): each
@@ -154,6 +170,19 @@ window.COPY = {
       cancelled: '로그인을 취소했습니다. 다시 시도할 수 있습니다.',
       timeout: '로그인 대기 시간이 지났습니다. 다시 시도해주세요.',
       reloginLabel: '다른 계정으로 로그인',
+      // Lazy dependency install (2026-07-07): shown INSTEAD of the login
+      // button when the provider's CLI is not on this Mac yet -- the app
+      // downloads and verifies it itself (Apple 서명 확인), no Terminal,
+      // no admin password.
+      install: {
+        needed: (name) => `${name} 구성 요소가 이 Mac에 아직 없습니다. 자동으로 설치할 수 있습니다.`,
+        button: '자동 설치',
+        downloading: (pct) => (pct == null ? '내려받는 중입니다' : `내려받는 중입니다 (${pct}%)`),
+        installing: '설치하고 확인하는 중입니다',
+        done: '설치됐습니다. 이제 로그인할 수 있습니다.',
+        failed: '설치에 실패했습니다. 네트워크를 확인하고 다시 시도해주세요.',
+        retryButton: '다시 시도',
+      },
     },
     // Folded-away fallback path. Field-level hint text is unchanged from
     // the pre-v2 copy (still accurate -- only its position in the flow
