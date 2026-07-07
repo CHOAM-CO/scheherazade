@@ -298,7 +298,7 @@ run_loop() {
     log_user 1
     set env(TERM) xterm-256color
     set stty_init "rows 50 cols 200"
-    spawn -noecho $env(CLAUDE_BIN) --model $env(MODEL) --name $env(AGENT_NAME) --dangerously-skip-permissions
+    spawn -noecho $env(CLAUDE_BIN) --model $env(MODEL) --name $env(AGENT_NAME) --dangerously-skip-permissions --dangerously-load-development-channels server:agent-channel
     set timeout 25
     # 2026-07-05 freeze fix (comment kept OUTSIDE expect{} on purpose: a #
     # inside an expect body is parsed as a pattern, not a comment). The BYOK
