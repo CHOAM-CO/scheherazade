@@ -1448,6 +1448,26 @@ async function handleApi(req, res, pathname, onOnboardingComplete) {
         return
       }
     }
+    // Codex finding #6 (login shell-out review 2026-07-07; deferred while the
+    // bootstrap step was unbuilt, closed now that it shipped): chatgpt/ollama
+    // are exempt from the stored-credential gate above BY DESIGN (their auth
+    // lives in the CLIs' own files, never in our Keychain) -- which left this
+    // endpoint accepting completion for them with a login that never
+    // happened. The wizard already gates Next on login success client-side;
+    // this is the server-side check for the crafted-POST surface, same
+    // belt-and-suspenders posture as the ROUTER_WIRED check above. The gate
+    // is the login flow's own success artifact (LOGIN_SPECS), i.e. the
+    // durable half of the "exit 0 AND artifact present" bar -- durable
+    // across app restarts where the in-memory login-status singleton is not,
+    // and it correctly accepts a user whose codex/ollama login predates this
+    // app. For ollama this inherits the identity-key heuristic documented at
+    // LOGIN_SPECS (can false-positive on a never-linked key); the gate is
+    // deliberately no STRICTER than the login step itself claims to be.
+    const loginSpec = LOGIN_SPECS[provider]
+    if (loginSpec && !fs.existsSync(loginSpec.artifact())) {
+      sendJson(res, 400, { error: `${provider} 로그인이 완료되지 않았습니다 -- 1단계에서 로그인을 마친 뒤 설정을 완료해주세요` })
+      return
+    }
     ensureMcpJsonAgentName()
     writeAgentConfig({
       AGENT_NAME,
