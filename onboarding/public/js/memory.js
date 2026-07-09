@@ -219,6 +219,7 @@
     stopConfirm: 'Stop the agent?',
     stopOk: 'Stop',
     cancel: 'Cancel',
+    openDiscord: 'Open Discord',
   }
 
   // Model catalog + provider gate. A model is selectable only if its provider
@@ -313,7 +314,7 @@
       // Stay disabled until pollAgentStatusOnce sees a settled state.
     } catch (err) {
       console.error(`agent ${action} failed:`, err)
-      showToast(GEN)
+      showToast(GEN(err.message))
       setAgentControlsDisabled(false)
     }
   }
@@ -368,6 +369,31 @@
       await fireControl(action)
     }
     $('agent-btn-restart').onclick = () => fireControl('restart')
+
+    // Discord-open button (moved here from wizard renderStep5Live, which the
+    // onboarding auto-nav now skips). Needs BOTH ids: guild from .agent-config
+    // (persisted at discord/validate), channel from .env via the camelCase
+    // ride-along. Installs onboarded before HOME_GUILD_ID persistence existed
+    // won't have the guild id -> button stays hidden until re-onboarding.
+    // Deliberately NOT part of setAgentControlsDisabled: opening a browser tab
+    // is independent of agent lifecycle.
+    const discordBtn = $('agent-btn-discord')
+    if (cfg.HOME_GUILD_ID && cfg.homeChannelId) {
+      discordBtn.textContent = AGENT_COPY.openDiscord
+      discordBtn.classList.remove('hidden')
+      discordBtn.onclick = async () => {
+        try {
+          await api('/api/discord/open', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ guildId: cfg.HOME_GUILD_ID, channelId: cfg.homeChannelId }),
+          })
+        } catch (err) {
+          console.error('discord open failed:', err)
+          showToast(GEN(err.message))
+        }
+      }
+    }
 
     stopAgentPoll()
     pollAgentStatusOnce()

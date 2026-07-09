@@ -1447,7 +1447,11 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     // new route. camelCase key deliberately, to stay visually distinct from
     // readAgentConfig()'s UPPER_SNAKE_CASE on-disk fields -- this one isn't
     // a stored config value, it's a build-time constant.
-    sendJson(res, 200, { ...readAgentConfig(), routerWired: ROUTER_WIRED })
+    // homeChannelId rides along camelCase like routerWired: it's read from
+    // .env (readHomeChannelId), not a readAgentConfig() on-disk field. The
+    // memory pane's Discord-open button needs guild+channel as a pair;
+    // duplicating the channel id into .agent-config would risk drift.
+    sendJson(res, 200, { ...readAgentConfig(), homeChannelId: readHomeChannelId(), routerWired: ROUTER_WIRED })
     return
   }
 
@@ -1620,7 +1624,11 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     }
     storeDiscordTokenVerified(token) // safeStorage only -- never written to .env in plaintext (security review, 2026-07-03)
     writeEnv({ homeChannelId: result.channelId })
-    writeAgentConfig({ ONBOARDING_STEP: '4', ONBOARDING_COMPLETE: '1', ONBOARDING_COMPLETED_AT: new Date().toISOString() })
+    // HOME_GUILD_ID lives in .agent-config (not .env): it's a UI-only value
+    // (building the discord.com/channels/<guild>/<channel> URL) -- the agent
+    // child process never needs it, and .agent-config is what /api/config
+    // already serves, so persisting here exposes it to the client for free.
+    writeAgentConfig({ ONBOARDING_STEP: '4', ONBOARDING_COMPLETE: '1', ONBOARDING_COMPLETED_AT: new Date().toISOString(), HOME_GUILD_ID: result.guildId })
     // BUG 1 fix (agent-lifecycle, 2026-07-03): this is the ONLY place
     // ONBOARDING_COMPLETE flips from unset -> '1' outside of an app
     // restart. Before this fix there was no callback into main.cjs here,
