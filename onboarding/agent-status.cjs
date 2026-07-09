@@ -42,6 +42,13 @@
 //                 pollFailureMarker()). NOT set for an individual `claude`
 //                 crash inside the loop -- those are absorbed by run.sh's
 //                 own restart/backoff ladder and never surface here.
+//   stopped    -- control panel (2026-07-09): the user deliberately turned the
+//                 agent OFF (main.cjs stopAgent()). Distinct from 'failed' (a
+//                 crash) and from 'idle' (never spawned). computeAgentStatus()
+//                 in http-server.cjs gives this HIGHEST precedence so a still-
+//                 fresh .agent-live marker can't read a just-stopped agent back
+//                 as 'live'. A control-panel start/restart moves it off this
+//                 state ('connecting' on the next spawn attempt).
 //
 // Cause CODE (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 1): `code` is
 // a STABLE machine-readable value, only meaningful when state === 'failed'.

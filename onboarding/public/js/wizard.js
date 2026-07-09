@@ -986,7 +986,10 @@
       const result = await api('/api/agent/status')
       if (result.state === 'live') {
         stopS5Poll()
-        renderStep5Live()
+        // Land the user in the steady-state home (/memory) on go-live. Rendering
+        // the success screen here dead-ended it: the only path to /memory was a
+        // fresh GET / (app reboot). renderStep5Live kept below for reuse.
+        window.location.href = '/memory'
         return
       }
       if (result.state === 'failed') {

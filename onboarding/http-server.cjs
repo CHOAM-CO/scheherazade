@@ -247,6 +247,14 @@ const TIMEOUT_MS = 60_000
 function computeAgentStatus() {
   const proc = getAgentStatus()
   const marker = readLivenessMarker()
+  if (proc.state === 'stopped') {
+    // Control panel: user turned the agent off (2026-07-09). HIGHEST
+    // precedence -- must beat a still-fresh .agent-live marker below: the leaf
+    // was just killed, but the marker FILE keeps its last timestamp inside
+    // isMarkerFresh()'s window for a while, so without this a just-stopped
+    // agent would read back 'live'. main.cjs's stopAgent() stamps 'stopped'.
+    return { state: 'stopped', code: null, detail: null, lastHeartbeat: marker ? marker.lastHeartbeat : null }
+  }
   if (proc.state === 'failed') {
     return { state: 'failed', code: proc.code || 'unknown', detail: proc.detail, lastHeartbeat: marker ? marker.lastHeartbeat : null }
   }
@@ -1430,7 +1438,7 @@ function killAllLoginChildren(signal = 'SIGTERM') {
   }
 }
 
-async function handleApi(req, res, pathname, onOnboardingComplete) {
+async function handleApi(req, res, pathname, onOnboardingComplete, agentControls) {
   if (pathname === '/api/config' && req.method === 'GET') {
     // routerWired (PIECE 3, consumer 1): a static capability flag, not
     // proc-state, so it rides along with the rest of the config bag every
@@ -1643,6 +1651,73 @@ async function handleApi(req, res, pathname, onOnboardingComplete) {
     return
   }
 
+  // ── control panel: agent lifecycle (2026-07-09) ─────────────────────────
+  // #5 on/off + #4 restart/model-swap. Delegate to main.cjs's serialized
+  // lifecycle fns (passed in as agentControls; the pkill-race + intentional-
+  // stop handling lives there, see stopAgentAwaited/intentionalStopMode). All
+  // are token-gated like every /api route (X-Onboard-Token check above).
+  //
+  // Fire-and-forget + 202, matching the onboarding-complete pattern above:
+  // stop/restart await run.sh stop (up to ~15s worst case), so the client must
+  // NOT block on that -- it fires the action and polls GET /api/agent/status
+  // (the same poll the Step 5 screen already uses) until state settles
+  // (stopped for #5-off, connecting->live for start/restart). Errors surface
+  // via agent-status ('failed') or the logged .catch, never a hung request.
+  // Overlapping control actions are prevented by the UI (buttons disabled while
+  // an action is in flight), so these are NOT serialized/busy-guarded here
+  // (Mino 2026-07-09, YAGNI) -- the load-bearing safety is main.cjs awaiting
+  // CONFIRMED process death before any respawn.
+  if (pathname === '/api/agent/stop' && req.method === 'POST') {
+    if (!agentControls || typeof agentControls.stopAgent !== 'function') {
+      sendJson(res, 500, { error: 'agent controls not wired' })
+      return
+    }
+    agentControls.stopAgent().catch((err) => console.error('[scheherazade/onboarding] stopAgent threw:', err))
+    sendJson(res, 202, { ok: true })
+    return
+  }
+  if (pathname === '/api/agent/start' && req.method === 'POST') {
+    if (!agentControls || typeof agentControls.startAgent !== 'function') {
+      sendJson(res, 500, { error: 'agent controls not wired' })
+      return
+    }
+    agentControls.startAgent().catch((err) => console.error('[scheherazade/onboarding] startAgent threw:', err))
+    sendJson(res, 202, { ok: true })
+    return
+  }
+  if (pathname === '/api/agent/restart' && req.method === 'POST') {
+    if (!agentControls || typeof agentControls.restartAgent !== 'function') {
+      sendJson(res, 500, { error: 'agent controls not wired' })
+      return
+    }
+    agentControls.restartAgent().catch((err) => console.error('[scheherazade/onboarding] restartAgent threw:', err))
+    sendJson(res, 202, { ok: true })
+    return
+  }
+  // POST /api/agent/model {model} -- #4 model swap: write MODEL to config then
+  // restart so the fresh spawn picks it up. Pattern-validated as defense (the
+  // value becomes `--model <MODEL>` argv). NOTE: per-provider auth gating (a
+  // model is selectable only if its provider is authed) is enforced client-side
+  // by the dropdown today; SERVER-SIDE gating enforcement lands with the
+  // dropdown-wiring slice (needs the model->provider map). The X-Onboard-Token
+  // gate + 127.0.0.1-only bind already bound WHO can reach this route.
+  if (pathname === '/api/agent/model' && req.method === 'POST') {
+    if (!agentControls || typeof agentControls.restartAgent !== 'function') {
+      sendJson(res, 500, { error: 'agent controls not wired' })
+      return
+    }
+    const { model } = await readJsonBody(req)
+    const value = typeof model === 'string' ? model.trim() : ''
+    if (!value || value.length > 200 || !/^[A-Za-z0-9._:/-]+$/.test(value)) {
+      sendJson(res, 400, { error: 'invalid model id' })
+      return
+    }
+    writeAgentConfig({ MODEL: value })
+    agentControls.restartAgent().catch((err) => console.error('[scheherazade/onboarding] restartAgent (model swap) threw:', err))
+    sendJson(res, 202, { ok: true, model: value })
+    return
+  }
+
   if (pathname === '/api/discord/open' && req.method === 'POST') {
     const { guildId, channelId } = await readJsonBody(req)
     if (!guildId || !channelId) {
@@ -1825,7 +1900,7 @@ const ROUTE_TO_FILE = {
 // user's agent starts immediately instead of waiting for the next app
 // launch. Optional (not required) so this file stays independently
 // testable/requireable without an Electron main process wired up.
-function createOnboardingServer(onOnboardingComplete) {
+function createOnboardingServer(onOnboardingComplete, agentControls) {
   seedConfigFromTemplates() // first-run only; no-op once CONFIG_DIR has real files
   ensureMcpJsonAgentName() // correctness fix applied every boot, independent of wizard progress
   ensureClaudeOnboardingDone() // first-ever-claude-run only; no-op once ~/.claude.json already has it
@@ -1890,7 +1965,7 @@ function createOnboardingServer(onOnboardingComplete) {
         }
 
         if (pathname.startsWith('/api/')) {
-          handleApi(req, res, pathname, onOnboardingComplete).catch((err) => respondError(err))
+          handleApi(req, res, pathname, onOnboardingComplete, agentControls).catch((err) => respondError(err))
           return
         }
 

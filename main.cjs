@@ -97,6 +97,7 @@ function log(...args) {
 }
 function fatal(msg, err) {
   console.error(`[scheherazade/main] FATAL: ${msg}`, err ?? '')
+  shuttingDown = true // block any queued control action from respawning post-cleanup
   // Bug 2 fix (agent-lifecycle, 2026-07-03, cross-model adversarial
   // review): app.exit(1) below force-exits WITHOUT emitting 'before-quit',
   // so the killAgentSupervisor('SIGTERM') wired there (see app.on('before-
@@ -601,7 +602,30 @@ function killCodexProxy() {
 // http-server.cjs.
 let agentSpawning = false
 
+// Intentional-stop mode (control-panel stop/restart, 2026-07-09). null means
+// "any supervisor exit is an unexpected crash" -- the historical assumption
+// baked into child.on('exit') below, which stamps 'failed'. The control panel
+// deliberately kills the supervisor (user turned the agent off, or swapped its
+// model), so those paths set this flag FIRST and the exit handler consumes it:
+//   'stop'    -- user turned the agent off: exit -> setAgentStatus('stopped').
+//   'restart' -- model swap / manual restart: exit -> leave status untouched,
+//                the immediately-following spawnRealAgentChild() re-stamps
+//                'connecting'. Reset to null by whichever exit handler consumes
+//                it (single-shot), never left dangling for the next real crash.
+let intentionalStopMode = null
+
+// Set once, irreversibly, when the app is tearing down (fatal() / before-quit).
+// spawnRealAgentChild() checks it and refuses to spawn: without this, a control
+// action awaiting a stop when the user quits could resume AFTER quit cleanup
+// (killAgentSupervisor) already ran and spawn a fresh detached supervisor that
+// outlives the app -- an orphan on the Discord token (Codex red-team, 2026-07-09).
+let shuttingDown = false
+
 async function spawnRealAgentChild() {
+  if (shuttingDown) {
+    log('agent spawn skipped: app is shutting down (quit cleanup already ran)')
+    return null
+  }
   if (agentSpawning) {
     log('agent spawn skipped: another spawn attempt is already in progress')
     return null
@@ -909,21 +933,35 @@ async function spawnRealAgentChildLocked() {
     fs.rmSync(AGENT_PIDFILE, { force: true })
   })
   child.on('exit', (code, signal) => {
-    // run.sh's run_loop() only exits on SIGTERM/SIGINT (trapped, clean) or
-    // an internal `set -euo pipefail` failure -- there is no intentional
-    // "stop the agent" path anywhere in this app yet, so ANY exit here is
-    // unexpected and worth surfacing as failed, not silently re-idle. (A
-    // deliberate app-quit SIGTERM, via killAgentSupervisor() below, is the
-    // one intentional case -- it's still fine to mark 'failed' here since
-    // the app is quitting anyway and no UI will read this status again.)
-    log(`agent child exited code=${code} signal=${signal}`)
-    // Same reasoning as the 'error' handler above -- an unexpected exit of
-    // the SUPERVISOR itself has no dedicated code; 'unknown' fallback.
-    setAgentStatus('failed', 'unknown', `agent process exited unexpectedly (code=${code} signal=${signal})`)
+    // run.sh's run_loop() only exits on SIGTERM/SIGINT (trapped, clean) or an
+    // internal `set -euo pipefail` failure. Historically ANY exit here meant a
+    // crash (stamp 'failed'). The control panel added two DELIBERATE kill paths
+    // (user turned the agent off, or swapped its model); those set
+    // intentionalStopMode before killing this supervisor. Consume it single-
+    // shot. (App-quit via killAgentSupervisor() leaves the flag null and still
+    // lands in the 'failed' branch -- fine, the app is quitting and no UI reads
+    // it again.) No stale-child guard needed: the control paths AWAIT confirmed
+    // death (agentChild nulled here) before respawning, so a new child never
+    // coexists with an unfired old exit.
+    const wasIntentional = intentionalStopMode
+    intentionalStopMode = null
+    log(`agent child exited code=${code} signal=${signal}${wasIntentional ? ` (intentional: ${wasIntentional})` : ''}`)
     agentChild = null
     agentSupervisorPid = null
     stopFailurePoll()
     fs.rmSync(AGENT_PIDFILE, { force: true })
+    if (wasIntentional === 'stop') {
+      // User turned the agent off from the control panel.
+      setAgentStatus('stopped')
+    } else if (wasIntentional === 'restart') {
+      // Model swap / manual restart: restartAgent() re-spawns immediately after
+      // this exit and re-stamps 'connecting'. Leave status untouched so the UI
+      // never flickers through 'failed'/'stopped' mid-restart.
+    } else {
+      // Unexpected exit of the SUPERVISOR itself. Same reasoning as the 'error'
+      // handler above -- no dedicated code; 'unknown' fallback.
+      setAgentStatus('failed', 'unknown', `agent process exited unexpectedly (code=${code} signal=${signal})`)
+    }
   })
 
   return child
@@ -1012,6 +1050,154 @@ function killAgentSupervisor(signal = 'SIGTERM') {
   }
 }
 
+// ── control-panel agent lifecycle (2026-07-09) ────────────────────────────
+// stop / start / restart for the in-app control panel (#4 model swap, #5
+// on/off). The app's FIRST intentional agent-lifecycle paths -- see
+// intentionalStopMode's declaration and child.on('exit')'s branch on it.
+//
+// Why NOT reuse killAgentSupervisor(): it fires `run.sh stop` DETACHED + unref
+// (fire-and-forget, correct for app-quit where nothing waits). A restart MUST
+// serialize -- run.sh's PKILL_PATTERN is `--name AGENT_NAME` (model-agnostic,
+// see run.sh's own comment on why --model was dropped), so a stop still in
+// flight would pkill the freshly-spawned replacement (a same-name new child).
+// stopAgentAwaited() AWAITS run.sh stop to completion (it blocks up to ~15s:
+// touch STOPFLAG, pkill leaf, poll, force-kill, remove PIDFILE) so the pkill
+// window is fully closed before any respawn.
+
+function stopAgentAwaited() {
+  // Resolves (never rejects) when `run.sh stop` has exited -- supervisor + leaf
+  // confirmed dead, STOPFLAG + PIDFILE cleaned up. A failed stop still resolves
+  // (logged) so the caller's next step can't hang on a stop error.
+  return new Promise((resolve) => {
+    let config = {}
+    try {
+      config = readAgentConfig()
+    } catch (err) {
+      console.error('[scheherazade/main] stopAgentAwaited: readAgentConfig failed, using defaults:', err)
+    }
+    const resolved = resolveClaudeBin()
+    const agentName = config.AGENT_NAME || FIXED_AGENT_NAME
+    const model = config.MODEL || 'claude-opus-4-6'
+    let stopper
+    try {
+      stopper = spawn(BASH_BIN, [RUN_SH_PATH, 'stop'], {
+        cwd: DATA_HOME,
+        env: {
+          ...process.env,
+          AGENT_NAME: agentName,
+          MODEL: model,
+          CLAUDE_BIN: resolved ? resolved.bin : (config.CLAUDE_BIN || 'claude'),
+          AGENT_DATA_HOME: DATA_HOME,
+        },
+        stdio: 'ignore',
+      })
+    } catch (err) {
+      console.error('[scheherazade/main] stopAgentAwaited: failed to spawn run.sh stop:', err)
+      resolve(false)
+      return
+    }
+    stopper.on('exit', (code) => {
+      log(`stopAgentAwaited: run.sh stop exited code=${code}`)
+      resolve(code === 0)
+    })
+    stopper.on('error', (err) => {
+      console.error('[scheherazade/main] stopAgentAwaited: run.sh stop process error:', err)
+      resolve(false)
+    })
+  })
+}
+
+// Poll until child.on('exit') has cleared the in-process supervisor handle --
+// i.e. the OS process REALLY died and Node reaped it (the exit handler nulls
+// agentChild). This is the AUTHORITATIVE "supervisor is gone" signal, more
+// reliable than run.sh stop's exit code, which is 0 even when it killed nothing
+// (missing/stale PIDFILE -- Codex red-team, 2026-07-09). On timeout it does NOT
+// null defensively: a still-alive agentChild means the stop did NOT kill it, and
+// nulling would (a) let a restart double-spawn a second supervisor on one
+// Discord token, (b) drop the pid app-quit needs to clean up. Callers treat
+// `false` as "not confirmed dead" and bail to 'failed' rather than respawn.
+function waitForAgentHandleCleared(timeoutMs = 3000, stepMs = 50) {
+  return new Promise((resolve) => {
+    const started = Number(process.hrtime.bigint() / 1000000n)
+    const tick = () => {
+      if (agentChild == null) return resolve(true)
+      const elapsed = Number(process.hrtime.bigint() / 1000000n) - started
+      if (elapsed >= timeoutMs) {
+        log('waitForAgentHandleCleared: timed out; supervisor did NOT confirm exit (handles left intact)')
+        return resolve(false)
+      }
+      setTimeout(tick, stepMs)
+    }
+    tick()
+  })
+}
+
+// NOTE on intentionalStopMode (accepted limitation): the flag is global and
+// reason-blind, so a REAL crash inside a stop/restart's own window (flag set ->
+// run.sh stop actually kills) is consumed as intentional rather than stamped
+// 'failed'. Low harm and self-correcting: the user's intent (stop/restart)
+// matches the outcome anyway, and for a crash-LOOP the flag is single-shot --
+// the very next crash (flag already null) surfaces as 'failed'.
+//
+// Concurrency (Mino 2026-07-09, YAGNI): these actions are deliberately NOT
+// serialized server-side. Overlapping control actions (a user mashing stop/
+// start/model) are prevented at the source -- the control-panel UI disables its
+// buttons while an action is in flight. The single-action safety that IS load-
+// bearing lives right here: each action AWAITS CONFIRMED process death before
+// respawning, because run.sh stop's pkill is `--name` only (model-agnostic) and
+// would kill a too-early replacement even on a lone click. Confirmed-death also
+// makes the respawn strictly ordered after the old child's exit, so no stale-
+// exit-vs-new-handle race exists to guard against.
+
+// #5 OFF: turn the agent off. Marks the stop intentional so the exit handler
+// lands on 'stopped' (not 'failed'), then awaits CONFIRMED death. Only stamps
+// 'stopped' if the supervisor actually exited; otherwise 'failed' (and keeps the
+// handles so quit-cleanup can still target a still-alive supervisor).
+async function stopAgent() {
+  log('control panel: stopping agent (intentional)')
+  intentionalStopMode = 'stop'
+  await stopAgentAwaited()
+  const cleared = await waitForAgentHandleCleared()
+  if (!cleared) {
+    intentionalStopMode = null
+    setAgentStatus('failed', 'unknown', 'stop did not confirm agent exit; it may still be running')
+    return
+  }
+  setAgentStatus('stopped')
+}
+
+// #5 ON: (re)start from a stopped/idle state. spawnRealAgentChild() already
+// guards double-spawn (agentSpawning + agentChild + PIDFILE attach) and refuses
+// during shutdown, so this is a thin wrapper -- but clear any stale intentional
+// flag first so a crash right after start isn't misread as intentional.
+async function startAgent() {
+  log('control panel: starting agent')
+  intentionalStopMode = null
+  await spawnRealAgentChild()
+}
+
+// #4 RESTART / model swap: the model write itself is the caller's job (the API
+// route validates + writeAgentConfig({MODEL}) BEFORE calling here); this just
+// cycles the process so the fresh spawnRealAgentChild() picks up the new
+// config.MODEL. intentional 'restart' -> awaited stop -> CONFIRMED death ->
+// fresh spawn. If death isn't confirmed, do NOT respawn (that would put a second
+// supervisor on one token) -- bail to 'failed'.
+async function restartAgent() {
+  log('control panel: restarting agent (intentional)')
+  intentionalStopMode = 'restart'
+  await stopAgentAwaited()
+  const cleared = await waitForAgentHandleCleared()
+  if (!cleared) {
+    intentionalStopMode = null
+    setAgentStatus('failed', 'unknown', 'restart aborted: prior agent did not confirm exit')
+    return
+  }
+  // Exit handler consumes the flag; ensure it's clear before respawn so the new
+  // child's own future crash isn't misattributed to this restart.
+  intentionalStopMode = null
+  await spawnRealAgentChild()
+}
+
 // BUG 1 fix (agent-lifecycle, 2026-07-03): passed to every
 // startOnboardingServer() call below. spawnRealAgentChild() is itself a
 // no-op-with-a-clear-log-line if onboarding isn't complete / no token yet /
@@ -1031,6 +1217,13 @@ const onOnboardingComplete = () => {
   })
 }
 
+// Control-panel lifecycle fns bundled for injection into the onboarding server's
+// agent routes (POST /api/agent/{stop,start,restart,model}). Same injection
+// channel as onOnboardingComplete: these run in THIS Electron main process and
+// mutate its agent-child state, so they can't live in http-server.cjs -- it
+// calls back into them.
+const agentControls = { stopAgent, startAgent, restartAgent }
+
 // ── boot sequence ────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
   try {
@@ -1046,7 +1239,7 @@ app.whenReady().then(async () => {
     const tccResults = probeUserFolders({ homedir: os.homedir(), log })
     log(`tcc-probe summary: ${JSON.stringify(tccResults)}`)
 
-    const { url } = await startOnboardingServer(onOnboardingComplete)
+    const { url } = await startOnboardingServer(onOnboardingComplete, agentControls)
     createMainWindow(url)
 
     // Long-lived; deliberately not awaited to exit -- see
@@ -1070,7 +1263,7 @@ app.whenReady().then(async () => {
     // re-shows one. Not exercised by this headless spike, kept for
     // correctness since electron-builder targets mac.
     if (BrowserWindow.getAllWindows().length === 0) {
-      startOnboardingServer(onOnboardingComplete)
+      startOnboardingServer(onOnboardingComplete, agentControls)
         .then(({ url }) => createMainWindow(url))
         .catch((err) => fatal('activate: failed to reopen window', err))
     }
@@ -1098,6 +1291,7 @@ app.on('window-all-closed', () => {
 // run.sh's own `trap ... TERM INT` handler removes the PIDFILE on its
 // side).
 app.on('before-quit', () => {
+  shuttingDown = true // stop any queued control action from respawning after this cleanup
   killAgentSupervisor('SIGTERM')
   killCodexProxy() // closes OUR in-process proxy server only; external/reused proxies are untouchable by construction
   killAllLoginChildren('SIGTERM') // detached login children must not outlive the app (Codex finding #3)
