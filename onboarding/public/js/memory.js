@@ -38,12 +38,12 @@
     setTimeout(() => el.classList.remove('visible'), 2200)
   }
 
-  function confirmDelete(message) {
+  function confirmDialog(message, confirmText, cancelText) {
     return new Promise((resolve) => {
       const dialog = $('m-dialog')
       $('m-dialog-text').textContent = message
-      $('m-dialog-confirm').textContent = C.deleteConfirm
-      $('m-dialog-cancel').textContent = C.deleteCancel
+      $('m-dialog-confirm').textContent = confirmText
+      $('m-dialog-cancel').textContent = cancelText
       dialog.classList.remove('hidden')
       const cleanup = (result) => {
         dialog.classList.add('hidden')
@@ -54,6 +54,10 @@
       $('m-dialog-confirm').onclick = () => cleanup(true)
       $('m-dialog-cancel').onclick = () => cleanup(false)
     })
+  }
+
+  function confirmDelete(message) {
+    return confirmDialog(message, C.deleteConfirm, C.deleteCancel)
   }
 
   // Tri-state open_threads status. `status` + `last_touched_at` are the
@@ -196,6 +200,179 @@
     }
   }
 
+  // ── Agent control panel (Slice 2, 2026-07-09) ──────────────────────────
+  // #2 model select / #4 model switch / #5 on-off, on the steady-state home
+  // pane. Copy below is eng placeholder (Mino's copy track localizes). The
+  // server control routes are fire-and-forget 202 -> the client polls
+  // /api/agent/status to observe the transition, and the in-flight guard
+  // (setAgentControlsDisabled) is the ONLY concurrency defense -- the server
+  // is deliberately not serialized (Mino 2026-07-09 YAGNI).
+  const AGENT_COPY = {
+    label: 'AGENT',
+    modelLabel: 'Model',
+    start: 'Start',
+    stop: 'Stop',
+    restart: 'Restart',
+    states: { live: 'Running', connecting: 'Starting…', stopped: 'Stopped', failed: 'Failed', idle: 'Not started' },
+    switchConfirm: (m) => `Switch model to ${m}? The agent will restart.`,
+    switchOk: 'Switch',
+    stopConfirm: 'Stop the agent?',
+    stopOk: 'Stop',
+    cancel: 'Cancel',
+  }
+
+  // Model catalog + provider gate. A model is selectable only if its provider
+  // is the onboarded PROVIDER (single-provider today; claude-subscription
+  // counts as claude). Claude ids use CLI aliases (version-independent).
+  const MODEL_CATALOG = [
+    { id: 'opus', label: 'Claude Opus', providers: ['claude', 'claude-subscription'] },
+    { id: 'sonnet', label: 'Claude Sonnet', providers: ['claude', 'claude-subscription'] },
+    { id: 'kimi-k2.7-code:cloud', label: 'Kimi K2.7 Code', providers: ['ollama'] },
+    { id: 'deepseek-v4-pro:cloud', label: 'DeepSeek V4 Pro', providers: ['ollama'] },
+    { id: 'glm-5.2:cloud', label: 'GLM 5.2', providers: ['ollama'] },
+    { id: 'gpt', label: 'GPT (Codex)', providers: ['chatgpt'] },
+  ]
+
+  const AGENT_POLL_INTERVAL_MS = 2000
+  const MAX_DISABLE_MS = 30000
+  let agentPollTimer = null
+  let agentControlsBusy = false
+  let lastPolledState = null
+  let busyStartState = null
+  let busySawChange = false
+  let busyDeadline = 0
+  let currentProvider = null
+  let currentModel = ''
+
+  function stopAgentPoll() { if (agentPollTimer) { clearTimeout(agentPollTimer); agentPollTimer = null } }
+
+  function renderAgentStatus(state) {
+    const line = $('agent-status-line')
+    line.textContent = AGENT_COPY.states[state] || state
+    line.className = 'status-line'
+    if (state === 'live') line.classList.add('success')
+    else if (state === 'failed') line.classList.add('failure')
+    else if (state === 'connecting' || state === 'idle') line.classList.add('pending')
+    const running = state === 'live' || state === 'connecting'
+    const toggle = $('agent-btn-startstop')
+    toggle.textContent = running ? AGENT_COPY.stop : AGENT_COPY.start
+    toggle.dataset.action = running ? 'stop' : 'start'
+    $('agent-btn-restart').classList.toggle('hidden', !running)
+  }
+
+  function setAgentControlsDisabled(disabled) {
+    agentControlsBusy = disabled
+    if (disabled) {
+      // Snapshot the state the action fired from + arm the backstop deadline.
+      busyStartState = lastPolledState
+      busySawChange = false
+      busyDeadline = Date.now() + MAX_DISABLE_MS
+    }
+    $('agent-model-select').disabled = disabled
+    $('agent-btn-startstop').disabled = disabled
+    $('agent-btn-restart').disabled = disabled
+  }
+
+  async function pollAgentStatusOnce() {
+    try {
+      const result = await api('/api/agent/status')
+      renderAgentStatus(result.state)
+      lastPolledState = result.state
+      if (agentControlsBusy) {
+        // Button-disable is the ONLY concurrency defense (server isn't
+        // serialized), so it must hold for the WHOLE action, not just to the
+        // first poll. The polled status is noisy mid-transition: a stale-fresh
+        // .agent-live marker still reads 'live' for seconds into a stop/restart,
+        // and a just-started agent reads 'stopped' until its spawn stamps
+        // 'connecting'. Re-enabling on "state != connecting" alone would release
+        // mid-action and let a second click race the first (intentionalStopMode
+        // is a single global flag -- a Stop landing during a Restart corrupts
+        // it). So: require having OBSERVED the state leave what it was when the
+        // action fired (busySawChange) before accepting a terminal state -- the
+        // "wait for the process to actually turn over" Mino asked for. The
+        // deadline is the backstop so a missed transition can't lock forever.
+        if (result.state !== busyStartState) busySawChange = true
+        const settled = result.state !== 'connecting' && busySawChange
+        if (settled || Date.now() >= busyDeadline) setAgentControlsDisabled(false)
+      }
+    } catch (err) {
+      console.error('agent status poll failed:', err)
+    }
+    agentPollTimer = setTimeout(pollAgentStatusOnce, AGENT_POLL_INTERVAL_MS)
+  }
+
+  async function fireControl(action, body) {
+    if (agentControlsBusy) return
+    setAgentControlsDisabled(true)
+    try {
+      await api(`/api/agent/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: body ? JSON.stringify(body) : undefined,
+      })
+      // Stay disabled until pollAgentStatusOnce sees a settled state.
+    } catch (err) {
+      console.error(`agent ${action} failed:`, err)
+      showToast(GEN)
+      setAgentControlsDisabled(false)
+    }
+  }
+
+  function populateModelSelect(model) {
+    const sel = $('agent-model-select')
+    sel.innerHTML = ''
+    // If the live MODEL isn't a catalog id (e.g. a pinned 'claude-opus-4-6'),
+    // surface it as-is so the dropdown reflects reality, not a guess.
+    if (model && !MODEL_CATALOG.some((m) => m.id === model)) {
+      const opt = document.createElement('option')
+      opt.value = model
+      opt.textContent = `${model} (current)`
+      opt.selected = true
+      sel.appendChild(opt)
+    }
+    for (const m of MODEL_CATALOG) {
+      const opt = document.createElement('option')
+      opt.value = m.id
+      opt.textContent = m.label
+      if (!currentProvider || !m.providers.includes(currentProvider)) opt.disabled = true
+      if (m.id === model) opt.selected = true
+      sel.appendChild(opt)
+    }
+  }
+
+  async function renderAgentControl() {
+    $('cat-agent-control-label').textContent = AGENT_COPY.label
+    $('agent-model-label').textContent = AGENT_COPY.modelLabel
+
+    let cfg = {}
+    try { cfg = await api('/api/config') } catch (err) { console.error(err) }
+    currentProvider = cfg.PROVIDER || null
+    currentModel = cfg.MODEL || ''
+    populateModelSelect(currentModel)
+
+    $('agent-model-select').onchange = async (e) => {
+      const model = e.target.value
+      if (model === currentModel) return
+      const ok = await confirmDialog(AGENT_COPY.switchConfirm(model), AGENT_COPY.switchOk, AGENT_COPY.cancel)
+      if (!ok) { e.target.value = currentModel; return }
+      currentModel = model
+      await fireControl('model', { model })
+    }
+
+    $('agent-btn-startstop').onclick = async () => {
+      const action = $('agent-btn-startstop').dataset.action
+      if (action === 'stop') {
+        const ok = await confirmDialog(AGENT_COPY.stopConfirm, AGENT_COPY.stopOk, AGENT_COPY.cancel)
+        if (!ok) return
+      }
+      await fireControl(action)
+    }
+    $('agent-btn-restart').onclick = () => fireControl('restart')
+
+    stopAgentPoll()
+    pollAgentStatusOnce()
+  }
+
   async function init() {
     try {
       const cfg = await api('/api/config')
@@ -212,6 +389,7 @@
       $(`cat-${table}-label`).textContent = C.categories[table].label
     }
 
+    renderAgentControl()
     await loadSessionGroup()
     for (const table of ['user_facts', 'open_threads', 'corrections', 'preferences']) {
       loadCategory(table)

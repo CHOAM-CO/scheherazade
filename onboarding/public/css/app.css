@@ -219,6 +219,35 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   margin-bottom: 0.6rem;
 }
 
+/* Agent control panel (Slice 2, 2026-07-09) */
+.agent-control-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+}
+.agent-control-row label {
+  font-size: 0.85rem;
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+.agent-control-row select {
+  flex: 1;
+  font-family: inherit;
+  font-size: 0.95rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-raised);
+  color: var(--fg);
+}
+.agent-control-row select:focus { outline: none; border-color: var(--accent); }
+.agent-control-row select:disabled { opacity: 0.5; cursor: default; }
+.agent-control-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
 .entry-row {
   display: flex;
   justify-content: space-between;
