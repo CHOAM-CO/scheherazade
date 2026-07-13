@@ -489,12 +489,39 @@ function ensureSettingsLocalAdditions() {
   }
 }
 
+// Subagent definitions (v0.0.4 item b): templates/agents/*.md ->
+// CONFIG_DIR/.claude/agents/. Per-file seed-if-absent, same contract as the
+// other seeds -- a user who edited a definition keeps their edit; NEW
+// definitions added in later app versions still arrive because absence is
+// checked per file, not per directory.
+const TEMPLATE_AGENTS_DIR = path.join(REPO_ROOT, 'onboarding', 'templates', 'agents')
+const AGENTS_DIR = path.join(CONFIG_DIR, '.claude', 'agents')
+
+function seedAgentDefinitions() {
+  if (!fs.existsSync(TEMPLATE_AGENTS_DIR)) return
+  let entries
+  try {
+    entries = fs.readdirSync(TEMPLATE_AGENTS_DIR).filter((f) => f.endsWith('.md'))
+  } catch (err) {
+    console.error(`[scheherazade/onboarding] cannot read agent templates dir: ${err.message}`)
+    return
+  }
+  for (const name of entries) {
+    const target = path.join(AGENTS_DIR, name)
+    if (fs.existsSync(target)) continue
+    fs.mkdirSync(AGENTS_DIR, { recursive: true })
+    fs.copyFileSync(path.join(TEMPLATE_AGENTS_DIR, name), target)
+    log(`seeded subagent definition ${name} into .claude/agents`)
+  }
+}
+
 function seedConfigFromTemplates() {
   seedConfigFromTemplate(TEMPLATE_MCP_JSON_PATH, MCP_JSON_PATH)
   seedConfigFromTemplate(TEMPLATE_ENV_PATH, ENV_PATH)
   seedConfigFromTemplate(TEMPLATE_AGENT_CONFIG_PATH, AGENT_CONFIG_PATH)
   seedSettingsLocal()
   ensureSettingsLocalAdditions()
+  seedAgentDefinitions()
 }
 
 // Global Claude Code CLI first-run state -- NOT part of CONFIG_DIR, and NOT

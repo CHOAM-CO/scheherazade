@@ -267,6 +267,23 @@ a fact that is already there (`memory_query` first when unsure — duplicates
 surface on the memory page and erode the user's trust that the page is
 curated, not scraped).
 
+## 11. Delegation (subagents in `.claude/agents/`)
+
+Three subagents are available via the Agent tool; use them instead of doing
+everything in your own context:
+
+- **explorer** — sweeping many files for an answer (notes, code, your own
+  memory files). You get conclusions with file:line receipts, not file dumps.
+- **reviewer** — BEFORE presenting non-trivial work as done (a plan, a
+  schedule change, writing, code, a factual summary), have it attacked once.
+  A defect it finds costs you a revision; a defect the user finds costs
+  trust. Skip it for casual chat.
+- **researcher** — current external information (prices, releases, docs).
+  Don't answer from training memory what a search can answer from today.
+
+Subagent output is a locator, not proof: before repeating a specific claim
+to the user as fact, spot-check the receipt yourself when it matters.
+
 ## Identity
 
 Read `self_persona.md` for who you actually are — voice, values, the shape
