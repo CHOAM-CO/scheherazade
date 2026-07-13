@@ -391,7 +391,55 @@ discord.once(Events.ClientReady, (c) => {
   setInterval(() => {
     writeLivenessMarker().catch((err) => log(`liveness heartbeat write failed: ${err.message}`))
   }, LIVENESS_HEARTBEAT_MS).unref()
+  startShutdownRequestWatcher()
 })
+
+// ── graceful shutdown (v0.0.4, Mino 2026-07-13 19:33 directive) ─────────────
+// App quit should not kill the agent mid-thought: main.cjs writes
+// DATA_HOME/.shutdown-request, THIS watcher injects a [SYSTEM] turn telling
+// the agent to flush checkpoint/session notes and touch .shutdown-ack, and
+// main.cjs proceeds on ack or on its 75s hard timeout (a hung agent must
+// never hold quit hostage -- the timeout lives on main.cjs's side so a dead
+// MCP server can't block it either). File-based seam on purpose: channel.mjs
+// is a grandchild (claude CLI's MCP child), no IPC channel to the Electron
+// main process exists.
+// The injected content deliberately contains "답장하지 마" -- that phrase is a
+// stop-reply-guard SKIP_PATTERN, so the guard will not force a Discord reply
+// out of a shutdown-flush turn.
+const SHUTDOWN_REQUEST_PATH = path.join(DATA_HOME, '.shutdown-request')
+const SHUTDOWN_ACK_PATH = path.join(DATA_HOME, '.shutdown-ack')
+const SHUTDOWN_POLL_MS = 2000
+let lastShutdownReqMtimeMs = 0
+
+function startShutdownRequestWatcher() {
+  setInterval(async () => {
+    let st
+    try {
+      st = await fs.stat(SHUTDOWN_REQUEST_PATH)
+    } catch {
+      return // no request pending
+    }
+    if (st.mtimeMs <= lastShutdownReqMtimeMs) return // already forwarded this request
+    lastShutdownReqMtimeMs = st.mtimeMs
+    try {
+      await mcp.notification({
+        method: 'notifications/claude/channel',
+        params: {
+          content:
+            '[SYSTEM] 종료 감지됨 -- 사용자가 앱을 종료하는 중이다. 지금 바로: ' +
+            '(1) checkpoint.md와 오늘 세션노트를 최신 상태로 덮어써 (다음 부팅의 네가 여기서 이어받는다), ' +
+            '(2) 이번 세션에서 memory_write 안 한 same-turn 기록이 있으면 지금 써, ' +
+            `(3) 끝나면 Bash로 \`touch "${SHUTDOWN_ACK_PATH}"\` 실행. ` +
+            '디스코드에 답장하지 마, 파일 작업만 하고 끝내. 최대 60초 안에 마무리해라, 그 뒤엔 앱이 그냥 종료된다.',
+          meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() },
+        },
+      })
+      log('shutdown-request forwarded into session')
+    } catch (err) {
+      log(`shutdown-request notification failed: ${err.message}`)
+    }
+  }, SHUTDOWN_POLL_MS).unref()
+}
 discord.on(Events.Error, (err) => log('Discord client error:', err.message))
 
 // ── Thinking indicator (Mino 07-13 click-test feedback: MAGI-style 🤔

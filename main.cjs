@@ -1286,16 +1286,62 @@ app.on('window-all-closed', () => {
   }
 })
 
+// Graceful shutdown (v0.0.4, Mino 2026-07-13 19:33 directive): quit no
+// longer kills the agent mid-thought. First quit attempt writes
+// DATA_HOME/.shutdown-request; channel.mjs's watcher injects a [SYSTEM]
+// turn telling the agent to flush checkpoint/session-notes/memory and touch
+// .shutdown-ack; we proceed on ack or on the HARD timeout -- a hung agent
+// must never hold quit hostage (my design weld, posted to home 19:4x). The
+// deepseek swap earlier today live-proved WHY: continuity survived the swap
+// precisely because the agent wrote checkpoint right before it.
+// Only attempted when agentChild is non-null: an ADOPTED supervisor (app
+// reinstalled over a live agent, run.sh "already running" path) has
+// agentChild == null and takes the immediate-kill path exactly as before --
+// no regression, just no grace (v1 scope).
+const SHUTDOWN_REQUEST_PATH = path.join(DATA_HOME, '.shutdown-request')
+const SHUTDOWN_ACK_PATH = path.join(DATA_HOME, '.shutdown-ack')
+const SHUTDOWN_GRACE_MS = 75 * 1000
+const SHUTDOWN_ACK_POLL_MS = 500
+let gracefulQuitDone = false
+
+async function requestAgentShutdownGrace() {
+  // Stale ack from a previous cycle must not satisfy this cycle instantly.
+  try { fs.unlinkSync(SHUTDOWN_ACK_PATH) } catch { /* absent = fine */ }
+  fs.writeFileSync(SHUTDOWN_REQUEST_PATH, JSON.stringify({ requested_at: new Date().toISOString() }) + '\n')
+  log(`graceful quit: shutdown-request written, waiting up to ${SHUTDOWN_GRACE_MS / 1000}s for agent ack`)
+  const deadline = Date.now() + SHUTDOWN_GRACE_MS
+  while (Date.now() < deadline) {
+    if (fs.existsSync(SHUTDOWN_ACK_PATH)) {
+      log('graceful quit: agent acked shutdown flush')
+      break
+    }
+    await new Promise((r) => setTimeout(r, SHUTDOWN_ACK_POLL_MS))
+  }
+  if (!fs.existsSync(SHUTDOWN_ACK_PATH)) log('graceful quit: grace window expired without ack, proceeding with shutdown')
+  // Always clean both markers so the next cycle starts fresh.
+  try { fs.unlinkSync(SHUTDOWN_REQUEST_PATH) } catch { /* already gone */ }
+  try { fs.unlinkSync(SHUTDOWN_ACK_PATH) } catch { /* already gone */ }
+}
+
 // Fix C (agent-lifecycle model-divergent review, 2026-07-03): a real
 // Cmd+Q / Quit used to leave the agent supervisor running with no cleanup
 // at all -- it became an orphan (still alive, still holding the Discord
 // token, PIDFILE now stale from this process's perspective since the
 // in-memory `agentChild` reference is gone). before-quit fires once per
-// quit attempt, before windows close; synchronous signal-and-continue is
-// enough here (no async work to await -- SIGTERM is fire-and-forget, and
-// run.sh's own `trap ... TERM INT` handler removes the PIDFILE on its
-// side).
-app.on('before-quit', () => {
+// quit attempt, before windows close; the kill path stays synchronous
+// signal-and-continue (SIGTERM is fire-and-forget, and run.sh's own
+// `trap ... TERM INT` handler removes the PIDFILE on its side). The
+// graceful branch above it defers the quit ONCE via preventDefault, then
+// re-enters with gracefulQuitDone set.
+app.on('before-quit', (event) => {
+  if (!gracefulQuitDone && agentChild != null) {
+    event.preventDefault()
+    gracefulQuitDone = true
+    requestAgentShutdownGrace()
+      .catch((err) => console.error('[scheherazade/main] graceful quit path threw (proceeding with quit):', err))
+      .finally(() => app.quit())
+    return
+  }
   shuttingDown = true // stop any queued control action from respawning after this cleanup
   killAgentSupervisor('SIGTERM')
   killCodexProxy() // closes OUR in-process proxy server only; external/reused proxies are untouchable by construction
