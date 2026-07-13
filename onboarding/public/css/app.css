@@ -320,3 +320,9 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 }
 
 .hidden { display: none !important; }
+
+/* Step 4 connect buttons (Mino 07-13 click-test feedback) */
+.connect-list { display: flex; flex-direction: column; gap: 0.75rem; margin-top: 1.5rem; }
+.connect-item { display: flex; align-items: center; gap: 0.75rem; }
+.connect-item button { min-width: 11rem; }
+.connect-note { color: var(--fg-dim); font-size: 0.85rem; }

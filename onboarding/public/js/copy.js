@@ -243,7 +243,23 @@ window.COPY = {
   step4: {
     title: '대화할 곳을 연결하세요',
     body: (name) => `${name}는 Discord에서 대화합니다. 봇을 하나 만들어 연결합니다. 5분 걸립니다.`,
-    startButton: '튜토리얼 시작',
+    // Mino 07-13 click-test: three platform buttons, each a redirect.
+    // Discord keeps the real flow (opens the dev portal AND enters the
+    // existing tutorial -- redirect alone would kill the guided steps,
+    // 2FA warning and Sirin's friction fixes included). Slack/Telegram
+    // have NO backend yet (settings.js Slack placeholder is the only
+    // trace), so their shared note says so -- otherwise the user makes
+    // a token and finds no field to paste it into.
+    connectDiscord: 'Connect Discord',
+    connectDiscordNote: '봇 만들기 페이지가 열리고, 여기에 단계별 안내가 시작됩니다',
+    connectSlack: 'Connect Slack',
+    connectTelegram: 'Connect Telegram',
+    supportSoonNote: '봇 만들기 페이지만 열립니다 — 연결은 지원 예정',
+    links: {
+      discord: 'https://discord.com/developers/applications',
+      slack: 'https://api.slack.com/apps',
+      telegram: 'https://t.me/botfather',
+    },
     // De-lied (source file, Step 4 note): no local-chat fallback exists
     // (Mino rejected it 13:55; localhost is onboarding-only). This button
     // only saves settings and parks the user on the waiting screen.

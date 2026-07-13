@@ -152,16 +152,24 @@ if (!HOME_CHANNEL_ID) {
   process.exit(1)
 }
 
-// ── KST timestamps ──────────────────────────────────────────────────────────
+// ── Local-time timestamps ───────────────────────────────────────────────────
 // new Date().toISOString() is UTC; the model reads this as "now", so it needs
-// to be explicit KST (UTC+9), not silently off by up to 9 hours.
-function kstISO(ms = Date.now()) {
-  return new Date(ms + 9 * 3600_000).toISOString().replace('Z', '+09:00')
+// an explicit local-time offset. Was hardcoded KST (+9) -- Mino 07-13
+// click-test: "하드코딩하지말고 시스템 시간 가져와라". Offset now comes from
+// the system timezone, so the app is correct wherever the user runs it.
+function localISO(ms = Date.now()) {
+  const d = new Date(ms)
+  const offMin = -d.getTimezoneOffset()
+  const sign = offMin >= 0 ? '+' : '-'
+  const abs = Math.abs(offMin)
+  const hh = String(Math.trunc(abs / 60)).padStart(2, '0')
+  const mm = String(abs % 60).padStart(2, '0')
+  return new Date(ms + offMin * 60_000).toISOString().replace('Z', `${sign}${hh}:${mm}`)
 }
-function kstWeekday(ms = Date.now()) {
-  return new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: 'Asia/Seoul' }).format(new Date(ms))
+function localWeekday(ms = Date.now()) {
+  return new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(new Date(ms))
 }
-const kstNow = () => `${kstISO()} (${kstWeekday()})`
+const localNow = () => `${localISO()} (${localWeekday()})`
 
 // ── safe mentions — block @everyone/@here on every send ────────────────────
 const SAFE_MENTIONS = { parse: ['users', 'roles'] }
@@ -297,6 +305,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     const chunks = []
     for (let i = 0; i < text.length; i += 1900) chunks.push(text.slice(i, i + 1900))
     for (const chunk of chunks) await ch.send({ content: chunk, allowedMentions: SAFE_MENTIONS })
+    clearThinking(channelId).catch((err) => log('thinking reaction clear failed:', err.message))
     return { content: [{ type: 'text', text: `sent to ${channelId} (${chunks.length} message${chunks.length > 1 ? 's' : ''})` }] }
   }
 
@@ -316,7 +325,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         author: m.member?.displayName || m.author.username,
         authorId: m.author.id,
         content: m.content,
-        timestamp: kstISO(m.createdTimestamp),
+        timestamp: localISO(m.createdTimestamp),
         attachments: [...m.attachments.values()].map((a) => a.url),
       }))
     return { content: [{ type: 'text', text: JSON.stringify({ channelId, count: result.length, messages: result }, null, 2) }] }
@@ -344,10 +353,46 @@ discord.once(Events.ClientReady, (c) => {
 })
 discord.on(Events.Error, (err) => log('Discord client error:', err.message))
 
+// ── Thinking indicator (Mino 07-13 click-test feedback: MAGI-style 🤔
+// reaction while the agent composes, removed when the reply lands, plus a
+// one-shot typing indicator for the instant cue). Both are best-effort --
+// a failed reaction must never block message forwarding. ─────────────────
+const THINKING_EMOJI = '🤔'
+const pendingThinking = new Map() // channelId -> Set<messageId>
+
+function addThinking(message) {
+  message.channel.sendTyping().catch(() => {})
+  message
+    .react(THINKING_EMOJI)
+    .then(() => {
+      if (!pendingThinking.has(message.channelId)) pendingThinking.set(message.channelId, new Set())
+      pendingThinking.get(message.channelId).add(message.id)
+    })
+    .catch((err) => log('thinking reaction add failed:', err.message))
+}
+
+async function clearThinking(channelId) {
+  const msgSet = pendingThinking.get(channelId)
+  if (!msgSet || msgSet.size === 0) return
+  pendingThinking.delete(channelId)
+  for (const msgId of msgSet) {
+    try {
+      const ch = await fetchTextChannel(channelId)
+      const msg = await ch.messages.fetch(msgId)
+      const reaction = msg.reactions.cache.get(THINKING_EMOJI)
+      if (reaction) await reaction.users.remove(discord.user.id)
+    } catch (err) {
+      log('thinking reaction remove failed:', err.message)
+    }
+  }
+}
+
 discord.on(Events.MessageCreate, async (message) => {
   try {
     if (message.author.bot) return
     if (!message.channel.isDMBased() && message.channelId !== HOME_CHANNEL_ID) return
+
+    addThinking(message)
 
     const localPaths = []
     for (const img of extractImages(message)) {
@@ -365,7 +410,7 @@ discord.on(Events.MessageCreate, async (message) => {
       method: 'notifications/claude/channel',
       params: {
         content,
-        meta: { sender, channelId: message.channelId, authorId: message.author.id, timestamp: kstNow() },
+        meta: { sender, channelId: message.channelId, authorId: message.author.id, timestamp: localNow() },
       },
     })
   } catch (err) {

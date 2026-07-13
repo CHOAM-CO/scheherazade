@@ -10,7 +10,11 @@
   const GEN = window.COPY.genericError
 
   function $(id) { return document.getElementById(id) }
-  function isoDate(iso) { return iso ? String(iso).slice(0, 10) : '' }
+  // Local-time rendering (Mino 07-13 click-test: raw ISO slicing displayed
+  // UTC dates/times). 'sv-SE' fixes only the FORMAT (YYYY-MM-DD / HH:MM);
+  // the timezone always comes from the system.
+  function isoDate(iso) { return iso ? new Date(iso).toLocaleDateString('sv-SE') : '' }
+  function localTime(iso) { return iso ? new Date(iso).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' }) : '' }
 
   async function api(path, options) {
     const opts = options ? { ...options } : {}
@@ -191,7 +195,7 @@
       valueEl.textContent = `${tableLabel} · ${eventLabel}${preview}`
       const metaEl = document.createElement('div')
       metaEl.className = 'entry-meta'
-      const time = ev.at ? String(ev.at).slice(11, 16) : ''
+      const time = localTime(ev.at)
       metaEl.textContent = time
       main.appendChild(valueEl)
       main.appendChild(metaEl)

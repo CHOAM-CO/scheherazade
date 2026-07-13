@@ -714,16 +714,28 @@
     }
   }
 
-  // ── Step 4: Discord intro ───────────────────────────────────────────
+  // ── Step 4: connect platform (Mino 07-13: three connect buttons) ────
   function renderStep4() {
     $('s4-title').textContent = C.step4.title
     $('s4-body').textContent = C.step4.body(state.displayName)
-    $('s4-start').textContent = C.step4.startButton
+    $('s4-connect-discord').textContent = C.step4.connectDiscord
+    $('s4-discord-note').textContent = C.step4.connectDiscordNote
+    $('s4-connect-slack').textContent = C.step4.connectSlack
+    $('s4-slack-note').textContent = C.step4.supportSoonNote
+    $('s4-connect-telegram').textContent = C.step4.connectTelegram
+    $('s4-telegram-note').textContent = C.step4.supportSoonNote
     $('s4-later').textContent = C.step4.laterButton
-    $('s4-start').onclick = () => {
+    $('s4-connect-discord').onclick = () => {
+      window.open(C.step4.links.discord, '_blank', 'noopener')
       state.tutorialIndex = -1 // 2FA pre-warning intro, before step 1 of 6
       renderTutorialStep()
       showStep('4b')
+    }
+    $('s4-connect-slack').onclick = () => {
+      window.open(C.step4.links.slack, '_blank', 'noopener')
+    }
+    $('s4-connect-telegram').onclick = () => {
+      window.open(C.step4.links.telegram, '_blank', 'noopener')
     }
     $('s4-later').onclick = () => {
       window.location.href = '/waiting'
