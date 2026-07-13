@@ -155,11 +155,26 @@ const db = mod.initDb()
 //    night-cycle reads existed, ordinary boot never read the journal at all.
 //    This pins the pair -- whoever removes the reader breaks the writer's
 //    promise HERE, not silently in some future install.
+//
+//    Contract floor (Skia review, 07-14): what live verification must assert
+//    is that the boot-time read HAPPENED with a window that covers
+//    YESTERDAY's entry -- that is the minimum that makes the shutdown
+//    promise true. The "last 3 days" in CLAUDE.md §1 is a default
+//    instruction, not the floor; an instruction may be more specific than
+//    the contract it serves. This static check only pins the pair's
+//    existence; the floor is checked against a real session transcript.
 {
   const repoRoot = fileURLToPath(new URL('..', import.meta.url))
   const claudeMd = fs.readFileSync(path.join(repoRoot, 'CLAUDE.md'), 'utf8')
   const restoreSection = claudeMd.split(/^## 2\./m)[0]
+  // Two pins, not one (Skia's split): the first is the shutdown promise's
+  // minimum (a reader exists at all); the second is the procedure's own
+  // instruction (the 3-day default). Without the second, a watered-down §1
+  // that still says "journal_read" somewhere would pass the pair check while
+  // weakening the procedure -- changing the default is allowed, but it must
+  // touch this test in the same diff.
   check('CLAUDE.md restore procedure (§1) points the next boot at journal_read', /journal_read/.test(restoreSection))
+  check('§1 states the read window default (last 3 days), not just the tool name', /last 3 days/.test(restoreSection))
 
   const channel = fs.readFileSync(path.join(repoRoot, 'channel.mjs'), 'utf8')
   check('shutdown inject still asks for journal_write (the writer half of the pair)', /journal_write/.test(channel))
