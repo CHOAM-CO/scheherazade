@@ -186,10 +186,13 @@ const localNow = () => `${localISO()} (${localWeekday()})`
 // ── safe mentions — block @everyone/@here on every send ────────────────────
 const SAFE_MENTIONS = { parse: ['users', 'roles'] }
 
-// ── image attachments -> /tmp ───────────────────────────────────────────────
+// ── image attachments -> the OS temp dir ────────────────────────────────────
+// os.tmpdir(), not a /tmp literal: /tmp does not exist on Windows, and this
+// file is in the Windows-port lane (docs/windows-port-scoping.md, Phase 2 --
+// "do first in this lane"). Same behavior on mac (os.tmpdir() = $TMPDIR).
 const IMAGE_MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' }
 const IMAGE_MIME_SET = new Set(Object.values(IMAGE_MIME))
-const TMP_IMAGE_DIR = `/tmp/agent-portable-${AGENT_NAME}`
+const TMP_IMAGE_DIR = path.join(os.tmpdir(), `agent-portable-${AGENT_NAME}`)
 
 function extractImages(message) {
   const found = []
