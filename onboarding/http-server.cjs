@@ -2243,6 +2243,49 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     return
   }
 
+  // ── Journal (v0.0.5) ────────────────────────────────────────────────────
+  //   GET    /api/journal        -- the timeline. Newest first.
+  //   DELETE /api/journal/:date  -- the user erases a day. Only the user can.
+  //
+  // These sit ABOVE the /api/memory/:table matcher for the same reason the
+  // pointer routes do -- but note they are on their own /api/journal prefix, so
+  // the collision is structural, not lexical. A day is not a memory table row.
+  //
+  // HONEST COVERAGE, and this is the load-bearing part: the timeline reports
+  // days the agent was ALIVE but wrote NOTHING, as gaps. An empty journal that
+  // renders as "nothing happened" is a lie; the truth is "the agent ran and did
+  // not write." The user is owed the difference, because only one of those is a
+  // bug. (Same rule as the pointer index's found:0 rows.)
+  if (pathname === '/api/journal' && req.method === 'GET') {
+    const { mod, db } = await getMemory()
+    const { rows } = mod.journalRead(db, { limit: 120 })
+    const written = new Set(rows.map((r) => r.date))
+
+    // Days with activity, from the audit log. substr(1,10) of an ISO timestamp
+    // is the UTC date -- close enough to spot a gap, and deliberately NOT used
+    // to key an entry (journal days are LOCAL days; see localToday).
+    let activeDays = []
+    try {
+      activeDays = db
+        .prepare("SELECT DISTINCT substr(at, 1, 10) AS d FROM memory_events ORDER BY d DESC LIMIT 120")
+        .all()
+        .map((r) => r.d)
+    } catch { activeDays = [] }
+    const gaps = activeDays.filter((d) => !written.has(d))
+
+    sendJson(res, 200, { rows, gaps })
+    return
+  }
+  const journalDayMatch = pathname.match(/^\/api\/journal\/(\d{4}-\d{2}-\d{2})$/)
+  if (journalDayMatch && req.method === 'DELETE') {
+    const { db } = await getMemory()
+    const info = db.prepare('DELETE FROM journal_entries WHERE date = ?').run(journalDayMatch[1])
+    // Same secure-erase contract as memoryDelete: the bytes go, not just the row.
+    try { db.exec("PRAGMA wal_checkpoint(TRUNCATE)") } catch { /* best effort */ }
+    sendJson(res, 200, { ok: true, deleted: Number(info.changes || 0) })
+    return
+  }
+
   const tableMatch = pathname.match(/^\/api\/memory\/([a-z_]+)$/)
   if (tableMatch && req.method === 'GET') {
     const table = tableMatch[1]

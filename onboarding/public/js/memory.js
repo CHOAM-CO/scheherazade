@@ -644,10 +644,98 @@
     }
 
     renderAgentControl()
+    renderJournal()
     renderPointers()
     await loadSessionGroup()
     for (const table of ['user_facts', 'open_threads', 'corrections', 'preferences']) {
       loadCategory(table)
+    }
+  }
+
+  // The journal (v0.0.5). The four tables below are what the agent knows ABOUT
+  // the user; this is what its days were like. It sits first for that reason.
+  const JOURNAL_COPY = {
+    label: '일지',
+    intro: '에이전트가 하루의 끝에 스스로 쓴 기록입니다. 요약이 아니라 그날의 이야기예요. 한 번 쓴 줄은 고칠 수 없고, 지울 수 있는 건 회원님뿐입니다.',
+    empty: '아직 쓴 일지가 없습니다.',
+    // A gap is stated, never hidden. "The agent ran that day and wrote nothing"
+    // and "nothing happened that day" are different facts, and only one of them
+    // is a bug -- so the user gets to tell them apart.
+    gaps: (n) => `기록이 비어있는 날이 ${n}일 있습니다 (에이전트는 그날 켜져 있었지만 아무것도 쓰지 않았어요).`,
+    del: '이 날 지우기',
+    delConfirm: (d) => `${d} 일지를 지울까요? 되돌릴 수 없습니다.`,
+    delOk: '지우기',
+    deleted: '지웠습니다.',
+  }
+
+  async function renderJournal() {
+    const J = JOURNAL_COPY
+    $('cat-journal-label').textContent = J.label
+    $('journal-intro').textContent = J.intro
+    const listEl = $('journal-entries')
+    const statusEl = $('journal-status')
+    listEl.innerHTML = ''
+    statusEl.textContent = ''
+
+    let data
+    try {
+      data = await api('/api/journal')
+    } catch (err) {
+      // Fail loud: an unreachable journal must not render as an empty one.
+      statusEl.textContent = `일지를 불러오지 못했습니다 (${err.message}).`
+      return
+    }
+
+    const rows = data.rows || []
+    const gaps = data.gaps || []
+    if (gaps.length > 0) statusEl.textContent = J.gaps(gaps.length)
+    if (rows.length === 0) {
+      const empty = document.createElement('div')
+      empty.className = 'empty-state'
+      empty.textContent = J.empty
+      listEl.appendChild(empty)
+      return
+    }
+
+    for (const row of rows) {
+      const card = document.createElement('div')
+      card.className = 'journal-day'
+
+      const head = document.createElement('div')
+      head.className = 'journal-day-head'
+      const dateEl = document.createElement('span')
+      dateEl.className = 'journal-date'
+      dateEl.textContent = row.date
+      head.appendChild(dateEl)
+
+      const del = document.createElement('button')
+      del.className = 'secondary journal-del'
+      del.textContent = J.del
+      del.addEventListener('click', async () => {
+        const ok = await confirmDialog(J.delConfirm(row.date), J.delOk)
+        if (!ok) return
+        del.disabled = true
+        try {
+          await api(`/api/journal/${row.date}`, { method: 'DELETE' })
+          showToast(J.deleted)
+          await renderJournal()
+        } catch (err) {
+          del.disabled = false
+          showToast(`실패: ${err.message}`)
+        }
+      })
+      head.appendChild(del)
+      card.appendChild(head)
+
+      // The body is the agent's own prose, including its timestamp seams. It is
+      // shown as written -- textContent, never innerHTML: this string came from
+      // a model and must never be able to become markup.
+      const body = document.createElement('div')
+      body.className = 'journal-body'
+      body.textContent = row.body
+      card.appendChild(body)
+
+      listEl.appendChild(card)
     }
   }
 

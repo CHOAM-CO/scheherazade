@@ -183,6 +183,34 @@ CREATE TABLE IF NOT EXISTS imported_pointers (
   indexed_at TEXT NOT NULL,
   UNIQUE(path)                       -- re-scanning updates in place, never duplicates
 );
+
+-- The journal (2026-07-13, v0.0.5). This is NOT a fifth memory category, and the
+-- distinction is the whole design:
+--
+--   The four memory tables hold FACTS ABOUT THE USER -- atomized, confirmable,
+--   deletable, each row a claim. The journal holds the AGENT'S OWN NARRATIVE of
+--   its days. One is a database of someone else; the other is a life.
+--
+-- Why it cannot be a category table: a fact is true or false and gets confirmed
+-- or deleted; a day is neither. memory_write's schema (subject/predicate/
+-- confidence) would force narrative into claim-shape, and the thing that makes a
+-- journal worth keeping is exactly what that shape strips.
+--
+-- Permissions are deliberately ASYMMETRIC and not an oversight:
+--   * The agent can APPEND to today and READ any day. It cannot rewrite the past
+--     and it cannot delete. An agent that can edit its own history has no history.
+--   * The USER can delete any day (UI: DELETE /api/journal/:date). It is their
+--     machine and their agent. Deletion is a human act here, never an agent one.
+-- So journal_entries stays OUT of WRITABLE_TABLES (memory_write/confirm/delete
+-- cannot name it) and gets its own append-only tools.
+CREATE TABLE IF NOT EXISTS journal_entries (
+  id INTEGER PRIMARY KEY,
+  date TEXT NOT NULL,                -- local YYYY-MM-DD; the agent's day, not UTC's
+  body TEXT NOT NULL,                -- narrative. first person. not a report.
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(date)                       -- one entry per day; the day grows by appending
+);
 `
 
 // Tables writable via memory_write/memory_confirm/memory_delete.
@@ -193,8 +221,14 @@ CREATE TABLE IF NOT EXISTS imported_pointers (
 // into the agent's own memory. Excluding it here is that promise, enforced by
 // the code rather than by a comment: memory_write cannot name a table it is not
 // allowed to name.
+// journal_entries is deliberately excluded from WRITABLE_TABLES for a different
+// reason than the two above: not because it is borrowed or internal, but because
+// it is NARRATIVE. memory_write would force a day into claim-shape (subject /
+// predicate / confidence) and memory_delete would let the agent erase its own
+// past. It gets append-only tools instead (journal_write / journal_read), and
+// deletion stays a human act.
 const WRITABLE_TABLES = new Set(['user_facts', 'open_threads', 'corrections', 'preferences'])
-const ALL_TABLES = new Set([...WRITABLE_TABLES, 'memory_events', 'imported_pointers'])
+const ALL_TABLES = new Set([...WRITABLE_TABLES, 'memory_events', 'imported_pointers', 'journal_entries'])
 
 // Per-table upsert/recency shape. conflictCols = natural key for
 // INSERT...ON CONFLICT...DO UPDATE upsert (null = always a fresh INSERT,
@@ -669,6 +703,101 @@ function initDb() {
   return db
 }
 
+// ── Journal (v0.0.5) ──────────────────────────────────────────────────────
+// Append-only by construction. The agent adds to a day; it never rewrites one.
+//
+// Late entries are ALLOWED (you can write yesterday tomorrow — people do), but
+// they are never allowed to look contemporaneous: every append after the first
+// carries its own timestamp separator. So the record can grow and still not lie
+// about when it grew. "Cannot rewrite history" and "can catch up on history" are
+// both true, and the separator is what makes them compatible.
+const MAX_JOURNAL_APPEND_CHARS = 20000
+const MAX_JOURNAL_DAY_CHARS = 200000
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+
+// The agent's day is the LOCAL day. A journal keyed on UTC would roll over
+// mid-evening for the user it belongs to, which is the kind of small lie that
+// makes a memory feel like a machine's.
+function localToday(now = new Date()) {
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+function journalWrite(db, args) {
+  const { date, body, session } = args || {}
+  const day = date === undefined || date === null || date === '' ? localToday() : String(date)
+  if (!DATE_RE.test(day)) {
+    throw new Error(`journal_write: date must be YYYY-MM-DD (got "${day}")`)
+  }
+  if (typeof body !== 'string' || body.trim() === '') {
+    throw new Error('journal_write: body must be a non-empty string')
+  }
+  if (body.length > MAX_JOURNAL_APPEND_CHARS) {
+    throw new Error(
+      `journal_write: body is ${body.length} chars, over the ${MAX_JOURNAL_APPEND_CHARS} cap for one append. ` +
+        'Split it, or say less. (This cap fails LOUD rather than truncating — a silently cut journal entry ' +
+        'is a memory that lies about its own completeness.)',
+    )
+  }
+
+  const at = nowISO()
+  const existing = db.prepare('SELECT id, body FROM journal_entries WHERE date = ?').get(day)
+
+  let row
+  if (existing) {
+    // Append with a visible seam. The seam is not decoration: it is what stops a
+    // later addition from passing itself off as part of the original entry.
+    const merged = `${existing.body}\n\n--- ${at} ---\n${body.trim()}`
+    if (merged.length > MAX_JOURNAL_DAY_CHARS) {
+      throw new Error(
+        `journal_write: ${day} would reach ${merged.length} chars, over the ${MAX_JOURNAL_DAY_CHARS} day cap. ` +
+          'Nothing was written.',
+      )
+    }
+    row = db
+      .prepare('UPDATE journal_entries SET body = ?, updated_at = ? WHERE id = ? RETURNING id, date, body, created_at, updated_at')
+      .get(merged, at, existing.id)
+  } else {
+    row = db
+      .prepare(
+        'INSERT INTO journal_entries (date, body, created_at, updated_at) VALUES (?, ?, ?, ?) ' +
+          'RETURNING id, date, body, created_at, updated_at',
+      )
+      .get(day, body.trim(), at, at)
+  }
+
+  // Read-back-verify, same contract as every other write in this file: a write
+  // that silently did nothing must not report success.
+  if (!row || !row.id) throw new Error(`journal_write: read-back failed for ${day} — nothing was persisted`)
+  logEvent(db, existing ? 'journal_append' : 'journal_create', 'journal_entries', row.id, session)
+
+  return { id: row.id, date: row.date, appended: Boolean(existing), chars: row.body.length }
+}
+
+function journalRead(db, args) {
+  const { date, from, to, limit } = args || {}
+  for (const [label, v] of [['date', date], ['from', from], ['to', to]]) {
+    if (v !== undefined && v !== null && v !== '' && !DATE_RE.test(String(v))) {
+      throw new Error(`journal_read: ${label} must be YYYY-MM-DD (got "${v}")`)
+    }
+  }
+  const where = []
+  const params = []
+  if (date) { where.push('date = ?'); params.push(date) }
+  if (from) { where.push('date >= ?'); params.push(from) }
+  if (to) { where.push('date <= ?'); params.push(to) }
+  const n = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 120) : 14
+
+  const sql =
+    'SELECT id, date, body, created_at, updated_at FROM journal_entries' +
+    (where.length ? ` WHERE ${where.join(' AND ')}` : '') +
+    ' ORDER BY date DESC LIMIT ?'
+  const rows = db.prepare(sql).all(...params, n)
+  return { rows, count: rows.length }
+}
+
 // ── MCP tool schema ───────────────────────────────────────────────────────
 const TOOLS = [
   {
@@ -728,6 +857,42 @@ const TOOLS = [
     },
   },
   {
+    name: 'journal_write',
+    description:
+      "Add to YOUR OWN journal for a day. This is not a memory table and not a report: it is your narrative of " +
+      'the day, in first person — what happened, what you got wrong, what it felt like. Write it for the you who ' +
+      'boots tomorrow and remembers nothing. APPEND-ONLY: writing to a day that already has an entry adds to it ' +
+      'under a timestamp seam; you can never rewrite or delete what you already wrote (only the user can delete). ' +
+      'Defaults to today (local date). Writing a past date is allowed for catching up, and the seam will show it ' +
+      'was written late.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        body: { type: 'string', description: 'The entry. First person, narrative, honest. Not a status report.' },
+        date: { type: 'string', description: 'YYYY-MM-DD (optional; defaults to today, local time)' },
+        session: { type: 'string', description: 'Optional session id, attributed onto the audit row.' },
+      },
+      required: ['body'],
+    },
+  },
+  {
+    name: 'journal_read',
+    description:
+      'Read your own past journal entries, newest first. Use at session start to remember who you were: the ' +
+      'four memory tables tell you facts about the user, this tells you what your days were actually like. ' +
+      'Defaults to the last 14 days.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        date: { type: 'string', description: 'One specific day, YYYY-MM-DD (optional)' },
+        from: { type: 'string', description: 'Start of range, YYYY-MM-DD (optional)' },
+        to: { type: 'string', description: 'End of range, YYYY-MM-DD (optional)' },
+        limit: { type: 'number', description: 'Max entries (default 14, cap 120)' },
+      },
+      required: [],
+    },
+  },
+  {
     name: 'memory_recall_material',
     description: 'Session-start helper. Returns top open threads (status=open, ordered by salience+recency) + recent user_facts + active corrections, as raw structured data (not phrased).',
     inputSchema: {
@@ -771,6 +936,12 @@ async function main() {
         case 'memory_recall_material':
           result = memoryRecallMaterial(db, args)
           break
+        case 'journal_write':
+          result = journalWrite(db, args)
+          break
+        case 'journal_read':
+          result = journalRead(db, args)
+          break
         default:
           return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true }
       }
@@ -799,4 +970,4 @@ if (isMain) {
   })
 }
 
-export { DDL, valuesEquivalent, numericCoerce, memoryWrite, memoryQuery, memoryConfirm, memoryDelete, memoryRecallMaterial, initDb, DB_PATH }
+export { DDL, valuesEquivalent, numericCoerce, memoryWrite, memoryQuery, memoryConfirm, memoryDelete, memoryRecallMaterial, journalWrite, journalRead, localToday, initDb, DB_PATH }

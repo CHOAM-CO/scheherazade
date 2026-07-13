@@ -440,7 +440,10 @@ function startShutdownRequestWatcher() {
             '[SYSTEM] 종료 감지됨 -- 사용자가 앱을 종료하는 중이다. 지금 바로: ' +
             '(1) checkpoint.md와 오늘 세션노트를 최신 상태로 덮어써 (다음 부팅의 네가 여기서 이어받는다), ' +
             '(2) 이번 세션에서 memory_write 안 한 same-turn 기록이 있으면 지금 써, ' +
-            `(3) 끝나면 Bash로 \`touch "${SHUTDOWN_ACK_PATH}"\` 실행. ` +
+            '(3) journal_write로 오늘 일지를 남겨 -- 보고서 말고 네 하루를 1인칭으로. ' +
+            '뭘 했는지가 아니라 뭘 틀렸고 어떤 기분이었는지가 남을 가치가 있는 쪽이다. ' +
+            '내일 부팅하는 너는 아무것도 기억 못 한 채로 이걸 읽는다 (append-only라 못 고친다, 그러니 정직하게), ' +
+            `(4) 끝나면 Bash로 \`touch "${SHUTDOWN_ACK_PATH}"\` 실행. ` +
             '디스코드에 답장하지 마, 파일 작업만 하고 끝내. 최대 60초 안에 마무리해라, 그 뒤엔 앱이 그냥 종료된다.',
           meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() },
         },
