@@ -71,6 +71,10 @@ while IFS= read -r match; do
 
   echo "$key" >> "$SEEN_FILE"
   NEW=$((NEW + 1))
-done < <(grep -n "🔒" "${NOTE_FILES[@]}" "${JOURNAL_FILES[@]}" 2>/dev/null)
+# Anchor to line-lead 🔒 (optional whitespace/bullet first) -- the same shape
+# the sed strip above assumes. A bare mid-line mention ("🔒 lines below"
+# quoted in prose) is not a correction; the agent's own boot test caught the
+# unanchored grep proposing one (Scheherazade 07-13, verified raw here).
+done < <(grep -nE '^[[:space:]]*[-*]?[[:space:]]*🔒' "${NOTE_FILES[@]}" "${JOURNAL_FILES[@]}" 2>/dev/null)
 
 echo "${NEW} new correction(s) added to ${PROPOSALS_FILE}" >&2
