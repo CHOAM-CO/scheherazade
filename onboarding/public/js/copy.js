@@ -280,26 +280,28 @@ window.COPY = {
         shot: true,
       },
       {
-        // Sirin #1: View Channel is required or the bot can't see the
-        // channel to post in at all.
+        // Mino 07-13 click-test: the bare oauth2/authorize link (no scope,
+        // no permissions) doesn't install correctly, and the URL Generator
+        // dance was the most error-prone part of the old tutorial (Sirin #1
+        // was a symptom of it). The invite URL is now minted in-app from the
+        // pasted token -- client_id derives from the token itself, and the
+        // permissions (View Channel, Send Messages, Read Message History,
+        // Add Reactions, Attach Files, Embed Links) ride along in the URL.
         text: () =>
-          'OAuth2 탭 → URL Generator → Scopes에서 bot 체크 → Bot Permissions에서 View Channel, Send Messages, Read Message History 체크',
-        shot: true,
+          '복사한 토큰을 아래 칸에 붙여넣으면 초대 링크가 만들어집니다 → 초대 링크 열기 → 봇을 넣을 서버 선택 (서버가 없으면: Discord 앱에서 + 버튼으로 개인 서버를 하나 만드세요) → 연결 확인',
+        shot: false,
       },
-      {
-        text: () => '아래 생성된 URL 복사 → 브라우저에 붙여넣기 → 봇을 넣을 서버 선택 (서버가 없으면: Discord 앱에서 + 버튼으로 개인 서버를 하나 만드세요)',
-        shot: true,
-      },
-      { text: () => '복사한 토큰을 아래 칸에 붙여넣기 → 연결 확인', shot: false },
     ],
     tokenFieldLabel: '봇 토큰',
+    inviteButton: '초대 링크 열기',
+    inviteHint: '권한이 미리 담긴 초대 링크입니다',
     validateButton: '연결 확인',
     validating: '연결을 확인하는 중입니다',
     success: (name) => `${name}가 서버에 들어왔습니다. Discord에서 확인하세요.`,
     failures: {
       invalid_token: '토큰이 거부됐습니다. 2번 단계에서 Reset Token 후 새 토큰을 복사했는지 확인하세요.',
       intent_off: '메시지를 읽을 수 없는 상태입니다. 3번 단계의 MESSAGE CONTENT INTENT가 켜져 있는지 확인하세요.',
-      not_invited: '봇이 아직 어느 서버에도 없습니다. 5번 단계의 초대 URL을 다시 여세요.',
+      not_invited: '봇이 아직 어느 서버에도 없습니다. 4번 단계의 초대 링크를 다시 여세요.',
     },
     prevButton: '이전',
     nextButton: '다음',
@@ -436,6 +438,10 @@ window.COPY = {
     deleteCancel: '취소',
     deleteToast: '삭제됐습니다.',
     deleteLabel: '삭제',
+    // AUTHORED (not in copy file) -- manual refresh, Mino 07-13 click-test:
+    // "기억페이지 리프레시 버튼이라도 있으면 좋겠어"
+    refreshLabel: '새로고침',
+    refreshToast: '다시 불러왔습니다.',
   },
 
   // AUTHORED (not in copy file) -- settings page, minimal v1.

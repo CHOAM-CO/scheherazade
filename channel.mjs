@@ -6,7 +6,7 @@
 //   Claude "reply"/"read_channel_history" tool call -> discord.js -> Discord
 //
 // Trimmed from MAGI's channels/base-channel.mjs (4000-line, multi-agent,
-// voice/B2B/lounge-aware) down to: one agent, one home channel, two tools.
+// voice/B2B/lounge-aware) down to: one agent, one home channel, three tools.
 
 import 'dotenv/config'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
@@ -249,6 +249,7 @@ const DEFAULT_INSTRUCTIONS = `You are ${AGENT_NAME}.
 Discord messages arrive as: <channel source="${AGENT_NAME}" sender="..." channelId="..." authorId="..." timestamp="...">content</channel>
 Reply with the "reply" tool, passing the same channelId back.
 Image attachments are downloaded locally; the notification includes the local file path(s) -- open with the Read tool.
+Use "send_file_to_discord" (channelId, filePath, comment?) to upload a local file (image, document, etc.) to the channel -- "reply" is text-only.
 Use "read_channel_history" (channelId, limit, after?, before?) to look back through the channel. after/before each accept a Discord message ID or an ISO date.`
 const INSTRUCTIONS = process.env.CHANNEL_INSTRUCTIONS || DEFAULT_INSTRUCTIONS
 
@@ -271,6 +272,19 @@ const TOOLS = [
     },
   },
   {
+    name: 'send_file_to_discord',
+    description: 'Upload a local file (image, document, etc.) to a Discord channel. Use this for attachments -- the reply tool is text-only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channelId: { type: 'string', description: 'Discord channel ID' },
+        filePath: { type: 'string', description: 'Full local path of the file to upload' },
+        comment: { type: 'string', description: 'Optional message text sent with the file' },
+      },
+      required: ['channelId', 'filePath'],
+    },
+  },
+  {
     name: 'read_channel_history',
     description: 'Read recent message history from a Discord channel.',
     inputSchema: {
@@ -287,6 +301,7 @@ const TOOLS = [
 ]
 
 const ReplyArgs = z.object({ channelId: z.string().min(1), text: z.string().min(1) })
+const SendFileArgs = z.object({ channelId: z.string().min(1), filePath: z.string().min(1), comment: z.string().optional() })
 const ReadHistoryArgs = z.object({
   channelId: z.string().min(1),
   limit: z.number().int().positive().max(100).optional(),
@@ -307,6 +322,32 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     for (const chunk of chunks) await ch.send({ content: chunk, allowedMentions: SAFE_MENTIONS })
     clearThinking(channelId).catch((err) => log('thinking reaction clear failed:', err.message))
     return { content: [{ type: 'text', text: `sent to ${channelId} (${chunks.length} message${chunks.length > 1 ? 's' : ''})` }] }
+  }
+
+  if (name === 'send_file_to_discord') {
+    const parsed = SendFileArgs.parse(args || {})
+    const filePath = parsed.filePath.startsWith('~') ? path.join(os.homedir(), parsed.filePath.slice(1)) : parsed.filePath
+    let stat
+    try {
+      stat = await fs.stat(filePath)
+    } catch {
+      return { content: [{ type: 'text', text: `file not found: ${filePath}` }], isError: true }
+    }
+    // Discord's default bot upload cap is 10 MiB -- fail here with a clear
+    // message instead of letting the API return an opaque 40005.
+    const MAX_UPLOAD = 10 * 1024 * 1024
+    if (stat.size > MAX_UPLOAD) {
+      return { content: [{ type: 'text', text: `file too large for Discord upload: ${(stat.size / 1024 / 1024).toFixed(1)}MB (limit 10MB)` }], isError: true }
+    }
+    const ch = await fetchTextChannel(parsed.channelId)
+    const msg = await ch.send({
+      content: parsed.comment || '',
+      files: [{ attachment: filePath, name: path.basename(filePath) }],
+      allowedMentions: SAFE_MENTIONS,
+    })
+    clearThinking(parsed.channelId).catch((err) => log('thinking reaction clear failed:', err.message))
+    const urls = [...msg.attachments.values()].map((a) => a.url)
+    return { content: [{ type: 'text', text: `file sent to ${parsed.channelId}: ${path.basename(filePath)}${urls.length ? `\nCDN URL: ${urls.join('\n')}` : ''}` }] }
   }
 
   if (name === 'read_channel_history') {

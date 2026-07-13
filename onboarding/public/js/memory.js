@@ -419,6 +419,21 @@
       $(`cat-${table}-label`).textContent = C.categories[table].label
     }
 
+    const refreshBtn = $('m-refresh')
+    refreshBtn.textContent = C.refreshLabel
+    refreshBtn.onclick = async () => {
+      refreshBtn.disabled = true
+      try {
+        await Promise.all([
+          loadSessionGroup(),
+          ...['user_facts', 'open_threads', 'corrections', 'preferences'].map((t) => loadCategory(t)),
+        ])
+        showToast(C.refreshToast)
+      } finally {
+        refreshBtn.disabled = false
+      }
+    }
+
     renderAgentControl()
     await loadSessionGroup()
     for (const table of ['user_facts', 'open_threads', 'corrections', 'preferences']) {

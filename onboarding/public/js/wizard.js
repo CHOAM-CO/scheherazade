@@ -807,6 +807,45 @@
     } else if (isLast) {
       tokenField.classList.remove('hidden')
       $('s4b-token-label').textContent = C.discordTutorial.tokenFieldLabel
+
+      // Invite URL minted from the token (Mino 07-13 click-test: the bare
+      // authorize link installs nothing useful). A bot token's first
+      // dot-segment is base64url of the bot's user ID, which for bots equals
+      // the application (client) ID -- so no separate ID field is needed.
+      // Permissions integer = View Channel 1024 + Send Messages 2048 +
+      // Read Message History 65536 + Add Reactions 64 (🤔 indicator) +
+      // Attach Files 32768 (send_file_to_discord) + Embed Links 16384.
+      const INVITE_PERMISSIONS = 117824
+      const deriveClientId = (token) => {
+        const seg = (token.split('.')[0] || '').replace(/-/g, '+').replace(/_/g, '/')
+        try {
+          const id = atob(seg)
+          return /^\d{15,21}$/.test(id) ? id : null
+        } catch {
+          return null
+        }
+      }
+      const inviteRow = $('s4b-invite-row')
+      const refreshInvite = () => {
+        const clientId = deriveClientId($('s4b-token').value.trim())
+        if (!clientId) {
+          inviteRow.classList.add('hidden')
+          return
+        }
+        inviteRow.classList.remove('hidden')
+        const btn = $('s4b-invite-open')
+        btn.textContent = C.discordTutorial.inviteButton
+        btn.onclick = () =>
+          window.open(
+            `https://discord.com/oauth2/authorize?client_id=${clientId}&scope=bot&permissions=${INVITE_PERMISSIONS}`,
+            '_blank',
+            'noopener',
+          )
+        $('s4b-invite-note').textContent = C.discordTutorial.inviteHint
+      }
+      $('s4b-token').oninput = refreshInvite
+      refreshInvite()
+
       $('s4b-action').textContent = C.discordTutorial.validateButton
       $('s4b-action').onclick = async () => {
         const token = $('s4b-token').value.trim()
