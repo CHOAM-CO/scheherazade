@@ -246,7 +246,9 @@
     // Same lane, tool-call format UNVERIFIED in this harness -- selectable
     // (that's what click-testing is for) but labeled so a mute agent after
     // swapping here is a known suspect, not a mystery.
-    { id: 'deepseek-v4-pro:cloud', label: 'DeepSeek V4 Pro (툴콜 미검증)', providers: ['ollama'] },
+    // deepseek verified live by Mino (2026-07-13 19:41 "딥시크 정상작동 확인",
+    // same round as glm/sonnet-5/opus-4.8; model-swap continuity also held).
+    { id: 'deepseek-v4-pro:cloud', label: 'DeepSeek V4 Pro', providers: ['ollama'] },
     // glm-5.2 tool-use verified live by Mino (2026-07-13 19:32, same ollama
     // lane as kimi: "glm5.2 << 문제 전혀없음") -- label cleared same day it
     // was added. sonnet-5 / opus-4.8 verified in the same test round.
