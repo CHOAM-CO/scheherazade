@@ -234,9 +234,20 @@
   const MODEL_CATALOG = [
     { id: 'opus', label: 'Claude Opus', providers: ['claude', 'claude-subscription'] },
     { id: 'sonnet', label: 'Claude Sonnet', providers: ['claude', 'claude-subscription'] },
-    { id: 'kimi-k2.7-code:cloud', label: 'Kimi K2.7 Code', providers: ['ollama'] },
-    { id: 'deepseek-v4-pro:cloud', label: 'DeepSeek V4 Pro', providers: ['ollama'] },
-    { id: 'glm-5.2:cloud', label: 'GLM 5.2', providers: ['ollama'] },
+    // Kimi CONFIRMED incompatible (Mino live test 2026-07-13 19:15-19:20,
+    // transcript cd209c48): the model TRIED to call reply but its native
+    // <|tool_call_argument_begin|> token format leaked into plain text --
+    // the ollama Anthropic-compat lane never produced a tool_use block, so
+    // the agent is silently mute (3/3 turns, tool_use count 0). Listing a
+    // model whose tool calls don't parse in this harness ships a dead agent;
+    // stays visible-but-unselectable until a swap-time tool-call smoke test
+    // exists (v0.0.4) and it passes.
+    { id: 'kimi-k2.7-code:cloud', label: 'Kimi K2.7 Code (툴콜 비호환)', providers: ['ollama'], brokenToolUse: true },
+    // Same lane, tool-call format UNVERIFIED in this harness -- selectable
+    // (that's what click-testing is for) but labeled so a mute agent after
+    // swapping here is a known suspect, not a mystery.
+    { id: 'deepseek-v4-pro:cloud', label: 'DeepSeek V4 Pro (툴콜 미검증)', providers: ['ollama'] },
+    { id: 'glm-5.2:cloud', label: 'GLM 5.2 (툴콜 미검증)', providers: ['ollama'] },
     { id: 'gpt', label: 'GPT (Codex)', providers: ['chatgpt'] },
   ]
 
@@ -365,6 +376,8 @@
       // A model is selectable if ANY of its providers is authenticated --
       // not just the currently-running one (07-13 multi-provider unlock).
       if (!m.providers.some((p) => availableProviders.includes(p))) opt.disabled = true
+      // Confirmed-broken tool-use models are never selectable (see catalog note).
+      if (m.brokenToolUse) opt.disabled = true
       if (m.id === model) opt.selected = true
       sel.appendChild(opt)
     }
