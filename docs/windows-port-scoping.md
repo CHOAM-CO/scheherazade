@@ -74,7 +74,8 @@ magi-win), 2 is hours, 3-as-detection-only is hours-to-a-day, 4 is a day.
 Managed-install parity (full Phase 3) would add multiple days — recommend
 deferring it out of v1.
 
-## Open calls for Mino
-1. Windows v1 = detection-only deps (no managed ollama/codex install) — OK?
-2. Unsigned + SmartScreen friction acceptable for v1, or budget Authenticode?
-3. arch: win32-x64 first (magi-win = x64), arm64 later?
+## Mino calls — LOCKED (2026-07-13 18:35, his home)
+1. Windows v1 = detection-only deps: **ㅇㅇ** (no managed ollama/codex install).
+2. SmartScreen friction: **감수** (unsigned v1, no Authenticode; release notes
+   must document the "More info → Run anyway" flow).
+3. Arch: **x64만 지원** — x64 ONLY, arm64 cut entirely (not deferred).
