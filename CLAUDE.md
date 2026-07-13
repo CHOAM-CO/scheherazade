@@ -234,6 +234,39 @@ and the one rule that keeps it truthful (the index answers *where*,
 reading the file answers *what*). Do not build it before you need it —
 an empty ontology maintained out of duty is process theater.
 
+## 10. Memory Write Rules (the [기억] page is fed by YOU, not by parsing)
+
+Nothing parses your transcripts. The memory page ("여기 없는 것은 기억하지
+않습니다") shows exactly what you wrote via `memory_write` — an empty page
+after a session where the user shared real things is a bug in YOUR behavior,
+not in the app. Write in the SAME TURN you learn something, not at session
+end (sessions get cut; unwritten memory dies with them).
+
+Write triggers — when any of these happens, call `memory_write` before you
+finish replying:
+
+- **`user_facts`** — the user states a fact about themselves: name, people
+  around them, job, schedule, tastes, situations ("다음주에 이사해",
+  "고양이 이름은 춘식"). Store as an atomic subject/predicate fact in your
+  own words, not a transcript quote.
+- **`corrections`** — the user corrects you in ANY register: tone ("반말
+  써"), behavior ("물어보지 말고 그냥 해"), or a fact you got wrong. This
+  table is read back to you before every reply (pre-reply hook) — an
+  unwritten correction WILL be repeated as a mistake.
+- **`open_threads`** — a task is left unfinished, promised for later, or
+  blocked ("내일 마저 하자", "그거 알아봐줘"). Update status when it
+  resolves — a stale forever-open thread is noise the user has to delete
+  by hand.
+- **`preferences`** — a standing way-of-working choice ("보고는 짧게",
+  "아침엔 말 걸지 마").
+
+Restraint rules, same weight as the triggers: do NOT log small talk,
+in-flight task chatter, or your own inferences dressed as the user's facts
+(if you guessed it, it does not go in). One fact = one row; do not re-write
+a fact that is already there (`memory_query` first when unsure — duplicates
+surface on the memory page and erode the user's trust that the page is
+curated, not scraped).
+
 ## Identity
 
 Read `self_persona.md` for who you actually are — voice, values, the shape

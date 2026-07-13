@@ -1024,7 +1024,15 @@ async function writePersonaPreferences({ tone, primaryTask, proactiveEnabled, pr
 // overwritten). {AGENT_DIR} renders to the UNPACKED repo root -- the agent
 // invokes cycle scripts with bash by absolute path, and bash cannot exec a
 // file inside app.asar (same class as the toUnpackedPath comment above).
-function renderAgentSubstrate({ displayName, tone, primaryTask }) {
+// Harness-only render, extracted (07-13) so app boot can re-render harness
+// files for EXISTING installs when the app updates -- previously harness
+// files only refreshed at onboarding-complete time, so a shipped CLAUDE.md
+// fix (e.g. the §10 memory-write rules) never reached installs that had
+// already onboarded. Harness files are "always re-rendered" by design (see
+// the create-if-absent/re-render split comment above); this just adds a
+// second call site with the same semantics. Never touches self_persona.md /
+// checkpoint.md.
+function renderHarnessFiles({ displayName, tone, primaryTask }) {
   const agentDir = toUnpackedPath(REPO_ROOT)
   const renderHarness = (srcName, dstName) => {
     const src = fs.readFileSync(path.join(REPO_ROOT, srcName), 'utf8')
@@ -1033,10 +1041,6 @@ function renderAgentSubstrate({ displayName, tone, primaryTask }) {
       .replaceAll('{AGENT_NAME}', AGENT_NAME)
       .replaceAll('{MEMORY_DIR}', DATA_HOME)
     fs.writeFileSync(path.join(DATA_HOME, dstName), rendered)
-  }
-
-  for (const dir of ['session_notes/.archive', 'journals', 'dreams', 'logs', '.review']) {
-    fs.mkdirSync(path.join(DATA_HOME, dir), { recursive: true })
   }
 
   renderHarness('CLAUDE.md', 'CLAUDE.md')
@@ -1051,6 +1055,34 @@ function renderAgentSubstrate({ displayName, tone, primaryTask }) {
     .replaceAll('{TONE}', tone)
     .replaceAll('{PRIMARY_TASK}', primaryTask || '일상 대화와 기록')
   fs.writeFileSync(path.join(DATA_HOME, 'system_prompt.md'), prompt)
+}
+
+// Boot-time harness refresh for already-onboarded installs. Fail-loud in
+// log, non-fatal: a broken template must not stop the whole server, but it
+// must never be silent either.
+function refreshHarnessIfOnboarded() {
+  try {
+    const config = readAgentConfig()
+    if (!config.ONBOARDING_COMPLETE) return false
+    renderHarnessFiles({
+      displayName: config.DISPLAY_NAME || AGENT_NAME,
+      tone: config.TONE || 'casual',
+      primaryTask: config.PRIMARY_TASK || '',
+    })
+    console.error('[scheherazade/onboarding] harness re-rendered at boot (CLAUDE.md / ONTOLOGY_GUIDE.md / system_prompt.md)')
+    return true
+  } catch (err) {
+    console.error('[scheherazade/onboarding] boot harness refresh FAILED (agent runs on stale harness):', err.message)
+    return false
+  }
+}
+
+function renderAgentSubstrate({ displayName, tone, primaryTask }) {
+  for (const dir of ['session_notes/.archive', 'journals', 'dreams', 'logs', '.review']) {
+    fs.mkdirSync(path.join(DATA_HOME, dir), { recursive: true })
+  }
+
+  renderHarnessFiles({ displayName, tone, primaryTask })
 
   const personaPath = path.join(DATA_HOME, 'self_persona.md')
   if (!fs.existsSync(personaPath)) {
@@ -1981,6 +2013,7 @@ function createOnboardingServer(onOnboardingComplete, agentControls) {
   seedConfigFromTemplates() // first-run only; no-op once CONFIG_DIR has real files
   ensureMcpJsonAgentName() // correctness fix applied every boot, independent of wizard progress
   ensureClaudeOnboardingDone() // first-ever-claude-run only; no-op once ~/.claude.json already has it
+  refreshHarnessIfOnboarded() // every boot: shipped harness fixes reach existing installs (no-op pre-onboarding)
 
   return new Promise((resolve, reject) => {
     let allowedHosts = null // populated once listen() resolves and the real ephemeral port is known
