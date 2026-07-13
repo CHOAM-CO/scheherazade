@@ -37,6 +37,8 @@
       "onboarding/**/*",
       "hooks/**/*",
       "scripts/**/*",
+      "autonomy/**/*",
+      "calendar/**/*",
       "docs/**/*",
       "memory/**/*",
       "CLAUDE.md",
@@ -53,7 +55,9 @@
       "channel.mjs",
       "run.sh",
       "hooks/**",
-      "scripts/**"
+      "scripts/**",
+      "autonomy/**",
+      "calendar/**"
     ],
     "extraResources": [
       {

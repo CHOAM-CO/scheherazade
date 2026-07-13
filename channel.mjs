@@ -537,8 +537,12 @@ async function writeAutonomyState(state) {
 }
 
 function startAutonomyWatcher() {
-  const budgetMod = require(path.join(MODULE_DIR, 'autonomy', 'budget.cjs'))
-  const cycleMod = require(path.join(MODULE_DIR, 'autonomy', 'cycle.cjs'))
+  // The decision, the wording, the consent gate and the write ORDER all live in
+  // autonomy/tick.cjs, and scripts/test-autonomy-night.mjs calls that same
+  // function. It used to live here, and the test carried its own copy of it --
+  // which meant the test could go green against its copy while this drifted.
+  // A copy of a rule is not the rule. What is left here is only the IO.
+  const tickMod = require(path.join(MODULE_DIR, 'autonomy', 'tick.cjs'))
 
   setInterval(async () => {
     if (autonomyInFlight) return
@@ -547,61 +551,26 @@ function startAutonomyWatcher() {
       const config = await readAgentConfigFile()
       const state = await readAutonomyState()
 
-      // The cheap exit, and it is narrower than it looks. It used to be just
-      // "AUTONOMY !== yes -> return", which meant that turning consent OFF
-      // mid-night made this watcher fall SILENT -- and a silent watcher does
-      // not stop the agent, because the agent was told once to work and is
-      // running its own loop. Withdrawal has to be able to speak. So we only
-      // skip when there is nothing outstanding: no cycle, or a cycle already
-      // stopped AND already briefed.
-      const consented = String(config.AUTONOMY || '').toLowerCase() === 'yes'
-      const settled = !state || !state.cycleDay ||
-        (state.stoppedDay === state.cycleDay && state.briefDay === state.cycleDay)
-      if (!consented && settled) return
-
-      const cap = Number(config.AUTONOMY_TOKEN_CAP || config.AUTONOMY_DAILY_TOKEN_CAP || budgetMod.DEFAULT_DAILY_CAP)
-      const decision = cycleMod.decideAutonomy({
+      const plan = tickMod.planTick({
         now: new Date(),
         config,
         state,
         // sinceMs anchors the cap to THE NIGHT: cycle.cjs hands us the start of
         // the running cycle (or null if none has begun). Measuring per calendar
         // day handed a 23:00-05:00 night a second full budget at midnight.
-        readBudget: (sinceMs) => budgetMod.budgetState(DATA_HOME, cap, new Date(), sinceMs),
+        readBudget: tickMod.realBudgetReader(DATA_HOME, tickMod.capFor(config)),
       })
+      if (plan.skip) return
 
-      if (decision.action === 'none') {
-        // Persist skip bookkeeping (why the night was quiet) without noise.
-        if (decision.nextState) await writeAutonomyState(decision.nextState)
+      const { decision, content, persistFirst } = plan
+
+      if (!content) {
+        // A 'none' that still wants its bookkeeping written (why the night was
+        // quiet). A silent no-op is how a feature becomes a ghost.
+        await writeAutonomyState(plan.nextState)
         return
       }
 
-      // The wording is a contract with stop-reply-guard (start/stop must carry
-      // a SKIP_PATTERN, brief must not), so it is chosen next to the decision
-      // that produced it, not here. cycle.cjs owns both; the tests assert both.
-      const content = cycleMod.injectFor(decision)
-      if (!content) return
-
-      // WHEN we persist depends on WHICH LIE IS WORSE, and the two actions have
-      // opposite answers. (External red team, 2026-07-13.)
-      //
-      // START -- persist BEFORE sending.
-      //   If we sent first and died before writing, the agent would be awake and
-      //   spending while the state file said no cycle exists. The owner could then
-      //   flip consent off and this watcher, seeing nothing outstanding, would say
-      //   nothing -- and a silent watcher does not stop a running agent. Worse, the
-      //   next poll would start a SECOND cycle.
-      //   The cost of pre-writing is the mirror case: the notification fails, and we
-      //   have recorded a night that never began. That costs a skipped night and a
-      //   brief reporting ~0 tokens. One error loses work; the other loses control of
-      //   someone's money while they sleep. Not a close call.
-      //
-      // STOP / BRIEF -- persist AFTER sending.
-      //   Marking these first would mean one transient failure becomes "we recorded
-      //   that we told them, and we never did". A brief that is never retried is the
-      //   owner never learning what the night cost. On failure we leave the debt
-      //   standing and the next poll retries it.
-      const persistFirst = decision.action === 'start'
       if (persistFirst) await writeAutonomyState(decision.nextState)
 
       try {

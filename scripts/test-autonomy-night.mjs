@@ -36,7 +36,7 @@ fs.mkdirSync(DATA_HOME, { recursive: true })
 process.env.SCHEHERAZADE_PROJECTS_ROOT = PROJECTS
 
 const budget = require(path.join(HERE, '..', 'autonomy', 'budget.cjs'))
-const cycle = require(path.join(HERE, '..', 'autonomy', 'cycle.cjs'))
+const tick_ = require(path.join(HERE, '..', 'autonomy', 'tick.cjs')) // the watcher's own body
 
 let pass = 0
 let fail = 0
@@ -72,28 +72,33 @@ function writeState(s) {
   fs.renameSync(tmp, STATE_PATH)
 }
 
-// One turn of the watcher, exactly as channel.mjs runs it -- including the
-// persist-order rule (START writes before it "sends", STOP/BRIEF after).
+// One turn of the watcher -- and it calls THE WATCHER'S OWN planTick, not a
+// re-implementation of it. The first version of this file carried its own copy
+// of the consent gate, the cap parse, the inject choice and the persist order.
+// It went green against its copy. Had channel.mjs drifted, this suite would have
+// kept saying yes. Everything below the planTick call is IO, which is all that
+// is left in channel.mjs too.
 const CONFIG = { AUTONOMY: 'yes', AUTONOMY_WINDOW_START: '23:00', AUTONOMY_WINDOW_END: '05:00', AUTONOMY_TOKEN_CAP: '1000' }
 const delivered = []
 
 function tick(now, config = CONFIG) {
   budget.resetCache() // a fresh poll may be a fresh process; never rely on warm cache for correctness
-  const cap = Number(config.AUTONOMY_TOKEN_CAP)
-  const decision = cycle.decideAutonomy({
+
+  const plan = tick_.planTick({
     now,
     config,
     state: readState(),
-    readBudget: (sinceMs) => budget.budgetState(DATA_HOME, cap, now, sinceMs),
+    readBudget: tick_.realBudgetReader(DATA_HOME, tick_.capFor(config), () => now),
   })
-  if (decision.action === 'none') {
-    if (decision.nextState) writeState(decision.nextState)
+  if (plan.skip) return plan.decision || { action: 'none', reason: plan.reason }
+
+  const { decision, content, persistFirst } = plan
+  if (!content) {
+    writeState(plan.nextState)
     return decision
   }
-  const text = cycle.injectFor(decision)
-  const persistFirst = decision.action === 'start'
   if (persistFirst) writeState(decision.nextState)
-  delivered.push({ at: now.toISOString(), action: decision.action, text })
+  delivered.push({ at: now.toISOString(), action: decision.action, text: content })
   if (!persistFirst) writeState(decision.nextState)
   return decision
 }
