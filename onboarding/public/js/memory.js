@@ -322,8 +322,13 @@
     agentPollTimer = setTimeout(pollAgentStatusOnce, AGENT_POLL_INTERVAL_MS)
   }
 
+  // Returns true when the server accepted the action (202), false when it
+  // rejected or the request failed -- callers that mutate local state before
+  // firing (model/effort switch) roll back on false (spark review 07-13:
+  // a 409'd cross-provider switch used to leave currentProvider drifted
+  // until page reload).
   async function fireControl(action, body) {
-    if (agentControlsBusy) return
+    if (agentControlsBusy) return false
     setAgentControlsDisabled(true)
     try {
       await api(`/api/agent/${action}`, {
@@ -332,10 +337,12 @@
         body: body ? JSON.stringify(body) : undefined,
       })
       // Stay disabled until pollAgentStatusOnce sees a settled state.
+      return true
     } catch (err) {
       console.error(`agent ${action} failed:`, err)
       showToast(GEN(err.message))
       setAgentControlsDisabled(false)
+      return false
     }
   }
 
@@ -408,12 +415,15 @@
       if (!provider) { e.target.value = currentModel; return } // fail closed: no authed provider serves it
       const ok = await confirmDialog(AGENT_COPY.switchConfirm(model), AGENT_COPY.switchOk, AGENT_COPY.cancel)
       if (!ok) { e.target.value = currentModel; return }
+      const prevModel = currentModel
+      const prevProvider = currentProvider
       currentModel = model
-      if (provider !== currentProvider) {
-        currentProvider = provider
-        await fireControl('model', { model, provider })
-      } else {
-        await fireControl('model', { model })
+      currentProvider = provider
+      const accepted = await fireControl('model', provider !== prevProvider ? { model, provider } : { model })
+      if (!accepted) {
+        currentModel = prevModel
+        currentProvider = prevProvider
+        e.target.value = prevModel
       }
     }
 
@@ -422,8 +432,13 @@
       if (effort === currentEffort) return
       const ok = await confirmDialog(AGENT_COPY.effortConfirm(effort), AGENT_COPY.switchOk, AGENT_COPY.cancel)
       if (!ok) { e.target.value = currentEffort; return }
+      const prevEffort = currentEffort
       currentEffort = effort
-      await fireControl('effort', { effort })
+      const accepted = await fireControl('effort', { effort })
+      if (!accepted) {
+        currentEffort = prevEffort
+        e.target.value = prevEffort
+      }
     }
 
     $('agent-btn-startstop').onclick = async () => {
