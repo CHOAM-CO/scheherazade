@@ -75,6 +75,10 @@ while IFS= read -r match; do
 # the sed strip above assumes. A bare mid-line mention ("🔒 lines below"
 # quoted in prose) is not a correction; the agent's own boot test caught the
 # unanchored grep proposing one (Scheherazade 07-13, verified raw here).
-done < <(grep -nE '^[[:space:]]*[-*]?[[:space:]]*🔒' "${NOTE_FILES[@]}" "${JOURNAL_FILES[@]}" 2>/dev/null)
+# -H forces the filename prefix even when only ONE file matches; without it
+# the file:line:content parse above shifts (file=line#, line=content), which
+# corrupts .reflux-seen keys and proposals Source. Scheherazade's second
+# boot-test catch (07-13, reproduced by it, verified here).
+done < <(grep -HnE '^[[:space:]]*[-*]?[[:space:]]*🔒' "${NOTE_FILES[@]}" "${JOURNAL_FILES[@]}" 2>/dev/null)
 
 echo "${NEW} new correction(s) added to ${PROPOSALS_FILE}" >&2
