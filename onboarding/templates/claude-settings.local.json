@@ -8,6 +8,7 @@
       "Glob",
       "Grep",
       "mcp__agent-channel__reply",
+      "mcp__agent-channel__send_file_to_discord",
       "mcp__agent-channel__read_channel_history",
       "mcp__memory__memory_write",
       "mcp__memory__memory_query",
@@ -65,6 +66,10 @@
           {
             "type": "command",
             "command": "node {AGENT_DIR}/hooks/stop-skill-extraction-nudge.mjs"
+          },
+          {
+            "type": "command",
+            "command": "node {AGENT_DIR}/hooks/stop-reply-guard.mjs"
           }
         ]
       }

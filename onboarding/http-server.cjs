@@ -413,11 +413,67 @@ function seedSettingsLocal() {
   log('seeded settings.local.json into CONFIG_DIR/.claude (hook paths rendered) from bundled template')
 }
 
+// Additive-only settings.local.json migration for EXISTING installs.
+// seedSettingsLocal() above is seed-if-absent by design (never clobbers user
+// edits), which means a hook added to the bundled template after a user's
+// first run would never reach them -- the exact "disk updated, config
+// frozen" half-update class diagnosed live on Mino's install 2026-07-13.
+// This runs on every boot and ONLY appends known-missing entries; it never
+// removes or rewrites anything the user has, so hand-edited hooks and
+// permissions survive. Currently migrates:
+//   - permissions.allow += mcp__agent-channel__send_file_to_discord
+//   - hooks.Stop += stop-reply-guard.mjs (silent-text regression detector,
+//     added after the agent composed replies without calling the reply tool
+//     and looked dead from Discord -- "돌연사" report, 2026-07-13 19:10)
+function ensureSettingsLocalAdditions() {
+  if (!fs.existsSync(SETTINGS_LOCAL_PATH)) return // fresh install: seeder covers it
+  let settings
+  try {
+    settings = JSON.parse(fs.readFileSync(SETTINGS_LOCAL_PATH, 'utf8'))
+  } catch (err) {
+    // Fail-loud but non-fatal: overwriting a corrupt (possibly hand-edited)
+    // file would destroy user configuration to fix a hook.
+    console.error(`[scheherazade/onboarding] settings.local.json is not valid JSON, skipping additive migration: ${err.message}`)
+    return
+  }
+  // Snapshot BEFORE mutation -- the in-place mutations below alias the parsed
+  // object, so a post-mutation snapshot would always equal the result and the
+  // write would silently never happen (same aliasing bug class as
+  // ensureMcpJsonAgentName's 2026-07-03 fix below).
+  const beforeText = JSON.stringify(settings, null, 2)
+
+  if (!settings.permissions || typeof settings.permissions !== 'object') settings.permissions = {}
+  if (!Array.isArray(settings.permissions.allow)) settings.permissions.allow = []
+  const SEND_FILE_PERM = 'mcp__agent-channel__send_file_to_discord'
+  if (!settings.permissions.allow.includes(SEND_FILE_PERM)) settings.permissions.allow.push(SEND_FILE_PERM)
+
+  if (!settings.hooks || typeof settings.hooks !== 'object') settings.hooks = {}
+  if (!Array.isArray(settings.hooks.Stop)) settings.hooks.Stop = []
+  if (settings.hooks.Stop.length === 0) settings.hooks.Stop.push({ hooks: [] })
+  const stopGroup = settings.hooks.Stop[0]
+  if (!Array.isArray(stopGroup.hooks)) stopGroup.hooks = []
+  const hasReplyGuard = settings.hooks.Stop.some((group) =>
+    Array.isArray(group.hooks) && group.hooks.some((h) => typeof h.command === 'string' && h.command.includes('stop-reply-guard.mjs')))
+  if (!hasReplyGuard) {
+    stopGroup.hooks.push({
+      type: 'command',
+      command: `node ${path.join(toUnpackedPath(REPO_ROOT), 'hooks', 'stop-reply-guard.mjs')}`,
+    })
+  }
+
+  const afterText = JSON.stringify(settings, null, 2)
+  if (afterText !== beforeText) {
+    fs.writeFileSync(SETTINGS_LOCAL_PATH, afterText + '\n')
+    log('settings.local.json additive migration applied (send_file permission / stop-reply-guard hook)')
+  }
+}
+
 function seedConfigFromTemplates() {
   seedConfigFromTemplate(TEMPLATE_MCP_JSON_PATH, MCP_JSON_PATH)
   seedConfigFromTemplate(TEMPLATE_ENV_PATH, ENV_PATH)
   seedConfigFromTemplate(TEMPLATE_AGENT_CONFIG_PATH, AGENT_CONFIG_PATH)
   seedSettingsLocal()
+  ensureSettingsLocalAdditions()
 }
 
 // Global Claude Code CLI first-run state -- NOT part of CONFIG_DIR, and NOT
