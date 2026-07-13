@@ -79,6 +79,30 @@ function emptyState() {
   return { cycleDay: null, cycleStartedAt: null, stoppedDay: null, briefDay: null, lastSkip: null }
 }
 
+// When did tonight begin? The cap is enforced over [cycleStartedAt, now], so
+// this timestamp IS the budget window.
+//
+// A cycle that is running but whose start time is missing or unparseable is the
+// dangerous case: returning null there would say "this night has spent nothing"
+// and hand the agent a fresh full budget on top of whatever it already burned.
+// So a corrupt anchor is not a zero, it is a BLINDNESS -- and blindness stops
+// the cycle, same as a broken meter.
+function anchorFor(st) {
+  if (!st.cycleDay) return { ok: true, ms: null } // no cycle -> nothing spent yet
+  const ms = Date.parse(st.cycleStartedAt || '')
+  if (!Number.isFinite(ms)) {
+    return { ok: false, reason: 'cycle state has no usable start time; cannot measure what tonight has cost' }
+  }
+  return { ok: true, ms }
+}
+
+// Wraps readBudget so a corrupt anchor can never silently become "spent 0".
+function budgetVia(readBudget, st) {
+  const a = anchorFor(st)
+  if (!a.ok) return { ok: false, mayRun: false, cap: 0, reason: a.reason }
+  return readBudget(a.ms)
+}
+
 // The decision. Returns one of:
 //   { action: 'none',  reason }
 //   { action: 'start', reason, nextState, budget }
@@ -89,8 +113,41 @@ function emptyState() {
 // blind it, and blow past it without writing transcripts.
 function decideAutonomy({ now, config, state, readBudget }) {
   const st = { ...emptyState(), ...(state || {}) }
+  const consented = String(config.AUTONOMY || '').toLowerCase() === 'yes'
 
-  if (String(config.AUTONOMY || '').toLowerCase() !== 'yes') {
+  // ── consent withdrawn ─────────────────────────────────────────────────────
+  // The first version of this returned immediately here, and I wrote a
+  // confident comment in http-server.cjs claiming "withdrawal of consent takes
+  // effect within the minute". That comment was false, and an external red team
+  // found it (2026-07-13): the agent is not PUSHED by this watcher, it was told
+  // once to go and is running its own loop. Declining to send it further
+  // instructions does not stop it. It keeps spending until the window closes.
+  //
+  // So withdrawal must SPEAK, not fall silent:
+  //   - a cycle is running -> tell it to stop, now.
+  //   - a brief is owed    -> still deliver it. The money was already spent, and
+  //     turning the feature off is not a request to be kept in the dark about
+  //     what it already cost. A bank does not stop sending statements because
+  //     you closed the account.
+  if (!consented) {
+    if (st.cycleDay && st.stoppedDay !== st.cycleDay) {
+      const budget = budgetVia(readBudget, st)
+      return {
+        action: 'stop',
+        reason: 'consent withdrawn while a cycle was running',
+        budget,
+        nextState: { ...st, stoppedDay: st.cycleDay },
+      }
+    }
+    if (st.cycleDay && st.briefDay !== st.cycleDay) {
+      const budget = budgetVia(readBudget, st)
+      return {
+        action: 'brief',
+        reason: 'consent withdrawn; the night that already ran is still owed an accounting',
+        budget,
+        nextState: { ...st, briefDay: st.cycleDay },
+      }
+    }
     return { action: 'none', reason: 'no consent (AUTONOMY is not yes)' }
   }
 
@@ -110,7 +167,7 @@ function decideAutonomy({ now, config, state, readBudget }) {
   // the state file), and it is not cancelled by the cycle having gone badly.
   if (!w.inWindow) {
     if (st.cycleDay && st.briefDay !== st.cycleDay) {
-      const budget = readBudget()
+      const budget = budgetVia(readBudget, st)
       return {
         action: 'brief',
         reason: `cycle ${st.cycleDay} ended, brief not yet delivered`,
@@ -122,7 +179,7 @@ function decideAutonomy({ now, config, state, readBudget }) {
   }
 
   // ── inside the window ─────────────────────────────────────────────────────
-  const budget = readBudget()
+  const budget = budgetVia(readBudget, st)
 
   // Already ran tonight.
   if (st.cycleDay === w.dayKey) {

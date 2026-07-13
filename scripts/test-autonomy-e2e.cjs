@@ -56,9 +56,10 @@ const realConfigBefore = fs.existsSync(REAL_CONFIG) ? fs.readFileSync(REAL_CONFI
     const a = await (await fetch(`${base}/api/autonomy`)).json()
     // No transcripts exist in the scratch tree yet -> the meter is BLIND, and
     // the API must say so rather than reporting a comfortable zero.
-    chk('a blind meter reports ok:false (not "0 tokens used")', a.usage && a.usage.ok === false, JSON.stringify(a.usage))
-    chk('and it may not run', a.usage.mayRun === false)
-    chk('and it says why', typeof a.usage.reason === 'string' && a.usage.reason.length > 0, a.usage && a.usage.reason)
+    chk('a blind meter reports ok:false (not "0 tokens used")', a.today && a.today.ok === false, JSON.stringify(a.today))
+    chk('and it says why', typeof a.today.reason === 'string' && a.today.reason.length > 0, a.today && a.today.reason)
+    chk('a blind meter never reports a total (a 0 would read as "you spent nothing")',
+      a.today.total === undefined, JSON.stringify(a.today))
   }
   {
     // Now give it a real transcript with real usage rows, the way the CLI does.
@@ -73,9 +74,12 @@ const realConfigBefore = fs.existsSync(REAL_CONFIG) ? fs.readFileSync(REAL_CONFI
     budget.resetCache()
 
     const a = await (await fetch(`${base}/api/autonomy`)).json()
-    chk('with transcripts present, the meter measures', a.usage.ok === true, JSON.stringify(a.usage))
-    chk('and the number is the RAW sum, cache reads included (3500)', a.usage.used === 3500, a.usage.used)
-    chk('the UI is handed the same cap the watcher enforces', a.usage.cap === a.cap, `${a.usage.cap} vs ${a.cap}`)
+    chk('with transcripts present, the meter measures', a.today.ok === true, JSON.stringify(a.today))
+    chk('and the number is the RAW sum, cache reads included (3500)', a.today.total === 3500, a.today.total)
+    // TODAY and THE CAP are different measurements and must not be conflated:
+    // today includes the owner's own chatting; the cap is enforced per NIGHT.
+    chk('today\'s total is reported separately from the per-night cap',
+      typeof a.cap === 'number' && a.today.total !== a.cap)
   }
 
   console.log('\n-- consent is a mutation, and mutations need the token')
@@ -117,7 +121,9 @@ const realConfigBefore = fs.existsSync(REAL_CONFIG) ? fs.readFileSync(REAL_CONFI
     const r = await post({ cap: 0 })
     chk('a cap of 0 is accepted -- it means OFF, and there is no unlimited', r.status === 200, r.status)
     const a = await (await fetch(`${base}/api/autonomy`)).json()
-    chk('...and the meter refuses to run at cap 0', a.usage.mayRun === false, JSON.stringify(a.usage))
+    chk('...and it round-trips as 0', a.cap === 0, a.cap)
+    const budgetAtZero = budget.budgetState(tmp, 0, new Date(), null)
+    chk('...and the meter refuses to run at cap 0', budgetAtZero.mayRun === false, JSON.stringify(budgetAtZero))
   }
   {
     const r = await post({ enabled: false })
@@ -132,6 +138,7 @@ const realConfigBefore = fs.existsSync(REAL_CONFIG) ? fs.readFileSync(REAL_CONFI
     chk('scratch .agent-config exists', fs.existsSync(scratchConfig))
     const text = fs.existsSync(scratchConfig) ? fs.readFileSync(scratchConfig, 'utf8') : ''
     chk('and it holds the autonomy fields', /AUTONOMY=/.test(text), text.slice(0, 200))
+    chk('the cap is stored under the per-NIGHT name', /AUTONOMY_TOKEN_CAP=/.test(text), text.slice(0, 300))
 
     const realAfter = fs.existsSync(REAL_CONFIG) ? fs.readFileSync(REAL_CONFIG, 'utf8') : null
     chk('THE REAL USER CONFIG WAS NOT TOUCHED BY THIS TEST', realAfter === realConfigBefore,

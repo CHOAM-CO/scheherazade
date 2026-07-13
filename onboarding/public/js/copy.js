@@ -522,11 +522,19 @@ window.COPY = {
     autonomyEnableLabel: '혼자 일하도록 허용',
     autonomyWindowLabel: '작업 시간대',
     autonomyWindowNote: '이 시간대에만 시작합니다. 자정을 넘겨도 됩니다 (예: 23:00 - 05:00)',
-    autonomyCapLabel: '하루 토큰 상한',
+    // "하룻밤" and not "하루": the cap is enforced per CYCLE, from the moment the
+    // window opens until it closes. A 23:00-05:00 night is one night, and
+    // measuring it per calendar day handed it a second budget at midnight.
+    autonomyCapLabel: '하룻밤 토큰 상한',
     autonomyCapNote:
-      '캐시 재사용을 포함한 전체 토큰입니다. 아침 브리프에도 같은 숫자가 나옵니다. ' +
+      '한 번의 밤 동안 쓸 수 있는 최대 토큰입니다 (캐시 재사용 포함). 넘으면 스스로 멈추고, 아침 브리프에 같은 숫자가 나옵니다. ' +
       '0으로 두면 혼자 일하지 않습니다 (무제한은 없습니다).',
-    autonomyUsageLabel: '오늘 사용량',
+    // Deliberately a DIFFERENT label from the cap: this is everything spent
+    // today including your own conversations, and it is not what the cap is
+    // measured against. One label over two measurements is how a number starts
+    // lying.
+    autonomyUsageLabel: '오늘 전체 사용량 (대화 포함)',
+    autonomyTokensWord: '토큰',
     autonomyUsageBlind:
       '지금은 사용량을 측정할 수 없습니다. 측정하지 못하는 동안에는 혼자 일하지 않습니다.',
     autonomyLastCycle: '지난밤',

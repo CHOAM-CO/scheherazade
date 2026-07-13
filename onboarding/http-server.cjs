@@ -2090,21 +2090,43 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
   // one name is how a meter starts lying.
   if (pathname === '/api/autonomy' && req.method === 'GET') {
     const cfg = readAgentConfig()
-    const cap = Number(cfg.AUTONOMY_DAILY_TOKEN_CAP || autonomyBudget.DEFAULT_DAILY_CAP)
+    const cap = Number(cfg.AUTONOMY_TOKEN_CAP || autonomyBudget.DEFAULT_DAILY_CAP)
     const state = readAutonomyState()
-    const usage = autonomyBudget.budgetState(DATA_HOME, cap)
+
+    // TWO different numbers, and they are never allowed to wear one name:
+    //
+    //   today  -- everything spent today, including the user's own conversations.
+    //             This is what the owner actually wants to know ("what did today
+    //             cost me"), and it is NOT what the cap is enforced against.
+    //   cap    -- a PER-NIGHT ceiling, enforced over [cycleStart, now]. It has to
+    //             be per-night: a 23:00-05:00 window measured per calendar day
+    //             got a fresh budget at midnight and could spend the cap twice
+    //             (external red team, 2026-07-13).
+    //
+    // ok === false means the meter cannot see the transcripts. That is reported
+    // as blindness, never as zero: "nothing was spent" and "I cannot tell you
+    // what was spent" are different sentences, and only one of them is a relief.
+    const today = autonomyBudget.usageForDay(DATA_HOME)
+    const lastCycleUsage = state && state.cycleStartedAt && Number.isFinite(Date.parse(state.cycleStartedAt))
+      ? autonomyBudget.usageSince(DATA_HOME, Date.parse(state.cycleStartedAt))
+      : null
+
     sendJson(res, 200, {
       enabled: String(cfg.AUTONOMY || '').toLowerCase() === 'yes',
       windowStart: cfg.AUTONOMY_WINDOW_START || autonomyCycle.DEFAULTS.windowStart,
       windowEnd: cfg.AUTONOMY_WINDOW_END || autonomyCycle.DEFAULTS.windowEnd,
       cap,
       defaultCap: autonomyBudget.DEFAULT_DAILY_CAP,
-      // usage.ok === false means the meter cannot see the transcripts. The UI
-      // must say so out loud: a blank number would read as "0 tokens used",
-      // and the difference between "nothing was spent" and "I cannot tell you
-      // what was spent" is the whole point of this feature.
-      usage,
-      lastCycle: state ? { day: state.cycleDay, startedAt: state.cycleStartedAt, stopped: state.stoppedDay === state.cycleDay, briefed: state.briefDay === state.cycleDay } : null,
+      today,
+      lastCycle: state && state.cycleDay
+        ? {
+          day: state.cycleDay,
+          startedAt: state.cycleStartedAt,
+          stopped: state.stoppedDay === state.cycleDay,
+          briefed: state.briefDay === state.cycleDay,
+          used: lastCycleUsage && lastCycleUsage.ok ? lastCycleUsage.total : null,
+        }
+        : null,
       lastSkip: state ? state.lastSkip || null : null,
     })
     return
@@ -2134,10 +2156,10 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
       // the absence of a number means no, never yes, for a feature that spends
       // someone else's money while they sleep.
       if (!Number.isFinite(cap) || cap < 0 || cap > 1e12) {
-        sendJson(res, 400, { error: 'invalid daily token cap' })
+        sendJson(res, 400, { error: 'invalid token cap' })
         return
       }
-      fields.AUTONOMY_DAILY_TOKEN_CAP = String(Math.floor(cap))
+      fields.AUTONOMY_TOKEN_CAP = String(Math.floor(cap))
     }
     if (Object.keys(fields).length === 0) {
       sendJson(res, 400, { error: 'nothing to change' })

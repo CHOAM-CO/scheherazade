@@ -160,8 +160,19 @@ const USAGE_FIELDS = [
 // a test rewriting the file) we throw the cached offset away and re-read from
 // zero. A stale offset would silently skip real spend, which is the fail-open
 // direction, so this check is not optional.
+// The cache holds PARSED ROWS, not a running total, and that is a correction
+// rather than a design choice. The first version cached a per-day sum, which
+// silently made "the budget" mean "the calendar day" -- so a 23:00-05:00 night
+// got a fresh cap at 00:01 and could spend twice what the owner allowed
+// (red-team, 2026-07-13, external/model-divergent; my own tests missed it
+// because they mocked the meter). Rows are timestamped, so keeping them lets
+// the SAME meter answer both questions honestly:
+//   usageForDay   -> what the owner spent today (what the settings page shows)
+//   usageSince    -> what THIS NIGHT has spent (what the cap is enforced on)
+// A cap whose window disagrees with the cycle's window is not a cap.
 const HEAD_PROBE_BYTES = 256
-const fileCache = new Map() // path -> { day, head, offset, totals }
+const ROW_RETENTION_MS = 48 * 60 * 60 * 1000 // two days: yesterday's night is still answerable
+const fileCache = new Map() // path -> { head, offset, rows: [{ t, i, o, cc, cr }] }
 
 function resetCache() { fileCache.clear() }
 
@@ -230,23 +241,18 @@ function rowIsOurs(row, wantResolved) {
   return path.resolve(row.cwd) === wantResolved
 }
 
-// Sum every assistant-message usage record stamped with the given local day.
+// Collect every usage row this agent produced at or after `fromMs`, across all
+// transcripts. Returns { ok: true, rows: [...] } or { ok: false, reason }.
 //
-// Returns { ok: true, day, ...totals, files } or { ok: false, reason }.
-// Note `total` sums ALL four fields including cache reads. Cache reads are
-// cheap but they are not free, and the number the user is shown must be the
-// number the cap is enforced against -- two different numbers under one name
-// is how a meter starts lying.
-function usageForDay(dataHome, now = new Date(), resolved = null) {
+// This is the one place that touches disk. usageForDay() and usageSince() are
+// both filters over its output, so the number on the settings page and the
+// number the cap is enforced against can never drift apart into two different
+// measurements wearing one name.
+function collectRows(dataHome, fromMs, resolved = null) {
   const r = resolved || resolveTranscriptDir(dataHome)
   if (!r.ok) return { ok: false, reason: r.reason }
 
-  const day = localDay(now)
   const want = path.resolve(dataHome)
-  const totals = emptyTotals()
-  let files = 0
-  let filesCounted = 0
-
   let names
   try {
     names = fs.readdirSync(r.dir).filter((f) => f.endsWith('.jsonl'))
@@ -254,27 +260,26 @@ function usageForDay(dataHome, now = new Date(), resolved = null) {
     return { ok: false, reason: `transcript dir unreadable (${r.dir}): ${err.code || err.message}` }
   }
 
-  // Start-of-day in local time. A transcript last touched before today cannot
-  // contain today's rows, so it is skipped without being opened.
-  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
-
+  const out = []
+  let files = 0
   for (const name of names) {
     const file = path.join(r.dir, name)
     let st
     try { st = fs.statSync(file) } catch { continue }
-    if (st.mtimeMs < dayStart) continue
+    // A file untouched since before the window we care about cannot contain a
+    // row inside it. Skipped without being opened.
+    if (st.mtimeMs < fromMs) continue
     files++
 
     const head = readHead(file, st.size)
     let c = fileCache.get(file)
     // Any of these means the cached offset can no longer be trusted, so we
-    // re-read the file from zero rather than resume into the wrong place:
+    // re-read from zero rather than resume into the wrong place:
     //   - never seen it
-    //   - it belongs to a previous day's tally
     //   - it SHRANK (truncation / rotation)
     //   - its first bytes changed (rewritten, not appended)
-    if (!c || c.day !== day || st.size < c.offset || c.head !== head) {
-      c = { day, head, offset: 0, totals: emptyTotals() }
+    if (!c || st.size < c.offset || c.head !== head) {
+      c = { head, offset: 0, rows: [] }
       fileCache.set(file, c)
     }
 
@@ -286,26 +291,70 @@ function usageForDay(dataHome, now = new Date(), resolved = null) {
         if (!rowIsOurs(row, want)) continue
         const ts = new Date(row.timestamp)
         if (Number.isNaN(ts.getTime())) continue
-        if (localDay(ts) !== day) continue
-        c.totals.rows++
-        for (const [field, key] of USAGE_FIELDS) {
-          const v = usage[field]
-          if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
-            c.totals[key] += v
-            c.totals.total += v
-          }
-        }
+        const rec = { t: ts.getTime(), i: 0, o: 0, cc: 0, cr: 0 }
+        const num = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0)
+        rec.i = num(usage.input_tokens)
+        rec.o = num(usage.output_tokens)
+        rec.cc = num(usage.cache_creation_input_tokens)
+        rec.cr = num(usage.cache_read_input_tokens)
+        c.rows.push(rec)
       }
       c.offset += consumed
+      // Bound memory: a transcript that has been open for weeks would otherwise
+      // grow this array without limit. Two days back is enough to still answer
+      // "what did last night cost" after a midnight rollover.
+      const cutoff = Date.now() - ROW_RETENTION_MS
+      if (c.rows.length > 512 && c.rows[0].t < cutoff) {
+        c.rows = c.rows.filter((x) => x.t >= cutoff)
+      }
     }
 
-    if (c.totals.rows > 0) filesCounted++
-    for (const k of ['input', 'output', 'cacheCreate', 'cacheRead', 'total', 'rows']) {
-      totals[k] += c.totals[k]
+    for (const rec of c.rows) {
+      if (rec.t >= fromMs) out.push(rec)
     }
   }
 
-  return { ok: true, day, dir: r.dir, via: r.via, files, filesCounted, ...totals }
+  return { ok: true, rows: out, dir: r.dir, via: r.via, files }
+}
+
+function sumRows(rows) {
+  const totals = emptyTotals()
+  for (const rec of rows) {
+    totals.input += rec.i
+    totals.output += rec.o
+    totals.cacheCreate += rec.cc
+    totals.cacheRead += rec.cr
+    totals.total += rec.i + rec.o + rec.cc + rec.cr
+    totals.rows++
+  }
+  return totals
+}
+
+// What the owner spent TODAY (local day). This is what the settings page shows.
+//
+// Note `total` sums ALL four fields including cache reads. Cache reads are
+// cheap but they are not free, and the number the user is shown must be the
+// number the cap is enforced against -- two different numbers under one name
+// is how a meter starts lying.
+function usageForDay(dataHome, now = new Date(), resolved = null) {
+  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const c = collectRows(dataHome, dayStart, resolved)
+  if (!c.ok) return { ok: false, reason: c.reason }
+  const dayEnd = dayStart + 24 * 60 * 60 * 1000
+  const rows = c.rows.filter((r) => r.t >= dayStart && r.t < dayEnd)
+  return { ok: true, day: localDay(now), dir: c.dir, via: c.via, files: c.files, ...sumRows(rows) }
+}
+
+// What has been spent SINCE a moment -- i.e. what THIS NIGHT has cost.
+//
+// The cap is enforced on this, not on usageForDay, because a night that starts
+// at 23:00 and ends at 05:00 is one night and must get one budget. Measuring it
+// per calendar day handed it a fresh cap at midnight and let it spend twice
+// what the owner allowed.
+function usageSince(dataHome, sinceMs, resolved = null) {
+  const c = collectRows(dataHome, sinceMs, resolved)
+  if (!c.ok) return { ok: false, reason: c.reason }
+  return { ok: true, since: sinceMs, dir: c.dir, via: c.via, files: c.files, ...sumRows(c.rows.filter((r) => r.t >= sinceMs)) }
 }
 
 // The unit is ALL FOUR token fields summed, cache reads included.
@@ -330,16 +379,53 @@ const DEFAULT_DAILY_CAP = 5000000
 
 // The whole decision, in one call.
 //
+// `sinceMs` anchors the cap to THE NIGHT, not to the calendar day:
+//   - a cycle is running  -> pass its start time; `used` is what this night has
+//     cost, which is the only number the cap can honestly be enforced against.
+//   - no cycle yet        -> pass null; `used` is 0 by definition (this night
+//     has not spent anything), and the call still hits disk so that a meter
+//     which CANNOT SEE the transcripts refuses to start one.
+//
+// That last clause is the fail-closed property and it is easy to lose while
+// "optimizing": if no-cycle-yet short-circuited to used=0 without touching the
+// meter, a blind meter would happily green-light the night.
+//
 // `capTokens` <= 0 is NOT "unlimited" -- it is "off". There is no way to
 // express an unlimited autonomous budget in this product on purpose: the
 // feature spends someone else's money while they sleep, so the absence of a
 // number means no, never yes.
-function budgetState(dataHome, capTokens, now = new Date()) {
+function budgetState(dataHome, capTokens, now = new Date(), sinceMs = null) {
   const cap = Number(capTokens)
   if (!Number.isFinite(cap) || cap <= 0) {
-    return { ok: false, reason: 'no daily token cap configured', cap: 0, mayRun: false }
+    return { ok: false, reason: 'no token cap configured', cap: 0, mayRun: false }
   }
-  const u = usageForDay(dataHome, now)
+  // No cycle yet: this night has spent nothing, BY DEFINITION -- so there is no
+  // sum to take. But we still have to prove the meter can SEE, or a blind meter
+  // would green-light a night it could never measure. Resolving the transcript
+  // directory is that proof, and it is the same check every other path makes.
+  //
+  // (Doing this by summing "rows since now" instead would be a boundary hack:
+  // a row stamped at exactly `now` lands inside `>= now` and the night starts
+  // pre-charged for a message the owner just sent.)
+  if (sinceMs === null) {
+    const r = resolveTranscriptDir(dataHome)
+    if (!r.ok) return { ok: false, reason: r.reason, cap, mayRun: false }
+    return {
+      ok: true,
+      mayRun: true,
+      cap,
+      used: 0,
+      remaining: cap,
+      usedPct: 0,
+      since: null,
+      day: localDay(now),
+      breakdown: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 },
+      rows: 0,
+      files: 0,
+    }
+  }
+
+  const u = usageSince(dataHome, sinceMs)
   if (!u.ok) {
     // Cannot measure -> cannot spend. This is the single most important line
     // in the file.
@@ -353,7 +439,8 @@ function budgetState(dataHome, capTokens, now = new Date()) {
     used: u.total,
     remaining,
     usedPct: Math.round((u.total / cap) * 100),
-    day: u.day,
+    since: sinceMs,
+    day: localDay(now),
     breakdown: { input: u.input, output: u.output, cacheCreate: u.cacheCreate, cacheRead: u.cacheRead },
     rows: u.rows,
     files: u.files,

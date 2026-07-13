@@ -54,8 +54,11 @@
     $('set-autonomy-cap').value = String(a.cap)
 
     const usageEl = $('set-autonomy-usage')
-    if (a.usage && a.usage.ok) {
-      usageEl.textContent = `${C.autonomyUsageLabel}: ${fmtTokens(a.usage.used)} / ${fmtTokens(a.usage.cap)} (${a.usage.usedPct}%)`
+    if (a.today && a.today.ok) {
+      // Today's TOTAL -- the owner's own conversations included. This is not the
+      // number the cap is enforced against (that one is per-night), and the copy
+      // says so rather than letting one label cover two measurements.
+      usageEl.textContent = `${C.autonomyUsageLabel}: ${fmtTokens(a.today.total)}`
     } else {
       // Not a blank, not a zero. The one sentence the user must never be
       // shown wrongly is "you spent nothing".
@@ -65,6 +68,7 @@
     const lastEl = $('set-autonomy-last')
     if (a.lastCycle && a.lastCycle.day) {
       const bits = [a.lastCycle.stopped ? C.autonomyLastCycleStopped : C.autonomyLastCycleRan]
+      if (typeof a.lastCycle.used === 'number') bits.push(`${fmtTokens(a.lastCycle.used)} ${C.autonomyTokensWord}`)
       if (a.lastCycle.briefed) bits.push(C.autonomyLastCycleBriefed)
       lastEl.textContent = `${C.autonomyLastCycle} (${a.lastCycle.day}): ${bits.join(' / ')}`
     } else if (a.lastSkip) {

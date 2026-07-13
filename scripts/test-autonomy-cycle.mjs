@@ -167,12 +167,51 @@ console.log('\n-- the brief: a debt that survives the night and the process')
   const d = decideAutonomy({ now: at(7), config: CONSENTED, state: skipped, readBudget: BROKE })
   eq('a night with no cycle owes no brief', d.action, 'none')
 }
+console.log('\n-- consent WITHDRAWN mid-night (external red team, 2026-07-13)')
 {
-  // Consent withdrawn while a brief was outstanding. The user turned it off;
-  // we do not get one last word in.
-  const nightState = { cycleDay: '2026-07-13', cycleStartedAt: 'x', stoppedDay: null, briefDay: null }
-  const d = decideAutonomy({ now: at(7), config: { ...CONSENTED, AUTONOMY: 'no' }, state: nightState, readBudget: RICH })
-  eq('withdrawing consent silences even the pending brief', d.action, 'none')
+  // The hole: this watcher does not PUSH the agent. It told the agent once to
+  // go, and the agent is running its own loop. Falling silent when consent is
+  // withdrawn does not stop it -- it keeps spending until the window closes.
+  // Withdrawal has to SPEAK.
+  const running = { cycleDay: '2026-07-13', cycleStartedAt: '2026-07-13T02:00:00.000Z', stoppedDay: null, briefDay: null }
+  const d = decideAutonomy({ now: at(3), config: { ...CONSENTED, AUTONOMY: 'no' }, state: running, readBudget: RICH })
+  eq('withdrawing consent mid-cycle STOPS the agent (it does not just go quiet)', d.action, 'stop')
+  ok('and says so', /consent withdrawn/.test(d.reason), d.reason)
+
+  const after = decideAutonomy({ now: at(3, 5), config: { ...CONSENTED, AUTONOMY: 'no' }, state: d.nextState, readBudget: RICH })
+  eq('...then the night that already ran is STILL owed its accounting', after.action, 'brief')
+
+  const settled = decideAutonomy({ now: at(3, 10), config: { ...CONSENTED, AUTONOMY: 'no' }, state: after.nextState, readBudget: RICH })
+  eq('...and once stopped and briefed, it finally goes quiet', settled.action, 'none')
+}
+{
+  const never = { ...emptyState() }
+  const d = decideAutonomy({ now: at(3), config: { ...CONSENTED, AUTONOMY: 'no' }, state: never, readBudget: RICH })
+  eq('consent off with nothing outstanding stays silent', d.action, 'none')
+}
+
+console.log('\n-- a corrupt cycle anchor is BLINDNESS, not a free budget')
+{
+  // If cycleStartedAt is unreadable we cannot know what tonight has cost. The
+  // tempting answer (treat it as 0) hands the agent a fresh full cap on top of
+  // whatever it already burned.
+  const corrupt = { cycleDay: '2026-07-13', cycleStartedAt: 'not-a-timestamp', stoppedDay: null, briefDay: null }
+  const d = decideAutonomy({ now: at(3), config: CONSENTED, state: corrupt, readBudget: RICH })
+  eq('a cycle with an unparseable start time is STOPPED', d.action, 'stop')
+  ok('and the reason is that we cannot measure it, not that it overspent',
+    /cannot measure/.test(d.reason), d.reason)
+}
+
+console.log('\n-- the cap is anchored to the night, and the anchor is passed through')
+{
+  let seen = 'never called'
+  const spy = (sinceMs) => { seen = sinceMs; return RICH() }
+  decideAutonomy({ now: at(3), config: CONSENTED, state: null, readBudget: spy })
+  eq('with no cycle running, the meter is asked about NO window (null)', seen, null)
+
+  const running = { cycleDay: '2026-07-13', cycleStartedAt: '2026-07-13T14:00:00.000Z', stoppedDay: null, briefDay: null }
+  decideAutonomy({ now: at(3), config: CONSENTED, state: running, readBudget: spy })
+  eq('with a cycle running, the meter is anchored to the cycle START', seen, Date.parse('2026-07-13T14:00:00.000Z'))
 }
 
 console.log('\n-- the injected turns: a contract with stop-reply-guard, not decoration')

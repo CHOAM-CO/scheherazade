@@ -545,15 +545,29 @@ function startAutonomyWatcher() {
     autonomyInFlight = true
     try {
       const config = await readAgentConfigFile()
-      if (String(config.AUTONOMY || '').toLowerCase() !== 'yes') return // cheap exit, no disk reads
-
       const state = await readAutonomyState()
-      const cap = Number(config.AUTONOMY_DAILY_TOKEN_CAP || budgetMod.DEFAULT_DAILY_CAP)
+
+      // The cheap exit, and it is narrower than it looks. It used to be just
+      // "AUTONOMY !== yes -> return", which meant that turning consent OFF
+      // mid-night made this watcher fall SILENT -- and a silent watcher does
+      // not stop the agent, because the agent was told once to work and is
+      // running its own loop. Withdrawal has to be able to speak. So we only
+      // skip when there is nothing outstanding: no cycle, or a cycle already
+      // stopped AND already briefed.
+      const consented = String(config.AUTONOMY || '').toLowerCase() === 'yes'
+      const settled = !state || !state.cycleDay ||
+        (state.stoppedDay === state.cycleDay && state.briefDay === state.cycleDay)
+      if (!consented && settled) return
+
+      const cap = Number(config.AUTONOMY_TOKEN_CAP || config.AUTONOMY_DAILY_TOKEN_CAP || budgetMod.DEFAULT_DAILY_CAP)
       const decision = cycleMod.decideAutonomy({
         now: new Date(),
         config,
         state,
-        readBudget: () => budgetMod.budgetState(DATA_HOME, cap),
+        // sinceMs anchors the cap to THE NIGHT: cycle.cjs hands us the start of
+        // the running cycle (or null if none has begun). Measuring per calendar
+        // day handed a 23:00-05:00 night a second full budget at midnight.
+        readBudget: (sinceMs) => budgetMod.budgetState(DATA_HOME, cap, new Date(), sinceMs),
       })
 
       if (decision.action === 'none') {

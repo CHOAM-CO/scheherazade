@@ -155,7 +155,10 @@ console.log('\n-- usageForDay: sums, and what it refuses to count')
   writeTranscript(slugDir, 'old.jsonl', [usageRow(NOW, { output: 777 })], YESTERDAY)
   const u = budget.usageForDay(DATA_HOME, NOW)
   eq('stale-mtime transcripts are skipped', u.total, 11)
-  eq('only one file actually contributed rows', u.filesCounted, 1)
+  // old.jsonl was never even opened. (wrong-cwd.jsonl still is -- it has a
+  // fresh mtime -- but its rows are excluded by the cwd filter, which is the
+  // next test's job.)
+  ok('the stale file was not opened at all', u.files === 2, `files=${u.files}`)
 }
 
 console.log('\n-- the cwd filter: a foreign row in our directory is not our spend')
@@ -244,19 +247,62 @@ console.log('\n-- tailRows: a partial row is dropped, never half-parsed')
   ok('no fabricated row', rows.every((r) => r && typeof r === 'object'))
 }
 
+console.log('\n-- the cap follows THE NIGHT, not the calendar day (red-team 2026-07-13)')
+{
+  // The bug: a 23:00-05:00 cycle measured per calendar day gets a fresh cap at
+  // 00:01 and can spend the owner's ceiling TWICE in one night.
+  budget.resetCache()
+  const nightStart = new Date(2026, 6, 13, 23, 0, 0)
+  const beforeMidnight = new Date(2026, 6, 13, 23, 40, 0)
+  const afterMidnight = new Date(2026, 6, 14, 0, 30, 0)
+  writeTranscript(slugDir, 'night.jsonl', [
+    usageRow(new Date(2026, 6, 13, 23, 30, 0), { output: 800 }),
+  ], beforeMidnight)
+
+  const pre = budget.budgetState(DATA_HOME, 1000, beforeMidnight, nightStart.getTime())
+  eq('before midnight the night has spent 800', pre.used, 800)
+  ok('and it may still run', pre.mayRun === true)
+
+  // 00:30. The calendar day rolled over. The NIGHT did not.
+  fs.appendFileSync(path.join(slugDir, 'night.jsonl'), usageRow(new Date(2026, 6, 14, 0, 10, 0), { output: 300 }) + '\n')
+  fs.utimesSync(path.join(slugDir, 'night.jsonl'), afterMidnight, afterMidnight)
+  const post = budget.budgetState(DATA_HOME, 1000, afterMidnight, nightStart.getTime())
+  eq('after midnight the night still remembers what it spent BEFORE midnight', post.used, 1100)
+  ok('so the cap is now breached and the cycle may NOT continue', post.mayRun === false, JSON.stringify(post))
+
+  // The old (broken) behavior, spelled out so it cannot come back: measured by
+  // calendar day, the same moment would have reported only the post-midnight
+  // spend and handed the agent a fresh budget.
+  const byCalendarDay = budget.usageForDay(DATA_HOME, afterMidnight)
+  eq('...whereas a calendar-day meter would have said 300 and let it keep going', byCalendarDay.total, 300)
+  fs.rmSync(path.join(slugDir, 'night.jsonl'))
+  budget.resetCache()
+}
+
 console.log('\n-- budgetState: the fail-CLOSED property (the whole point)')
 {
   writeTranscript(slugDir, 'a.jsonl', [usageRow(NOW, { output: 100 })])
-  const s = budget.budgetState(DATA_HOME, 1000, NOW)
+  const since = new Date(2026, 6, 13, 0, 0, 0).getTime()
+  const s = budget.budgetState(DATA_HOME, 1000, NOW, since)
   ok('under cap -> mayRun', s.ok === true && s.mayRun === true, JSON.stringify(s))
   eq('remaining is honest', s.remaining, 900)
   eq('usedPct surfaced for the agent to SEE', s.usedPct, 10)
 }
 {
   writeTranscript(slugDir, 'a.jsonl', [usageRow(NOW, { output: 1000 })])
-  const s = budget.budgetState(DATA_HOME, 1000, NOW)
+  const since = new Date(2026, 6, 13, 0, 0, 0).getTime()
+  const s = budget.budgetState(DATA_HOME, 1000, NOW, since)
   ok('at cap -> may NOT run', s.mayRun === false, JSON.stringify(s))
   eq('remaining floors at 0, never negative', s.remaining, 0)
+}
+{
+  // No cycle running: nothing has been spent by THIS NIGHT, so used is 0 --
+  // but the meter must still have been consulted, or a blind meter would
+  // green-light the night.
+  writeTranscript(slugDir, 'a.jsonl', [usageRow(NOW, { output: 999999 })])
+  const s = budget.budgetState(DATA_HOME, 1000, NOW, null)
+  ok('with no cycle yet, the night has spent nothing', s.ok === true && s.used === 0, JSON.stringify(s))
+  ok('...and today\'s heavy chat does NOT cancel the night', s.mayRun === true)
 }
 {
   const s = budget.budgetState(DATA_HOME, 0, NOW)
