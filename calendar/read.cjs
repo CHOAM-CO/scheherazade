@@ -99,7 +99,15 @@ function run(argv) {
   const pred = store.predicateForEventsWithStartDateEndDateCalendars(from, to, $())
   const evs = store.eventsMatchingPredicate(pred)
 
+  // The owner lives in a timezone. NSISO8601DateFormatter defaults to UTC, which
+  // rendered a 13:45 KST meeting as "04:45Z" -- and an agent reading that would
+  // cheerfully tell them their meeting is at quarter to five in the morning. The
+  // read SUCCEEDED and still said something false, which is the same failure as
+  // the empty-list-on-no-permission, just quieter.
   const fmt = $.NSISO8601DateFormatter.alloc.init
+  fmt.timeZone = $.NSTimeZone.localTimeZone
+  // withInternetDateTime, so the offset (+09:00) is carried rather than implied.
+  fmt.formatOptions = $.NSISO8601DateFormatWithInternetDateTime
   const out = []
   const n = parseInt(evs.count, 10)
   for (let i = 0; i < n; i++) {
