@@ -2177,6 +2177,72 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     return
   }
 
+  // ── pointer index over other tools' local memory (v0.0.4 item d) ──────────
+  // Three routes, and the gates live in the HTTP verbs themselves:
+  //   POST   /api/memory/import   -- the scan. Runs ONLY here. There is no boot
+  //                                  hook and no timer; the user's click IS the
+  //                                  consent (Mino gate 1).
+  //   GET    /api/memory/pointers -- what we hold, with provenance + coverage.
+  //   DELETE /api/memory/pointers -- throw it all away. A privacy feature the
+  //                                  user cannot undo is not a privacy feature.
+  //
+  // Note these are NOT reachable via the /api/memory/:table routes above:
+  // imported_pointers is deliberately not in CATEGORY_TABLES, so it can never
+  // be rendered as, or mistaken for, one of the agent's own memory categories.
+  if (pathname === '/api/memory/import' && req.method === 'POST') {
+    const { scanPointers } = require('../memory/pointer-scan.cjs')
+    const { db } = await getMemory()
+    const { pointers, coverage } = scanPointers({})
+    const now = new Date().toISOString()
+    // Upsert on path: a re-scan refreshes what's there rather than piling up
+    // duplicate rows for the same file (UNIQUE(path) in the DDL backs this).
+    const stmt = db.prepare(`
+      INSERT INTO imported_pointers (source_tool, path, kind, topic, size_bytes, mtime, indexed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(path) DO UPDATE SET
+        source_tool = excluded.source_tool,
+        kind        = excluded.kind,
+        topic       = excluded.topic,
+        size_bytes  = excluded.size_bytes,
+        mtime       = excluded.mtime,
+        indexed_at  = excluded.indexed_at
+    `)
+    let written = 0
+    for (const p of pointers) {
+      try {
+        stmt.run(p.source_tool, p.path, p.kind, p.topic, p.size_bytes, p.mtime, now)
+        written++
+      } catch (err) {
+        // One bad row must not abort the whole scan (seedAgentDefinitions'
+        // per-entry try/catch shape). Loud in the log, invisible to the user.
+        console.error(`[scheherazade/onboarding] pointer upsert failed for ${p.path}:`, err.message)
+      }
+    }
+    sendJson(res, 200, { ok: true, written, coverage })
+    return
+  }
+  if (pathname === '/api/memory/pointers' && req.method === 'GET') {
+    const { scanPointers: _s, defaultSources } = require('../memory/pointer-scan.cjs')
+    const { mod, db } = await getMemory()
+    const { rows } = mod.memoryQuery(db, { table: 'imported_pointers' })
+    // Coverage notes are static per tool; the counts are live from the table.
+    // Deliberately does NOT re-scan -- reading the page must never touch the
+    // user's files. Opt-in means opt-in.
+    const counts = new Map()
+    for (const r of rows) counts.set(r.source_tool, (counts.get(r.source_tool) || 0) + 1)
+    const coverage = defaultSources().map((s) => ({
+      tool: s.tool, label: s.label, note: s.coverage, found: counts.get(s.tool) || 0,
+    }))
+    sendJson(res, 200, { rows, coverage })
+    return
+  }
+  if (pathname === '/api/memory/pointers' && req.method === 'DELETE') {
+    const { db } = await getMemory()
+    db.prepare('DELETE FROM imported_pointers').run()
+    sendJson(res, 200, { ok: true })
+    return
+  }
+
   const tableMatch = pathname.match(/^\/api\/memory\/([a-z_]+)$/)
   if (tableMatch && req.method === 'GET') {
     const table = tableMatch[1]

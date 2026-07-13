@@ -155,13 +155,46 @@ CREATE TABLE IF NOT EXISTS memory_events (
                                       -- v1.1 with the self_catches work; not implemented here).
   at TEXT NOT NULL
 );
+
+-- Pointer index over OTHER tools' local memory (2026-07-13, v0.0.4 item d).
+-- This is not an import and must never become one. Every column here is a
+-- LOCATION or a label; none is content. The rule is the one ONTOLOGY_GUIDE.md
+-- already states: an index answers WHERE, never WHAT — "the moment you store
+-- answer text in the index and serve it back, you have built a second, staler
+-- copy."
+--
+-- The topic column is the closest thing to content, and it is deliberately only a
+-- markdown heading (the file's table of contents, never its body — asserted in
+-- scripts/test-pointer-scan.mjs). The agent that wants to know what a pointed-at
+-- file SAYS has to open it, with a visible tool call, in front of the user.
+--
+-- CRITICALLY: this table is absent from WRITABLE_TABLES below, so memory_write
+-- and memory_confirm physically cannot reach it. Borrowed knowledge and lived
+-- knowledge must not be able to become the same sentence. Rows arrive only from
+-- an explicit, user-initiated scan (http-server's POST /api/memory/import).
+CREATE TABLE IF NOT EXISTS imported_pointers (
+  id INTEGER PRIMARY KEY,
+  source_tool TEXT NOT NULL,         -- provenance tag: claude-code | codex | claude-desktop
+  path TEXT NOT NULL,                -- WHERE. the whole point.
+  kind TEXT,                         -- file extension, e.g. md | jsonl
+  topic TEXT,                        -- headings only; '' when the file was never opened
+  size_bytes INTEGER,
+  mtime TEXT,                        -- source file's mtime: staleness is detectable
+  indexed_at TEXT NOT NULL,
+  UNIQUE(path)                       -- re-scanning updates in place, never duplicates
+);
 `
 
 // Tables writable via memory_write/memory_confirm/memory_delete.
 // memory_events is deliberately excluded — it's an append-only audit log,
 // written only internally by logEvent(); it is readable via memory_query.
+// imported_pointers is deliberately excluded — it is BORROWED knowledge from
+// other tools, and the one thing this feature promises is that it never blends
+// into the agent's own memory. Excluding it here is that promise, enforced by
+// the code rather than by a comment: memory_write cannot name a table it is not
+// allowed to name.
 const WRITABLE_TABLES = new Set(['user_facts', 'open_threads', 'corrections', 'preferences'])
-const ALL_TABLES = new Set([...WRITABLE_TABLES, 'memory_events'])
+const ALL_TABLES = new Set([...WRITABLE_TABLES, 'memory_events', 'imported_pointers'])
 
 // Per-table upsert/recency shape. conflictCols = natural key for
 // INSERT...ON CONFLICT...DO UPDATE upsert (null = always a fresh INSERT,

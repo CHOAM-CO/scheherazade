@@ -235,6 +235,29 @@
     muteRevertConfirm: (m) => `Switch back to ${m}? The agent will restart.`,
   }
 
+  // ── Imported pointers (v0.0.4 item d) ─────────────────────────────────
+  // Copy discipline: say what this IS (locations), what it is NOT (a copy of
+  // your files), and what it costs. The scan opens nothing but markdown
+  // headings, and never enters a credential path -- if we claim that, the copy
+  // has to be plain enough that the claim is checkable.
+  const POINTERS_COPY = {
+    label: '다른 도구의 메모리 (위치만)',
+    intro: '다른 AI 도구가 이 Mac에 남긴 메모리 파일의 "위치"를 찾아 목록으로 둡니다. 내용을 복사해 오지 않고, 제 기억에 섞지도 않습니다. 로그인 정보가 있는 경로는 스캔 대상에서 원천 제외됩니다.',
+    scan: '지금 찾아보기',
+    clear: '목록 비우기',
+    scanning: '찾는 중…',
+    // Truncation is stated, never silent: a capped list that reads as complete
+    // is a lie the user has no way to detect.
+    scanned: (n, truncated) => (truncated
+      ? `${n}개를 찾았습니다 (상한에 걸려 일부만 표시됩니다).`
+      : `${n}개를 찾았습니다.`),
+    cleared: '목록을 비웠습니다.',
+    empty: '아직 찾아본 적이 없습니다.',
+    clearConfirm: '이 목록을 전부 비울까요?',
+    clearOk: '비우기',
+    coverage: (label, found, note) => `${label}: ${found}개 — ${note}`,
+  }
+
   // Model catalog + provider gate. A model is selectable only if its provider
   // is the onboarded PROVIDER (single-provider today; claude-subscription
   // counts as claude). Claude ids use CLI aliases (version-independent).
@@ -616,10 +639,106 @@
     }
 
     renderAgentControl()
+    renderPointers()
     await loadSessionGroup()
     for (const table of ['user_facts', 'open_threads', 'corrections', 'preferences']) {
       loadCategory(table)
     }
+  }
+
+  // Imported pointers. Note what does NOT happen here: opening this page does
+  // not scan anything. GET /api/memory/pointers reads the table only. The scan
+  // runs on the button and nowhere else -- opt-in has to mean opt-in even when
+  // scanning would be convenient.
+  function renderPointers() {
+    const P = POINTERS_COPY
+    $('cat-pointers-label').textContent = P.label
+    $('pointers-intro').textContent = P.intro
+    const scanBtn = $('pointers-scan')
+    const clearBtn = $('pointers-clear')
+    const statusEl = $('pointers-status')
+    scanBtn.textContent = P.scan
+    clearBtn.textContent = P.clear
+
+    function paint(data) {
+      const rows = data.rows || []
+      const cov = data.coverage || []
+      $('pointers-coverage').innerHTML = ''
+      for (const c of cov) {
+        const line = document.createElement('div')
+        line.className = 'pointers-coverage-line'
+        line.textContent = P.coverage(c.label, c.found, c.note)
+        $('pointers-coverage').appendChild(line)
+      }
+      const entries = $('pointers-entries')
+      entries.innerHTML = ''
+      if (!rows.length) {
+        const empty = document.createElement('div')
+        empty.className = 'entry-empty'
+        empty.textContent = P.empty
+        entries.appendChild(empty)
+        return
+      }
+      for (const r of rows) {
+        const el = document.createElement('div')
+        el.className = 'entry pointer-entry'
+        // The pointer shows WHERE and (at most) a heading. There is no body
+        // text to show, because none was ever read.
+        const loc = document.createElement('div')
+        loc.className = 'pointer-path'
+        loc.textContent = r.path
+        const meta = document.createElement('div')
+        meta.className = 'pointer-meta'
+        meta.textContent = [r.source_tool, r.topic].filter(Boolean).join(' · ')
+        el.appendChild(loc)
+        el.appendChild(meta)
+        entries.appendChild(el)
+      }
+    }
+
+    async function load() {
+      try {
+        paint(await api('/api/memory/pointers'))
+      } catch (err) {
+        console.error('pointer load failed:', err)
+      }
+    }
+
+    scanBtn.onclick = async () => {
+      scanBtn.disabled = true
+      statusEl.textContent = P.scanning
+      try {
+        const result = await api('/api/memory/import', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+        })
+        const truncated = (result.coverage || []).some((c) => c.truncated)
+        statusEl.textContent = P.scanned(result.written || 0, truncated)
+        await load()
+      } catch (err) {
+        statusEl.className = 'status-line failure'
+        statusEl.textContent = String(err.message || err)
+      } finally {
+        scanBtn.disabled = false
+      }
+    }
+
+    clearBtn.onclick = async () => {
+      const ok = await confirmDialog(P.clearConfirm, P.clearOk, AGENT_COPY.cancel)
+      if (!ok) return
+      clearBtn.disabled = true
+      try {
+        await api('/api/memory/pointers', { method: 'DELETE' })
+        statusEl.textContent = P.cleared
+        await load()
+      } catch (err) {
+        statusEl.className = 'status-line failure'
+        statusEl.textContent = String(err.message || err)
+      } finally {
+        clearBtn.disabled = false
+      }
+    }
+
+    load()
   }
 
   init()

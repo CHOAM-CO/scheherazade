@@ -46,6 +46,23 @@
         </div>
       </div>
 
+      <!-- Imported pointers (v0.0.4 item d). Visually and structurally SEPARATE
+           from the agent's own memory categories below: this is borrowed
+           knowledge from other tools, it holds locations rather than content,
+           and it never blends into user_facts/open_threads/corrections/
+           preferences (imported_pointers is not in WRITABLE_TABLES). -->
+      <div class="category" id="cat-pointers">
+        <div class="category-label" id="cat-pointers-label"></div>
+        <div class="pointers-intro" id="pointers-intro"></div>
+        <div class="pointers-coverage" id="pointers-coverage"></div>
+        <div class="pointers-actions">
+          <button class="secondary" id="pointers-scan"></button>
+          <button class="secondary" id="pointers-clear"></button>
+        </div>
+        <div class="status-line" id="pointers-status"></div>
+        <div class="entries" id="pointers-entries"></div>
+      </div>
+
       <div class="category" id="cat-user_facts">
         <div class="category-label" id="cat-user_facts-label"></div>
         <div class="entries" id="cat-user_facts-entries"></div>
