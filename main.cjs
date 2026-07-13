@@ -1304,6 +1304,15 @@ const SHUTDOWN_GRACE_MS = 75 * 1000
 const SHUTDOWN_ACK_POLL_MS = 500
 let gracefulQuitDone = false
 
+// Boot-time stale-marker sweep (red-team finding #1, 2026-07-13 spark pass):
+// a kill -9 / OS crash between the request write and the graceful path's
+// cleanup leaves .shutdown-request on disk; a fresh boot's channel.mjs
+// watcher would honor it and inject a phantom shutdown turn. Unlink both
+// markers before any agent can spawn. channel.mjs additionally ignores
+// requests older than 5 minutes -- two layers, either alone suffices.
+try { fs.unlinkSync(SHUTDOWN_REQUEST_PATH) } catch { /* absent = normal boot */ }
+try { fs.unlinkSync(SHUTDOWN_ACK_PATH) } catch { /* absent = normal boot */ }
+
 async function requestAgentShutdownGrace() {
   // Stale ack from a previous cycle must not satisfy this cycle instantly.
   try { fs.unlinkSync(SHUTDOWN_ACK_PATH) } catch { /* absent = fine */ }

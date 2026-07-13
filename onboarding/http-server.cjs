@@ -509,9 +509,20 @@ function seedAgentDefinitions() {
   for (const name of entries) {
     const target = path.join(AGENTS_DIR, name)
     if (fs.existsSync(target)) continue
-    fs.mkdirSync(AGENTS_DIR, { recursive: true })
-    fs.copyFileSync(path.join(TEMPLATE_AGENTS_DIR, name), target)
-    log(`seeded subagent definition ${name} into .claude/agents`)
+    // tmp+rename (atomic on same volume) + per-file catch: an interrupted
+    // plain copyFileSync leaves a truncated file that the exists-check
+    // treats as "seeded" forever, and one throwing file used to abort the
+    // whole seedConfigFromTemplates() boot path (red-team finding #3,
+    // 2026-07-13 spark pass).
+    try {
+      fs.mkdirSync(AGENTS_DIR, { recursive: true })
+      const tmp = `${target}.tmp`
+      fs.copyFileSync(path.join(TEMPLATE_AGENTS_DIR, name), tmp)
+      fs.renameSync(tmp, target)
+      log(`seeded subagent definition ${name} into .claude/agents`)
+    } catch (err) {
+      console.error(`[scheherazade/onboarding] seeding subagent ${name} failed (continuing): ${err.message}`)
+    }
   }
 }
 

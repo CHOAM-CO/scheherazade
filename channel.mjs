@@ -409,10 +409,20 @@ discord.once(Events.ClientReady, (c) => {
 const SHUTDOWN_REQUEST_PATH = path.join(DATA_HOME, '.shutdown-request')
 const SHUTDOWN_ACK_PATH = path.join(DATA_HOME, '.shutdown-ack')
 const SHUTDOWN_POLL_MS = 2000
+// A request older than this is a leftover from a crashed quit (kill -9 / OS
+// crash after main.cjs wrote it but before its cleanup ran) -- honoring it
+// would inject a phantom shutdown turn on a fresh boot. main.cjs also
+// unlinks stale markers at startup; this is the second layer of the same
+// defense (red-team finding #1, 2026-07-13 spark pass).
+const SHUTDOWN_REQUEST_MAX_AGE_MS = 5 * 60 * 1000
 let lastShutdownReqMtimeMs = 0
+// In-flight guard: success-only dedup (below) means a slow notification can
+// overlap the next 2s tick -- without this, one request could double-inject.
+let shutdownForwardInFlight = false
 
 function startShutdownRequestWatcher() {
   setInterval(async () => {
+    if (shutdownForwardInFlight) return
     let st
     try {
       st = await fs.stat(SHUTDOWN_REQUEST_PATH)
@@ -420,7 +430,8 @@ function startShutdownRequestWatcher() {
       return // no request pending
     }
     if (st.mtimeMs <= lastShutdownReqMtimeMs) return // already forwarded this request
-    lastShutdownReqMtimeMs = st.mtimeMs
+    if (Date.now() - st.mtimeMs > SHUTDOWN_REQUEST_MAX_AGE_MS) return // stale leftover, main.cjs will clean it
+    shutdownForwardInFlight = true
     try {
       await mcp.notification({
         method: 'notifications/claude/channel',
@@ -434,9 +445,17 @@ function startShutdownRequestWatcher() {
           meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() },
         },
       })
+      // Dedup marker advances ONLY on successful delivery -- advancing it
+      // before the send turned one transient notification failure into
+      // "never retried, agent never told, 75s timeout kills anyway"
+      // (red-team finding #2, 2026-07-13 spark pass). On failure the next
+      // 2s poll retries; bounded by main.cjs deleting the request file.
+      lastShutdownReqMtimeMs = st.mtimeMs
       log('shutdown-request forwarded into session')
     } catch (err) {
-      log(`shutdown-request notification failed: ${err.message}`)
+      log(`shutdown-request notification failed (will retry next poll): ${err.message}`)
+    } finally {
+      shutdownForwardInFlight = false
     }
   }, SHUTDOWN_POLL_MS).unref()
 }

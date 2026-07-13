@@ -31,9 +31,11 @@ const NEGATION_PATTERNS = [
   /지원.{0,4}(안|불가)/,
   /불가능(?:해|임|이야|이다)/,
   /no.{0,3}(access|tool|api|way)/i,
-  /can'?t.{0,5}(access|read|do)/i,
+  /can['’]?t.{0,6}(access|read|do|recall|remember)/i,
+  /cannot.{0,6}(access|read|do|recall|remember)/i,
+  /don['’]?t.{0,6}(remember|recall)/i,
   /not.{0,5}(available|possible|supported)/i,
-  /never.{0,5}(talked|discussed|mentioned|said)/i,
+  /never.{0,6}(talked|discussed|mentioned|said)/i,
 ]
 
 // Signs the agent actually checked something before denying. memory_query /
