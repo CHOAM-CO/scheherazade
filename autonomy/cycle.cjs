@@ -91,8 +91,18 @@ function emptyState() {
 // not jitter, it is a clock that moved.
 const CLOCK_SKEW_TOLERANCE_MS = 60 * 1000
 
-function anchorFor(st, now) {
+function anchorFor(st, now, forDayKey = null) {
   if (!st.cycleDay) return { ok: true, ms: null } // no cycle -> nothing spent yet
+  // The cap is per NIGHT, and last night is not this night. Measuring tonight's
+  // spend from LAST night's anchor carries the old bill forward forever: the
+  // first night that hits the cap poisons every night after it, and autonomy is
+  // permanently disarmed while still reporting itself as enabled.
+  //
+  // The unit tests could not see this. They mocked the meter and reset the state
+  // between cases, so every night they tested was the first night. It took
+  // running two nights in a row against a real state file on disk.
+  // (scripts/test-autonomy-night.mjs, 2026-07-13.)
+  if (forDayKey && st.cycleDay !== forDayKey) return { ok: true, ms: null }
   const ms = Date.parse(st.cycleStartedAt || '')
   if (!Number.isFinite(ms)) {
     return { ok: false, reason: 'cycle state has no usable start time; cannot measure what tonight has cost' }
@@ -115,8 +125,8 @@ function anchorFor(st, now) {
 
 // Wraps readBudget so a corrupt or impossible anchor can never silently become
 // "spent 0" -- which would be a full fresh budget on top of whatever was burned.
-function budgetVia(readBudget, st, now) {
-  const a = anchorFor(st, now)
+function budgetVia(readBudget, st, now, forDayKey = null) {
+  const a = anchorFor(st, now, forDayKey)
   if (!a.ok) return { ok: false, mayRun: false, cap: 0, reason: a.reason }
   return readBudget(a.ms)
 }
@@ -210,7 +220,23 @@ function decideAutonomy({ now, config, state, readBudget }) {
   }
 
   // ── inside the window ─────────────────────────────────────────────────────
-  const budget = budgetVia(readBudget, st, now)
+  // Debt before credit. A night that ran and was never reported is still owed --
+  // and the brief is keyed by cycleDay, which STARTING tonight would overwrite.
+  // If the app was closed when the window shut (the ordinary case: the user quit
+  // before morning), the previous night's brief never went out, and opening a new
+  // window would bury it. The user would never learn what that night cost.
+  //
+  // So pay first. The next poll starts tonight, a minute later.
+  if (st.cycleDay && st.cycleDay !== w.dayKey && st.briefDay !== st.cycleDay) {
+    return {
+      action: 'brief',
+      reason: `cycle ${st.cycleDay} was never reported; delivering it before tonight begins`,
+      budget: budgetVia(readBudget, st, now), // measured against THAT night, not this one
+      nextState: { ...st, briefDay: st.cycleDay },
+    }
+  }
+
+  const budget = budgetVia(readBudget, st, now, w.dayKey)
 
   // Already ran tonight.
   if (st.cycleDay === w.dayKey) {
