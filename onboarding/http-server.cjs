@@ -461,6 +461,27 @@ function ensureSettingsLocalAdditions() {
     })
   }
 
+  // v0.0.4: negation-check on the reply tool (denial gate -- see the hook's
+  // own header). Appends into the existing mcp__agent-channel__reply
+  // PreToolUse matcher group when present; creates the group when a user
+  // config predates PreToolUse entirely. Same additive-only contract.
+  if (!Array.isArray(settings.hooks.PreToolUse)) settings.hooks.PreToolUse = []
+  const NEGATION_HOOK = 'pre-reply-negation-check.mjs'
+  const hasNegation = settings.hooks.PreToolUse.some((group) =>
+    Array.isArray(group.hooks) && group.hooks.some((h) => typeof h.command === 'string' && h.command.includes(NEGATION_HOOK)))
+  if (!hasNegation) {
+    let replyGroup = settings.hooks.PreToolUse.find((g) => g && g.matcher === 'mcp__agent-channel__reply')
+    if (!replyGroup) {
+      replyGroup = { matcher: 'mcp__agent-channel__reply', hooks: [] }
+      settings.hooks.PreToolUse.push(replyGroup)
+    }
+    if (!Array.isArray(replyGroup.hooks)) replyGroup.hooks = []
+    replyGroup.hooks.push({
+      type: 'command',
+      command: `node ${path.join(toUnpackedPath(REPO_ROOT), 'hooks', NEGATION_HOOK)}`,
+    })
+  }
+
   const afterText = JSON.stringify(settings, null, 2)
   if (afterText !== beforeText) {
     fs.writeFileSync(SETTINGS_LOCAL_PATH, afterText + '\n')
