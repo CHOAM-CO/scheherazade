@@ -247,7 +247,10 @@
     // (that's what click-testing is for) but labeled so a mute agent after
     // swapping here is a known suspect, not a mystery.
     { id: 'deepseek-v4-pro:cloud', label: 'DeepSeek V4 Pro (툴콜 미검증)', providers: ['ollama'] },
-    { id: 'glm-5.2:cloud', label: 'GLM 5.2 (툴콜 미검증)', providers: ['ollama'] },
+    // glm-5.2 tool-use verified live by Mino (2026-07-13 19:32, same ollama
+    // lane as kimi: "glm5.2 << 문제 전혀없음") -- label cleared same day it
+    // was added. sonnet-5 / opus-4.8 verified in the same test round.
+    { id: 'glm-5.2:cloud', label: 'GLM 5.2', providers: ['ollama'] },
     { id: 'gpt', label: 'GPT (Codex)', providers: ['chatgpt'] },
   ]
 
