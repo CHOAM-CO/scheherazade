@@ -25,6 +25,12 @@
       <div class="category" id="cat-agent-control">
         <div class="category-label" id="cat-agent-control-label"></div>
         <div class="status-line" id="agent-status-line"></div>
+        <!-- Mute-revert offer. Hidden until the strike ledger says the running
+             model was told to speak and still didn't (see stop-reply-guard). -->
+        <div class="mute-banner" id="agent-mute-banner" hidden>
+          <div class="mute-banner-text" id="agent-mute-text"></div>
+          <button type="button" id="agent-mute-revert"></button>
+        </div>
         <div class="agent-control-row">
           <label for="agent-model-select" id="agent-model-label"></label>
           <select id="agent-model-select"></select>

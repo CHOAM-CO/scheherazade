@@ -17,9 +17,88 @@
 // on any internal error -- a buggy guard must never trap the agent.
 
 import fs from 'fs'
+import os from 'os'
+import path from 'path'
 
 const SCAN_TAIL = 80
 const TAIL_BYTES = 500 * 1024
+
+// ── mute-strike ledger (2026-07-13, replaces the killed "swap-time tool-call
+// smoke test") ────────────────────────────────────────────────────────────────
+// WHY NOT A PRE-SWAP PROBE: the v0.0.4 plan was to probe a model for tool_use
+// support BEFORE committing a swap. That design is dead, and the receipts are
+// worth writing down so nobody rebuilds it. kimi-k2.7-code was recorded (by me,
+// 638fbf7) as "ollama compat lane never produces tool_use blocks". On 07-13
+// ~20:5x that mechanism was falsified live in 7 conditions -- non-streaming,
+// streaming (content_block_start type=tool_use + input_json_delta), forced
+// tool_choice, free tool_choice, 15-tool harness shape, 36k context, and the
+// REAL Claude Code CLI driving a REAL MCP server (which wrote a file receipt
+// proving the tool executed). kimi passes every probe I can construct, yet it
+// was demonstrably mute in Mino's install. So a pre-swap probe would have
+// stamped the broken model HEALTHY: it can convict, it cannot acquit (absence
+// of a finding is not an acquittal). A gate that manufactures false acquittals
+// is worse than no gate.
+//
+// WHAT THIS DOES INSTEAD: convict on observed behavior in the real harness.
+// This guard already sees BOTH outcomes on every Stop, so the ledger lives
+// here and nowhere else:
+//   - a reply/send_file actually landed  -> strikes reset to 0
+//   - the guard fired, Claude retried, and STILL no reply (cap-hit) -> strike++
+// A strike is therefore not "the agent was quiet once" -- it is "I explicitly
+// told it to send, and it still could not". That is the mute signature,
+// whatever the underlying cause (parse failure, provider breakage, a cause
+// nobody has named yet). At MUTE_STRIKE_THRESHOLD the UI offers a one-click
+// revert to the previous model (http-server.cjs GET /api/agent/mute-status).
+//
+// Threshold 2: the original 돌연사 was two consecutive silent turns (18:51 +
+// 18:57), and each strike already contains one internal retry -- so 2 strikes
+// means 4 failed attempts to speak, not a one-off mood.
+//
+// Every fs path here is best-effort and swallowed: a ledger that throws must
+// never trap the agent (same fail-open contract as the rest of this hook).
+// AGENT_DATA_HOME is exported into the agent's env by main.cjs:872 (and honored
+// by run.sh:49), and this hook runs inside that env -- so prefer it over
+// re-deriving the path. The literal fallback matches http-server.cjs's DATA_HOME
+// for the case where a hook is invoked outside a managed spawn.
+const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', 'Scheherazade')
+const STRIKES_PATH = path.join(DATA_HOME, '.mute-strikes.json')
+const AGENT_CONFIG_PATH = path.join(DATA_HOME, '.agent-config')
+
+function currentModel() {
+  try {
+    const text = fs.readFileSync(AGENT_CONFIG_PATH, 'utf8')
+    const m = text.match(/^MODEL=(.*)$/m)
+    if (!m) return ''
+    return m[1].replace(/^"|"$/g, '')
+  } catch { return '' }
+}
+
+function writeStrikes(obj) {
+  try {
+    const tmp = `${STRIKES_PATH}.tmp`
+    fs.writeFileSync(tmp, JSON.stringify(obj))
+    fs.renameSync(tmp, STRIKES_PATH) // atomic: a torn ledger reads as corrupt-and-ignored
+  } catch { /* best-effort */ }
+}
+
+function clearStrikes() {
+  try {
+    if (!fs.existsSync(STRIKES_PATH)) return
+    const cur = JSON.parse(fs.readFileSync(STRIKES_PATH, 'utf8'))
+    if (!cur || !cur.strikes) return // already clean -- don't churn the file every turn
+  } catch { /* corrupt -> fall through and overwrite with a clean ledger */ }
+  writeStrikes({ strikes: 0, model: currentModel(), lastAt: new Date().toISOString() })
+}
+
+function recordStrike() {
+  let cur = {}
+  try { cur = JSON.parse(fs.readFileSync(STRIKES_PATH, 'utf8')) || {} } catch { cur = {} }
+  const model = currentModel()
+  // A strike ledger belongs to ONE model. If the model changed under us, the
+  // old count is about a different subject -- start over rather than inherit.
+  const strikes = (cur.model === model && Number.isInteger(cur.strikes)) ? cur.strikes + 1 : 1
+  writeStrikes({ strikes, model, lastAt: new Date().toISOString() })
+}
 // Explicit silence requests -- the user told the agent NOT to answer.
 const SKIP_PATTERNS = [
   /생각만/, /대답하지마/, /대답\s*하지\s*마/, /답장\s*하지\s*마/, /조용/, /무시해/,
@@ -83,11 +162,18 @@ async function main() {
       }
     }
   }
-  if (replyFound) process.exit(0)
+  if (replyFound) {
+    clearStrikes() // the agent spoke -> whatever was wrong isn't wrong now
+    process.exit(0)
+  }
 
   // Retry cap: if Claude already retried once for this stop event, allow.
   if (hookInput.stop_hook_active) {
-    process.stderr.write('[stop-reply-guard] cap hit (stop_hook_active), allowing\n')
+    // We told it to send, it retried, it STILL didn't. That is the mute
+    // signature -- record it. This is the only place a strike is scored: a
+    // single quiet turn (pre-retry) is not evidence of anything.
+    recordStrike()
+    process.stderr.write('[stop-reply-guard] cap hit (stop_hook_active), allowing; mute strike recorded\n')
     process.exit(0)
   }
 

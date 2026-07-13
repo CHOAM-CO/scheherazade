@@ -1,0 +1,173 @@
+#!/usr/bin/env node
+// test-mute-ledger.mjs -- fixtures for the mute-strike ledger in
+// hooks/stop-reply-guard.mjs (the post-swap convicter that replaced the killed
+// swap-time smoke test; see that file's header for the receipts).
+//
+// Drives the REAL hook as a child process with a REAL transcript jsonl and a
+// scratch AGENT_DATA_HOME, and asserts on the ledger file it writes. Nothing
+// is stubbed -- the thing under test is the thing that ships.
+//
+// Run: node scripts/test-mute-ledger.mjs
+
+import { execFileSync } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const HOOK = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'hooks', 'stop-reply-guard.mjs')
+const CHANNEL_ID = '1495311473847828652'
+
+let pass = 0
+let fail = 0
+function check(name, cond, detail) {
+  if (cond) { pass++; console.log(`  ok   ${name}`) }
+  else { fail++; console.log(`  FAIL ${name}${detail ? ` -- ${detail}` : ''}`) }
+}
+
+function makeHome() {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-mute-'))
+  fs.writeFileSync(path.join(home, '.agent-config'), 'MODEL=kimi-k2.7-code:cloud\nPROVIDER=ollama\n')
+  return home
+}
+
+// A transcript where a Discord message arrived. `replied` controls whether the
+// agent actually called the reply tool afterwards.
+function makeTranscript(home, { replied }) {
+  const p = path.join(home, 'transcript.jsonl')
+  const rows = [
+    { type: 'user', message: { content: `<channel source="x" channelId="${CHANNEL_ID}">안녕</channel>` } },
+  ]
+  if (replied) {
+    rows.push({
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', name: 'mcp__agent-channel__reply', input: { channelId: CHANNEL_ID, text: 'hi' } }] },
+    })
+  } else {
+    rows.push({ type: 'assistant', message: { content: [{ type: 'text', text: '안녕! (never sent)' }] } })
+  }
+  fs.writeFileSync(p, rows.map((r) => JSON.stringify(r)).join('\n') + '\n')
+  return p
+}
+
+// Returns { code, ledger }
+function runHook(home, { replied, capHit }) {
+  const transcript = makeTranscript(home, { replied })
+  let code = 0
+  try {
+    execFileSync('node', [HOOK], {
+      input: JSON.stringify({ transcript_path: transcript, stop_hook_active: Boolean(capHit) }),
+      env: { ...process.env, AGENT_DATA_HOME: home },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+  } catch (err) {
+    code = err.status
+  }
+  const lp = path.join(home, '.mute-strikes.json')
+  const ledger = fs.existsSync(lp) ? JSON.parse(fs.readFileSync(lp, 'utf8')) : null
+  return { code, ledger }
+}
+
+console.log('mute-strike ledger fixtures\n')
+
+// 1. First silent turn (no retry yet) -> BLOCK (exit 2), and NO strike.
+//    A single quiet turn is not evidence; forcing the retry is the whole point.
+{
+  const home = makeHome()
+  const { code, ledger } = runHook(home, { replied: false, capHit: false })
+  check('first silent turn blocks the stop (exit 2)', code === 2, `got exit ${code}`)
+  check('first silent turn scores NO strike', ledger === null || !ledger.strikes, JSON.stringify(ledger))
+}
+
+// 2. Retried and STILL silent -> allow (exit 0), strike scored. The mute signature.
+{
+  const home = makeHome()
+  const { code, ledger } = runHook(home, { replied: false, capHit: true })
+  check('cap-hit allows the stop (exit 0)', code === 0, `got exit ${code}`)
+  check('cap-hit scores strike 1', ledger?.strikes === 1, JSON.stringify(ledger))
+  check('strike is stamped with the model', ledger?.model === 'kimi-k2.7-code:cloud', JSON.stringify(ledger))
+}
+
+// 3. Strikes accumulate to the threshold (2) across turns.
+{
+  const home = makeHome()
+  runHook(home, { replied: false, capHit: true })
+  const { ledger } = runHook(home, { replied: false, capHit: true })
+  check('strikes accumulate to threshold', ledger?.strikes === 2, JSON.stringify(ledger))
+}
+
+// 4. The agent speaks -> ledger resets. Recovery must clear the alarm, or the
+//    revert banner would haunt a model that started working.
+{
+  const home = makeHome()
+  runHook(home, { replied: false, capHit: true })
+  runHook(home, { replied: false, capHit: true })
+  const { code, ledger } = runHook(home, { replied: true, capHit: false })
+  check('a real reply exits 0', code === 0, `got exit ${code}`)
+  check('a real reply resets strikes to 0', ledger?.strikes === 0, JSON.stringify(ledger))
+}
+
+// 5. Model changed under a dirty ledger -> count restarts, does not inherit.
+//    Otherwise a swap would carry the old model's guilt onto the new one.
+{
+  const home = makeHome()
+  runHook(home, { replied: false, capHit: true })
+  fs.writeFileSync(path.join(home, '.agent-config'), 'MODEL=glm-5.2:cloud\nPROVIDER=ollama\n')
+  const { ledger } = runHook(home, { replied: false, capHit: true })
+  check('model change restarts the count at 1', ledger?.strikes === 1, JSON.stringify(ledger))
+  check('ledger re-stamps the new model', ledger?.model === 'glm-5.2:cloud', JSON.stringify(ledger))
+}
+
+// 6. Corrupt ledger must not trap the agent (fail-open contract).
+{
+  const home = makeHome()
+  fs.writeFileSync(path.join(home, '.mute-strikes.json'), '{ this is not json')
+  const { code, ledger } = runHook(home, { replied: false, capHit: true })
+  check('corrupt ledger still exits cleanly', code === 0, `got exit ${code}`)
+  check('corrupt ledger is overwritten, not inherited', ledger?.strikes === 1, JSON.stringify(ledger))
+}
+
+// 7. No Discord trigger in the transcript -> hook is not applicable, and must
+//    NOT touch the ledger (an agent doing non-Discord work isn't "mute").
+{
+  const home = makeHome()
+  fs.writeFileSync(path.join(home, '.mute-strikes.json'), JSON.stringify({ strikes: 1, model: 'kimi-k2.7-code:cloud' }))
+  const tp = path.join(home, 'transcript.jsonl')
+  fs.writeFileSync(tp, JSON.stringify({ type: 'user', message: { content: 'just a local task, no channel tag' } }) + '\n')
+  let code = 0
+  try {
+    execFileSync('node', [HOOK], {
+      input: JSON.stringify({ transcript_path: tp, stop_hook_active: true }),
+      env: { ...process.env, AGENT_DATA_HOME: home },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+  } catch (err) { code = err.status }
+  const ledger = JSON.parse(fs.readFileSync(path.join(home, '.mute-strikes.json'), 'utf8'))
+  check('no-Discord-trigger exits 0', code === 0, `got exit ${code}`)
+  check('no-Discord-trigger leaves the ledger untouched', ledger.strikes === 1, JSON.stringify(ledger))
+}
+
+// 8. Explicit silence request ("답장하지마") -> skip, no strike. The user asked
+//    for quiet; punishing the agent for obeying would be the guard eating itself.
+{
+  const home = makeHome()
+  const tp = path.join(home, 'transcript.jsonl')
+  fs.writeFileSync(tp, JSON.stringify({
+    type: 'user',
+    message: { content: `<channel source="x" channelId="${CHANNEL_ID}">답장하지마 그냥 생각만 해</channel>` },
+  }) + '\n')
+  let code = 0
+  try {
+    execFileSync('node', [HOOK], {
+      input: JSON.stringify({ transcript_path: tp, stop_hook_active: true }),
+      env: { ...process.env, AGENT_DATA_HOME: home },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+  } catch (err) { code = err.status }
+  const lp = path.join(home, '.mute-strikes.json')
+  check('silence request exits 0', code === 0, `got exit ${code}`)
+  check('silence request scores NO strike', !fs.existsSync(lp), 'ledger was written')
+}
+
+console.log(`\n${pass} passed, ${fail} failed`)
+process.exit(fail === 0 ? 0 : 1)

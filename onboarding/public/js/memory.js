@@ -226,6 +226,13 @@
     stopOk: 'Stop',
     cancel: 'Cancel',
     openDiscord: 'Open Discord',
+    // Mute-revert offer (2026-07-13). Deliberately describes the OBSERVED
+    // behavior ("hasn't replied") rather than diagnosing a cause -- the one
+    // time we shipped a cause ("this model can't call tools") it turned out to
+    // be false under 7 live conditions. State what we saw; offer the undo.
+    muteWarn: (n, m) => `${m} was asked to reply ${n}× and didn't. The agent may be unable to send messages.`,
+    muteRevert: (m) => `Go back to ${m}`,
+    muteRevertConfirm: (m) => `Switch back to ${m}? The agent will restart.`,
   }
 
   // Model catalog + provider gate. A model is selectable only if its provider
@@ -234,15 +241,37 @@
   const MODEL_CATALOG = [
     { id: 'opus', label: 'Claude Opus', providers: ['claude', 'claude-subscription'] },
     { id: 'sonnet', label: 'Claude Sonnet', providers: ['claude', 'claude-subscription'] },
-    // Kimi CONFIRMED incompatible (Mino live test 2026-07-13 19:15-19:20,
-    // transcript cd209c48): the model TRIED to call reply but its native
-    // <|tool_call_argument_begin|> token format leaked into plain text --
-    // the ollama Anthropic-compat lane never produced a tool_use block, so
-    // the agent is silently mute (3/3 turns, tool_use count 0). Listing a
-    // model whose tool calls don't parse in this harness ships a dead agent;
-    // stays visible-but-unselectable until a swap-time tool-call smoke test
-    // exists (v0.0.4) and it passes.
-    { id: 'kimi-k2.7-code:cloud', label: 'Kimi K2.7 Code (툴콜 비호환)', providers: ['ollama'], brokenToolUse: true },
+    // Kimi: DISABLED because it went mute in production, cause UNRESOLVED.
+    //
+    // ⚠️ The mechanism this entry used to assert -- "the ollama Anthropic-compat
+    // lane never produced a tool_use block" -- is FALSE. It came from the
+    // agent's own transcript self-diagnosis (2026-07-13 19:15-19:20, transcript
+    // cd209c48, relayed by Mino) and was welded into this file at 638fbf7
+    // WITHOUT anyone verifying it against the lane. It was falsified at ~20:5x
+    // the same night, live, in 7 conditions:
+    //   1-2. POST /v1/messages, tool_choice forced AND free  -> tool_use block
+    //   3.   streaming (what the CLI actually does) -> content_block_start
+    //        type=tool_use + input_json_delta + stop_reason=tool_use
+    //   4.   15-tool + system-prompt harness shape -> called reply, right channelId
+    //   5.   36k-token context -> still clean
+    //   6.   the REAL Claude Code CLI (not curl) -> executed a Bash tool
+    //   7.   the REAL CLI against a REAL MCP server -> the server wrote a file
+    //        receipt proving the tool executed
+    // Kimi's tool calls work on this lane. Something else made it mute in Mino's
+    // install, and the failing transcript lives on his machine, so the true
+    // cause is still unnamed.
+    //
+    // It stays OFF anyway: a model observed mute in production, with no known
+    // cause, is not a model to hand a user. But the reason recorded here is now
+    // what we actually know, not a story that reads well.
+    //
+    // This is also why there is no swap-time tool-call smoke test: every probe
+    // above PASSES the model that was mute. Such a gate can only convict, never
+    // acquit -- it would have stamped kimi healthy. The replacement is a
+    // post-swap convicter on real behavior (hooks/stop-reply-guard.mjs ledger +
+    // /api/agent/mute-status + the revert banner), which catches mute agents
+    // whatever the cause, including the one nobody has named.
+    { id: 'kimi-k2.7-code:cloud', label: 'Kimi K2.7 Code (프로덕션 무응답, 원인미상)', providers: ['ollama'], disabled: true },
     // Same lane, tool-call format UNVERIFIED in this harness -- selectable
     // (that's what click-testing is for) but labeled so a mute agent after
     // swapping here is a known suspect, not a mystery.
@@ -307,6 +336,12 @@
     $('agent-model-select').disabled = disabled
     $('agent-effort-select').disabled = disabled
     $('agent-btn-startstop').disabled = disabled
+    // The revert button fires the SAME /api/agent/model route as the dropdown,
+    // so it must sit behind the SAME lock (red-team 2026-07-13: it was added
+    // outside it). Button-disable is this page's only concurrency defense --
+    // the server is deliberately not serialized -- so a control that skips it
+    // can race a swap that's already in flight.
+    $('agent-mute-revert').disabled = disabled
     $('agent-btn-restart').disabled = disabled
   }
 
@@ -335,7 +370,58 @@
     } catch (err) {
       console.error('agent status poll failed:', err)
     }
+    // Rides the existing 2s poll rather than adding a second timer: the mute
+    // check is one cheap file read server-side, and a separate cadence would
+    // just be another thing that can drift out of sync with the status line.
+    // Failures are swallowed inside renderMuteBanner -- a mute-check outage
+    // must never take down the status poll that everything else depends on.
+    await renderMuteBanner()
     agentPollTimer = setTimeout(pollAgentStatusOnce, AGENT_POLL_INTERVAL_MS)
+  }
+
+  // The revert offer. Shown ONLY when the guard's ledger says the running model
+  // was explicitly told to send and still didn't (threshold strikes), AND we
+  // know a model to go back to. No previous model -> no banner: an offer with
+  // nowhere to go is just an alarm.
+  async function renderMuteBanner() {
+    const banner = $('agent-mute-banner')
+    if (!banner) return
+    let s
+    try {
+      s = await api('/api/agent/mute-status')
+    } catch (err) {
+      console.error('mute status poll failed:', err)
+      return // leave the banner in whatever state it was; don't flap on a blip
+    }
+    const tripped = (s.strikes || 0) >= (s.threshold || 2) && Boolean(s.previousModel)
+    if (!tripped) { banner.hidden = true; return }
+    $('agent-mute-text').textContent = AGENT_COPY.muteWarn(s.strikes, s.model || 'the model')
+    const btn = $('agent-mute-revert')
+    btn.textContent = AGENT_COPY.muteRevert(s.previousModel)
+    // The banner can first APPEAR mid-action (this poll runs every 2s), and a
+    // freshly-shown button defaults to enabled -- so it has to inherit the lock
+    // on render, not only when setAgentControlsDisabled happens to fire.
+    btn.disabled = agentControlsBusy
+    btn.onclick = async () => {
+      // Second half of the lock: `disabled` blocks the click, but the confirm
+      // dialog is async -- an action can start WHILE this dialog is open. Re-check
+      // on the way out so a swap that began during the prompt isn't raced.
+      if (agentControlsBusy) return
+      const ok = await confirmDialog(AGENT_COPY.muteRevertConfirm(s.previousModel), AGENT_COPY.switchOk, AGENT_COPY.cancel)
+      if (!ok || agentControlsBusy) return
+      // Route through the same swap lane as the dropdown (which records the
+      // new PREVIOUS_* pair and clears the ledger) instead of a bespoke revert
+      // endpoint -- one swap path, one place for swap semantics to live.
+      const body = s.previousProvider ? { model: s.previousModel, provider: s.previousProvider } : { model: s.previousModel }
+      const accepted = await fireControl('model', body)
+      if (accepted) {
+        banner.hidden = true
+        currentModel = s.previousModel
+        if (s.previousProvider) currentProvider = s.previousProvider
+        populateModelSelect(currentModel)
+      }
+    }
+    banner.hidden = false
   }
 
   // Returns true when the server accepted the action (202), false when it
@@ -381,8 +467,8 @@
       // A model is selectable if ANY of its providers is authenticated --
       // not just the currently-running one (07-13 multi-provider unlock).
       if (!m.providers.some((p) => availableProviders.includes(p))) opt.disabled = true
-      // Confirmed-broken tool-use models are never selectable (see catalog note).
-      if (m.brokenToolUse) opt.disabled = true
+      // Models withdrawn for observed production failure (see catalog note).
+      if (m.disabled) opt.disabled = true
       if (m.id === model) opt.selected = true
       sel.appendChild(opt)
     }

@@ -326,3 +326,21 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .connect-item { display: flex; align-items: center; gap: 0.75rem; }
 .connect-item button { min-width: 11rem; }
 .connect-note { color: var(--fg-dim); font-size: 0.85rem; }
+
+/* Mute-revert offer (2026-07-13). Uses --danger because a silently-mute agent
+   is indistinguishable from a dead one to the person waiting on the other end
+   -- the whole point of surfacing it is that it must not read as ambient. */
+.mute-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin: 0.5rem 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+}
+.mute-banner[hidden] { display: none; }
+.mute-banner-text { color: var(--danger); font-size: 0.9rem; }
+.mute-banner button { min-width: 11rem; }

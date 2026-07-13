@@ -672,8 +672,55 @@ function writeAgentConfig(fields) {
   ensureConfigDir()
   const merged = { ...readAgentConfig(), ...fields }
   const lines = Object.entries(merged).map(([k, v]) => `${k}=${shellQuote(v)}`)
-  fs.writeFileSync(AGENT_CONFIG_PATH, lines.join('\n') + '\n')
+  // Atomic (tmp + rename), NOT a plain writeFileSync (red-team 2026-07-13).
+  // This file has readers in OTHER processes -- run.sh sources it at spawn, and
+  // hooks/stop-reply-guard.mjs reads MODEL out of it to stamp the strike ledger.
+  // writeFileSync truncates first, so a reader landing inside that window sees a
+  // half-written or empty config. For the hook that means a strike attributed to
+  // model '' ; for a spawn it means booting with no MODEL at all. rename(2) is
+  // atomic within a filesystem, so a reader sees strictly the old file or
+  // strictly the new one.
+  const tmp = `${AGENT_CONFIG_PATH}.tmp`
+  fs.writeFileSync(tmp, lines.join('\n') + '\n')
+  fs.renameSync(tmp, AGENT_CONFIG_PATH)
   return merged
+}
+
+// ── mute-strike ledger (read side) ───────────────────────────────────────────
+// The WRITE side is hooks/stop-reply-guard.mjs -- it runs in the agent's own
+// process tree on every Stop, so it is the only thing positioned to see
+// whether the agent actually spoke. This file only reads the ledger and clears
+// it on a model swap. Path is duplicated (not imported) because the hook is an
+// ESM file spawned by the Claude CLI with no access to this CommonJS module;
+// both derive it from the same DATA_HOME constant shape. If DATA_HOME ever
+// moves: two CODE sites define this path (the const below, and STRIKES_PATH in
+// hooks/stop-reply-guard.mjs). A grep returns a third hit -- this sentence.
+const MUTE_STRIKES_PATH = path.join(CONFIG_DIR, '.mute-strikes.json')
+// 2 strikes = 4 failed attempts to speak (each strike already contains one
+// guard-forced retry). Matches the original 돌연사 shape: two consecutive
+// silent turns, 19:10 KST 2026-07-13.
+const MUTE_STRIKE_THRESHOLD = 2
+
+function readMuteStrikes() {
+  try {
+    if (!fs.existsSync(MUTE_STRIKES_PATH)) return {}
+    const parsed = JSON.parse(fs.readFileSync(MUTE_STRIKES_PATH, 'utf8'))
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch (err) {
+    // Corrupt ledger reads as "no strikes", never as a 500. The cost of a
+    // false-negative here is one un-offered revert button; the cost of
+    // throwing is a dead settings page.
+    console.error('[scheherazade/onboarding] mute-strike ledger unreadable (treating as clean):', err.message)
+    return {}
+  }
+}
+
+function clearMuteStrikes() {
+  try {
+    if (fs.existsSync(MUTE_STRIKES_PATH)) fs.unlinkSync(MUTE_STRIKES_PATH)
+  } catch (err) {
+    console.error('[scheherazade/onboarding] could not clear mute-strike ledger:', err.message)
+  }
 }
 
 // ── unpacked-path mapping for spawned (ELECTRON_RUN_AS_NODE) children ────
@@ -1917,9 +1964,53 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
         return
       }
     }
-    writeAgentConfig(providerValue ? { MODEL: value, PROVIDER: providerValue } : { MODEL: value })
+    // Record where we came FROM before overwriting it -- this is the only
+    // thing that makes the mute-revert offer possible (see clearMuteStrikes'
+    // header and hooks/stop-reply-guard.mjs). Read the live config first: the
+    // pre-swap MODEL/PROVIDER is about to be clobbered by writeAgentConfig.
+    const prior = readAgentConfig()
+    const previousFields = {}
+    if (prior.MODEL && prior.MODEL !== value) {
+      previousFields.PREVIOUS_MODEL = prior.MODEL
+      previousFields.PREVIOUS_PROVIDER = prior.PROVIDER || ''
+    }
+    writeAgentConfig({
+      ...previousFields,
+      ...(providerValue ? { MODEL: value, PROVIDER: providerValue } : { MODEL: value }),
+    })
+    // A strike ledger is about ONE model. Swapping makes every prior strike a
+    // statement about a model that is no longer running -- carrying them
+    // forward would fire a revert prompt against the innocent new model.
+    clearMuteStrikes()
     agentControls.restartAgent().catch((err) => console.error('[scheherazade/onboarding] restartAgent (model swap) threw:', err))
     sendJson(res, 202, { ok: true, model: value, ...(providerValue ? { provider: providerValue } : {}) })
+    return
+  }
+  // GET /api/agent/mute-status -- is the running model failing to SPEAK?
+  //
+  // Feeds the UI's revert offer. Source of truth is the strike ledger written
+  // by hooks/stop-reply-guard.mjs (see its header for why this is a post-swap
+  // convicter and not a pre-swap probe: a probe passed the known-mute model in
+  // 7 of 7 live conditions, so it could only ever have manufactured false
+  // acquittals). A strike = the guard told the agent to send and it still
+  // didn't, after a retry.
+  //
+  // Read-only and fail-open: a missing/corrupt ledger reports "no strikes"
+  // rather than 500ing the settings page.
+  if (pathname === '/api/agent/mute-status' && req.method === 'GET') {
+    const cfg = readAgentConfig()
+    const ledger = readMuteStrikes()
+    // Only offer a revert to a model the ledger is actually about. If the
+    // ledger names a different model than the one running, it's stale -- and a
+    // stale ledger must not push the user to revert a model that never failed.
+    const stale = Boolean(ledger.model && cfg.MODEL && ledger.model !== cfg.MODEL)
+    sendJson(res, 200, {
+      strikes: stale ? 0 : (ledger.strikes || 0),
+      threshold: MUTE_STRIKE_THRESHOLD,
+      model: cfg.MODEL || '',
+      previousModel: cfg.PREVIOUS_MODEL || '',
+      previousProvider: cfg.PREVIOUS_PROVIDER || '',
+    })
     return
   }
   // POST /api/agent/effort {effort} -- Mino 07-13 click-test item 2, same

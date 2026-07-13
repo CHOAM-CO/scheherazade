@@ -1,0 +1,27 @@
+**Findings**
+
+1. High: the localhost auth token is not a real local-process secret.
+   [onboarding/http-server.cjs:1041](/Users/narr/Desktop/scheherazade/onboarding/http-server.cjs:1041) injects `SERVER_TOKEN` into every served HTML page, while GETs are unauthenticated. A local process can scan localhost ports, GET `/`, parse the meta tag, then pass the check at [onboarding/http-server.cjs:1365](/Users/narr/Desktop/scheherazade/onboarding/http-server.cjs:1365). This blocks browser CSRF reasonably well, but not “any other local process,” which the comments claim to defend against.
+
+2. High: `chatgpt` / `ollama` validation stores credentials even though those modes are supposed to need no secret.
+   [onboarding/http-server.cjs:794](/Users/narr/Desktop/scheherazade/onboarding/http-server.cjs:794) explicitly treats local modes as no-secret, but the shared success path still calls `storeProviderKeyVerified(provider, key)` at [onboarding/http-server.cjs:1086](/Users/narr/Desktop/scheherazade/onboarding/http-server.cjs:1086). If a user pastes a real OpenAI/Ollama key, the app unnecessarily retains it under `.credentials`, and runtime ignores it anyway.
+
+3. High: Claude subscription mode is backend-wired but normal onboarding drives the pasted token through the BYOK `claude` path.
+   The server has `claude-subscription` in the allow-list at [onboarding/http-server.cjs:258](/Users/narr/Desktop/scheherazade/onboarding/http-server.cjs:258), but its own comment says the shipped wizard has no UI for that provider at [onboarding/http-server.cjs:281](/Users/narr/Desktop/scheherazade/onboarding/http-server.cjs:281). The validation split is fatal: `claude` posts the pasted value as an Anthropic API key at [onboarding/http-server.cjs:821](/Users/narr/Desktop/scheherazade/onboarding/http-server.cjs:821), while `claude-subscription` is only handled at [onboarding/http-server.cjs:839](/Users/narr/Desktop/scheherazade/onboarding/http-server.cjs:839). So subscription users following setup-token copy will fail or need an unsupported direct API call.
+
+4. Medium-high: Ollama cannot complete through the shipped flow because the backend requires `MODEL`, but there is no normal model path here.
+   Completion rejects Ollama without a model at [onboarding/http-server.cjs:1120](/Users/narr/Desktop/scheherazade/onboarding/http-server.cjs:1120), and `provider-env.cjs` also refuses to spawn without it at [provider-env.cjs:193](/Users/narr/Desktop/scheherazade/provider-env.cjs:193). That is correct for runtime, but as shipped it means the mode validates locally, then dies at completion unless a crafted client sends `model`.
+
+5. Medium: `chatgpt` proxy port validation is inconsistent and can make validation lie.
+   Spawn-time validates digits and TCP range at [provider-env.cjs:164](/Users/narr/Desktop/scheherazade/provider-env.cjs:164), but validation uses raw `proxyPort` directly in a URL at [onboarding/http-server.cjs:809](/Users/narr/Desktop/scheherazade/onboarding/http-server.cjs:809). A crafted `proxyPort` can make `/api/byok/validate` report success/reachability for a value that later fails spawn as `provider_not_wired`.
+
+6. Medium: local liveness checks are too weak for non-technical users.
+   [onboarding/http-server.cjs:772](/Users/narr/Desktop/scheherazade/onboarding/http-server.cjs:772) treats any HTTP response as success. That proves “something is listening,” not that it is `codex-as-api`, Anthropic-compatible, or the expected Ollama API. Users can finish setup against the wrong local service and only see a later agent failure.
+
+7. Medium: provider auth relies on the real global Claude config, not an app-scoped auth directory.
+   The code explicitly says spawned Claude reads the user’s real `~/.claude.json` at [onboarding/http-server.cjs:390](/Users/narr/Desktop/scheherazade/onboarding/http-server.cjs:390), and `main.cjs` does not set an isolated `CLAUDE_CONFIG_DIR` in the spawn env at [main.cjs:634](/Users/narr/Desktop/scheherazade/main.cjs:634). `provider-env.cjs` does clear the main env vars per mode, which helps, but global Claude state can still affect behavior if Claude Code changes auth precedence or ignores one of these env knobs.
+
+8. Low-medium: invalid `claude-subscription` tokens are accepted as “validated.”
+   [onboarding/http-server.cjs:839](/Users/narr/Desktop/scheherazade/onboarding/http-server.cjs:839) only checks non-empty. That may be a product decision, but for weekend shipping it means users can paste junk, pass Step 1, store it, and only fail during agent spawn/crash-loop.
+
+The strongest fixes before shipping are: make local mutating auth not recoverable from unauthenticated GET, do not store keys for no-secret local modes, align the Claude subscription UI/provider value with the backend, and either hide Ollama/ChatGPT or add the missing model/port validation and real compatibility probes.
