@@ -53,7 +53,11 @@ CLAUDE_BIN="${CLAUDE_BIN:-claude}"
 # Claude Code tuning knobs carried over from the source launchers -- all
 # overridable via env, all optional (Claude Code defaults these itself if
 # unset).
-export CLAUDE_CODE_EFFORT_LEVEL="${EFFORT_LEVEL:-max}"
+# Default effort max -> high (Mino 07-13 click-test: sonnet-5 felt slow;
+# max buys thinking budget casual chat doesn't need). An effort selector
+# next to the model dropdown is the real fix (click-test item 2); until it
+# lands, EFFORT_LEVEL env remains the override.
+export CLAUDE_CODE_EFFORT_LEVEL="${EFFORT_LEVEL:-high}"
 export CLAUDE_STREAM_IDLE_TIMEOUT_MS="${STREAM_IDLE_TIMEOUT:-300000}"
 export CLAUDE_CODE_AUTO_COMPACT_WINDOW="${AUTO_COMPACT_WINDOW:-500000}"
 export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE="${AUTOCOMPACT_PCT:-80}"
