@@ -209,9 +209,49 @@ console.log('\n-- the cap is anchored to the night, and the anchor is passed thr
   decideAutonomy({ now: at(3), config: CONSENTED, state: null, readBudget: spy })
   eq('with no cycle running, the meter is asked about NO window (null)', seen, null)
 
-  const running = { cycleDay: '2026-07-13', cycleStartedAt: '2026-07-13T14:00:00.000Z', stoppedDay: null, briefDay: null }
+  // The anchor must be in the PAST relative to `now` -- the clock guard rejects a
+  // future one, and it caught this fixture when it was written wrong.
+  const startedAt = new Date(at(3).getTime() - 60 * 60 * 1000).toISOString() // an hour before now
+  const running = { cycleDay: '2026-07-13', cycleStartedAt: startedAt, stoppedDay: null, briefDay: null }
   decideAutonomy({ now: at(3), config: CONSENTED, state: running, readBudget: spy })
-  eq('with a cycle running, the meter is anchored to the cycle START', seen, Date.parse('2026-07-13T14:00:00.000Z'))
+  eq('with a cycle running, the meter is anchored to the cycle START', seen, Date.parse(startedAt))
+}
+
+console.log('\n-- clock moved BACKWARD (external red team, pass 2)')
+{
+  // NTP correction / manual change / VM restore: the night now starts in the
+  // future. usageSince() would filter out every row the agent writes, spend
+  // would read as zero forever, and the cap would be silently disarmed.
+  const running = {
+    cycleDay: '2026-07-13',
+    cycleStartedAt: new Date(2026, 6, 13, 5, 0, 0).toISOString(), // 05:00
+    stoppedDay: null, briefDay: null,
+  }
+  const d = decideAutonomy({ now: at(3), config: CONSENTED, state: running, readBudget: RICH })
+  eq('an anchor in the FUTURE stops the cycle', d.action, 'stop')
+  ok('and names the clock, rather than inventing a spend number',
+    /clock moved backward/.test(d.reason), d.reason)
+}
+{
+  // ...but ordinary NTP jitter (a few seconds) must not kill the night.
+  const jitter = {
+    cycleDay: '2026-07-13',
+    cycleStartedAt: new Date(2026, 6, 13, 3, 0, 10).toISOString(), // 10s ahead of now
+    stoppedDay: null, briefDay: null,
+  }
+  const d = decideAutonomy({ now: at(3), config: CONSENTED, state: jitter, readBudget: RICH })
+  eq('a few seconds of skew is tolerated, not treated as a clock jump', d.action, 'none')
+}
+
+console.log('\n-- an unreadable schedule is a STOP, not a shrug (external red team, pass 2)')
+{
+  const running = { cycleDay: '2026-07-13', cycleStartedAt: '2026-07-13T02:00:00.000Z', stoppedDay: null, briefDay: null }
+  const cfg = { AUTONOMY: 'yes', AUTONOMY_WINDOW_START: 'garbage', AUTONOMY_WINDOW_END: '06:00' }
+  const d = decideAutonomy({ now: at(3), config: cfg, state: running, readBudget: RICH })
+  eq('a running cycle under an unreadable window is STOPPED', d.action, 'stop')
+
+  const idle = decideAutonomy({ now: at(3), config: cfg, state: null, readBudget: RICH })
+  eq('...while with no cycle running it simply does not start', idle.action, 'none')
 }
 
 console.log('\n-- the injected turns: a contract with stop-reply-guard, not decoration')

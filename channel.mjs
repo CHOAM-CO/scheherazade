@@ -582,19 +582,49 @@ function startAutonomyWatcher() {
       const content = cycleMod.injectFor(decision)
       if (!content) return
 
-      await mcp.notification({
-        method: 'notifications/claude/channel',
-        params: {
-          content,
-          meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() },
-        },
-      })
-      // State advances only on SUCCESSFUL delivery -- same reasoning as the
-      // shutdown watcher's dedup marker. Advancing first would turn one
-      // transient notification failure into "the brief was never sent and we
-      // recorded that it was", which is exactly the class of lie this whole
-      // build is about.
-      await writeAutonomyState(decision.nextState)
+      // WHEN we persist depends on WHICH LIE IS WORSE, and the two actions have
+      // opposite answers. (External red team, 2026-07-13.)
+      //
+      // START -- persist BEFORE sending.
+      //   If we sent first and died before writing, the agent would be awake and
+      //   spending while the state file said no cycle exists. The owner could then
+      //   flip consent off and this watcher, seeing nothing outstanding, would say
+      //   nothing -- and a silent watcher does not stop a running agent. Worse, the
+      //   next poll would start a SECOND cycle.
+      //   The cost of pre-writing is the mirror case: the notification fails, and we
+      //   have recorded a night that never began. That costs a skipped night and a
+      //   brief reporting ~0 tokens. One error loses work; the other loses control of
+      //   someone's money while they sleep. Not a close call.
+      //
+      // STOP / BRIEF -- persist AFTER sending.
+      //   Marking these first would mean one transient failure becomes "we recorded
+      //   that we told them, and we never did". A brief that is never retried is the
+      //   owner never learning what the night cost. On failure we leave the debt
+      //   standing and the next poll retries it.
+      const persistFirst = decision.action === 'start'
+      if (persistFirst) await writeAutonomyState(decision.nextState)
+
+      try {
+        await mcp.notification({
+          method: 'notifications/claude/channel',
+          params: {
+            content,
+            meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() },
+          },
+        })
+      } catch (err) {
+        if (persistFirst) {
+          // The night was recorded but the agent was never told. Leave the record
+          // standing: something may already have reached it, and assuming spend is
+          // the safe direction. Say so loudly rather than retrying into a double
+          // start.
+          log(`autonomy: START recorded but NOT delivered (${err.message}) -- treating tonight as begun; no second start will be issued`)
+          return
+        }
+        throw err // stop/brief: unrecorded, so the next poll retries
+      }
+
+      if (!persistFirst) await writeAutonomyState(decision.nextState)
       log(`autonomy: ${decision.action} -- ${decision.reason}`)
     } catch (err) {
       log(`autonomy watcher error (will retry next poll): ${err.message}`)

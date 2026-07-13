@@ -87,18 +87,36 @@ function emptyState() {
 // and hand the agent a fresh full budget on top of whatever it already burned.
 // So a corrupt anchor is not a zero, it is a BLINDNESS -- and blindness stops
 // the cycle, same as a broken meter.
-function anchorFor(st) {
+// Tolerance for ordinary NTP jitter. Beyond this, an anchor in the FUTURE is
+// not jitter, it is a clock that moved.
+const CLOCK_SKEW_TOLERANCE_MS = 60 * 1000
+
+function anchorFor(st, now) {
   if (!st.cycleDay) return { ok: true, ms: null } // no cycle -> nothing spent yet
   const ms = Date.parse(st.cycleStartedAt || '')
   if (!Number.isFinite(ms)) {
     return { ok: false, reason: 'cycle state has no usable start time; cannot measure what tonight has cost' }
   }
+  // The clock moved BACKWARD (NTP correction, manual change, VM restore) and the
+  // night now begins in the future. usageSince() would then filter out every row
+  // the agent writes -- spend would read as zero, forever, and the cap would be
+  // silently disarmed for the rest of the night. (External red team, 2026-07-13.)
+  //
+  // We cannot re-derive the truth here, so we do not pretend to: an anchor in the
+  // future is BLINDNESS, and blindness stops the cycle.
+  if (now && ms > now.getTime() + CLOCK_SKEW_TOLERANCE_MS) {
+    return {
+      ok: false,
+      reason: 'the clock moved backward past this cycle\'s start; token spend can no longer be measured',
+    }
+  }
   return { ok: true, ms }
 }
 
-// Wraps readBudget so a corrupt anchor can never silently become "spent 0".
-function budgetVia(readBudget, st) {
-  const a = anchorFor(st)
+// Wraps readBudget so a corrupt or impossible anchor can never silently become
+// "spent 0" -- which would be a full fresh budget on top of whatever was burned.
+function budgetVia(readBudget, st, now) {
+  const a = anchorFor(st, now)
   if (!a.ok) return { ok: false, mayRun: false, cap: 0, reason: a.reason }
   return readBudget(a.ms)
 }
@@ -131,7 +149,7 @@ function decideAutonomy({ now, config, state, readBudget }) {
   //     you closed the account.
   if (!consented) {
     if (st.cycleDay && st.stoppedDay !== st.cycleDay) {
-      const budget = budgetVia(readBudget, st)
+      const budget = budgetVia(readBudget, st, now)
       return {
         action: 'stop',
         reason: 'consent withdrawn while a cycle was running',
@@ -140,7 +158,7 @@ function decideAutonomy({ now, config, state, readBudget }) {
       }
     }
     if (st.cycleDay && st.briefDay !== st.cycleDay) {
-      const budget = budgetVia(readBudget, st)
+      const budget = budgetVia(readBudget, st, now)
       return {
         action: 'brief',
         reason: 'consent withdrawn; the night that already ran is still owed an accounting',
@@ -157,7 +175,20 @@ function decideAutonomy({ now, config, state, readBudget }) {
     config.AUTONOMY_WINDOW_END || DEFAULTS.windowEnd,
   )
   if (!w.ok) {
-    // A malformed window is not permission to run whenever. It is a stop.
+    // A malformed window is not permission to run whenever. It is a stop -- and
+    // "a stop" has to mean SPEAKING to a cycle that is already running, not just
+    // declining to start the next one. The schedule is the owner's control
+    // surface; a control we can no longer evaluate is not a licence to continue.
+    // (External red team, 2026-07-13: this returned 'none' and left a live cycle
+    // spending under a schedule nobody could read.)
+    if (st.cycleDay && st.stoppedDay !== st.cycleDay) {
+      return {
+        action: 'stop',
+        reason: `${w.reason} -- stopping the running cycle rather than continuing under a schedule that cannot be read`,
+        budget: budgetVia(readBudget, st, now),
+        nextState: { ...st, stoppedDay: st.cycleDay },
+      }
+    }
     return { action: 'none', reason: w.reason }
   }
 
@@ -167,7 +198,7 @@ function decideAutonomy({ now, config, state, readBudget }) {
   // the state file), and it is not cancelled by the cycle having gone badly.
   if (!w.inWindow) {
     if (st.cycleDay && st.briefDay !== st.cycleDay) {
-      const budget = budgetVia(readBudget, st)
+      const budget = budgetVia(readBudget, st, now)
       return {
         action: 'brief',
         reason: `cycle ${st.cycleDay} ended, brief not yet delivered`,
@@ -179,7 +210,7 @@ function decideAutonomy({ now, config, state, readBudget }) {
   }
 
   // ── inside the window ─────────────────────────────────────────────────────
-  const budget = budgetVia(readBudget, st)
+  const budget = budgetVia(readBudget, st, now)
 
   // Already ran tonight.
   if (st.cycleDay === w.dayKey) {
