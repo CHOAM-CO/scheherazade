@@ -863,6 +863,11 @@ async function spawnRealAgentChildLocked() {
       HOME_CHANNEL_ID: homeChannelId,
       AGENT_NAME: agentName,
       MODEL: model,
+      // Effort selector (Mino 07-13 click-test item 2): only forwarded when
+      // the user picked one -- absent, run.sh's own `${EFFORT_LEVEL:-high}`
+      // default applies. The stop-path spawns deliberately don't carry this
+      // (run.sh stop never reads it).
+      ...(config.EFFORT_LEVEL ? { EFFORT_LEVEL: config.EFFORT_LEVEL } : {}),
       CLAUDE_BIN: resolved.bin,
       AGENT_DATA_HOME: DATA_HOME, // see run.sh's own comment: MEM = AGENT_DATA_HOME override
       // 4-provider-mode wiring (2026-07-04): spread LAST so buildProviderEnv()'s

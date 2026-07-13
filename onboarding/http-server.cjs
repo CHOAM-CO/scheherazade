@@ -285,6 +285,11 @@ function computeAgentStatus() {
 // outcome).
 const PROVIDERS = ['claude', 'claude-subscription', 'chatgpt', 'ollama']
 
+// Effort allowlist for POST /api/agent/effort (Mino 07-13 click-test item 2).
+// Values become CLAUDE_CODE_EFFORT_LEVEL in the spawned agent's env via
+// main.cjs -> run.sh:56; run.sh's own fallback default is 'high'.
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'max']
+
 // ROUTER_WIRED (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 3; flipped
 // 2026-07-04, 4-provider-mode wiring): all 4 PROVIDERS values now actually
 // spawn -- see main.cjs's spawnRealAgentChild() -> provider-env.cjs's
@@ -1241,6 +1246,34 @@ const LOGIN_SPECS = {
   },
 }
 
+// Which providers have a usable credential/auth artifact RIGHT NOW.
+// (post-onboarding multi-provider unlock, Mino 07-13 click-test item 3:
+// "인증키 있으면 Model Dropdown에서 셀렉 가능하게"). Rides along on GET
+// /api/config as camelCase `availableProviders`, and gates the provider
+// field of POST /api/agent/model server-side. Detection mirrors what spawn
+// time actually requires: claude/claude-subscription = a stored credential
+// (provider-env.cjs reads the same store), chatgpt/ollama = the login
+// artifact LOGIN_SPECS itself points at. A keychain read failure logs LOUD
+// but degrades to "not available" rather than 500ing the whole config bag.
+function computeAvailableProviders() {
+  const out = []
+  for (const provider of ['claude', 'claude-subscription']) {
+    try {
+      if (readProviderKey(provider)) out.push(provider)
+    } catch (err) {
+      console.error(`[scheherazade/onboarding] availableProviders: readProviderKey(${provider}) failed (treating as unavailable):`, err.message)
+    }
+  }
+  for (const provider of LOGIN_PROVIDERS) {
+    try {
+      if (fs.existsSync(LOGIN_SPECS[provider].artifact())) out.push(provider)
+    } catch (err) {
+      console.error(`[scheherazade/onboarding] availableProviders: artifact check (${provider}) failed (treating as unavailable):`, err.message)
+    }
+  }
+  return out
+}
+
 // provider -> live ChildProcess while a login child runs. Also the
 // ownership token: only children WE spawned are ever signaled -- see
 // cancelProviderLogin(). (Same ownership discipline as main.cjs's proxy
@@ -1451,7 +1484,9 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     // .env (readHomeChannelId), not a readAgentConfig() on-disk field. The
     // memory pane's Discord-open button needs guild+channel as a pair;
     // duplicating the channel id into .agent-config would risk drift.
-    sendJson(res, 200, { ...readAgentConfig(), homeChannelId: readHomeChannelId(), routerWired: ROUTER_WIRED })
+    // availableProviders rides along camelCase like the two above: computed
+    // live (credential store + login artifacts), never a stored field.
+    sendJson(res, 200, { ...readAgentConfig(), homeChannelId: readHomeChannelId(), routerWired: ROUTER_WIRED, availableProviders: computeAvailableProviders() })
     return
   }
 
@@ -1702,27 +1737,61 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     sendJson(res, 202, { ok: true })
     return
   }
-  // POST /api/agent/model {model} -- #4 model swap: write MODEL to config then
-  // restart so the fresh spawn picks it up. Pattern-validated as defense (the
-  // value becomes `--model <MODEL>` argv). NOTE: per-provider auth gating (a
-  // model is selectable only if its provider is authed) is enforced client-side
-  // by the dropdown today; SERVER-SIDE gating enforcement lands with the
-  // dropdown-wiring slice (needs the model->provider map). The X-Onboard-Token
-  // gate + 127.0.0.1-only bind already bound WHO can reach this route.
+  // POST /api/agent/model {model, provider?} -- #4 model swap: write MODEL
+  // (and, when the model lives under a different provider, PROVIDER) to
+  // config then restart so the fresh spawn picks it up. Pattern-validated as
+  // defense (the value becomes `--model <MODEL>` argv). The provider field
+  // is the promised SERVER-SIDE gating half (07-13 multi-provider unlock):
+  // allowlist + rejectIfRouterNotWired + computeAvailableProviders, so a
+  // crafted request can't switch to a provider with no usable credential.
+  // The X-Onboard-Token gate + 127.0.0.1-only bind already bound WHO can
+  // reach this route.
   if (pathname === '/api/agent/model' && req.method === 'POST') {
     if (!agentControls || typeof agentControls.restartAgent !== 'function') {
       sendJson(res, 500, { error: 'agent controls not wired' })
       return
     }
-    const { model } = await readJsonBody(req)
+    const { model, provider } = await readJsonBody(req)
     const value = typeof model === 'string' ? model.trim() : ''
     if (!value || value.length > 200 || !/^[A-Za-z0-9._:/-]+$/.test(value)) {
       sendJson(res, 400, { error: 'invalid model id' })
       return
     }
-    writeAgentConfig({ MODEL: value })
+    let providerValue = null
+    if (provider !== undefined && provider !== null && provider !== '') {
+      providerValue = typeof provider === 'string' ? provider.trim() : ''
+      if (!PROVIDERS.includes(providerValue)) {
+        sendJson(res, 400, { error: `invalid provider: ${providerValue}` })
+        return
+      }
+      if (rejectIfRouterNotWired(res, providerValue)) return
+      if (!computeAvailableProviders().includes(providerValue)) {
+        sendJson(res, 409, { error: `provider not authenticated: ${providerValue}` })
+        return
+      }
+    }
+    writeAgentConfig(providerValue ? { MODEL: value, PROVIDER: providerValue } : { MODEL: value })
     agentControls.restartAgent().catch((err) => console.error('[scheherazade/onboarding] restartAgent (model swap) threw:', err))
-    sendJson(res, 202, { ok: true, model: value })
+    sendJson(res, 202, { ok: true, model: value, ...(providerValue ? { provider: providerValue } : {}) })
+    return
+  }
+  // POST /api/agent/effort {effort} -- Mino 07-13 click-test item 2, same
+  // shape as the model route: write EFFORT_LEVEL then restart. main.cjs
+  // forwards it into the spawn env only when set; run.sh:56 defaults 'high'.
+  if (pathname === '/api/agent/effort' && req.method === 'POST') {
+    if (!agentControls || typeof agentControls.restartAgent !== 'function') {
+      sendJson(res, 500, { error: 'agent controls not wired' })
+      return
+    }
+    const { effort } = await readJsonBody(req)
+    const effortValue = typeof effort === 'string' ? effort.trim() : ''
+    if (!EFFORT_LEVELS.includes(effortValue)) {
+      sendJson(res, 400, { error: `invalid effort level (expected one of: ${EFFORT_LEVELS.join(', ')})` })
+      return
+    }
+    writeAgentConfig({ EFFORT_LEVEL: effortValue })
+    agentControls.restartAgent().catch((err) => console.error('[scheherazade/onboarding] restartAgent (effort swap) threw:', err))
+    sendJson(res, 202, { ok: true, effort: effortValue })
     return
   }
 

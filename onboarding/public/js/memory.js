@@ -214,11 +214,13 @@
   const AGENT_COPY = {
     label: 'AGENT',
     modelLabel: 'Model',
+    effortLabel: 'Effort',
     start: 'Start',
     stop: 'Stop',
     restart: 'Restart',
     states: { live: 'Running', connecting: 'Starting…', stopped: 'Stopped', failed: 'Failed', idle: 'Not started' },
     switchConfirm: (m) => `Switch model to ${m}? The agent will restart.`,
+    effortConfirm: (e) => `Switch effort to ${e}? The agent will restart.`,
     switchOk: 'Switch',
     stopConfirm: 'Stop the agent?',
     stopOk: 'Stop',
@@ -238,6 +240,13 @@
     { id: 'gpt', label: 'GPT (Codex)', providers: ['chatgpt'] },
   ]
 
+  // Effort selector (Mino 07-13 click-test item 2: sonnet-5 felt slow -- the
+  // old hardwired max bought thinking budget casual chat doesn't need).
+  // 'high' is run.sh's own `${EFFORT_LEVEL:-high}` default; labels say so
+  // rather than pre-selecting silently.
+  const EFFORT_LEVELS = ['low', 'medium', 'high', 'max']
+  const EFFORT_DEFAULT = 'high'
+
   const AGENT_POLL_INTERVAL_MS = 2000
   const MAX_DISABLE_MS = 30000
   let agentPollTimer = null
@@ -248,6 +257,12 @@
   let busyDeadline = 0
   let currentProvider = null
   let currentModel = ''
+  let currentEffort = EFFORT_DEFAULT
+  // Providers with a usable credential/login artifact right now, computed
+  // server-side (07-13 multi-provider unlock). The onboarded provider is
+  // always treated as available even if the server list momentarily misses
+  // it -- the running agent is its own proof.
+  let availableProviders = []
 
   function stopAgentPoll() { if (agentPollTimer) { clearTimeout(agentPollTimer); agentPollTimer = null } }
 
@@ -274,6 +289,7 @@
       busyDeadline = Date.now() + MAX_DISABLE_MS
     }
     $('agent-model-select').disabled = disabled
+    $('agent-effort-select').disabled = disabled
     $('agent-btn-startstop').disabled = disabled
     $('agent-btn-restart').disabled = disabled
   }
@@ -339,29 +355,75 @@
       const opt = document.createElement('option')
       opt.value = m.id
       opt.textContent = m.label
-      if (!currentProvider || !m.providers.includes(currentProvider)) opt.disabled = true
+      // A model is selectable if ANY of its providers is authenticated --
+      // not just the currently-running one (07-13 multi-provider unlock).
+      if (!m.providers.some((p) => availableProviders.includes(p))) opt.disabled = true
       if (m.id === model) opt.selected = true
       sel.appendChild(opt)
     }
   }
 
+  function populateEffortSelect(effort) {
+    const sel = $('agent-effort-select')
+    sel.innerHTML = ''
+    for (const level of EFFORT_LEVELS) {
+      const opt = document.createElement('option')
+      opt.value = level
+      opt.textContent = level === EFFORT_DEFAULT ? `${level} (default)` : level
+      if (level === effort) opt.selected = true
+      sel.appendChild(opt)
+    }
+  }
+
+  // The provider a model switch must run under: keep the current provider
+  // when it can serve the model, otherwise the first authenticated provider
+  // that can. Returns null when none can (shouldn't happen for an enabled
+  // option, but fail closed).
+  function providerForModel(modelId) {
+    const entry = MODEL_CATALOG.find((m) => m.id === modelId)
+    if (!entry) return currentProvider // pinned non-catalog id: stay put
+    if (entry.providers.includes(currentProvider)) return currentProvider
+    return entry.providers.find((p) => availableProviders.includes(p)) || null
+  }
+
   async function renderAgentControl() {
     $('cat-agent-control-label').textContent = AGENT_COPY.label
     $('agent-model-label').textContent = AGENT_COPY.modelLabel
+    $('agent-effort-label').textContent = AGENT_COPY.effortLabel
 
     let cfg = {}
     try { cfg = await api('/api/config') } catch (err) { console.error(err) }
     currentProvider = cfg.PROVIDER || null
     currentModel = cfg.MODEL || ''
+    currentEffort = EFFORT_LEVELS.includes(cfg.EFFORT_LEVEL) ? cfg.EFFORT_LEVEL : EFFORT_DEFAULT
+    availableProviders = Array.isArray(cfg.availableProviders) ? cfg.availableProviders.slice() : []
+    if (currentProvider && !availableProviders.includes(currentProvider)) availableProviders.push(currentProvider)
     populateModelSelect(currentModel)
+    populateEffortSelect(currentEffort)
 
     $('agent-model-select').onchange = async (e) => {
       const model = e.target.value
       if (model === currentModel) return
+      const provider = providerForModel(model)
+      if (!provider) { e.target.value = currentModel; return } // fail closed: no authed provider serves it
       const ok = await confirmDialog(AGENT_COPY.switchConfirm(model), AGENT_COPY.switchOk, AGENT_COPY.cancel)
       if (!ok) { e.target.value = currentModel; return }
       currentModel = model
-      await fireControl('model', { model })
+      if (provider !== currentProvider) {
+        currentProvider = provider
+        await fireControl('model', { model, provider })
+      } else {
+        await fireControl('model', { model })
+      }
+    }
+
+    $('agent-effort-select').onchange = async (e) => {
+      const effort = e.target.value
+      if (effort === currentEffort) return
+      const ok = await confirmDialog(AGENT_COPY.effortConfirm(effort), AGENT_COPY.switchOk, AGENT_COPY.cancel)
+      if (!ok) { e.target.value = currentEffort; return }
+      currentEffort = effort
+      await fireControl('effort', { effort })
     }
 
     $('agent-btn-startstop').onclick = async () => {

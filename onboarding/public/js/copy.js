@@ -453,6 +453,26 @@ window.COPY = {
     renameSaved: '저장됐습니다.',
     slackLabel: 'Slack',
     slackNote: '나중에 지원 예정',
+    // AUTHORED -- post-onboarding provider auth (Mino 07-13 click-test:
+    // "온보딩 끝낸 이후에 ollama cloud 인증 추가 / chatGPT인증 추가").
+    providersLabel: '추가 인증',
+    providersNote: '인증하면 기억 페이지의 모델 선택에서 해당 모델을 고를 수 있습니다',
+    providerNames: { chatgpt: 'ChatGPT (Codex)', ollama: 'Ollama Cloud' },
+    providerConnected: '연결됨',
+    providerNotConnected: '미연결',
+    providerAuthButton: '인증하기',
+    providerAuthRunning: '로그인 창이 열렸습니다. 브라우저에서 로그인을 끝내면 여기가 바뀝니다',
+    providerAuthSuccess: '연결됐습니다',
+    providerAuthFailures: {
+      cli_missing: {
+        chatgpt: 'codex CLI가 없습니다. https://github.com/openai/codex 에서 설치 후 다시 시도해주세요',
+        ollama: 'Ollama 앱이 설치되어 있지 않습니다. https://ollama.com 에서 설치 후 다시 시도해주세요',
+      },
+      cancelled: '인증이 취소됐습니다',
+      timeout: '인증이 제한 시간을 넘겼습니다. 다시 시도해주세요',
+      exit_nonzero: '인증이 실패했습니다. 다시 시도해주세요',
+      unknown: '인증이 실패했습니다. 다시 시도해주세요',
+    },
   },
 
   // Sourced from the source file's Step 4 폴백 note: "waiting.html 카피
