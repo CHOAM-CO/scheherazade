@@ -256,6 +256,11 @@
     clearConfirm: '이 목록을 전부 비울까요?',
     clearOk: '비우기',
     coverage: (label, found, note) => `${label}: ${found}개 — ${note}`,
+    // A heading we refused to keep because it looked like a credential. Silence
+    // here would be the same bug in a friendlier coat: the user would never learn
+    // that we ate a label, and could not tell a caught key from an over-strict
+    // filter. Zero is normal, so this line only appears when it isn't zero.
+    suppressed: (n) => `제목 ${n}개는 열쇠처럼 보여서 목록에 담지 않았습니다 (파일 위치는 그대로 있습니다).`,
   }
 
   // Model catalog + provider gate. A model is selectable only if its provider
@@ -669,6 +674,12 @@
         line.className = 'pointers-coverage-line'
         line.textContent = P.coverage(c.label, c.found, c.note)
         $('pointers-coverage').appendChild(line)
+        if (c.suppressed > 0) {
+          const warn = document.createElement('div')
+          warn.className = 'pointers-coverage-line pointers-suppressed'
+          warn.textContent = P.suppressed(c.suppressed)
+          $('pointers-coverage').appendChild(warn)
+        }
       }
       const entries = $('pointers-entries')
       entries.innerHTML = ''

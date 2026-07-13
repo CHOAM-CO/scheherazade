@@ -105,6 +105,29 @@ function looksSecret(text) {
   return SECRET_SHAPES.some((re) => re.test(text))
 }
 
+// SECRET_SHAPES is a denylist of shapes we have ALREADY SEEN. On a shape we have
+// never seen -- some internal token format, a pasted password, next year's key
+// prefix -- it returns false and the heading gets indexed. That is this
+// instrument failing SILENT in the leaking direction: its silence means "publish".
+//
+// The fix is not more shapes (the hand writing the list is the blind hand). It is
+// to flip which way silence points for THIS surface: when a heading contains a
+// token that doesn't look like something a human wrote, drop the label. We lose a
+// topic string; we never lose the pointer, because the file is still indexed by
+// path. Cheap wrong direction, chosen on purpose.
+//
+// Test: one whitespace-free run, >= 20 chars, carrying BOTH a digit and a letter.
+// Prose almost never does this. Keys, hashes, base64 and pasted passwords almost
+// always do. Deliberately NOT applied to paths -- `.../scheherazade/v0.0.4/x.md`
+// matches, and refusing that file would silently drop legitimate memory. The path
+// and the heading are different channels, so they get different defaults.
+const UNKNOWN_CREDENTIAL_TOKEN = /(?=[^\s]*\d)(?=[^\s]*[A-Za-z])[^\s]{20,}/
+
+function looksUnknownCredential(text) {
+  if (!text) return false
+  return UNKNOWN_CREDENTIAL_TOKEN.test(text)
+}
+
 function isDenied(fullPath) {
   const lower = fullPath.toLowerCase()
   for (const needle of DENY_SUBSTRINGS) {
@@ -169,7 +192,7 @@ function defaultSources(homedir = os.homedir()) {
 // a file, and it takes only `#`-prefixed lines: the table of contents, not the
 // contents. A heading is what the file is ABOUT (a WHERE-label); the paragraph
 // under it is what the file SAYS (a WHAT), and that stays on disk.
-function extractHeadings(filePath) {
+function extractHeadings(filePath, tally) {
   try {
     const stat = fs.statSync(filePath)
     if (stat.size > MAX_HEADING_READ_BYTES) return []
@@ -183,7 +206,16 @@ function extractHeadings(filePath) {
       // a pasted API key. Drop the whole heading rather than trying to redact
       // inside it: a partially-scrubbed secret is still a secret with a hint
       // attached, and we lose nothing by omitting one label.
-      if (looksSecret(heading)) continue
+      //
+      // Dropping is SAFE but SILENT, and silent is the failure direction this
+      // whole file is about. So every drop is COUNTED and the count is surfaced
+      // (coverage.suppressed). That makes both residual failures visible: an
+      // over-strict drop of a legitimate heading, and a caught unknown secret.
+      // A suppression the user cannot see is indistinguishable from a bug.
+      if (looksSecret(heading) || looksUnknownCredential(heading)) {
+        if (tally) tally.suppressed++
+        continue
+      }
       out.push(heading)
       if (out.length >= MAX_HEADINGS_PER_FILE) break
     }
@@ -193,7 +225,7 @@ function extractHeadings(filePath) {
   }
 }
 
-function walk(root, depth, acc, source, realRoots) {
+function walk(root, depth, acc, source, realRoots, tally) {
   if (depth > MAX_DEPTH) return
   if (acc.length >= MAX_POINTERS_PER_SOURCE) return
   let entries
@@ -230,7 +262,7 @@ function walk(root, depth, acc, source, realRoots) {
     try { stat = fs.statSync(real) } catch { continue }
 
     if (stat.isDirectory()) {
-      walk(full, depth + 1, acc, source, realRoots)
+      walk(full, depth + 1, acc, source, realRoots, tally)
       continue
     }
     if (!stat.isFile()) continue
@@ -250,7 +282,7 @@ function walk(root, depth, acc, source, realRoots) {
       kind: ext.replace('.', '') || 'file',
       // WHERE-label only. For non-markdown (e.g. transcript jsonl) we never
       // open the file at all -- the filename is the whole topic we claim.
-      topic: readable ? extractHeadings(real).join(' / ') : '',
+      topic: readable ? extractHeadings(real, tally).join(" / ") : "",
       size_bytes: stat.size,
       mtime: new Date(stat.mtimeMs).toISOString(),
     })
@@ -275,6 +307,7 @@ function scanPointers(opts = {}) {
   const coverage = []
   for (const source of sources) {
     const found = []
+    const tally = { suppressed: 0 }
     // Resolve the roots ONCE, up front, so containment compares like with like
     // (see walk's own note on the fail-quiet symlinked-home bug). A root that
     // doesn't exist simply drops out -- that tool isn't installed.
@@ -286,7 +319,7 @@ function scanPointers(opts = {}) {
       let exists = false
       try { exists = fs.existsSync(root) } catch { exists = false }
       if (!exists) continue
-      walk(root, 0, found, source, realRoots)
+      walk(root, 0, found, source, realRoots, tally)
     }
     pointers.push(...found)
     coverage.push({
@@ -296,6 +329,12 @@ function scanPointers(opts = {}) {
       // Loud when we hit the cap: a silently truncated index reads as "this is
       // everything you have", which is a lie the user cannot detect.
       truncated: found.length >= MAX_POINTERS_PER_SOURCE,
+      // Headings we refused to keep because they looked like a credential. Zero
+      // is the normal number. A non-zero one is the honest thing to say out loud:
+      // either we just caught a key that was sitting in someone's notes, or we
+      // were over-strict and ate a legitimate label. Both readings are the user's
+      // to make, and neither is possible if the count stays inside this file.
+      suppressed: tally.suppressed,
       note: source.coverage,
     })
   }
@@ -308,6 +347,7 @@ module.exports = {
   isDenied,
   isInsideRoot,
   looksSecret,
+  looksUnknownCredential,
   MAX_POINTERS_PER_SOURCE,
   MAX_DEPTH,
 }

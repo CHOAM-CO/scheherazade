@@ -16,7 +16,7 @@ import path from 'node:path'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
-const { scanPointers, defaultSources, isDenied, isInsideRoot, looksSecret } = require('../memory/pointer-scan.cjs')
+const { scanPointers, defaultSources, isDenied, isInsideRoot, looksSecret, looksUnknownCredential } = require('../memory/pointer-scan.cjs')
 
 let pass = 0
 let fail = 0
@@ -207,6 +207,61 @@ console.log('pointer-scan adversarial fixtures\n')
   check('looksSecret: long hex blob', looksSecret('a'.repeat(40)))
   check('looksSecret: ordinary prose is NOT a secret', !looksSecret('# Deploy notes for the staging server'))
   check('looksSecret: ordinary path is NOT a secret', !looksSecret('/Users/x/.claude/CLAUDE.md'))
+}
+
+// ── 12. FAILURE DIRECTION 2026-07-13 (fleet class B): the UNSEEN shape ─────
+//    SECRET_SHAPES is a denylist of shapes already seen, so on a shape nobody has
+//    seen it returns false and the heading ships. The remedy is not more shapes --
+//    the hand writing the list is the blind hand -- it is to make this surface's
+//    SILENCE mean "drop" instead of "publish". These are credential formats that
+//    match NONE of SECRET_SHAPES on purpose.
+{
+  const home = makeHome()
+  fs.writeFileSync(path.join(home, '.claude', 'unseen.md'), [
+    '# corp_tok_9f3k2m4x8q7w1e5r6t0y',        // invented internal format
+    '# hunter2correcthorsebattery99',          // a pasted password, no known prefix
+    '# db://admin:Pa55w0rdLongEnough@host',    // credential inside a connstring
+    '# Deploy notes for the staging server',   // ordinary prose: must SURVIVE
+  ].join('\n'))
+  const { pointers } = scanPointers({ homedir: home, sources: sourcesFor(home) })
+  const blob = JSON.stringify(pointers)
+  const row = pointers.find((p) => p.path.endsWith('unseen.md'))
+
+  check('UNSEEN internal token format is dropped', !blob.includes('corp_tok_9f3k'), blob)
+  check('UNSEEN pasted password is dropped', !blob.includes('hunter2correct'), blob)
+  check('UNSEEN credential in a connstring is dropped', !blob.includes('Pa55w0rd'), blob)
+  check('the file is STILL indexed (we lose a label, never the pointer)', Boolean(row), blob)
+  check('ordinary prose in the same file SURVIVES', row && row.topic.includes('Deploy notes'), JSON.stringify(row))
+}
+
+// ── 13. looksUnknownCredential: the false-drop cost is bounded ─────────────
+//    Over-strict on purpose, so state the exact cost: a long alphanumeric token in
+//    a heading loses its LABEL. Prose, paths and short versions must not trip it.
+{
+  check('unknown: long digit+letter run trips', looksUnknownCredential('# corp_tok_9f3k2m4x8q7w1e5r6t0y'))
+  check('unknown: base64-ish blob trips', looksUnknownCredential('aGVsbG8gd29ybGQgMTIzNDU2Nzg5MA'))
+  check('unknown: plain prose does NOT trip', !looksUnknownCredential('Deploy notes for the staging server'))
+  check('unknown: a letters-only path does NOT trip', !looksUnknownCredential('/Users/x/.claude/CLAUDE.md'))
+  check('unknown: short versioned heading does NOT trip', !looksUnknownCredential('Release 2026-07-13 rc1'))
+  check('unknown: korean prose does NOT trip', !looksUnknownCredential('배포 노트 2026년 7월'))
+  check('ACCEPTED COST: a long alnum identifier loses its label', looksUnknownCredential('commit 94cc732a75d352233c878ee2bd8'))
+}
+
+// ── 14. A SILENT drop is still a silent failure ───────────────────────────
+//    Dropping the heading is safe, but a suppression the user cannot see is
+//    indistinguishable from a bug -- and "cannot fail loudly" is the whole class.
+//    So the count is surfaced. Loud and cheap beats safe and quiet.
+{
+  const home = makeHome()
+  fs.writeFileSync(path.join(home, '.claude', 'leaky.md'), '# sk-ant-api03-CCCCCCCCCCCCCCCCCCCC\n# Fine Heading\n')
+  const { coverage } = scanPointers({ homedir: home, sources: sourcesFor(home) })
+  const cc = coverage.find((c) => c.tool === 'claude-code')
+  check('coverage REPORTS suppressed headings', cc && cc.suppressed === 1, JSON.stringify(cc))
+
+  const clean = makeHome()
+  const { coverage: cov2 } = scanPointers({ homedir: clean, sources: sourcesFor(clean) })
+  const cc2 = cov2.find((c) => c.tool === 'claude-code')
+  check('a clean scan reports suppressed: 0, not undefined', cc2 && cc2.suppressed === 0, JSON.stringify(cc2))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
