@@ -92,6 +92,40 @@ function fakeReadProviderKey(store) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// 1b. provider === 'claude-cli' (NEW 2026-07-13: reuse the machine's EXISTING
+//     Claude Code CLI login in place; zero paste, zero storage, zero copy)
+//
+//     The contract is unusual and worth asserting hard: the implementation is
+//     the ABSENCE of env. All three auth vars must be present-as-undefined --
+//     i.e. actively cleared in the child, not merely "not set here" -- because
+//     main.cjs spreads ...process.env into the spawn, so a value left over from
+//     a previous provider would otherwise win and silently turn this mode into
+//     BYOK-on-a-stale-key. `'X' in env` is the assertion that matters; a plain
+//     `env.X === undefined` would pass even if the key were missing entirely.
+// ─────────────────────────────────────────────────────────────────────────
+{
+  // Deliberately hand it a store that WOULD satisfy other modes: claude-cli
+  // must not read, prefer, or fall back to any stored credential.
+  const store = { claude: 'sk-ant-should-not-be-used', 'claude-subscription': 'token-should-not-be-used' }
+  let readCalls = 0
+  const spyRead = (p) => { readCalls++; return store[p] }
+  const result = buildProviderEnv('claude-cli', { MODEL: 'opus' }, { readProviderKey: spyRead })
+  assert(!result.error, 'claude-cli: never errors (no credential to be missing)')
+  assert(readCalls === 0, 'claude-cli: readProviderKey is NEVER called (the promise is that we do not read the user credential)')
+  assert(result.env.ANTHROPIC_API_KEY === undefined && 'ANTHROPIC_API_KEY' in result.env, 'claude-cli: ANTHROPIC_API_KEY actively cleared (a stale key would out-rank the OAuth session)')
+  assert(result.env.CLAUDE_CODE_OAUTH_TOKEN === undefined && 'CLAUDE_CODE_OAUTH_TOKEN' in result.env, 'claude-cli: CLAUDE_CODE_OAUTH_TOKEN actively cleared')
+  assert(result.env.ANTHROPIC_BASE_URL === undefined && 'ANTHROPIC_BASE_URL' in result.env, 'claude-cli: ANTHROPIC_BASE_URL actively cleared (else a stale ollama/codex base-url would hijack the session)')
+  assert(Object.values(result.env).every((v) => v === undefined), 'claude-cli: injects NOTHING -- the empty env IS the mechanism')
+}
+{
+  // A stored credential is NOT required for this mode to be completable.
+  assert(
+    !PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes('claude-cli'),
+    'claude-cli: not in PROVIDERS_REQUIRING_STORED_CREDENTIAL (onboarding must not demand a paste)',
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // 2. provider === 'claude-subscription' (NEW: OAuth token from `claude
 //    setup-token`)
 // ─────────────────────────────────────────────────────────────────────────

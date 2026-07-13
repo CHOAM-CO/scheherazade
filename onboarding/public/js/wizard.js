@@ -221,6 +221,53 @@
     const keyFieldWrap = $('s1-key').parentElement
     let extraEl = null // lazily-mounted container for claude's primary-panel + fallback-toggle; inserted once, right before keyFieldWrap
 
+    // ── zero-auth consent card (2026-07-13) ─────────────────────────────
+    // If this Mac already has a Claude Code CLI login, offer to reuse it IN
+    // PLACE and skip auth entirely. Detection is server-side and
+    // existence-only (http-server.cjs's computeAvailableProviders) -- the
+    // credential file is never opened, so there is nothing here that could
+    // leak it.
+    //
+    // Fetches its own status rather than waiting on init()'s cfg, mirroring
+    // renderFdaCard: renderStep1 is deliberately synchronous and must not
+    // start awaiting (see init()'s comment). Non-blocking in the same way,
+    // too -- if the probe fails, the card simply never appears and the normal
+    // tabs carry the user, exactly as before this feature existed.
+    function renderFoundLoginCard() {
+      const F = C.step1.foundLogin
+      const card = $('s1-found-login')
+      api('/api/config')
+        .then((cfg) => {
+          const providers = Array.isArray(cfg.availableProviders) ? cfg.availableProviders : []
+          if (!providers.includes('claude-cli')) return // nothing found -> normal flow, no card
+          $('s1-found-login-title').textContent = F.title
+          $('s1-found-login-body').textContent = F.body
+          $('s1-found-login-cost').textContent = F.cost
+          $('s1-found-login-stale').textContent = F.staleHint
+          $('s1-found-login-alt').textContent = F.alt
+          const useBtn = $('s1-found-login-use')
+          useBtn.textContent = F.use
+          useBtn.onclick = () => {
+            // Consent is this click, and this click is the entire flow: there
+            // is no key to validate and nothing to store, so the provider is
+            // simply chosen and the user moves on. /api/onboarding/complete
+            // writes PROVIDER=claude-cli, and provider-env.cjs's claude-cli
+            // branch then injects NOTHING, which is what makes the CLI fall
+            // back to the login we found.
+            state.provider = 'claude-cli'
+            state.key = ''
+            stopLoginPoll()
+            showStep('2')
+          }
+          card.classList.remove('hidden')
+        })
+        .catch((err) => {
+          // A failed probe must never block onboarding -- worst case the user
+          // connects a provider by hand, which is the pre-existing path.
+          console.error('found-login probe failed (card stays hidden):', err)
+        })
+    }
+
     // ── login shell-out poll plumbing (v1.1, 2026-07-07) ────────────────
     let loginPollTimer = null
     function stopLoginPoll() {
@@ -608,6 +655,11 @@
     // Initial render -- MUST stay below validateNextHandler (TDZ; see
     // wireValidateNext's comment).
     renderClaudeArea()
+    // Offer the existing login, if there is one. Mounted AFTER the normal tab
+    // render on purpose: the manual path is fully wired and usable whether or
+    // not this card ever appears, so a probe that hangs or fails degrades to
+    // exactly the pre-existing onboarding rather than to a dead step.
+    renderFoundLoginCard()
   }
 
   // ── Step 2: name ─────────────────────────────────────────────────────

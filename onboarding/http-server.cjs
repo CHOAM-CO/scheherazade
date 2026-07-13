@@ -283,7 +283,14 @@ function computeAgentStatus() {
 // externally-governed copy-source file copy.js is sourced from verbatim --
 // out of scope here, and a materially bigger/riskier diff for the same
 // outcome).
-const PROVIDERS = ['claude', 'claude-subscription', 'chatgpt', 'ollama']
+const PROVIDERS = ['claude', 'claude-cli', 'claude-subscription', 'chatgpt', 'ollama']
+
+// The artifact that proves a Claude Code CLI login exists on this machine.
+// Checked for EXISTENCE ONLY and never opened (see computeAvailableProviders).
+// This is the same file the CLI itself authenticates from when no API key /
+// OAuth token / base-url override is present in its env -- which is exactly
+// what provider-env.cjs's 'claude-cli' branch arranges.
+const CLAUDE_CLI_CREDENTIALS_PATH = path.join(os.homedir(), '.claude', '.credentials.json')
 
 // Effort allowlist for POST /api/agent/effort (Mino 07-13 click-test item 2).
 // Values become CLAUDE_CODE_EFFORT_LEVEL in the spawned agent's env via
@@ -1457,6 +1464,18 @@ function computeAvailableProviders() {
     } catch (err) {
       console.error(`[scheherazade/onboarding] availableProviders: readProviderKey(${provider}) failed (treating as unavailable):`, err.message)
     }
+  }
+  // claude-cli: the login the user ALREADY has, reused in place. Detection is
+  // EXISTENCE-ONLY, deliberately -- opening this file to validate the token
+  // would be precisely the thing the zero-auth promise forbids. An expired
+  // login therefore still reads as "available", and the CLI itself reports the
+  // failure at spawn in its own voice. That is the correct trade: a false
+  // "available" costs one loud spawn error, whereas reading the user's OAuth
+  // token to avoid that error costs the promise.
+  try {
+    if (fs.existsSync(CLAUDE_CLI_CREDENTIALS_PATH)) out.push('claude-cli')
+  } catch (err) {
+    console.error('[scheherazade/onboarding] availableProviders: claude-cli artifact check failed (treating as unavailable):', err.message)
   }
   for (const provider of LOGIN_PROVIDERS) {
     try {

@@ -23,6 +23,18 @@
         <section class="step hidden" data-step="1">
           <h1 id="s1-title"></h1>
           <p id="s1-body"></p>
+          <!-- Zero-auth consent card. Appears only when a Claude Code CLI login
+               already exists on this machine (existence check, never read). The
+               cost line is mandatory copy: reusing the login spends the user's
+               own subscription quota. -->
+          <div class="found-login hidden" id="s1-found-login">
+            <div class="found-login-title" id="s1-found-login-title"></div>
+            <div class="found-login-body" id="s1-found-login-body"></div>
+            <div class="found-login-cost" id="s1-found-login-cost"></div>
+            <div class="found-login-stale" id="s1-found-login-stale"></div>
+            <button type="button" id="s1-found-login-use"></button>
+            <div class="found-login-alt" id="s1-found-login-alt"></div>
+          </div>
           <div class="tabs" id="s1-tabs"></div>
           <div class="field-hint hidden" id="s1-router-note"></div>
           <div class="field">

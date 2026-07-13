@@ -239,8 +239,8 @@
   // is the onboarded PROVIDER (single-provider today; claude-subscription
   // counts as claude). Claude ids use CLI aliases (version-independent).
   const MODEL_CATALOG = [
-    { id: 'opus', label: 'Claude Opus', providers: ['claude', 'claude-subscription'] },
-    { id: 'sonnet', label: 'Claude Sonnet', providers: ['claude', 'claude-subscription'] },
+    { id: 'opus', label: 'Claude Opus', providers: ['claude', 'claude-cli', 'claude-subscription'] },
+    { id: 'sonnet', label: 'Claude Sonnet', providers: ['claude', 'claude-cli', 'claude-subscription'] },
     // Kimi: DISABLED because it went mute in production, cause UNRESOLVED.
     //
     // ⚠️ The mechanism this entry used to assert -- "the ollama Anthropic-compat

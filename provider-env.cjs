@@ -202,6 +202,46 @@ function buildProviderEnv(provider, config, deps) {
     }
   }
 
+  if (provider === 'claude-cli') {
+    // NEW mode (2026-07-13): reuse the Claude Code CLI login the user ALREADY
+    // has on this machine, IN PLACE. This is the true zero-auth path -- the
+    // user pastes nothing, we store nothing, we copy nothing.
+    //
+    // The mechanism is to inject NOTHING. With no ANTHROPIC_API_KEY, no
+    // CLAUDE_CODE_OAUTH_TOKEN and no ANTHROPIC_BASE_URL, the CLI falls back to
+    // its own interactively-authenticated OAuth session (~/.claude/.credentials.json).
+    // This isn't a guess: it is exactly how the entire MAGI fleet runs today --
+    // `ps eww <agent-pid> | grep -cE '^ANTHROPIC_API_KEY=|^ANTHROPIC_BASE_URL=|^CLAUDE_CODE_OAUTH_TOKEN='`
+    // returns 0 for a live, working agent (verified 2026-07-13 on pid 71610).
+    //
+    // The three explicit `undefined`s are therefore the WHOLE implementation,
+    // not hygiene: they clear anything a previous provider left in
+    // process.env, which main.cjs spreads into the child. If a stale
+    // ANTHROPIC_API_KEY survived here, the CLI would prefer it over the OAuth
+    // session and this mode would silently become BYOK-on-someone-else's-key
+    // (the exact leak sirin's run-agent.sh comment describes, quoted in this
+    // file's header).
+    //
+    // COST DISCLOSURE IS MANDATORY IN THE UI (locked with Mino): this spends
+    // the user's OWN Claude subscription quota. "We found your login and will
+    // use it" must never be presented as if it were free.
+    //
+    // No credential is read, so there is nothing to fail on -- readProviderKey
+    // is never called and this branch cannot return 'not_ready'. If the login
+    // is absent or expired, the CLI itself says so at spawn, loudly, in its own
+    // voice. We deliberately do NOT pre-validate by reading the credential
+    // file: detection is existence-only (http-server.cjs), because reading a
+    // user's OAuth token to check it is exactly the thing this mode promises
+    // not to do.
+    return {
+      env: {
+        ANTHROPIC_API_KEY: undefined,
+        ANTHROPIC_BASE_URL: undefined,
+        CLAUDE_CODE_OAUTH_TOKEN: undefined,
+      },
+    }
+  }
+
   if (provider === 'chatgpt') {
     // NEW mode: local codex-as-api proxy. No user secret required -- see
     // this file's header comment for why an explicit placeholder key is
@@ -246,7 +286,7 @@ function buildProviderEnv(provider, config, deps) {
   return {
     error: {
       kind: 'provider_not_wired',
-      reason: `provider "${provider}" is not a recognized mode -- expected one of: claude, claude-subscription, chatgpt, ollama`,
+      reason: `provider "${provider}" is not a recognized mode -- expected one of: claude, claude-cli, claude-subscription, chatgpt, ollama`,
     },
   }
 }

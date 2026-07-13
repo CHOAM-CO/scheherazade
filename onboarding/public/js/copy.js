@@ -77,6 +77,34 @@ window.COPY = {
   step1: {
     title: '사용할 모델을 연결하세요',
     body: '쓰고 있는 계정으로 로그인하면 됩니다. 구독 요금제가 그대로 적용되고, 로그인 정보는 이 Mac에만 저장됩니다.',
+    // Zero-auth consent card (2026-07-13). Shown only when this Mac already has
+    // a Claude Code CLI login. Three rules baked into this copy:
+    //   1. Say what we did NOT do (no copy, no store, no read) -- the whole
+    //      value of detect-and-reuse is that it touches nothing.
+    //   2. `cost` is MANDATORY and never softened: reusing the login spends the
+    //      user's own subscription quota. A "we found it, we'll just use it"
+    //      framing that omits this is a lie by omission.
+    //   3. `alt` keeps the other paths visible. A found login is an offer, not
+    //      a fait accompli.
+    foundLogin: {
+      title: '이 Mac에 이미 Claude Code 로그인이 있습니다',
+      body: '그 로그인을 그대로 쓸 수 있습니다. 복사하지 않고, 따로 저장하지 않고, 내용을 열어보지도 않습니다 (있는지만 확인했습니다). 붙여넣을 키도 없습니다.',
+      cost: '사용량은 회원님의 Claude 구독에서 차감됩니다.',
+      use: '이 로그인 그대로 쓰기',
+      alt: '다른 계정을 쓰고 싶다면 아래에서 직접 연결하세요.',
+      // Expired-login disclosure, placed HERE on purpose (red-team 2026-07-13,
+      // axis "false availability"). We check only that the login file exists,
+      // never what is in it -- so an expired login still reads as available and
+      // the agent then fails to start with a generic error.
+      //
+      // The two ways to fail faster were both rejected: reading the credential
+      // to inspect its expiry is exactly the promise this mode makes ("내용을
+      // 열어보지도 않습니다"), and firing a validation call through the CLI
+      // spends the user's quota before they have agreed to spend any. So the
+      // honest move is to spend one sentence, at the moment of consent, telling
+      // the user what the failure will look like and how to fix it.
+      staleHint: '로그인이 만료된 상태라면 에이전트가 시작되지 않습니다. 그때는 터미널에서 claude 를 한 번 실행해 다시 로그인한 뒤 재시도해주세요.',
+    },
     tabs: [
       {
         id: 'claude',
