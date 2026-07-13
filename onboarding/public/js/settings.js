@@ -38,6 +38,78 @@
     setTimeout(() => el.classList.remove('visible'), 2200)
   }
 
+  // ── autonomous cycle (v0.0.6) ──────────────────────────────────────────
+  // This section shows the user a number that is being spent on their behalf
+  // while they sleep, so it is written to be un-flatterable:
+  //   - the token count is the SAME number the cap is enforced against
+  //   - when the meter cannot measure, it says that instead of showing 0
+  //   - "used 0 tokens" and "cannot tell you how many tokens" never render
+  //     the same way, because only one of them means nothing was spent
+  const fmtTokens = (n) => Number(n || 0).toLocaleString()
+
+  function renderAutonomy(a) {
+    $('set-autonomy-enabled').checked = a.enabled === true
+    $('set-autonomy-start').value = a.windowStart
+    $('set-autonomy-end').value = a.windowEnd
+    $('set-autonomy-cap').value = String(a.cap)
+
+    const usageEl = $('set-autonomy-usage')
+    if (a.usage && a.usage.ok) {
+      usageEl.textContent = `${C.autonomyUsageLabel}: ${fmtTokens(a.usage.used)} / ${fmtTokens(a.usage.cap)} (${a.usage.usedPct}%)`
+    } else {
+      // Not a blank, not a zero. The one sentence the user must never be
+      // shown wrongly is "you spent nothing".
+      usageEl.textContent = C.autonomyUsageBlind
+    }
+
+    const lastEl = $('set-autonomy-last')
+    if (a.lastCycle && a.lastCycle.day) {
+      const bits = [a.lastCycle.stopped ? C.autonomyLastCycleStopped : C.autonomyLastCycleRan]
+      if (a.lastCycle.briefed) bits.push(C.autonomyLastCycleBriefed)
+      lastEl.textContent = `${C.autonomyLastCycle} (${a.lastCycle.day}): ${bits.join(' / ')}`
+    } else if (a.lastSkip) {
+      lastEl.textContent = a.lastSkip.reason === 'cap' ? C.autonomySkipCap : C.autonomySkipMeter
+    } else {
+      lastEl.textContent = C.autonomyLastCycleNone
+    }
+  }
+
+  async function loadAutonomy() {
+    renderAutonomy(await api('/api/autonomy'))
+  }
+
+  async function saveAutonomy() {
+    const statusEl = $('set-autonomy-status')
+    statusEl.classList.add('hidden')
+    const cap = Number(String($('set-autonomy-cap').value).replace(/[,\s]/g, ''))
+    if (!Number.isFinite(cap) || cap < 0) {
+      statusEl.textContent = C.autonomyInvalidCap
+      statusEl.classList.remove('hidden')
+      return
+    }
+    const btn = $('set-autonomy-save')
+    btn.disabled = true
+    try {
+      await api('/api/autonomy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          enabled: $('set-autonomy-enabled').checked,
+          windowStart: $('set-autonomy-start').value.trim(),
+          windowEnd: $('set-autonomy-end').value.trim(),
+          cap,
+        }),
+      })
+      showToast(C.autonomySaved)
+      await loadAutonomy() // re-read from the server, never trust the form
+    } catch (err) {
+      statusEl.textContent = /HH:MM|window/.test(err.message) ? C.autonomyInvalidWindow : (GEN.body || err.message)
+      statusEl.classList.remove('hidden')
+    } finally {
+      btn.disabled = false
+    }
+  }
+
   async function init() {
     $('set-title').textContent = C.title
     $('set-back-link').textContent = C.backToMemory
@@ -45,6 +117,17 @@
     $('set-rename-save').textContent = C.renameButton
     $('set-slack-label').textContent = C.slackLabel
     $('set-slack-note').textContent = C.slackNote
+
+    $('set-autonomy-label').textContent = C.autonomyLabel
+    $('set-autonomy-note').textContent = C.autonomyNote
+    $('set-autonomy-enabled-label').textContent = C.autonomyEnableLabel
+    $('set-autonomy-window-label').textContent = C.autonomyWindowLabel
+    $('set-autonomy-window-note').textContent = C.autonomyWindowNote
+    $('set-autonomy-cap-label').textContent = C.autonomyCapLabel
+    $('set-autonomy-cap-note').textContent = C.autonomyCapNote
+    $('set-autonomy-save').textContent = C.autonomySave
+    $('set-autonomy-save').addEventListener('click', saveAutonomy)
+    loadAutonomy().catch((err) => console.error(err))
 
     try {
       const cfg = await api('/api/config')

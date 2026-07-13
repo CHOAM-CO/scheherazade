@@ -46,6 +46,43 @@
         </div>
       </div>
 
+      <!-- Autonomous cycle (v0.0.6). The only setting on this page that spends
+           the user's subscription while they are not watching, so it carries
+           its cost note ABOVE the switch, ships OFF, and shows today's real
+           token count next to the cap it is enforced against. -->
+      <div class="category" style="margin-top: 2.5rem" id="set-autonomy">
+        <div class="category-label" id="set-autonomy-label"></div>
+        <p class="subtitle" id="set-autonomy-note"></p>
+
+        <div class="agent-control-row">
+          <label for="set-autonomy-enabled" id="set-autonomy-enabled-label"></label>
+          <input type="checkbox" id="set-autonomy-enabled" />
+        </div>
+
+        <div class="agent-control-row">
+          <label for="set-autonomy-start" id="set-autonomy-window-label"></label>
+          <span>
+            <input type="text" id="set-autonomy-start" size="5" placeholder="02:00" />
+            <input type="text" id="set-autonomy-end" size="5" placeholder="06:00" />
+          </span>
+        </div>
+        <div class="field-hint" id="set-autonomy-window-note"></div>
+
+        <div class="agent-control-row">
+          <label for="set-autonomy-cap" id="set-autonomy-cap-label"></label>
+          <input type="text" id="set-autonomy-cap" size="12" inputmode="numeric" />
+        </div>
+        <div class="field-hint" id="set-autonomy-cap-note"></div>
+
+        <div class="status-line" id="set-autonomy-usage"></div>
+        <div class="status-line" id="set-autonomy-last"></div>
+
+        <div class="step-actions">
+          <span class="field-hint hidden" id="set-autonomy-status"></span>
+          <button id="set-autonomy-save"></button>
+        </div>
+      </div>
+
       <div class="banner" style="margin-top: 2.5rem">
         <div class="entry-row" style="border-bottom: none; padding: 0">
           <div class="entry-main">

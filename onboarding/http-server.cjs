@@ -58,6 +58,13 @@ const { PROVIDERS_REQUIRING_STORED_CREDENTIAL, resolveChatgptProxyPort, OLLAMA_B
 // resolve via resolveBin() below and use a FIXED argv -- the LOGIN_SPECS
 // table is the single existing site.
 const { spawn, execFile } = require('node:child_process')
+
+// The autonomous cycle's meter and decision logic. The SAME modules the
+// channel.mjs watcher enforces against -- the settings page must not compute
+// the user's token count a second, subtly different way. One implementation,
+// two callers.
+const autonomyBudget = require(path.join(__dirname, '..', 'autonomy', 'budget.cjs'))
+const autonomyCycle = require(path.join(__dirname, '..', 'autonomy', 'cycle.cjs'))
 const { LOGIN_PROVIDERS, setLoginStatus, getLoginStatus } = require('./login-status.cjs')
 // Fresh-Mac dependency bootstrap (2026-07-07): app-managed download/install
 // of the codex/ollama CLIs into DATA_HOME/bin + sha256 manifest. See
@@ -88,7 +95,17 @@ const AGENT_NAME = 'scheherazade'
 // directory now (not AGENT_NAME) -- see its own top-of-file comment. Its
 // SCHEHERAZADE_MEMORY_DB env override (used by memory/smoke.mjs) still
 // works unchanged.
-const DATA_HOME = path.join(os.homedir(), 'Documents', 'Scheherazade')
+//
+// AGENT_DATA_HOME override (2026-07-13, v0.0.6): channel.mjs (line 79) and
+// run.sh (MEM=) have always honored this env var; http-server.cjs was the one
+// component that did not, so its DATA_HOME could not be redirected. That was
+// harmless only because no test had ever POSTed to a config-WRITING route --
+// the first one to do so (the autonomy consent toggle) would have written into
+// the real user's ~/Documents/Scheherazade/.agent-config from a test run.
+// Production is unaffected: main.cjs passes AGENT_DATA_HOME into the env of the
+// children it spawns, never into its own process.env, and http-server runs
+// inside main.
+const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', 'Scheherazade')
 
 // CONFIG_DIR: where every *writable* runtime config file lives -- the same
 // directory as DATA_HOME/memory.db, kept as a separate name below purely
@@ -652,6 +669,20 @@ function shellQuote(value) {
   const str = String(value).replace(/\r?\n/g, ' ')
   const escaped = str.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`')
   return `"${escaped}"`
+}
+
+// The autonomous cycle's own state (which night ran, whether it was stopped by
+// the cap, whether the morning brief was delivered). Written by channel.mjs's
+// watcher via tmp+rename; read here only. A corrupt or missing file reads as
+// "no cycle has ever run", which is the safe direction: the settings page will
+// say nothing happened rather than claim a night that it cannot substantiate.
+const AUTONOMY_STATE_PATH = path.join(DATA_HOME, '.autonomy-state.json')
+function readAutonomyState() {
+  try {
+    return JSON.parse(fs.readFileSync(AUTONOMY_STATE_PATH, 'utf8'))
+  } catch {
+    return null
+  }
 }
 
 function readAgentConfig() {
@@ -2049,6 +2080,87 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     writeAgentConfig({ EFFORT_LEVEL: effortValue })
     agentControls.restartAgent().catch((err) => console.error('[scheherazade/onboarding] restartAgent (effort swap) threw:', err))
     sendJson(res, 202, { ok: true, effort: effortValue })
+    return
+  }
+
+  // ── autonomous cycle (v0.0.6) ─────────────────────────────────────────────
+  // GET returns consent + window + cap + TODAY'S REAL TOKEN COUNT, read from
+  // the same meter the watcher enforces against. The user is shown the exact
+  // number the cap is enforced on -- not a friendlier one. Two numbers under
+  // one name is how a meter starts lying.
+  if (pathname === '/api/autonomy' && req.method === 'GET') {
+    const cfg = readAgentConfig()
+    const cap = Number(cfg.AUTONOMY_DAILY_TOKEN_CAP || autonomyBudget.DEFAULT_DAILY_CAP)
+    const state = readAutonomyState()
+    const usage = autonomyBudget.budgetState(DATA_HOME, cap)
+    sendJson(res, 200, {
+      enabled: String(cfg.AUTONOMY || '').toLowerCase() === 'yes',
+      windowStart: cfg.AUTONOMY_WINDOW_START || autonomyCycle.DEFAULTS.windowStart,
+      windowEnd: cfg.AUTONOMY_WINDOW_END || autonomyCycle.DEFAULTS.windowEnd,
+      cap,
+      defaultCap: autonomyBudget.DEFAULT_DAILY_CAP,
+      // usage.ok === false means the meter cannot see the transcripts. The UI
+      // must say so out loud: a blank number would read as "0 tokens used",
+      // and the difference between "nothing was spent" and "I cannot tell you
+      // what was spent" is the whole point of this feature.
+      usage,
+      lastCycle: state ? { day: state.cycleDay, startedAt: state.cycleStartedAt, stopped: state.stoppedDay === state.cycleDay, briefed: state.briefDay === state.cycleDay } : null,
+      lastSkip: state ? state.lastSkip || null : null,
+    })
+    return
+  }
+
+  if (pathname === '/api/autonomy' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    const fields = {}
+
+    if (body.enabled !== undefined) {
+      // Consent is a boolean the user typed, not a value we infer. There is no
+      // path here that turns autonomy on as a side effect of something else.
+      fields.AUTONOMY = body.enabled === true ? 'yes' : 'no'
+    }
+    for (const [key, field] of [['windowStart', 'AUTONOMY_WINDOW_START'], ['windowEnd', 'AUTONOMY_WINDOW_END']]) {
+      if (body[key] === undefined) continue
+      const v = typeof body[key] === 'string' ? body[key].trim() : ''
+      if (autonomyCycle.parseHM(v) === null) {
+        sendJson(res, 400, { error: `invalid ${key} (expected HH:MM)` })
+        return
+      }
+      fields[field] = v
+    }
+    if (body.cap !== undefined) {
+      const cap = Number(body.cap)
+      // No unlimited. A cap of 0 disables the cycle rather than freeing it --
+      // the absence of a number means no, never yes, for a feature that spends
+      // someone else's money while they sleep.
+      if (!Number.isFinite(cap) || cap < 0 || cap > 1e12) {
+        sendJson(res, 400, { error: 'invalid daily token cap' })
+        return
+      }
+      fields.AUTONOMY_DAILY_TOKEN_CAP = String(Math.floor(cap))
+    }
+    if (Object.keys(fields).length === 0) {
+      sendJson(res, 400, { error: 'nothing to change' })
+      return
+    }
+    // A zero-length window would be rejected by the watcher every poll and the
+    // user would never learn why. Reject it at the surface where they can see it.
+    const merged = { ...readAgentConfig(), ...fields }
+    const w = autonomyCycle.windowState(
+      new Date(),
+      merged.AUTONOMY_WINDOW_START || autonomyCycle.DEFAULTS.windowStart,
+      merged.AUTONOMY_WINDOW_END || autonomyCycle.DEFAULTS.windowEnd,
+    )
+    if (!w.ok) {
+      sendJson(res, 400, { error: w.reason })
+      return
+    }
+
+    writeAgentConfig(fields)
+    // No restart. The watcher re-reads .agent-config on every poll precisely so
+    // that turning this OFF takes effect within the minute instead of at the
+    // next restart -- withdrawal of consent must be faster than granting it.
+    sendJson(res, 200, { ok: true })
     return
   }
 

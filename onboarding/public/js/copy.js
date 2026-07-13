@@ -501,6 +501,45 @@ window.COPY = {
       exit_nonzero: '인증이 실패했습니다. 다시 시도해주세요',
       unknown: '인증이 실패했습니다. 다시 시도해주세요',
     },
+
+    // AUTHORED -- autonomous cycle (v0.0.6).
+    //
+    // The copy rules for this block are stricter than the rest of the page,
+    // because this is the one setting that spends the user's money while they
+    // are asleep:
+    //   1. The cost is stated before the benefit. Not in a footnote.
+    //   2. It ships OFF. The user turns it on; nothing turns it on for them.
+    //   3. The number shown is the number the cap is enforced against --
+    //      cache reads included, no friendlier second number.
+    //   4. When the meter cannot measure, we say so. A blank reads as zero,
+    //      and "nothing was spent" is not the same sentence as "I cannot tell
+    //      you what was spent."
+    autonomyLabel: '혼자 일하기',
+    autonomyNote:
+      '주무시는 동안 에이전트가 스스로 일을 고르고 진행합니다. ' +
+      '이 작업은 회원님의 Claude 구독 사용량을 소모하며, 그동안 아무도 보고 있지 않습니다. ' +
+      '기본값은 꺼짐이고, 켜신 뒤에도 아래 상한을 넘으면 스스로 멈춥니다.',
+    autonomyEnableLabel: '혼자 일하도록 허용',
+    autonomyWindowLabel: '작업 시간대',
+    autonomyWindowNote: '이 시간대에만 시작합니다. 자정을 넘겨도 됩니다 (예: 23:00 - 05:00)',
+    autonomyCapLabel: '하루 토큰 상한',
+    autonomyCapNote:
+      '캐시 재사용을 포함한 전체 토큰입니다. 아침 브리프에도 같은 숫자가 나옵니다. ' +
+      '0으로 두면 혼자 일하지 않습니다 (무제한은 없습니다).',
+    autonomyUsageLabel: '오늘 사용량',
+    autonomyUsageBlind:
+      '지금은 사용량을 측정할 수 없습니다. 측정하지 못하는 동안에는 혼자 일하지 않습니다.',
+    autonomyLastCycle: '지난밤',
+    autonomyLastCycleNone: '아직 혼자 일한 밤이 없습니다',
+    autonomyLastCycleStopped: '상한에 걸려 중간에 멈췄습니다',
+    autonomyLastCycleBriefed: '아침 브리프를 보냈습니다',
+    autonomyLastCycleRan: '작업했습니다',
+    autonomySkipCap: '상한에 이미 도달해 있어서 시작하지 않았습니다',
+    autonomySkipMeter: '사용량을 측정할 수 없어서 시작하지 않았습니다',
+    autonomySave: '저장',
+    autonomySaved: '저장됐습니다',
+    autonomyInvalidWindow: '시간 형식이 올바르지 않습니다 (예: 02:00)',
+    autonomyInvalidCap: '숫자를 입력해주세요',
   },
 
   // Sourced from the source file's Step 4 폴백 note: "waiting.html 카피

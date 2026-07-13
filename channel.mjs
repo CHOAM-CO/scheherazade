@@ -20,6 +20,18 @@ import os from 'node:os'
 import https from 'node:https'
 import http from 'node:http'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
+
+// autonomy/*.cjs are CommonJS on purpose: onboarding/http-server.cjs has to
+// read the same meter to show the user their own numbers, and it cannot import
+// ESM. One implementation, two callers, no second copy of the math.
+const require = createRequire(import.meta.url)
+// Declared HERE (top) rather than next to its only use (the autonomy watcher,
+// far below): the watcher is started from a Discord event, and "the event
+// cannot fire before module evaluation finishes" is a true argument that I do
+// not want anyone to have to make again. A const in the temporal dead zone is
+// a crash that only happens on someone else's machine.
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url))
 
 // ── stdout hygiene ─────────────────────────────────────────────────────────
 // MCP stdio transport reserves stdout exclusively for JSON-RPC. Any stray
@@ -392,6 +404,7 @@ discord.once(Events.ClientReady, (c) => {
     writeLivenessMarker().catch((err) => log(`liveness heartbeat write failed: ${err.message}`))
   }, LIVENESS_HEARTBEAT_MS).unref()
   startShutdownRequestWatcher()
+  startAutonomyWatcher()
 })
 
 // ── graceful shutdown (v0.0.4, Mino 2026-07-13 19:33 directive) ─────────────
@@ -462,6 +475,121 @@ function startShutdownRequestWatcher() {
     }
   }, SHUTDOWN_POLL_MS).unref()
 }
+
+// ── autonomous cycle (v0.0.6) ───────────────────────────────────────────────
+// The agent works while the user sleeps. That sentence is the whole feature and
+// the whole danger: it spends THEIR tokens, at an hour when nobody is watching
+// and nobody consented twice.
+//
+// Three gates, AND-ed, all in autonomy/cycle.cjs so they can be attacked in
+// tests without a Discord client: consent (a separate, explicit yes -- never
+// inherited from the PROACTIVE flag), budget (a real measured cap that fails
+// CLOSED when it cannot measure), and the brief (the night is not over until
+// the user has been told what it cost).
+//
+// This rides the shutdown-request rail rather than inventing a scheduler: same
+// poll loop, same mcp.notification seam, same [SYSTEM] turn shape.
+//
+// Reply behavior is deliberately split, using the stop-reply-guard as a rail
+// instead of a new delivery mechanism:
+//   - start/stop injects contain "답장하지 마" (a guard SKIP_PATTERN), so the
+//     agent works and closes out in silence. Nobody is woken at 03:00.
+//   - the BRIEF inject deliberately omits it, so the existing guard enforces
+//     that the morning report actually lands in Discord instead of being
+//     composed in the transcript and lost.
+const AUTONOMY_STATE_PATH = path.join(DATA_HOME, '.autonomy-state.json')
+const AUTONOMY_POLL_MS = 60 * 1000
+let autonomyInFlight = false
+
+async function readAgentConfigFile() {
+  // Read on every poll, never cached: the settings page can flip consent or
+  // the cap at any moment, and a cached "yes" would keep spending after the
+  // user said stop. Config is the shell-style KEY="value" file run.sh sources.
+  const out = {}
+  let text
+  try {
+    text = await fs.readFile(path.join(DATA_HOME, '.agent-config'), 'utf8')
+  } catch {
+    return out
+  }
+  for (const line of text.split('\n')) {
+    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*"?([^"]*)"?\s*$/)
+    if (m) out[m[1]] = m[2]
+  }
+  return out
+}
+
+async function readAutonomyState() {
+  try {
+    return JSON.parse(await fs.readFile(AUTONOMY_STATE_PATH, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+async function writeAutonomyState(state) {
+  // tmp+rename: the state file is read by the settings page while we write it,
+  // and a torn read here would look like "no cycle ran tonight" -- which would
+  // silently cancel the user's brief. Same convention as .agent-failed.json.
+  const tmp = `${AUTONOMY_STATE_PATH}.tmp`
+  await fs.writeFile(tmp, JSON.stringify(state, null, 2))
+  await fs.rename(tmp, AUTONOMY_STATE_PATH)
+}
+
+function startAutonomyWatcher() {
+  const budgetMod = require(path.join(MODULE_DIR, 'autonomy', 'budget.cjs'))
+  const cycleMod = require(path.join(MODULE_DIR, 'autonomy', 'cycle.cjs'))
+
+  setInterval(async () => {
+    if (autonomyInFlight) return
+    autonomyInFlight = true
+    try {
+      const config = await readAgentConfigFile()
+      if (String(config.AUTONOMY || '').toLowerCase() !== 'yes') return // cheap exit, no disk reads
+
+      const state = await readAutonomyState()
+      const cap = Number(config.AUTONOMY_DAILY_TOKEN_CAP || budgetMod.DEFAULT_DAILY_CAP)
+      const decision = cycleMod.decideAutonomy({
+        now: new Date(),
+        config,
+        state,
+        readBudget: () => budgetMod.budgetState(DATA_HOME, cap),
+      })
+
+      if (decision.action === 'none') {
+        // Persist skip bookkeeping (why the night was quiet) without noise.
+        if (decision.nextState) await writeAutonomyState(decision.nextState)
+        return
+      }
+
+      // The wording is a contract with stop-reply-guard (start/stop must carry
+      // a SKIP_PATTERN, brief must not), so it is chosen next to the decision
+      // that produced it, not here. cycle.cjs owns both; the tests assert both.
+      const content = cycleMod.injectFor(decision)
+      if (!content) return
+
+      await mcp.notification({
+        method: 'notifications/claude/channel',
+        params: {
+          content,
+          meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() },
+        },
+      })
+      // State advances only on SUCCESSFUL delivery -- same reasoning as the
+      // shutdown watcher's dedup marker. Advancing first would turn one
+      // transient notification failure into "the brief was never sent and we
+      // recorded that it was", which is exactly the class of lie this whole
+      // build is about.
+      await writeAutonomyState(decision.nextState)
+      log(`autonomy: ${decision.action} -- ${decision.reason}`)
+    } catch (err) {
+      log(`autonomy watcher error (will retry next poll): ${err.message}`)
+    } finally {
+      autonomyInFlight = false
+    }
+  }, AUTONOMY_POLL_MS).unref()
+}
+
 discord.on(Events.Error, (err) => log('Discord client error:', err.message))
 
 // ── Thinking indicator (Mino 07-13 click-test feedback: MAGI-style 🤔
