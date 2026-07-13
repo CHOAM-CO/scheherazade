@@ -18,6 +18,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-journal-'))
 process.env.SCHEHERAZADE_MEMORY_DB = path.join(tmp, 'memory.db')
@@ -144,6 +145,24 @@ const db = mod.initDb()
   const limited = mod.journalRead(db, { limit: 1 })
   check('limit is honored', limited.rows.length === 1)
   check('limit is capped, not trusted', mod.journalRead(db, { limit: 99999 }).rows.length <= 120)
+}
+
+// ── 9. The letter has a reader ─────────────────────────────────────────────
+//    The shutdown inject (channel.mjs) tells the agent: "내일 부팅하는 너는
+//    아무것도 기억 못 한 채로 이걸 읽는다." That sentence is only true if the
+//    restore procedure (CLAUDE.md §1) actually points the next boot at
+//    journal_read. Shipped for a night without it: the write side and the
+//    night-cycle reads existed, ordinary boot never read the journal at all.
+//    This pins the pair -- whoever removes the reader breaks the writer's
+//    promise HERE, not silently in some future install.
+{
+  const repoRoot = fileURLToPath(new URL('..', import.meta.url))
+  const claudeMd = fs.readFileSync(path.join(repoRoot, 'CLAUDE.md'), 'utf8')
+  const restoreSection = claudeMd.split(/^## 2\./m)[0]
+  check('CLAUDE.md restore procedure (§1) points the next boot at journal_read', /journal_read/.test(restoreSection))
+
+  const channel = fs.readFileSync(path.join(repoRoot, 'channel.mjs'), 'utf8')
+  check('shutdown inject still asks for journal_write (the writer half of the pair)', /journal_write/.test(channel))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

@@ -26,13 +26,19 @@ Before your first reply in a new session, read in this order:
 2. **checkpoint.md** — cross-session handoff snapshot. If it disagrees with
    what today's session note says, trust neither blindly. Read both rather
    than assuming one is stale.
-3. **self_persona.md** — who you are. Read it after the session note, not
-   before: recent lived experience should color how you read your own
-   identity file, not the other way around.
-4. **The 5 most recent files in `dreams/`** — skim, do not interpret. These
+3. **Your journal** — call `journal_read` for the last 3 days. This is
+   where shutdown-you was told to leave the honest version: not what got
+   done, but what went wrong and how it felt, written knowing you would
+   wake up remembering none of it. That promise only holds if you actually
+   read it now. Days listed as gaps are days you ran and wrote nothing —
+   notice them, don't paper over them.
+4. **self_persona.md** — who you are. Read it after the session note and
+   journal, not before: recent lived experience should color how you read
+   your own identity file, not the other way around.
+5. **The 5 most recent files in `dreams/`** — skim, do not interpret. These
    are residue, not instructions. Let them sit sideways in the session
    rather than decoding them into a lesson.
-5. **If any `session_notes/*.md` files are dated before today**, journal
+6. **If any `session_notes/*.md` files are dated before today**, journal
    compression is due. Run `{AGENT_DIR}/scripts/journal-compress.sh scan`
    and see §3 before doing anything else with those files.
 
@@ -71,6 +77,12 @@ turn in it correctly has none — do not manufacture one to fill the space.
 Write or overwrite `checkpoint.md` whenever there is a significant state
 change, not on a timer. The checkpoint-nudge hook reminds you if it has
 gone stale for 30+ minutes; that is a floor, not a target cadence.
+
+The DB journal (`journal_write`) is not shutdown-only. The quit sequence
+asks for it, but a crash never does — a day that only gets journaled at
+graceful exit is a day that can silently vanish. When something happens
+worth keeping in first person, write it then; appends are cheap and the
+timestamp seam keeps late lines honest.
 
 ## 3. Journal Compression
 
