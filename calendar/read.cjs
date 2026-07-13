@@ -34,6 +34,26 @@
 // So this file NEVER reports events without first checking the authorization
 // status, and treats anything short of full access as a refusal to answer. The
 // zero was the lie; the guard is the fix.
+// ── UNVERIFIED, and named here rather than assumed ──────────────────────────
+// This reader shells out to /usr/bin/osascript. In the shipped app the process
+// tree is:  Scheherazade.app -> claude CLI -> calendar/server.mjs -> osascript
+//
+// macOS attributes a TCC request to the "responsible process", which for a
+// spawned child is normally the parent app bundle -- that is why the Automation
+// prompt names the app rather than naming osascript. If that attribution holds,
+// NSCalendarsFullAccessUsageDescription (declared in package.json) supplies the
+// sentence, the user clicks once on first use, and this works.
+//
+// I HAVE NOT PROVEN THAT. It needs a packaged build on a machine that has never
+// granted the permission, and it is exactly the kind of claim that sounds true
+// and ships broken -- the same shape as the 50-second design that "worked" in
+// theory until it was executed.
+//
+// If attribution instead lands on osascript, the fallback is to stop shelling
+// out: do the EventKit call in-process from the Electron main (a native addon,
+// or a small signed helper inside the bundle) so the request unambiguously comes
+// from the app. That is a bigger change and it is not worth making until the
+// cheap path is observed to fail.
 'use strict'
 
 const { execFile } = require('node:child_process')

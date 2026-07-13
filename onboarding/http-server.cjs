@@ -787,6 +787,7 @@ function toUnpackedPath(p) {
 
 const CHANNEL_SCRIPT_PATH = toUnpackedPath(path.join(REPO_ROOT, 'channel.mjs'))
 const MEMORY_SERVER_SCRIPT_PATH = toUnpackedPath(path.join(REPO_ROOT, 'memory', 'server.mjs'))
+const CALENDAR_SERVER_SCRIPT_PATH = toUnpackedPath(path.join(REPO_ROOT, 'calendar', 'server.mjs'))
 
 // ── .mcp.json AGENT_NAME + command/args/cwd correction ──────────────────
 // The checked-in .mcp.json (both the "agent-channel" and "memory" MCP
@@ -837,7 +838,11 @@ function ensureMcpJsonAgentName() {
   // despite this function running (silently, no error) on every boot.
   const currentText = existing ? JSON.stringify(existing, null, 2) + '\n' : null
   const servers = existing && existing.mcpServers ? existing.mcpServers : {}
-  const KNOWN_SERVERS = { 'agent-channel': CHANNEL_SCRIPT_PATH, memory: MEMORY_SERVER_SCRIPT_PATH }
+  const KNOWN_SERVERS = {
+    'agent-channel': CHANNEL_SCRIPT_PATH,
+    memory: MEMORY_SERVER_SCRIPT_PATH,
+    calendar: CALENDAR_SERVER_SCRIPT_PATH,
+  }
   for (const name of Object.keys(KNOWN_SERVERS)) {
     if (!servers[name]) continue
     servers[name].command = process.execPath
@@ -859,6 +864,14 @@ function ensureMcpJsonAgentName() {
     servers['memory'] = {
       command: process.execPath,
       args: [MEMORY_SERVER_SCRIPT_PATH],
+      cwd: DATA_HOME,
+      env: { AGENT_NAME, ELECTRON_RUN_AS_NODE: '1' },
+    }
+  }
+  if (!servers['calendar']) {
+    servers['calendar'] = {
+      command: process.execPath,
+      args: [CALENDAR_SERVER_SCRIPT_PATH],
       cwd: DATA_HOME,
       env: { AGENT_NAME, ELECTRON_RUN_AS_NODE: '1' },
     }
