@@ -456,6 +456,11 @@ let agentSupervisorPid = null
 // structurally impossible here), no orphan on crash (server dies with the
 // process), and no binary resolution/spawn surface at all.
 let codexProxyServer = null
+// The MODEL the live in-process proxy was built for (null = proxy default).
+// Compared on every ensure so a model swap rebuilds the proxy instead of
+// silently serving the previous pick (see ensureCodexProxy's passthrough
+// comment).
+let codexProxyModel = null
 
 // Critical B: polls AGENT_FAILFILE (written by run.sh's write_failure() on
 // a quick-fail restart streak, or by channel.mjs's writeFailureMarker() on
@@ -553,6 +558,24 @@ async function ensureCodexProxy(config) {
   }
   const port = Number(portResult.port)
   const url = `http://localhost:${port}`
+  // Model passthrough (2026-07-14, caught live on Mino's second-device
+  // test the same morning the versioned GPT catalog shipped): codex-as-api's
+  // anthropic route sends its MODULE-LEVEL default model and only ECHOES
+  // body.model back (dist/index.js: `requestModel = MODEL; clientModel =
+  // body.model`) -- so the dropdown's gpt-5.6-* pick never reached the
+  // engine, and three catalog entries were one actual model (the proxy
+  // default, gpt-5.5 at 0.5.2). The module reads CODEX_AS_API_MODEL once at
+  // load, hence: env set BEFORE require, require-cache evicted per (re)build
+  // so a model swap reloads the constant, and the proxy's own /health
+  // `model` field is the RECEIPT gate after listen -- if the engine-side
+  // model doesn't match the user's pick, the proxy dies loudly rather than
+  // serving a silently different model (the exact defect class this fixes).
+  // Only gpt-* ids are forwarded; anything else leaves the proxy default.
+  // An explicitly-configured EXTERNAL proxy (the dev/fleet opt-in below) is
+  // not ours to configure -- its operator owns its model.
+  const desiredModel = typeof config.MODEL === 'string' && /^gpt-/.test(config.MODEL.trim())
+    ? config.MODEL.trim()
+    : null
   const alive = async () => {
     try {
       await fetch(url, { signal: AbortSignal.timeout(750) })
@@ -576,16 +599,23 @@ async function ensureCodexProxy(config) {
   }
 
   if (codexProxyServer) {
-    if (codexProxyServer.listening && (await alive())) {
-      log(`ensureCodexProxy: our in-process proxy already serves ${url}`)
+    if (codexProxyServer.listening && codexProxyModel === desiredModel && (await alive())) {
+      log(`ensureCodexProxy: our in-process proxy already serves ${url} (model ${codexProxyModel || 'proxy default'})`)
       return true
     }
-    log('ensureCodexProxy: stale in-process proxy server handle -- closing and re-creating')
+    log(codexProxyServer.listening && codexProxyModel !== desiredModel
+      ? `ensureCodexProxy: model changed (${codexProxyModel || 'default'} -> ${desiredModel || 'default'}) -- rebuilding proxy`
+      : 'ensureCodexProxy: stale in-process proxy server handle -- closing and re-creating')
     killCodexProxy()
   }
 
   let createApp
   try {
+    if (desiredModel) process.env.CODEX_AS_API_MODEL = desiredModel
+    else delete process.env.CODEX_AS_API_MODEL
+    // Evict so the module-level MODEL constant re-reads the env we just set;
+    // the bundle re-requires only cached stateless deps (express et al).
+    try { delete require.cache[require.resolve('codex-as-api')] } catch {}
     ;({ createApp } = require('codex-as-api'))
   } catch (err) {
     console.error('[scheherazade/main] ensureCodexProxy: codex-as-api package failed to load (bundling problem?):', err)
@@ -625,7 +655,29 @@ async function ensureCodexProxy(config) {
   codexProxyServer.on('error', (err) => {
     console.error('[scheherazade/main] ensureCodexProxy: in-process proxy server error:', err)
   })
-  log(`ensureCodexProxy: in-process proxy up at ${url}`)
+
+  // RECEIPT, not hope: the proxy's own /health reports the model it will
+  // actually send. If the passthrough didn't take (env read too late, a
+  // future codex-as-api changing its config surface), serving a silently
+  // different model than the dropdown shows is the exact defect this lane
+  // just had -- fail closed and loud instead.
+  if (desiredModel) {
+    let reported = null
+    try {
+      const health = await (await fetch(`${url}/health`, { signal: AbortSignal.timeout(2000) })).json()
+      reported = health && health.model ? String(health.model) : null
+    } catch (err) {
+      log(`ensureCodexProxy: /health probe failed (${err.message}) -- cannot verify model passthrough`)
+    }
+    if (reported !== desiredModel) {
+      console.error(`[scheherazade/main] ensureCodexProxy: model passthrough FAILED -- picked ${desiredModel}, proxy /health reports ${reported ?? 'unknown'}. Not spawning the agent on a silently different model.`)
+      killCodexProxy()
+      return false
+    }
+  }
+
+  codexProxyModel = desiredModel
+  log(`ensureCodexProxy: in-process proxy up at ${url} (model ${desiredModel || 'proxy default'}, /health-verified)`)
   return true
 }
 
@@ -638,6 +690,7 @@ function killCodexProxy() {
     log(`killCodexProxy: close failed (${err.message}) -- proceeding`)
   }
   codexProxyServer = null
+  codexProxyModel = null
 }
 
 // Reentrancy sentinel (Codex re-review finding #2, 2026-07-07): the awaited
