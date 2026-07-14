@@ -266,9 +266,28 @@
   // Model catalog + provider gate. A model is selectable only if its provider
   // is the onboarded PROVIDER (single-provider today; claude-subscription
   // counts as claude). Claude ids use CLI aliases (version-independent).
+  // Catalog reorg (Mino 2026-07-14 09:45, verbatim ask): "프로바이더별로
+  // 정리좀 합시다 ... 버전까지 명시해줘". Groups render as <optgroup>; ids are
+  // EXPLICIT versioned model ids, replacing the old version-independent CLI
+  // aliases ('opus'/'sonnet'). Existing installs with an alias still stored
+  // surface it via the pinned "(current)" passthrough below -- honest, and it
+  // heals on the next swap.
+  //
+  // Receipts for the Claude ids (all ran live in the MAGI fleet):
+  // claude-fable-5 + claude-opus-4-8 (ps-verified boots, 07-14),
+  // claude-opus-4-6 (fleet default lane), claude-sonnet-5 (conf swap
+  // 57e4744, ran 07-05). GPT: gpt-5.6-terra ran live (Skia lane, 07-10);
+  // sol/luna are Mino-named siblings -- live-verify on first swap, the
+  // mute-strike ledger is the backstop either way.
+  const CLAUDE_PROVIDERS = ['claude', 'claude-cli', 'claude-subscription']
   const MODEL_CATALOG = [
-    { id: 'opus', label: 'Claude Opus', providers: ['claude', 'claude-cli', 'claude-subscription'] },
-    { id: 'sonnet', label: 'Claude Sonnet', providers: ['claude', 'claude-cli', 'claude-subscription'] },
+    { id: 'claude-fable-5', label: 'Claude Fable 5', group: 'Claude', providers: CLAUDE_PROVIDERS },
+    { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', group: 'Claude', providers: CLAUDE_PROVIDERS },
+    { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', group: 'Claude', providers: CLAUDE_PROVIDERS },
+    { id: 'claude-sonnet-5', label: 'Claude Sonnet 5', group: 'Claude', providers: CLAUDE_PROVIDERS },
+    { id: 'gpt-5.6-sol', label: 'GPT 5.6 Sol', group: 'GPT', providers: ['chatgpt'] },
+    { id: 'gpt-5.6-terra', label: 'GPT 5.6 Terra', group: 'GPT', providers: ['chatgpt'] },
+    { id: 'gpt-5.6-luna', label: 'GPT 5.6 Luna', group: 'GPT', providers: ['chatgpt'] },
     // Kimi: DROPPED entirely (Mino, 2026-07-14 09:27 "키미는 프로바이더째로
     // 드랍하자"). History compressed so nobody re-litigates it:
     //   - Went mute in Mino's install (07-13). The first diagnosis ("ollama
@@ -288,12 +307,12 @@
     //     passed the model that was mute in production.)
     // deepseek verified live by Mino (2026-07-13 19:41 "딥시크 정상작동 확인",
     // same round as glm/sonnet-5/opus-4.8; model-swap continuity also held).
-    { id: 'deepseek-v4-pro:cloud', label: 'DeepSeek V4 Pro', providers: ['ollama'] },
+    { id: 'deepseek-v4-pro:cloud', label: 'DeepSeek V4 Pro', group: 'Ollama', providers: ['ollama'] },
     // glm-5.2 tool-use verified live by Mino (2026-07-13 19:32, same ollama
     // lane as kimi: "glm5.2 << 문제 전혀없음") -- label cleared same day it
     // was added. sonnet-5 / opus-4.8 verified in the same test round.
-    { id: 'glm-5.2:cloud', label: 'GLM 5.2', providers: ['ollama'] },
-    { id: 'gpt', label: 'GPT (Codex)', providers: ['chatgpt'] },
+    { id: 'glm-5.2:cloud', label: 'GLM 5.2', group: 'Ollama', providers: ['ollama'] },
+    // (old single 'gpt' Codex entry replaced by the versioned GPT group above)
   ]
 
   // Effort selector (Mino 07-13 click-test item 2: sonnet-5 felt slow -- the
@@ -462,7 +481,8 @@
   function populateModelSelect(model) {
     const sel = $('agent-model-select')
     sel.innerHTML = ''
-    // If the live MODEL isn't a catalog id (e.g. a pinned 'claude-opus-4-6'),
+    // If the live MODEL isn't a catalog id (e.g. an old stored alias like
+    // 'opus'/'sonnet' from before the versioned catalog, or a hand-pinned id),
     // surface it as-is so the dropdown reflects reality, not a guess.
     if (model && !MODEL_CATALOG.some((m) => m.id === model)) {
       const opt = document.createElement('option')
@@ -471,6 +491,9 @@
       opt.selected = true
       sel.appendChild(opt)
     }
+    // Grouped by provider family (<optgroup>), per Mino 2026-07-14. Group
+    // order follows catalog order; entries without a group land at top level.
+    const groups = new Map()
     for (const m of MODEL_CATALOG) {
       const opt = document.createElement('option')
       opt.value = m.id
@@ -481,7 +504,17 @@
       // Models withdrawn for observed production failure (see catalog note).
       if (m.disabled) opt.disabled = true
       if (m.id === model) opt.selected = true
-      sel.appendChild(opt)
+      if (m.group) {
+        if (!groups.has(m.group)) {
+          const og = document.createElement('optgroup')
+          og.label = m.group
+          groups.set(m.group, og)
+          sel.appendChild(og)
+        }
+        groups.get(m.group).appendChild(opt)
+      } else {
+        sel.appendChild(opt)
+      }
     }
   }
 
