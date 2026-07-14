@@ -68,6 +68,20 @@
 2. **슬랙/텔레그램**: 커넥터에 비활성 슬롯 줄 ("준비 중"). 클라이언트 전환 스위치는 전송 레인 구현 시점에.
 3. **셸 채널 열기 추상화**: 디코 하드코딩 버튼 → 활성 클라이언트 라우팅 (오늘은 항상 discord). 레드팀 기각 #4 철회분 (Mino 지시로 가정이 사실이 됨).
 
+## 구글 연동 + claude.ai 커넥터 상속 (Mino 11:54 발견 + 11:57 리프레임)
+
+**사건**: 춘식3 (단스트럭트 맥스튜디오)가 mcp__claude_ai_Google_Calendar__* / mcp__claude_ai_Gmail__* 로 미노 구글 데이터 접근. 제품 표면이 아니라 호스트 클로드 로그인의 claude.ai 계정 연동이 상속된 것. 미노 판정: 클린 테스트 무효 + "UI에서 인증 붙어야 함".
+
+**조사 결과 (claude-code-guide 서브, code.claude.com 문서 인용 — 구현 전 라이브 재검증 필수)**:
+- 상속은 문서화된 의도 동작. 단 **인증 방식 게이트**: subscription OAuth일 때만 로드. ANTHROPIC_API_KEY / AUTH_TOKEN / 서드파티 프로바이더 활성 시 안 붙음 → **코덱스/ollama/BYOK 레인엔 구조적으로 안 옴** = 자체 OAuth 결정의 문서 영수증.
+- 사전 감지 불가 (목록은 서버측, 세션 시작 시 라이브 페치). 런타임 감지만 가능 (`claude mcp list`, claude.ai 출처 표기 있음).
+- 끄는 레버: `ENABLE_CLAUDEAI_MCP_SERVERS=false` (스폰 env, 래퍼에 최적) / `disableClaudeAiConnectors` (settings.json, v2.1.182+, any-source-true) / `deniedMcpServers` (개별). --strict-mcp-config는 우리 로컬 MCP까지 죽여서 부적합.
+- 신뢰성 주의: Connected 표기돼도 툴이 실제 안 붙는 버전 이슈 2건 오픈 (#72914, #29345) → 이 레일 위에 기능을 짓지 않는 근거 하나 더.
+
+**제품 스탠스 (Idea PO 콜)**:
+1. **구글 정식 연동 = 자체 OAuth** (태스크 #7): 데스크톱 루프백 플로우, 브라우저 동의, refresh token은 safeStorage, 자체 구글 캘린더/지메일 MCP (readonly 스코프부터), 전 프로바이더 공통. 사람 의존성 = 미노가 GCP 콘솔에서 OAuth 클라이언트 등록 (동의화면 테스트 모드, 심사 불요) — 조기 플래그 완료.
+2. **상속 커넥터는 기본 유지 + 표시**: subscription 레인 한정 존재. 커넥터 페이지가 런타임 감지로 "claude.ai 연동에서 상속됨 (계정 표기)" 줄 표시 + 끄기 토글 (env 레버). 죽이지 않는 이유 = 파워유저 (미노 본인)에겐 딜라이트, 문제는 존재가 아니라 비가시성.
+
 ## 마이그레이션 노트
 - PAGES 맵에 /connectors 추가. /settings 경로 유지 (기존 진입점 부담 없음).
 - copy.js: connectors 키 신설, memoryPane에서 agentControl/pointers 분리는 하지 않음 (문구 이동만, 사전 구조 재편은 별도).
