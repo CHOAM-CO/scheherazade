@@ -25,6 +25,7 @@ import {
   writeFailureMarker,
   clearFailureMarker,
   isOurSupervisor,
+  classifyPidfileOwner,
   buildChildArgs,
   runLoop,
 } from '../supervisor.mjs'
@@ -197,6 +198,42 @@ console.log('\n-- isOurSupervisor: never trust, never force-kill an unverified p
   ok('dead pid -> NOT verified without even reading a command line',
     isOurSupervisor(999999999, { signature: SIG, readCommandLine: () => { throw new Error('must not be called') } }) === false)
   ok('null/garbage pid -> NOT verified', isOurSupervisor(null) === false && isOurSupervisor(0) === false)
+}
+{
+  // Cross-lane hazard: a LIVE run.sh-lane supervisor on the shared PIDFILE
+  // is FOREIGN, not stale -- treating it as stale would delete the pidfile
+  // out from under a running agent and let the next start double-spawn onto
+  // one Discord token.
+  const SIG = '/some/install/supervisor.mjs __loop'
+  const alive = process.pid
+  ok("live run.sh supervisor -> 'foreign_supervisor', never 'stale'",
+    classifyPidfileOwner(alive, { signature: SIG, readCommandLine: () => '/bin/bash /Applications/S.app/Contents/Resources/app.asar.unpacked/run.sh __loop' }) === 'foreign_supervisor')
+  ok("our own signature -> 'ours'",
+    classifyPidfileOwner(alive, { signature: SIG, readCommandLine: () => `node ${SIG}` }) === 'ours')
+  ok("recycled pid (unrelated argv) -> 'stale'",
+    classifyPidfileOwner(alive, { signature: SIG, readCommandLine: () => 'vim notes.txt' }) === 'stale')
+  ok("dead pid -> 'stale'", classifyPidfileOwner(999999999, { signature: SIG }) === 'stale')
+}
+
+// ── 6b. main.cjs seam source pins (SUPERVISOR_LANE wiring) ─────────────────
+console.log('\n-- main.cjs seam: SUPERVISOR_LANE wiring stays welded')
+{
+  // main.cjs is Electron-main and cannot be unit-imported here; these pins
+  // keep the three seam points (spawn / stop routing / identity) from
+  // silently drifting apart. The REAL proof is a full live session on the
+  // node lane -- until then run.sh stays production (design doc).
+  const mainSrc = fs.readFileSync(path.join(ROOT, 'main.cjs'), 'utf8')
+  ok('lane flag exists and defaults to bash', mainSrc.includes("=== 'node' ? 'node' : 'bash'"))
+  ok('node lane spawns supervisor.mjs under ELECTRON_RUN_AS_NODE',
+    mainSrc.includes("spawn(process.execPath, [SUPERVISOR_MJS_PATH, '__loop']") && mainSrc.includes("ELECTRON_RUN_AS_NODE: '1'"))
+  ok('identity check recognizes BOTH lane signatures (lane-agnostic recognition)',
+    mainSrc.includes('${RUN_SH_PATH} __loop') && mainSrc.includes('${SUPERVISOR_MJS_PATH} __loop'))
+  ok('stop path routes by the LIVE supervisor lane (supervisorStopCommand)',
+    mainSrc.includes('function supervisorStopCommand') && !/spawn\(BASH_BIN, \[RUN_SH_PATH, 'stop'\]/.test(mainSrc))
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
+  ok('supervisor.mjs ships (build.files)', pkg.build.files.includes('supervisor.mjs'))
+  ok('supervisor.mjs is a REAL file on disk (asarUnpack) -- plain node cannot read inside app.asar',
+    pkg.build.asarUnpack.includes('supervisor.mjs'))
 }
 
 // ── 7. child argv mirrors the expect spawn line ─────────────────────────────

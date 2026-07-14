@@ -278,6 +278,15 @@ function resolveClaudeBin() {
 const RUN_SH_PATH = toUnpackedPath(path.join(__dirname, 'run.sh'))
 const BASH_BIN = '/bin/bash' // confirmed present on stock macOS; hardcoded rather than PATH-resolved since a packaged app's PATH can be minimal
 
+// Windows-port Phase 1 seam (docs/supervisor-design.md, "What run.sh keeps
+// doing"): SUPERVISOR_LANE=node spawns supervisor.mjs under Electron-as-node
+// (ELECTRON_RUN_AS_NODE, probe-verified ABI lane); anything else -- including
+// unset -- keeps the battle-tested bash lane. Read ONCE at module load: a
+// lane is a process-lifetime decision, and flipping it mid-run would desync
+// the spawn/stop/identity trio that all key off it.
+const SUPERVISOR_MJS_PATH = toUnpackedPath(path.join(__dirname, 'supervisor.mjs'))
+const SUPERVISOR_LANE = (process.env.SUPERVISOR_LANE || '').trim().toLowerCase() === 'node' ? 'node' : 'bash'
+
 // Fix C (agent-lifecycle model-divergent review, 2026-07-03): this used to
 // spawn `bash run.sh __loop` directly, bypassing run.sh's OWN start_agent()
 // PIDFILE entirely -- quit+reopen (or a second app instance) could spawn a
@@ -353,15 +362,42 @@ function isPidAlive(pid) {
 //     sufficient, and depends on Fix A: without `-ww`, truncation could
 //     also sever this exact contiguous match.
 function isOurSupervisor(pid) {
-  if (!isPidAlive(pid)) return false
+  // Recognition is deliberately LANE-AGNOSTIC (SUPERVISOR_LANE seam,
+  // Windows-port Phase 1): both signatures are OUR supervisors on the same
+  // PIDFILE. Recognizing only the configured lane would make a lane flip
+  // treat a live old-lane supervisor as stale -- and double-spawn a second
+  // supervisor onto the same Discord token, the exact Fix-C disaster.
+  return readSupervisorCommandLine(pid) !== null
+}
+
+// Returns the verified command line when pid is a live supervisor of EITHER
+// lane, else null. Shared by isOurSupervisor() and the stop-path lane router.
+function readSupervisorCommandLine(pid) {
+  if (!isPidAlive(pid)) return null
   let commandLine
   try {
     commandLine = execFileSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8' })
   } catch (err) {
-    log(`isOurSupervisor(${pid}): ps lookup failed (${err.message}) -- treating as UNVERIFIED, fail-safe`)
-    return false
+    log(`readSupervisorCommandLine(${pid}): ps lookup failed (${err.message}) -- treating as UNVERIFIED, fail-safe`)
+    return null
   }
-  return commandLine.includes(`${RUN_SH_PATH} __loop`)
+  if (commandLine.includes(`${RUN_SH_PATH} __loop`) || commandLine.includes(`${SUPERVISOR_MJS_PATH} __loop`)) return commandLine
+  return null
+}
+
+// Stop must be routed to the lane that matches the LIVE supervisor, not the
+// configured one: each lane's stopper only recognizes its own spawn
+// signature (run.sh is frozen as the production mac lane), and the wrong
+// stopper would "clean up" a pidfile whose owner is alive -- orphaning a
+// running agent. Falls back to the configured lane when nothing verifiable
+// is live (then the stopper only does stale-state cleanup anyway).
+function supervisorStopCommand() {
+  let lane = SUPERVISOR_LANE
+  const commandLine = readSupervisorCommandLine(readPidFromFile(AGENT_PIDFILE))
+  if (commandLine) lane = commandLine.includes(`${SUPERVISOR_MJS_PATH} __loop`) ? 'node' : 'bash'
+  return lane === 'node'
+    ? { lane, bin: process.execPath, args: [SUPERVISOR_MJS_PATH, 'stop'], extraEnv: { ELECTRON_RUN_AS_NODE: '1' } }
+    : { lane, bin: BASH_BIN, args: [RUN_SH_PATH, 'stop'], extraEnv: {} }
 }
 
 function readPidFromFile(filePath) {
@@ -855,40 +891,54 @@ async function spawnRealAgentChildLocked() {
   // comment previously and incorrectly claimed the flag was deliberately
   // unused system-wide; that was true of run.sh's OLD behavior, not its
   // current one, and never described this spawn() call either way).
-  const child = spawn(BASH_BIN, [RUN_SH_PATH, '__loop'], {
-    cwd: DATA_HOME,
-    env: {
-      ...process.env,
-      DISCORD_BOT_TOKEN: token,
-      HOME_CHANNEL_ID: homeChannelId,
-      AGENT_NAME: agentName,
-      MODEL: model,
-      // Effort selector (Mino 07-13 click-test item 2): only forwarded when
-      // the user picked one -- absent, run.sh's own `${EFFORT_LEVEL:-high}`
-      // default applies. The stop-path spawns deliberately don't carry this
-      // (run.sh stop never reads it).
-      ...(config.EFFORT_LEVEL ? { EFFORT_LEVEL: config.EFFORT_LEVEL } : {}),
-      CLAUDE_BIN: resolved.bin,
-      AGENT_DATA_HOME: DATA_HOME, // see run.sh's own comment: MEM = AGENT_DATA_HOME override
-      // 4-provider-mode wiring (2026-07-04): spread LAST so buildProviderEnv()'s
-      // fields (provider-env.cjs, computed above as providerEnvResult.env)
-      // win over both ...process.env AND this object's own MODEL field --
-      // e.g. ollama mode returns its own MODEL (a real Ollama model tag,
-      // never the generic Anthropic-model default set above). See
-      // provider-env.cjs's own doc comment on `env` for the full merge-order
-      // contract, including `undefined`-valued keys meaning "actively unset".
-      ...providerEnvResult.env,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-    // Fix C: own process group (setsid-equivalent), so the app-quit handler
-    // below can SIGTERM the WHOLE tree (run.sh -> expect -> claude) with one
-    // negative-pid group signal without also taking down Electron's own
-    // process group. Without this, `cmd &` in bash inherits the parent's
-    // group (verified empirically, see run.sh's run_expect() comment on the
-    // exact same fact from the bash side) and a group-kill here would be
-    // unsafe.
-    detached: true,
-  })
+  const supervisorEnv = {
+    ...process.env,
+    DISCORD_BOT_TOKEN: token,
+    HOME_CHANNEL_ID: homeChannelId,
+    AGENT_NAME: agentName,
+    MODEL: model,
+    // Effort selector (Mino 07-13 click-test item 2): only forwarded when
+    // the user picked one -- absent, run.sh's own `${EFFORT_LEVEL:-high}`
+    // default applies. The stop-path spawns deliberately don't carry this
+    // (run.sh stop never reads it).
+    ...(config.EFFORT_LEVEL ? { EFFORT_LEVEL: config.EFFORT_LEVEL } : {}),
+    CLAUDE_BIN: resolved.bin,
+    AGENT_DATA_HOME: DATA_HOME, // see run.sh's own comment: MEM = AGENT_DATA_HOME override
+    // 4-provider-mode wiring (2026-07-04): spread LAST so buildProviderEnv()'s
+    // fields (provider-env.cjs, computed above as providerEnvResult.env)
+    // win over both ...process.env AND this object's own MODEL field --
+    // e.g. ollama mode returns its own MODEL (a real Ollama model tag,
+    // never the generic Anthropic-model default set above). See
+    // provider-env.cjs's own doc comment on `env` for the full merge-order
+    // contract, including `undefined`-valued keys meaning "actively unset".
+    ...providerEnvResult.env,
+  }
+  // SUPERVISOR_LANE seam (Windows-port Phase 1): identical env, stdio, and
+  // detached process-group contract in both lanes -- only the runtime
+  // differs (bash running run.sh vs Electron-as-node running
+  // supervisor.mjs). supervisor.mjs resolves the same config from this same
+  // env (its resolveConfig mirrors run.sh:38-109) and participates in the
+  // same PIDFILE/STOPFLAG/FAILFILE contract.
+  const child = SUPERVISOR_LANE === 'node'
+    ? spawn(process.execPath, [SUPERVISOR_MJS_PATH, '__loop'], {
+        cwd: DATA_HOME,
+        env: { ...supervisorEnv, ELECTRON_RUN_AS_NODE: '1' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: true, // same Fix-C group isolation as the bash lane below
+      })
+    : spawn(BASH_BIN, [RUN_SH_PATH, '__loop'], {
+        cwd: DATA_HOME,
+        env: supervisorEnv,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        // Fix C: own process group (setsid-equivalent), so the app-quit handler
+        // below can SIGTERM the WHOLE tree (run.sh -> expect -> claude) with one
+        // negative-pid group signal without also taking down Electron's own
+        // process group. Without this, `cmd &` in bash inherits the parent's
+        // group (verified empirically, see run.sh's run_expect() comment on the
+        // exact same fact from the bash side) and a group-kill here would be
+        // unsafe.
+        detached: true,
+      })
 
   agentChild = child
   agentSupervisorPid = child.pid
@@ -1036,7 +1086,8 @@ function killAgentSupervisor(signal = 'SIGTERM') {
     const resolved = resolveClaudeBin()
     const agentName = config.AGENT_NAME || FIXED_AGENT_NAME
     const model = config.MODEL || 'claude-opus-4-6'
-    const stopper = spawn(BASH_BIN, [RUN_SH_PATH, 'stop'], {
+    const stopCmd = supervisorStopCommand()
+    const stopper = spawn(stopCmd.bin, stopCmd.args, {
       cwd: DATA_HOME,
       env: {
         ...process.env,
@@ -1044,12 +1095,13 @@ function killAgentSupervisor(signal = 'SIGTERM') {
         MODEL: model,
         CLAUDE_BIN: resolved ? resolved.bin : (config.CLAUDE_BIN || 'claude'),
         AGENT_DATA_HOME: DATA_HOME,
+        ...stopCmd.extraEnv,
       },
       stdio: 'ignore',
       detached: true,
     })
     stopper.unref()
-    log(`spawned 'run.sh stop' (pid=${stopper.pid}) as the reliable cleanup path (PKILL_PATTERN, not process-group dependent)`)
+    log(`spawned '${stopCmd.lane}-lane stop' (pid=${stopper.pid}) as the reliable cleanup path (identity-safe on its own side of the PIDFILE)`)
   } catch (err) {
     console.error('[scheherazade/main] failed to spawn run.sh stop cleanup:', err)
   }
@@ -1084,8 +1136,9 @@ function stopAgentAwaited() {
     const agentName = config.AGENT_NAME || FIXED_AGENT_NAME
     const model = config.MODEL || 'claude-opus-4-6'
     let stopper
+    const stopCmd = supervisorStopCommand()
     try {
-      stopper = spawn(BASH_BIN, [RUN_SH_PATH, 'stop'], {
+      stopper = spawn(stopCmd.bin, stopCmd.args, {
         cwd: DATA_HOME,
         env: {
           ...process.env,
@@ -1093,20 +1146,21 @@ function stopAgentAwaited() {
           MODEL: model,
           CLAUDE_BIN: resolved ? resolved.bin : (config.CLAUDE_BIN || 'claude'),
           AGENT_DATA_HOME: DATA_HOME,
+          ...stopCmd.extraEnv,
         },
         stdio: 'ignore',
       })
     } catch (err) {
-      console.error('[scheherazade/main] stopAgentAwaited: failed to spawn run.sh stop:', err)
+      console.error(`[scheherazade/main] stopAgentAwaited: failed to spawn ${stopCmd.lane}-lane stop:`, err)
       resolve(false)
       return
     }
     stopper.on('exit', (code) => {
-      log(`stopAgentAwaited: run.sh stop exited code=${code}`)
+      log(`stopAgentAwaited: ${stopCmd.lane}-lane stop exited code=${code}`)
       resolve(code === 0)
     })
     stopper.on('error', (err) => {
-      console.error('[scheherazade/main] stopAgentAwaited: run.sh stop process error:', err)
+      console.error(`[scheherazade/main] stopAgentAwaited: ${stopCmd.lane}-lane stop process error:`, err)
       resolve(false)
     })
   })

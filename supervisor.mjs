@@ -232,15 +232,32 @@ export function clearFailureMarker(failfile) {
 // as `<RUN_SH_PATH> __loop` (contiguity + ps -ww receipts: run.sh:126-174).
 // Fail SAFE: lookup erroring/empty/non-matching all resolve to "not
 // verified" -- callers never trust it as already-running, never force-kill.
-export function isOurSupervisor(pid, {
+export function isOurSupervisor(pid, opts = {}) {
+  return classifyPidfileOwner(pid, opts) === 'ours'
+}
+
+// Cross-LANE hazard (the reason 'foreign_supervisor' exists as a third
+// verdict): run.sh and supervisor.mjs share the same PIDFILE, and each
+// lane's stopper only recognizes its own spawn signature. Treating a LIVE
+// other-lane supervisor as "stale" would delete the pidfile out from under
+// it -- orphaning a running agent with a live Discord connection, and
+// letting the next start double-spawn a second supervisor onto the same
+// token (the exact Fix-C class disaster main.cjs's PIDFILE participation
+// exists to prevent). run.sh is frozen (production mac lane until the port
+// proves itself), so the tolerance lives HERE: a live pid whose command
+// line carries the bash lane's contiguous `run.sh __loop` marker is
+// FOREIGN, not stale -- refuse to touch its state, tell the caller.
+export function classifyPidfileOwner(pid, {
   signature = `${SELF_PATH} __loop`,
   readCommandLine = defaultReadCommandLine,
 } = {}) {
-  if (!pid || !isPidAlive(pid)) return false
+  if (!pid || !isPidAlive(pid)) return 'stale'
   let cmd
-  try { cmd = readCommandLine(pid) } catch { return false }
-  if (!cmd) return false
-  return cmd.includes(signature)
+  try { cmd = readCommandLine(pid) } catch { return 'stale' }
+  if (!cmd) return 'stale'
+  if (cmd.includes(signature)) return 'ours'
+  if (cmd.includes('run.sh __loop')) return 'foreign_supervisor'
+  return 'stale'
 }
 
 function isPidAlive(pid) {
@@ -478,8 +495,16 @@ function startAgent(cfg) {
     process.exit(1)
   }
   const existingPid = readPid(cfg.pidfile)
-  if (existingPid && isOurSupervisor(existingPid)) {
+  const owner = existingPid === null ? null : classifyPidfileOwner(existingPid)
+  if (owner === 'ours') {
     log(`${cfg.agentName} already running (pid ${existingPid})`)
+    return
+  }
+  if (owner === 'foreign_supervisor') {
+    // Starting anyway would put two supervisors on one agent name / one
+    // Discord token. Fail loud, change nothing.
+    console.error(`a run.sh-lane supervisor (pid ${existingPid}) is already running for ${cfg.agentName} -- stop it with 'run.sh stop' before starting the node lane`)
+    process.exitCode = 1
     return
   }
   if (existingPid !== null) {
@@ -515,7 +540,15 @@ async function stopAgent(cfg) {
     return
   }
   const pid = readPid(cfg.pidfile)
-  if (!isOurSupervisor(pid)) {
+  const owner = classifyPidfileOwner(pid)
+  if (owner === 'foreign_supervisor') {
+    // NOT ours to stop, and NOT ours to "clean up" either -- deleting a
+    // live supervisor's pidfile orphans it (see classifyPidfileOwner).
+    console.error(`pid ${pid} is a live run.sh-lane supervisor -- refusing to touch its pidfile; stop it with 'run.sh stop'`)
+    process.exitCode = 1
+    return
+  }
+  if (owner !== 'ours') {
     log(`stale/unverified pidfile (pid ${pid} is dead, or was recycled to an unrelated process), cleaning up`)
     try { fs.rmSync(cfg.pidfile, { force: true }) } catch {}
     return
