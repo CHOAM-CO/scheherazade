@@ -17,7 +17,49 @@
         </div>
       </div>
 
-      <div class="category" id="conn-providers">
+      <!-- Message channel (Discord today; the slots below name the path).
+           FIRST on the page: it is the connector the agent lives through. -->
+      <div class="category" id="conn-discord">
+        <div class="category-label" id="conn-discord-label"></div>
+        <div class="entries">
+          <div class="entry-row">
+            <div class="entry-main">
+              <div class="entry-value" id="conn-discord-name"></div>
+              <div class="entry-meta" id="conn-discord-status"></div>
+            </div>
+            <button class="secondary" id="conn-discord-reconnect"></button>
+          </div>
+        </div>
+        <!-- Reconnect flow (2-step: enumerate -> pick -> apply). Hidden until
+             the 재연결 button opens it. -->
+        <div class="reconnect-flow hidden" id="conn-reconnect-flow">
+          <div class="field-hint" id="conn-reconnect-note"></div>
+          <div class="field">
+            <input type="password" id="conn-reconnect-token" />
+          </div>
+          <div class="step-actions">
+            <span class="status-line" id="conn-reconnect-status"></span>
+            <button class="secondary" id="conn-reconnect-enum"></button>
+          </div>
+          <div class="reconnect-pickers hidden" id="conn-reconnect-pickers">
+            <div class="agent-control-row">
+              <label for="conn-reconnect-guild" id="conn-reconnect-guild-label"></label>
+              <select id="conn-reconnect-guild"></select>
+            </div>
+            <div class="agent-control-row">
+              <label for="conn-reconnect-channel" id="conn-reconnect-channel-label"></label>
+              <select id="conn-reconnect-channel"></select>
+            </div>
+            <div class="field-hint hidden" id="conn-reconnect-truncated"></div>
+            <div class="step-actions">
+              <span></span>
+              <button id="conn-reconnect-apply"></button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="category" style="margin-top: 2.5rem" id="conn-providers">
         <div class="category-label" id="conn-providers-label"></div>
         <p class="subtitle" id="conn-providers-note"></p>
         <div class="entries">
@@ -25,6 +67,9 @@
             <div class="entry-main">
               <div class="entry-value" id="conn-provider-chatgpt-name"></div>
               <div class="entry-meta" id="conn-provider-chatgpt-status"></div>
+              <!-- Live serving receipt: the proxy's own /health model, only
+                   when something actually answers. 셸은 현실. -->
+              <div class="entry-meta" id="conn-provider-chatgpt-receipt"></div>
             </div>
             <button class="secondary" id="conn-provider-chatgpt-btn"></button>
           </div>
@@ -35,6 +80,23 @@
             </div>
             <button class="secondary" id="conn-provider-ollama-btn"></button>
           </div>
+          <div class="entry-row">
+            <div class="entry-main">
+              <div class="entry-value" id="conn-provider-claude-name"></div>
+              <div class="entry-meta" id="conn-provider-claude-status"></div>
+            </div>
+            <button class="secondary" id="conn-provider-claude-btn"></button>
+          </div>
+        </div>
+        <!-- Claude BYOK re-entry flow (key never rendered back; input only). -->
+        <div class="claude-key-flow hidden" id="conn-claude-flow">
+          <div class="field">
+            <input type="password" id="conn-claude-key" />
+          </div>
+          <div class="step-actions">
+            <span class="status-line" id="conn-claude-status-line"></span>
+            <button class="secondary" id="conn-claude-save"></button>
+          </div>
         </div>
       </div>
 
@@ -43,6 +105,12 @@
           <div class="entry-main">
             <div class="entry-value" id="conn-slack-label"></div>
             <div class="entry-meta" id="conn-slack-note"></div>
+          </div>
+        </div>
+        <div class="entry-row" style="border-bottom: none; padding: 0">
+          <div class="entry-main">
+            <div class="entry-value" id="conn-telegram-label"></div>
+            <div class="entry-meta" id="conn-telegram-note"></div>
           </div>
         </div>
       </div>

@@ -607,6 +607,50 @@ window.COPY = {
       exit_nonzero: '인증이 실패했습니다. 다시 시도해주세요',
       unknown: '인증이 실패했습니다. 다시 시도해주세요',
     },
+    // AUTHORED -- discord reconnect (Mino 07-14 11:31: "이미 세팅한 상태에서
+    // 디코 -> 슬랙 -> 텔레그램 해보게"). Failure branches deliberately reuse
+    // discordTutorial.failures VERBATIM at the call site (same three causes,
+    // same fixes) -- no duplicate strings here, connectors.js reads that map.
+    discordLabel: '메시지 채널',
+    discordName: 'Discord',
+    discordConnected: (guild, channel) => `연결됨 · ${guild} / #${channel}`,
+    discordNotConnected: '미연결',
+    discordReconnectButton: '재연결',
+    discordReconnectClose: '접기',
+    discordStoredTokenNote: '비워두면 저장된 토큰을 그대로 씁니다. 봇 토큰을 바꿨을 때만 새 토큰을 붙여넣으세요.',
+    discordTokenPlaceholder: '새 봇 토큰 (선택)',
+    discordEnumButton: '서버 목록 불러오기',
+    discordEnumRunning: '서버 목록을 불러오는 중입니다',
+    discordGuildLabel: '서버',
+    discordChannelLabel: '채널',
+    discordTruncatedNote: (max) => `봇이 있는 서버가 많아 앞 ${max}개만 표시합니다`,
+    discordNoChannels: '이 서버에 텍스트 채널이 없습니다',
+    discordApplyButton: '이 채널로 연결',
+    discordApplyConfirm: (guild, channel) => `${guild} / #${channel}(으)로 옮기고 에이전트를 재시작합니다. 계속할까요?`,
+    discordApplyOk: '옮기기',
+    discordApplying: '적용하고 에이전트를 재시작하는 중입니다',
+    discordApplied: (guild, channel) => `연결됐습니다: ${guild} / #${channel}`,
+    // AUTHORED -- Claude BYOK key management row (gap-close: post-onboarding
+    // key status/re-entry surface did not exist; the provider block above is
+    // login-capable providers only).
+    claudeKeyName: 'Claude API 키',
+    claudeKeyStored: '키 저장됨',
+    claudeKeyMissing: '키 없음',
+    claudeKeyButton: '키 재입력',
+    claudeKeyClose: '접기',
+    claudeKeyPlaceholder: 'sk-ant-...',
+    claudeKeySave: '검증 후 저장',
+    claudeKeyValidating: '키를 검증하는 중입니다',
+    claudeKeySaved: '키가 검증되고 저장됐습니다',
+    // AUTHORED -- chatgpt live serving receipt ("셸은 현실" product form of
+    // the 07-14 dropdown-vs-engine model mismatch catch). Shown only when the
+    // proxy actually answers; no line when it doesn't run.
+    chatgptServing: (model) => `지금 서빙 중: ${model}`,
+    chatgptServingUnknown: '프록시 응답에 모델 정보가 없습니다',
+    // AUTHORED -- future client slots (Mino 07-14 11:31 directive names the
+    // path: 디코 -> 슬랙 -> 텔레그램).
+    telegramLabel: 'Telegram',
+    telegramNote: '나중에 지원 예정',
   },
 
   // Sourced from the source file's Step 4 폴백 note: "waiting.html 카피

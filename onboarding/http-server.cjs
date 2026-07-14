@@ -1210,6 +1210,56 @@ async function validateDiscordToken(token) {
   return { ok: true, guildId: guild.id, guildName: guild.name, channelId: homeChannel.id, channelName: homeChannel.name }
 }
 
+// ── Discord reconnect enumeration (IA v0.0.9, Mino 11:31 "디코→슬랙→텔레그램
+// 갈아타기") ─────────────────────────────────────────────────────────────
+// Same 3-check validation as validateDiscordToken above, but NO auto-pick:
+// onboarding's "first guild, first text channel" inference assumes a freshly
+// created single-server setup (see the flagged comment above) -- a RECONNECT
+// user is switching servers/channels on purpose, so the only honest move is
+// to enumerate the candidates and let them pick. validateDiscordToken stays
+// verbatim for the onboarding path; this is a separate reader, not a rewrite.
+//
+// fetchImpl is injectable for tests (scripts/test-discord-reconnect.mjs
+// drives every branch with fixture responses -- no live Discord API in CI).
+// Guild fan-out is capped; the cap is REPORTED (truncated flag), never
+// silent (no-silent-caps rule).
+const RECONNECT_MAX_GUILDS = 10
+async function enumerateDiscordTargets(token, fetchImpl = fetch) {
+  if (!token || !token.trim()) return { ok: false, branch: 'invalid_token' }
+  const headers = { Authorization: `Bot ${token}` }
+
+  const meRes = await fetchImpl(`${DISCORD_API}/users/@me`, { headers })
+  if (!meRes.ok) return { ok: false, branch: 'invalid_token' }
+
+  const appRes = await fetchImpl(`${DISCORD_API}/oauth2/applications/@me`, { headers })
+  if (!appRes.ok) return { ok: false, branch: 'invalid_token' }
+  const appBody = await appRes.json()
+  const flags = appBody.flags || 0
+  const hasMessageContentIntent = (flags & GATEWAY_MESSAGE_CONTENT) !== 0 || (flags & GATEWAY_MESSAGE_CONTENT_LIMITED) !== 0
+  if (!hasMessageContentIntent) return { ok: false, branch: 'intent_off' }
+
+  const guildsRes = await fetchImpl(`${DISCORD_API}/users/@me/guilds`, { headers })
+  if (!guildsRes.ok) throw new Error(`Discord guilds fetch failed: HTTP ${guildsRes.status}`)
+  const allGuilds = await guildsRes.json()
+  if (!Array.isArray(allGuilds) || allGuilds.length === 0) return { ok: false, branch: 'not_invited' }
+
+  const truncated = allGuilds.length > RECONNECT_MAX_GUILDS
+  const guilds = []
+  for (const g of allGuilds.slice(0, RECONNECT_MAX_GUILDS)) {
+    const channelsRes = await fetchImpl(`${DISCORD_API}/guilds/${g.id}/channels`, { headers })
+    if (!channelsRes.ok) {
+      throw new Error(`Discord channels fetch failed for guild ${g.id}: HTTP ${channelsRes.status}`)
+    }
+    const channels = await channelsRes.json()
+    const textChannels = (Array.isArray(channels) ? channels : [])
+      .filter((c) => c.type === 0)
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+      .map((c) => ({ id: c.id, name: c.name }))
+    guilds.push({ id: g.id, name: g.name, channels: textChannels })
+  }
+  return { ok: true, guilds, truncated }
+}
+
 // ── memory tool bridge (bypasses MCP stdio, direct dynamic import) ───────
 let _memoryModulePromise = null
 let _db = null
@@ -2030,6 +2080,92 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     return
   }
 
+  // ── Discord reconnect (IA v0.0.9): 2-step validate/apply ─────────────────
+  // Post-onboarding re-wiring: switch token, server, or channel on a live
+  // install. Deliberately SEPARATE from /api/discord/validate above -- that
+  // route is the onboarding completer (it stamps ONBOARDING_COMPLETE and
+  // fires the spawn callback); these routes must never re-stamp onboarding
+  // history. ONBOARDING_COMPLETED_AT records when onboarding happened --
+  // rewriting it on a reconnect would falsify the record.
+  //
+  // token is OPTIONAL on both: absent/blank falls back to the STORED token
+  // (safeStorage), so switching channels doesn't demand a re-paste of a
+  // credential the app already holds.
+  if (pathname === '/api/discord/reconnect/validate' && req.method === 'POST') {
+    const { token } = await readJsonBody(req)
+    const provided = typeof token === 'string' && token.trim() !== ''
+    const effective = provided ? token.trim() : readDiscordToken()
+    if (!effective) {
+      sendJson(res, 200, { ok: false, branch: 'invalid_token', usedStoredToken: !provided })
+      return
+    }
+    const result = await enumerateDiscordTargets(effective)
+    sendJson(res, 200, { ...result, usedStoredToken: !provided })
+    return
+  }
+  if (pathname === '/api/discord/reconnect/apply' && req.method === 'POST') {
+    const { token, guildId, channelId } = await readJsonBody(req)
+    if (!guildId || !channelId) {
+      sendJson(res, 400, { error: 'guildId and channelId are required' })
+      return
+    }
+    const provided = typeof token === 'string' && token.trim() !== ''
+    const effective = provided ? token.trim() : readDiscordToken()
+    if (!effective) {
+      sendJson(res, 200, { ok: false, branch: 'invalid_token' })
+      return
+    }
+    // Server-side re-verification at apply time: the picked ids must be
+    // reachable by THIS token right now. Client-sent ids are never trusted
+    // (the validate response is a UI convenience, not an authorization), and
+    // a token/pick mismatch fails loud instead of persisting a channel the
+    // bot cannot actually read.
+    const enumerated = await enumerateDiscordTargets(effective)
+    if (!enumerated.ok) {
+      sendJson(res, 200, enumerated)
+      return
+    }
+    const guild = enumerated.guilds.find((g) => g.id === String(guildId))
+    const channel = guild && guild.channels.find((c) => c.id === String(channelId))
+    if (!guild || !channel) {
+      sendJson(res, 400, { error: 'picked guild/channel is not reachable by this token' })
+      return
+    }
+    storeDiscordTokenVerified(effective)
+    writeEnv({ homeChannelId: channel.id })
+    // HOME_GUILD_ID: same UI-only persistence as the onboarding validate
+    // route above. HOME_GUILD_NAME/HOME_CHANNEL_NAME are display-only
+    // additions so the connectors page can show WHERE the agent lives
+    // without a Discord API call per page view (legacy installs simply
+    // don't have them and the UI falls back to ids). NO onboarding stamps.
+    writeAgentConfig({ HOME_GUILD_ID: guild.id, HOME_GUILD_NAME: guild.name || '', HOME_CHANNEL_NAME: channel.name || '' })
+    // Restart so the child picks up the new token/channel (spawn re-reads
+    // both fresh -- main.cjs readHomeChannelId()/readDiscordToken() at spawn
+    // time). Fire-and-forget + 202, same contract as the lifecycle routes
+    // below: the client polls GET /api/agent/status until it settles. On a
+    // STOPPED agent restartAgent starts it -- deliberate: a reconnect is an
+    // explicit "point my agent here" act.
+    if (agentControls && typeof agentControls.restartAgent === 'function') {
+      agentControls.restartAgent().catch((err) => console.error('[scheherazade/onboarding] reconnect restart threw:', err))
+    }
+    sendJson(res, 202, { ok: true, guildId: guild.id, guildName: guild.name, channelId: channel.id, channelName: channel.name })
+    return
+  }
+
+  // ── chatgpt proxy live receipt (IA v0.0.9, "셸은 현실" principle) ─────────
+  // Surfaces what the proxy's own /health reports RIGHT NOW -- the product
+  // form of the 07-14 live catch (dropdown gpt-5.6-sol vs engine gpt-5.5,
+  // visible only by log-digging). Delegates to main.cjs (it owns the proxy
+  // port/lifecycle); running:false when not wired or nothing answers.
+  if (pathname === '/api/proxy/health' && req.method === 'GET') {
+    if (!agentControls || typeof agentControls.proxyHealth !== 'function') {
+      sendJson(res, 200, { running: false })
+      return
+    }
+    sendJson(res, 200, await agentControls.proxyHealth())
+    return
+  }
+
   if (pathname === '/api/agent/status' && req.method === 'GET') {
     sendJson(res, 200, computeAgentStatus())
     return
@@ -2736,6 +2872,10 @@ module.exports = {
   // the net-change collapse (Mino live catch 2026-07-14, duplicate feed
   // lines) is attackable without spinning up Electron or a memory db.
   collapseSessionEvents,
+  // Exported for scripts/test-discord-reconnect.mjs -- fetchImpl-injectable,
+  // so every branch (3-check failures, truncation, channel filtering) runs
+  // against fixtures, never the live Discord API.
+  enumerateDiscordTargets,
   isPidAlive,
   // Exported for testability/tuning visibility (Step 5 onboarding-wiring
   // fix, 2026-07-03, PIECE 2 + PIECE 3) -- same rationale as the Fix D

@@ -1340,12 +1340,38 @@ const onOnboardingComplete = () => {
   })
 }
 
+// Live proxy receipt for GET /api/proxy/health (IA v0.0.9, "셸은 현실"). The
+// answer is ALWAYS the proxy's own /health at this moment -- never
+// codexProxyModel or config (those are intent; a state variable can outlive
+// the process it described, which is the exact live-lie class the 07-14
+// passthrough catch was about). codexProxyServer only annotates ownership.
+// Covers the explicitly-configured EXTERNAL proxy too: whatever answers on
+// the resolved port IS the reality the agent's calls would hit.
+async function proxyHealth() {
+  const portResult = resolveChatgptProxyPort(readAgentConfig().CHATGPT_PROXY_PORT)
+  if (portResult.error) return { running: false }
+  try {
+    const res = await fetch(`http://localhost:${portResult.port}/health`, { signal: AbortSignal.timeout(1500) })
+    const health = await res.json()
+    return {
+      running: true,
+      model: health && health.model ? String(health.model) : null,
+      authAvailable: health ? Boolean(health.auth_available) : null,
+      inProcess: Boolean(codexProxyServer),
+    }
+  } catch {
+    // Nothing listening, or the listener is not a codex-as-api (non-JSON):
+    // either way there is no proxy reality to report.
+    return { running: false }
+  }
+}
+
 // Control-panel lifecycle fns bundled for injection into the onboarding server's
 // agent routes (POST /api/agent/{stop,start,restart,model}). Same injection
 // channel as onOnboardingComplete: these run in THIS Electron main process and
 // mutate its agent-child state, so they can't live in http-server.cjs -- it
 // calls back into them.
-const agentControls = { stopAgent, startAgent, restartAgent }
+const agentControls = { stopAgent, startAgent, restartAgent, proxyHealth }
 
 // ── boot sequence ────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
