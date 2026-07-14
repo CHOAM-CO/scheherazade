@@ -1,0 +1,326 @@
+// nav.js — shared shell for every post-onboarding page (memory / connectors /
+// settings). Loads after copy.js, before the page-specific script, and
+// renders into <div id="app-nav"> at the top of each page's .page-shell.
+//
+// Mechanically extracted from memory.js's "Agent control panel" (Slice 2,
+// 2026-07-09) per docs/ia-subpage-plan.md's shell principle: "셸은 현실,
+// 설정은 의도" -- read-only status + the command-shaped actions (start/stop/
+// restart/Discord open) + the mute-revert banner live here; the model/effort
+// SELECT config moved to settings.js. Same endpoints, same polling cadence,
+// same copy as before (still eng placeholder pending Mino's copy-track
+// localization pass -- unchanged by this move, just relocated).
+//
+// Also the new single home for window.api()/window.showToast(), previously
+// duplicated in memory.js + settings.js (wizard.js keeps its own local
+// copies -- the onboarding wizard page never includes this shell).
+
+;(function () {
+  const NAV = window.COPY.nav
+  const GEN = window.COPY.genericError
+
+  function $(id) { return document.getElementById(id) }
+
+  // ── window.api (consolidated; was duplicated in memory.js + settings.js) ──
+  window.api = async function api(path, options) {
+    const opts = options ? { ...options } : {}
+    // localhost-auth gate (security review, 2026-07-03): every mutating
+    // (non-GET) request must carry the per-launch token the server
+    // injected into this page's <head> -- see copy.js's getOnboardToken().
+    if (opts.method && opts.method !== 'GET') {
+      opts.headers = { ...(opts.headers || {}), 'X-Onboard-Token': window.getOnboardToken() || '' }
+    }
+    const res = await fetch(path, opts)
+    let body = {}
+    try {
+      body = await res.json()
+    } catch (err) {
+      throw new Error(`non-JSON response from ${path}: ${err.message}`)
+    }
+    if (!res.ok) throw new Error(body.error || `HTTP ${res.status} from ${path}`)
+    return body
+  }
+
+  // ── window.showToast (consolidated; was duplicated in memory.js + settings.js) ──
+  // Targets whichever `.toast` element the current page declares -- every
+  // page still owns its own toast <div> (unchanged), only the function moved.
+  window.showToast = function showToast(text) {
+    const el = document.querySelector('.toast')
+    if (!el) return
+    el.textContent = text
+    el.classList.add('visible')
+    setTimeout(() => el.classList.remove('visible'), 2200)
+  }
+
+  // ── window.confirmDialog ────────────────────────────────────────────────
+  // NOT part of the task's explicit consolidation list, but required by the
+  // split: fireControl's stop-confirm and the mute-revert-confirm both used
+  // to share memory.js's #m-dialog markup, and that markup only exists on
+  // memory.html. Since nav.js now renders on pages that never had a dialog
+  // element (settings.html, connectors.html), the shell grows its own,
+  // built the same way the rest of this file builds its DOM (dynamically,
+  // since it has to work on any page). memory.js keeps its OWN separate
+  // #m-dialog-backed confirmDialog untouched, for its delete/pointer-clear
+  // confirms -- this one only backs the shell's own confirms and (by
+  // necessity, same reasoning) settings.js's model/effort switch confirms.
+  let dialogEl = null
+  function ensureDialog() {
+    if (dialogEl) return dialogEl
+    dialogEl = document.createElement('div')
+    dialogEl.className = 'dialog-backdrop hidden'
+    dialogEl.innerHTML =
+      '<div class="dialog-box">' +
+        '<p class="nav-dialog-text"></p>' +
+        '<div class="dialog-actions">' +
+          '<button class="secondary nav-dialog-cancel"></button>' +
+          '<button class="danger nav-dialog-confirm"></button>' +
+        '</div>' +
+      '</div>'
+    document.body.appendChild(dialogEl)
+    return dialogEl
+  }
+  window.confirmDialog = function confirmDialog(message, confirmText, cancelText) {
+    return new Promise((resolve) => {
+      const dialog = ensureDialog()
+      dialog.querySelector('.nav-dialog-text').textContent = message
+      const confirmBtn = dialog.querySelector('.nav-dialog-confirm')
+      const cancelBtn = dialog.querySelector('.nav-dialog-cancel')
+      confirmBtn.textContent = confirmText
+      cancelBtn.textContent = cancelText
+      dialog.classList.remove('hidden')
+      const cleanup = (result) => {
+        dialog.classList.add('hidden')
+        confirmBtn.onclick = null
+        cancelBtn.onclick = null
+        resolve(result)
+      }
+      confirmBtn.onclick = () => cleanup(true)
+      cancelBtn.onclick = () => cleanup(false)
+    })
+  }
+
+  // ── nav tabs ────────────────────────────────────────────────────────────
+  // AUTHORED structure (the tab bar itself is new -- three pages didn't
+  // exist together before this split); labels reuse the same words already
+  // shipped as page titles (memoryPane.title / settings.title / the new
+  // connectors.title) rather than inventing new ones. Active tab is derived
+  // from the URL, never hand-set, so it can't drift from reality.
+  const TABS = [
+    { id: 'memory', href: '/memory', label: NAV.tabs.memory },
+    { id: 'connectors', href: '/connectors', label: NAV.tabs.connectors },
+    { id: 'settings', href: '/settings', label: NAV.tabs.settings },
+  ]
+
+  function activeTabId() {
+    const path = window.location.pathname
+    if (path.startsWith('/connectors')) return 'connectors'
+    if (path.startsWith('/settings')) return 'settings'
+    return 'memory' // '/memory' and '/' both read as home
+  }
+
+  // ── shell skeleton ──────────────────────────────────────────────────────
+  // Was memory.html's static cat-agent-control markup; relocated into JS
+  // since it now has to render identically on three separate HTML pages.
+  // Structure/classes are unchanged from the original (agent-control-actions,
+  // mute-banner, status-line) so app.css's existing rules keep applying —
+  // only .app-nav/.nav-status/.nav-tabs/.nav-tab are genuinely new classes.
+  function renderSkeleton(root) {
+    const active = activeTabId()
+    root.innerHTML =
+      '<div class="nav-status">' +
+        '<span class="category-label" id="nav-agent-label"></span>' +
+        '<span class="status-line" id="nav-status-line"></span>' +
+        '<span class="nav-status-detail" id="nav-status-model"></span>' +
+        '<span class="nav-status-detail" id="nav-status-effort"></span>' +
+        '<div class="agent-control-actions">' +
+          '<button class="secondary" id="nav-btn-startstop"></button>' +
+          '<button class="secondary hidden" id="nav-btn-restart"></button>' +
+          '<button class="secondary hidden" id="nav-btn-discord"></button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="mute-banner" id="nav-mute-banner" hidden>' +
+        '<div class="mute-banner-text" id="nav-mute-text"></div>' +
+        '<button type="button" id="nav-mute-revert"></button>' +
+      '</div>' +
+      '<div class="nav-tabs"></div>'
+    $('nav-agent-label').textContent = NAV.label
+    const tabsEl = root.querySelector('.nav-tabs')
+    for (const t of TABS) {
+      const a = document.createElement('a')
+      a.href = t.href
+      a.className = 'nav-tab' + (t.id === active ? ' active' : '')
+      a.textContent = t.label
+      tabsEl.appendChild(a)
+    }
+  }
+
+  // ── status + lifecycle controls (start/stop/restart), extracted from
+  // memory.js's renderAgentStatus/setAgentControlsDisabled/pollAgentStatusOnce
+  // /fireControl. Scoped to only the elements the shell owns -- the
+  // model/effort selects that used to share one disable-lock with these
+  // moved to settings.js and now lock independently there (see settings.js
+  // for that half). ──
+  const AGENT_POLL_INTERVAL_MS = 2000
+  const MAX_DISABLE_MS = 30000
+  let agentPollTimer = null
+  let controlsBusy = false
+  let lastPolledState = null
+  let busyStartState = null
+  let busySawChange = false
+  let busyDeadline = 0
+
+  function renderAgentStatus(state) {
+    const line = $('nav-status-line')
+    line.textContent = NAV.states[state] || state
+    line.className = 'status-line'
+    if (state === 'live') line.classList.add('success')
+    else if (state === 'failed') line.classList.add('failure')
+    else if (state === 'connecting' || state === 'idle') line.classList.add('pending')
+    const running = state === 'live' || state === 'connecting'
+    const toggle = $('nav-btn-startstop')
+    toggle.textContent = running ? NAV.stop : NAV.start
+    toggle.dataset.action = running ? 'stop' : 'start'
+    $('nav-btn-restart').classList.toggle('hidden', !running)
+  }
+
+  function setControlsDisabled(disabled) {
+    controlsBusy = disabled
+    if (disabled) {
+      busyStartState = lastPolledState
+      busySawChange = false
+      busyDeadline = Date.now() + MAX_DISABLE_MS
+    }
+    $('nav-btn-startstop').disabled = disabled
+    $('nav-btn-restart').disabled = disabled
+    const revert = $('nav-mute-revert')
+    if (revert) revert.disabled = disabled
+  }
+
+  async function pollAgentStatusOnce() {
+    try {
+      const result = await window.api('/api/agent/status')
+      renderAgentStatus(result.state)
+      lastPolledState = result.state
+      if (controlsBusy) {
+        if (result.state !== busyStartState) busySawChange = true
+        const settled = result.state !== 'connecting' && busySawChange
+        if (settled || Date.now() >= busyDeadline) setControlsDisabled(false)
+      }
+    } catch (err) {
+      console.error('agent status poll failed:', err)
+    }
+    // Rides the existing 2s poll rather than adding a second timer -- same
+    // reasoning as the original: a mute-check outage must never take down
+    // the status poll everything else depends on.
+    await renderMuteBanner()
+    agentPollTimer = setTimeout(pollAgentStatusOnce, AGENT_POLL_INTERVAL_MS)
+  }
+
+  async function fireControl(action, body) {
+    if (controlsBusy) return false
+    setControlsDisabled(true)
+    try {
+      await window.api(`/api/agent/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: body ? JSON.stringify(body) : undefined,
+      })
+      // Stay disabled until pollAgentStatusOnce sees a settled state.
+      return true
+    } catch (err) {
+      console.error(`agent ${action} failed:`, err)
+      window.showToast(GEN(err.message))
+      setControlsDisabled(false)
+      return false
+    }
+  }
+
+  // ── mute/revert banner, extracted from memory.js's renderMuteBanner ──────
+  async function renderMuteBanner() {
+    const banner = $('nav-mute-banner')
+    if (!banner) return
+    let s
+    try {
+      s = await window.api('/api/agent/mute-status')
+    } catch (err) {
+      console.error('mute status poll failed:', err)
+      return // leave the banner in whatever state it was; don't flap on a blip
+    }
+    const tripped = (s.strikes || 0) >= (s.threshold || 2) && Boolean(s.previousModel)
+    if (!tripped) { banner.hidden = true; return }
+    $('nav-mute-text').textContent = NAV.muteWarn(s.strikes, s.model || 'the model')
+    const btn = $('nav-mute-revert')
+    btn.textContent = NAV.muteRevert(s.previousModel)
+    btn.disabled = controlsBusy
+    btn.onclick = async () => {
+      if (controlsBusy) return
+      const ok = await window.confirmDialog(NAV.muteRevertConfirm(s.previousModel), NAV.switchOk, NAV.cancel)
+      if (!ok || controlsBusy) return
+      const body = s.previousProvider ? { model: s.previousModel, provider: s.previousProvider } : { model: s.previousModel }
+      const accepted = await fireControl('model', body)
+      if (accepted) {
+        banner.hidden = true
+        // Shell shows model as plain text (no select to repopulate here --
+        // that lives in settings.js now), so reflect the revert directly.
+        $('nav-status-model').textContent = s.previousModel
+      }
+    }
+    banner.hidden = false
+  }
+
+  // ── shell init ───────────────────────────────────────────────────────────
+  async function initShell() {
+    const root = $('app-nav')
+    if (!root) return // page doesn't include the shell mount point
+    renderSkeleton(root)
+
+    let cfg = {}
+    try { cfg = await window.api('/api/config') } catch (err) { console.error(err) }
+
+    // Discord-open button (moved here from memory.js's renderAgentControl,
+    // which had itself inherited it from wizard.js's renderStep5Live).
+    // Needs BOTH ids: guild from .agent-config, channel from .env via the
+    // camelCase ride-along. Installs onboarded before HOME_GUILD_ID
+    // persistence existed won't have the guild id -> button stays hidden.
+    const discordBtn = $('nav-btn-discord')
+    if (cfg.HOME_GUILD_ID && cfg.homeChannelId) {
+      discordBtn.textContent = NAV.openDiscord
+      discordBtn.classList.remove('hidden')
+      discordBtn.onclick = async () => {
+        try {
+          await window.api('/api/discord/open', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ guildId: cfg.HOME_GUILD_ID, channelId: cfg.homeChannelId }),
+          })
+        } catch (err) {
+          console.error('discord open failed:', err)
+          window.showToast(GEN(err.message))
+        }
+      }
+    }
+
+    $('nav-btn-startstop').onclick = async () => {
+      const action = $('nav-btn-startstop').dataset.action
+      if (action === 'stop') {
+        const ok = await window.confirmDialog(NAV.stopConfirm, NAV.stopOk, NAV.cancel)
+        if (!ok) return
+      }
+      await fireControl(action)
+    }
+    $('nav-btn-restart').onclick = () => fireControl('restart')
+
+    // Read-only display only -- current model/effort as plain text (the
+    // SELECT config controls that write these live in settings.js). This is
+    // a one-time snapshot from /api/config, same data source
+    // renderAgentControl used to read; it does not live-refresh on the 2s
+    // poll (that poll only ever carried .state -- see pollAgentStatusOnce),
+    // so a model/effort switch made on /settings shows here on next
+    // navigation, not instantly on this same page load.
+    $('nav-status-model').textContent = cfg.MODEL || ''
+    $('nav-status-effort').textContent = cfg.EFFORT_LEVEL || ''
+
+    pollAgentStatusOnce()
+  }
+
+  document.addEventListener('DOMContentLoaded', initShell)
+})()

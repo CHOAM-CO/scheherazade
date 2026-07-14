@@ -248,6 +248,50 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   gap: 0.5rem;
 }
 
+/* ── shared shell (nav.js, subpage split 2026-07-14) ──────────────────────
+   Renders into <div id="app-nav"> at the top of every post-onboarding
+   page's .page-shell, before .page-header. It carries its own margin-bottom
+   (below), so .page-header needs no separate margin-top adjustment -- it
+   just follows in normal flow, same as it did with the old cat-agent-control
+   block it replaces. */
+.app-nav {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg);
+  padding-top: 0.5rem;
+  padding-bottom: 1rem;
+  margin-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.nav-status {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+/* Row context: kill the block-layout spacing .status-line carries elsewhere. */
+.nav-status .status-line { margin-top: 0; min-height: 0; }
+.nav-status-detail { font-size: 0.85rem; color: var(--fg-dim); }
+.nav-status .agent-control-actions { margin-left: auto; }
+
+.nav-tabs {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.85rem;
+  border-bottom: 1px solid var(--border);
+}
+.nav-tab {
+  padding: 0.55rem 1rem;
+  color: var(--fg-faint);
+  text-decoration: none;
+  font-size: 0.9rem;
+  border-bottom: 2px solid transparent;
+}
+.nav-tab:hover { color: var(--fg-dim); }
+.nav-tab.active { color: var(--fg); border-bottom-color: var(--accent); }
+
 .entry-row {
   display: flex;
   justify-content: space-between;

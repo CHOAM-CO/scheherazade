@@ -479,6 +479,29 @@ window.COPY = {
     refreshToast: '다시 불러왔습니다.',
   },
 
+  // AUTHORED (not in copy file) -- shared shell (nav.js), subpage split
+  // 2026-07-14 per docs/ia-subpage-plan.md. tabs{} is genuinely new UI (the
+  // 3-way split didn't exist before); everything else here is MOVED verbatim
+  // from memory.js's inline AGENT_COPY const (Slice 2, 2026-07-09) -- still
+  // eng placeholder pending Mino's copy-track localization pass, unchanged
+  // by the move itself.
+  nav: {
+    tabs: { memory: '기억', connectors: '커넥터', settings: '설정' },
+    label: 'AGENT',
+    states: { live: 'Running', connecting: 'Starting…', stopped: 'Stopped', failed: 'Failed', idle: 'Not started' },
+    start: 'Start',
+    stop: 'Stop',
+    restart: 'Restart',
+    openDiscord: 'Open Discord',
+    stopConfirm: 'Stop the agent?',
+    stopOk: 'Stop',
+    cancel: 'Cancel',
+    switchOk: 'Switch',
+    muteWarn: (n, m) => `${m} was asked to reply ${n}× and didn't. The agent may be unable to send messages.`,
+    muteRevert: (m) => `Go back to ${m}`,
+    muteRevertConfirm: (m) => `Switch back to ${m}? The agent will restart.`,
+  },
+
   // AUTHORED (not in copy file) -- settings page, minimal v1.
   settings: {
     title: '설정',
@@ -486,28 +509,20 @@ window.COPY = {
     renameLabel: '이름',
     renameButton: '저장',
     renameSaved: '저장됐습니다.',
-    slackLabel: 'Slack',
-    slackNote: '나중에 지원 예정',
-    // AUTHORED -- post-onboarding provider auth (Mino 07-13 click-test:
-    // "온보딩 끝낸 이후에 ollama cloud 인증 추가 / chatGPT인증 추가").
-    providersLabel: '추가 인증',
-    providersNote: '인증하면 기억 페이지의 모델 선택에서 해당 모델을 고를 수 있습니다',
-    providerNames: { chatgpt: 'ChatGPT (Codex)', ollama: 'Ollama Cloud' },
-    providerConnected: '연결됨',
-    providerNotConnected: '미연결',
-    providerAuthButton: '인증하기',
-    providerAuthRunning: '로그인 창이 열렸습니다. 브라우저에서 로그인을 끝내면 여기가 바뀝니다',
-    providerAuthSuccess: '연결됐습니다',
-    providerAuthFailures: {
-      cli_missing: {
-        chatgpt: 'codex CLI가 없습니다. https://github.com/openai/codex 에서 설치 후 다시 시도해주세요',
-        ollama: 'Ollama 앱이 설치되어 있지 않습니다. https://ollama.com 에서 설치 후 다시 시도해주세요',
-      },
-      cancelled: '인증이 취소됐습니다',
-      timeout: '인증이 제한 시간을 넘겼습니다. 다시 시도해주세요',
-      exit_nonzero: '인증이 실패했습니다. 다시 시도해주세요',
-      unknown: '인증이 실패했습니다. 다시 시도해주세요',
-    },
+    // Moved verbatim from memory.js's inline AGENT_COPY (Slice 2,
+    // 2026-07-09) -- the SELECT-driven half (model/effort config). The
+    // read-only status-display half of that same const moved to `nav` above.
+    // agentConfigLabel is AUTHORED (not in copy file): the original AGENT_COPY
+    // had one 'AGENT' label covering the whole panel (status+buttons+selects
+    // together); now that the selects are their own section, they get their
+    // own wrapper label distinct from nav.label.
+    agentConfigLabel: 'Model & Effort',
+    modelLabel: 'Model',
+    effortLabel: 'Effort',
+    switchConfirm: (m) => `Switch model to ${m}? The agent will restart.`,
+    effortConfirm: (e) => `Switch effort to ${e}? The agent will restart.`,
+    switchOk: 'Switch',
+    cancel: 'Cancel',
 
     // AUTHORED -- autonomous cycle (v0.0.6).
     //
@@ -555,6 +570,43 @@ window.COPY = {
     autonomySaved: '저장됐습니다',
     autonomyInvalidWindow: '시간 형식이 올바르지 않습니다 (예: 02:00)',
     autonomyInvalidCap: '숫자를 입력해주세요',
+  },
+
+  // AUTHORED (not in copy file) -- connectors page, new in the 2026-07-14
+  // subpage split (docs/ia-subpage-plan.md). `title`/`backToMemory` are new;
+  // everything else below is MOVED verbatim from `settings` (provider auth +
+  // Slack banner lived there before the split -- unchanged strings, just
+  // relocated), except `providersNote`, corrected in place: it used to say
+  // "기억 페이지의 모델 선택" (model select lived on /memory back then); model
+  // select now lives on /settings, so the pointer is updated to match --
+  // otherwise this move would ship a note that sends the user to the wrong
+  // page for something this same refactor moved. Register unchanged: 간결
+  // 존댓말, no 이모지, no 느낌표, no cheerleading.
+  connectors: {
+    title: '커넥터',
+    backToMemory: '기억으로',
+    slackLabel: 'Slack',
+    slackNote: '나중에 지원 예정',
+    // AUTHORED -- post-onboarding provider auth (Mino 07-13 click-test:
+    // "온보딩 끝낸 이후에 ollama cloud 인증 추가 / chatGPT인증 추가").
+    providersLabel: '추가 인증',
+    providersNote: '인증하면 설정 페이지의 모델 선택에서 해당 모델을 고를 수 있습니다',
+    providerNames: { chatgpt: 'ChatGPT (Codex)', ollama: 'Ollama Cloud' },
+    providerConnected: '연결됨',
+    providerNotConnected: '미연결',
+    providerAuthButton: '인증하기',
+    providerAuthRunning: '로그인 창이 열렸습니다. 브라우저에서 로그인을 끝내면 여기가 바뀝니다',
+    providerAuthSuccess: '연결됐습니다',
+    providerAuthFailures: {
+      cli_missing: {
+        chatgpt: 'codex CLI가 없습니다. https://github.com/openai/codex 에서 설치 후 다시 시도해주세요',
+        ollama: 'Ollama 앱이 설치되어 있지 않습니다. https://ollama.com 에서 설치 후 다시 시도해주세요',
+      },
+      cancelled: '인증이 취소됐습니다',
+      timeout: '인증이 제한 시간을 넘겼습니다. 다시 시도해주세요',
+      exit_nonzero: '인증이 실패했습니다. 다시 시도해주세요',
+      unknown: '인증이 실패했습니다. 다시 시도해주세요',
+    },
   },
 
   // Sourced from the source file's Step 4 폴백 note: "waiting.html 카피

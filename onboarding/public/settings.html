@@ -8,6 +8,8 @@
   </head>
   <body>
     <div class="page-shell">
+      <div id="app-nav"></div>
+
       <div class="page-header">
         <h1 id="set-title"></h1>
         <div class="page-nav">
@@ -25,24 +27,18 @@
         <button id="set-rename-save"></button>
       </div>
 
-      <div class="category" style="margin-top: 2.5rem" id="set-providers">
-        <div class="category-label" id="set-providers-label"></div>
-        <p class="subtitle" id="set-providers-note"></p>
-        <div class="entries">
-          <div class="entry-row">
-            <div class="entry-main">
-              <div class="entry-value" id="set-provider-chatgpt-name"></div>
-              <div class="entry-meta" id="set-provider-chatgpt-status"></div>
-            </div>
-            <button class="secondary" id="set-provider-chatgpt-btn"></button>
-          </div>
-          <div class="entry-row">
-            <div class="entry-main">
-              <div class="entry-value" id="set-provider-ollama-name"></div>
-              <div class="entry-meta" id="set-provider-ollama-status"></div>
-            </div>
-            <button class="secondary" id="set-provider-ollama-btn"></button>
-          </div>
+      <!-- Agent model/effort config (moved from memory.html's agent control
+           panel, subpage split 2026-07-14). SELECT-driven config half; the
+           read-only status display half lives in the nav.js shell above. -->
+      <div class="category" style="margin-top: 2.5rem" id="set-agent-config">
+        <div class="category-label" id="set-agent-config-label"></div>
+        <div class="agent-control-row">
+          <label for="set-model-select" id="set-model-label"></label>
+          <select id="set-model-select"></select>
+        </div>
+        <div class="agent-control-row">
+          <label for="set-effort-select" id="set-effort-label"></label>
+          <select id="set-effort-select"></select>
         </div>
       </div>
 
@@ -82,20 +78,12 @@
           <button id="set-autonomy-save"></button>
         </div>
       </div>
-
-      <div class="banner" style="margin-top: 2.5rem">
-        <div class="entry-row" style="border-bottom: none; padding: 0">
-          <div class="entry-main">
-            <div class="entry-value" id="set-slack-label"></div>
-            <div class="entry-meta" id="set-slack-note"></div>
-          </div>
-        </div>
-      </div>
     </div>
 
     <div class="toast" id="set-toast"></div>
 
     <script src="/js/copy.js"></script>
+    <script src="/js/nav.js"></script>
     <script src="/js/settings.js"></script>
   </body>
 </html>

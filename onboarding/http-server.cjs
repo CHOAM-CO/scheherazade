@@ -2585,6 +2585,7 @@ const ROUTE_TO_FILE = {
   '/index.html': 'index.html',
   '/memory': 'memory.html',
   '/settings': 'settings.html',
+  '/connectors': 'connectors.html',
   '/waiting': 'waiting.html',
 }
 

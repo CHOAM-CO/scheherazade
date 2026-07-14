@@ -8,6 +8,11 @@
 ;(function () {
   const C = window.COPY.memoryPane
   const GEN = window.COPY.genericError
+  // Pointers' clear-confirm dialog borrows the generic Cancel label, same as
+  // before -- it used to reach into memory.js's own (now-moved) AGENT_COPY;
+  // that string now lives in copy.js's `nav` key, where the rest of that
+  // const relocated to.
+  const NAV = window.COPY.nav
 
   function $(id) { return document.getElementById(id) }
   // Local-time rendering (Mino 07-13 click-test: raw ISO slicing displayed
@@ -16,31 +21,9 @@
   function isoDate(iso) { return iso ? new Date(iso).toLocaleDateString('sv-SE') : '' }
   function localTime(iso) { return iso ? new Date(iso).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' }) : '' }
 
-  async function api(path, options) {
-    const opts = options ? { ...options } : {}
-    // localhost-auth gate (security review, 2026-07-03): every mutating
-    // (non-GET) request must carry the per-launch token the server
-    // injected into this page's <head> -- see copy.js's getOnboardToken().
-    if (opts.method && opts.method !== 'GET') {
-      opts.headers = { ...(opts.headers || {}), 'X-Onboard-Token': window.getOnboardToken() || '' }
-    }
-    const res = await fetch(path, opts)
-    let body = {}
-    try {
-      body = await res.json()
-    } catch (err) {
-      throw new Error(`non-JSON response from ${path}: ${err.message}`)
-    }
-    if (!res.ok) throw new Error(body.error || `HTTP ${res.status} from ${path}`)
-    return body
-  }
-
-  function showToast(text) {
-    const el = $('m-toast')
-    el.textContent = text
-    el.classList.add('visible')
-    setTimeout(() => el.classList.remove('visible'), 2200)
-  }
+  // window.api() / window.showToast() now live in nav.js (loaded before this
+  // file on memory.html) -- consolidated from what used to be local copies
+  // here and in settings.js.
 
   function confirmDialog(message, confirmText, cancelText) {
     return new Promise((resolve) => {
@@ -204,37 +187,6 @@
     }
   }
 
-  // ── Agent control panel (Slice 2, 2026-07-09) ──────────────────────────
-  // #2 model select / #4 model switch / #5 on-off, on the steady-state home
-  // pane. Copy below is eng placeholder (Mino's copy track localizes). The
-  // server control routes are fire-and-forget 202 -> the client polls
-  // /api/agent/status to observe the transition, and the in-flight guard
-  // (setAgentControlsDisabled) is the ONLY concurrency defense -- the server
-  // is deliberately not serialized (Mino 2026-07-09 YAGNI).
-  const AGENT_COPY = {
-    label: 'AGENT',
-    modelLabel: 'Model',
-    effortLabel: 'Effort',
-    start: 'Start',
-    stop: 'Stop',
-    restart: 'Restart',
-    states: { live: 'Running', connecting: 'Starting…', stopped: 'Stopped', failed: 'Failed', idle: 'Not started' },
-    switchConfirm: (m) => `Switch model to ${m}? The agent will restart.`,
-    effortConfirm: (e) => `Switch effort to ${e}? The agent will restart.`,
-    switchOk: 'Switch',
-    stopConfirm: 'Stop the agent?',
-    stopOk: 'Stop',
-    cancel: 'Cancel',
-    openDiscord: 'Open Discord',
-    // Mute-revert offer (2026-07-13). Deliberately describes the OBSERVED
-    // behavior ("hasn't replied") rather than diagnosing a cause -- the one
-    // time we shipped a cause ("this model can't call tools") it turned out to
-    // be false under 7 live conditions. State what we saw; offer the undo.
-    muteWarn: (n, m) => `${m} was asked to reply ${n}× and didn't. The agent may be unable to send messages.`,
-    muteRevert: (m) => `Go back to ${m}`,
-    muteRevertConfirm: (m) => `Switch back to ${m}? The agent will restart.`,
-  }
-
   // ── Imported pointers (v0.0.4 item d) ─────────────────────────────────
   // Copy discipline: say what this IS (locations), what it is NOT (a copy of
   // your files), and what it costs. The scan opens nothing but markdown
@@ -261,371 +213,6 @@
     // that we ate a label, and could not tell a caught key from an over-strict
     // filter. Zero is normal, so this line only appears when it isn't zero.
     suppressed: (n) => `제목 ${n}개는 열쇠처럼 보여서 목록에 담지 않았습니다 (파일 위치는 그대로 있습니다).`,
-  }
-
-  // Model catalog + provider gate. A model is selectable only if its provider
-  // is the onboarded PROVIDER (single-provider today; claude-subscription
-  // counts as claude). Claude ids use CLI aliases (version-independent).
-  // Catalog reorg (Mino 2026-07-14 09:45, verbatim ask): "프로바이더별로
-  // 정리좀 합시다 ... 버전까지 명시해줘". Groups render as <optgroup>; ids are
-  // EXPLICIT versioned model ids, replacing the old version-independent CLI
-  // aliases ('opus'/'sonnet'). Existing installs with an alias still stored
-  // surface it via the pinned "(current)" passthrough below -- honest, and it
-  // heals on the next swap.
-  //
-  // Receipts for the Claude ids (all ran live in the MAGI fleet):
-  // claude-fable-5 + claude-opus-4-8 (ps-verified boots, 07-14),
-  // claude-opus-4-6 (fleet default lane), claude-sonnet-5 (conf swap
-  // 57e4744, ran 07-05). GPT: gpt-5.6-terra ran live (Skia lane, 07-10);
-  // sol/luna are Mino-named siblings -- live-verify on first swap, the
-  // mute-strike ledger is the backstop either way.
-  const CLAUDE_PROVIDERS = ['claude', 'claude-cli', 'claude-subscription']
-  const MODEL_CATALOG = [
-    { id: 'claude-fable-5', label: 'Claude Fable 5', group: 'Claude', providers: CLAUDE_PROVIDERS },
-    { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', group: 'Claude', providers: CLAUDE_PROVIDERS },
-    { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', group: 'Claude', providers: CLAUDE_PROVIDERS },
-    { id: 'claude-sonnet-5', label: 'Claude Sonnet 5', group: 'Claude', providers: CLAUDE_PROVIDERS },
-    { id: 'gpt-5.6-sol', label: 'GPT 5.6 Sol', group: 'GPT', providers: ['chatgpt'] },
-    { id: 'gpt-5.6-terra', label: 'GPT 5.6 Terra', group: 'GPT', providers: ['chatgpt'] },
-    { id: 'gpt-5.6-luna', label: 'GPT 5.6 Luna', group: 'GPT', providers: ['chatgpt'] },
-    // Kimi: DROPPED entirely (Mino, 2026-07-14 09:27 "키미는 프로바이더째로
-    // 드랍하자"). History compressed so nobody re-litigates it:
-    //   - Went mute in Mino's install (07-13). The first diagnosis ("ollama
-    //     lane can't produce tool_use", welded here at 638fbf7) was FALSIFIED
-    //     live the same night in 7 conditions incl. the real CLI + a real MCP
-    //     server with file receipts -- the lane DOES carry kimi tool calls.
-    //   - The failing transcript itself (chunsik session cd209c48, read 07-14
-    //     01:3x) showed kimi emitting raw <|tool_call...|> token sequences
-    //     that leaked as text in THAT session: the emission is intermittent,
-    //     and when it happens the lane cannot translate it. The fix would have
-    //     been a translating proxy (est. half-day+); Mino called the lane not
-    //     worth it.
-    //   - The mute-strike ledger (hooks/stop-reply-guard.mjs +
-    //     /api/agent/mute-status + revert banner) was born from this case and
-    //     STAYS: it convicts mute agents on real behavior, whatever the model.
-    //     (A swap-time smoke test can only acquit falsely -- every probe
-    //     passed the model that was mute in production.)
-    // deepseek verified live by Mino (2026-07-13 19:41 "딥시크 정상작동 확인",
-    // same round as glm/sonnet-5/opus-4.8; model-swap continuity also held).
-    { id: 'deepseek-v4-pro:cloud', label: 'DeepSeek V4 Pro', group: 'Ollama', providers: ['ollama'] },
-    // glm-5.2 tool-use verified live by Mino (2026-07-13 19:32, same ollama
-    // lane as kimi: "glm5.2 << 문제 전혀없음") -- label cleared same day it
-    // was added. sonnet-5 / opus-4.8 verified in the same test round.
-    { id: 'glm-5.2:cloud', label: 'GLM 5.2', group: 'Ollama', providers: ['ollama'] },
-    // (old single 'gpt' Codex entry replaced by the versioned GPT group above)
-  ]
-
-  // Effort selector (Mino 07-13 click-test item 2: sonnet-5 felt slow -- the
-  // old hardwired max bought thinking budget casual chat doesn't need).
-  // 'high' is run.sh's own `${EFFORT_LEVEL:-high}` default; labels say so
-  // rather than pre-selecting silently.
-  const EFFORT_LEVELS = ['low', 'medium', 'high', 'max']
-  const EFFORT_DEFAULT = 'high'
-
-  const AGENT_POLL_INTERVAL_MS = 2000
-  const MAX_DISABLE_MS = 30000
-  let agentPollTimer = null
-  let agentControlsBusy = false
-  let lastPolledState = null
-  let busyStartState = null
-  let busySawChange = false
-  let busyDeadline = 0
-  let currentProvider = null
-  let currentModel = ''
-  let currentEffort = EFFORT_DEFAULT
-  // Providers with a usable credential/login artifact right now, computed
-  // server-side (07-13 multi-provider unlock). The onboarded provider is
-  // always treated as available even if the server list momentarily misses
-  // it -- the running agent is its own proof.
-  let availableProviders = []
-
-  function stopAgentPoll() { if (agentPollTimer) { clearTimeout(agentPollTimer); agentPollTimer = null } }
-
-  function renderAgentStatus(state) {
-    const line = $('agent-status-line')
-    line.textContent = AGENT_COPY.states[state] || state
-    line.className = 'status-line'
-    if (state === 'live') line.classList.add('success')
-    else if (state === 'failed') line.classList.add('failure')
-    else if (state === 'connecting' || state === 'idle') line.classList.add('pending')
-    const running = state === 'live' || state === 'connecting'
-    const toggle = $('agent-btn-startstop')
-    toggle.textContent = running ? AGENT_COPY.stop : AGENT_COPY.start
-    toggle.dataset.action = running ? 'stop' : 'start'
-    $('agent-btn-restart').classList.toggle('hidden', !running)
-  }
-
-  function setAgentControlsDisabled(disabled) {
-    agentControlsBusy = disabled
-    if (disabled) {
-      // Snapshot the state the action fired from + arm the backstop deadline.
-      busyStartState = lastPolledState
-      busySawChange = false
-      busyDeadline = Date.now() + MAX_DISABLE_MS
-    }
-    $('agent-model-select').disabled = disabled
-    $('agent-effort-select').disabled = disabled
-    $('agent-btn-startstop').disabled = disabled
-    // The revert button fires the SAME /api/agent/model route as the dropdown,
-    // so it must sit behind the SAME lock (red-team 2026-07-13: it was added
-    // outside it). Button-disable is this page's only concurrency defense --
-    // the server is deliberately not serialized -- so a control that skips it
-    // can race a swap that's already in flight.
-    $('agent-mute-revert').disabled = disabled
-    $('agent-btn-restart').disabled = disabled
-  }
-
-  async function pollAgentStatusOnce() {
-    try {
-      const result = await api('/api/agent/status')
-      renderAgentStatus(result.state)
-      lastPolledState = result.state
-      if (agentControlsBusy) {
-        // Button-disable is the ONLY concurrency defense (server isn't
-        // serialized), so it must hold for the WHOLE action, not just to the
-        // first poll. The polled status is noisy mid-transition: a stale-fresh
-        // .agent-live marker still reads 'live' for seconds into a stop/restart,
-        // and a just-started agent reads 'stopped' until its spawn stamps
-        // 'connecting'. Re-enabling on "state != connecting" alone would release
-        // mid-action and let a second click race the first (intentionalStopMode
-        // is a single global flag -- a Stop landing during a Restart corrupts
-        // it). So: require having OBSERVED the state leave what it was when the
-        // action fired (busySawChange) before accepting a terminal state -- the
-        // "wait for the process to actually turn over" Mino asked for. The
-        // deadline is the backstop so a missed transition can't lock forever.
-        if (result.state !== busyStartState) busySawChange = true
-        const settled = result.state !== 'connecting' && busySawChange
-        if (settled || Date.now() >= busyDeadline) setAgentControlsDisabled(false)
-      }
-    } catch (err) {
-      console.error('agent status poll failed:', err)
-    }
-    // Rides the existing 2s poll rather than adding a second timer: the mute
-    // check is one cheap file read server-side, and a separate cadence would
-    // just be another thing that can drift out of sync with the status line.
-    // Failures are swallowed inside renderMuteBanner -- a mute-check outage
-    // must never take down the status poll that everything else depends on.
-    await renderMuteBanner()
-    agentPollTimer = setTimeout(pollAgentStatusOnce, AGENT_POLL_INTERVAL_MS)
-  }
-
-  // The revert offer. Shown ONLY when the guard's ledger says the running model
-  // was explicitly told to send and still didn't (threshold strikes), AND we
-  // know a model to go back to. No previous model -> no banner: an offer with
-  // nowhere to go is just an alarm.
-  async function renderMuteBanner() {
-    const banner = $('agent-mute-banner')
-    if (!banner) return
-    let s
-    try {
-      s = await api('/api/agent/mute-status')
-    } catch (err) {
-      console.error('mute status poll failed:', err)
-      return // leave the banner in whatever state it was; don't flap on a blip
-    }
-    const tripped = (s.strikes || 0) >= (s.threshold || 2) && Boolean(s.previousModel)
-    if (!tripped) { banner.hidden = true; return }
-    $('agent-mute-text').textContent = AGENT_COPY.muteWarn(s.strikes, s.model || 'the model')
-    const btn = $('agent-mute-revert')
-    btn.textContent = AGENT_COPY.muteRevert(s.previousModel)
-    // The banner can first APPEAR mid-action (this poll runs every 2s), and a
-    // freshly-shown button defaults to enabled -- so it has to inherit the lock
-    // on render, not only when setAgentControlsDisabled happens to fire.
-    btn.disabled = agentControlsBusy
-    btn.onclick = async () => {
-      // Second half of the lock: `disabled` blocks the click, but the confirm
-      // dialog is async -- an action can start WHILE this dialog is open. Re-check
-      // on the way out so a swap that began during the prompt isn't raced.
-      if (agentControlsBusy) return
-      const ok = await confirmDialog(AGENT_COPY.muteRevertConfirm(s.previousModel), AGENT_COPY.switchOk, AGENT_COPY.cancel)
-      if (!ok || agentControlsBusy) return
-      // Route through the same swap lane as the dropdown (which records the
-      // new PREVIOUS_* pair and clears the ledger) instead of a bespoke revert
-      // endpoint -- one swap path, one place for swap semantics to live.
-      const body = s.previousProvider ? { model: s.previousModel, provider: s.previousProvider } : { model: s.previousModel }
-      const accepted = await fireControl('model', body)
-      if (accepted) {
-        banner.hidden = true
-        currentModel = s.previousModel
-        if (s.previousProvider) currentProvider = s.previousProvider
-        populateModelSelect(currentModel)
-      }
-    }
-    banner.hidden = false
-  }
-
-  // Returns true when the server accepted the action (202), false when it
-  // rejected or the request failed -- callers that mutate local state before
-  // firing (model/effort switch) roll back on false (spark review 07-13:
-  // a 409'd cross-provider switch used to leave currentProvider drifted
-  // until page reload).
-  async function fireControl(action, body) {
-    if (agentControlsBusy) return false
-    setAgentControlsDisabled(true)
-    try {
-      await api(`/api/agent/${action}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: body ? JSON.stringify(body) : undefined,
-      })
-      // Stay disabled until pollAgentStatusOnce sees a settled state.
-      return true
-    } catch (err) {
-      console.error(`agent ${action} failed:`, err)
-      showToast(GEN(err.message))
-      setAgentControlsDisabled(false)
-      return false
-    }
-  }
-
-  function populateModelSelect(model) {
-    const sel = $('agent-model-select')
-    sel.innerHTML = ''
-    // If the live MODEL isn't a catalog id (e.g. an old stored alias like
-    // 'opus'/'sonnet' from before the versioned catalog, or a hand-pinned id),
-    // surface it as-is so the dropdown reflects reality, not a guess.
-    if (model && !MODEL_CATALOG.some((m) => m.id === model)) {
-      const opt = document.createElement('option')
-      opt.value = model
-      opt.textContent = `${model} (current)`
-      opt.selected = true
-      sel.appendChild(opt)
-    }
-    // Grouped by provider family (<optgroup>), per Mino 2026-07-14. Group
-    // order follows catalog order; entries without a group land at top level.
-    const groups = new Map()
-    for (const m of MODEL_CATALOG) {
-      const opt = document.createElement('option')
-      opt.value = m.id
-      opt.textContent = m.label
-      // A model is selectable if ANY of its providers is authenticated --
-      // not just the currently-running one (07-13 multi-provider unlock).
-      if (!m.providers.some((p) => availableProviders.includes(p))) opt.disabled = true
-      // Models withdrawn for observed production failure (see catalog note).
-      if (m.disabled) opt.disabled = true
-      if (m.id === model) opt.selected = true
-      if (m.group) {
-        if (!groups.has(m.group)) {
-          const og = document.createElement('optgroup')
-          og.label = m.group
-          groups.set(m.group, og)
-          sel.appendChild(og)
-        }
-        groups.get(m.group).appendChild(opt)
-      } else {
-        sel.appendChild(opt)
-      }
-    }
-  }
-
-  function populateEffortSelect(effort) {
-    const sel = $('agent-effort-select')
-    sel.innerHTML = ''
-    for (const level of EFFORT_LEVELS) {
-      const opt = document.createElement('option')
-      opt.value = level
-      opt.textContent = level === EFFORT_DEFAULT ? `${level} (default)` : level
-      if (level === effort) opt.selected = true
-      sel.appendChild(opt)
-    }
-  }
-
-  // The provider a model switch must run under: keep the current provider
-  // when it can serve the model, otherwise the first authenticated provider
-  // that can. Returns null when none can (shouldn't happen for an enabled
-  // option, but fail closed).
-  function providerForModel(modelId) {
-    const entry = MODEL_CATALOG.find((m) => m.id === modelId)
-    if (!entry) return currentProvider // pinned non-catalog id: stay put
-    if (entry.providers.includes(currentProvider)) return currentProvider
-    return entry.providers.find((p) => availableProviders.includes(p)) || null
-  }
-
-  async function renderAgentControl() {
-    $('cat-agent-control-label').textContent = AGENT_COPY.label
-    $('agent-model-label').textContent = AGENT_COPY.modelLabel
-    $('agent-effort-label').textContent = AGENT_COPY.effortLabel
-
-    let cfg = {}
-    try { cfg = await api('/api/config') } catch (err) { console.error(err) }
-    currentProvider = cfg.PROVIDER || null
-    currentModel = cfg.MODEL || ''
-    currentEffort = EFFORT_LEVELS.includes(cfg.EFFORT_LEVEL) ? cfg.EFFORT_LEVEL : EFFORT_DEFAULT
-    availableProviders = Array.isArray(cfg.availableProviders) ? cfg.availableProviders.slice() : []
-    if (currentProvider && !availableProviders.includes(currentProvider)) availableProviders.push(currentProvider)
-    populateModelSelect(currentModel)
-    populateEffortSelect(currentEffort)
-
-    $('agent-model-select').onchange = async (e) => {
-      const model = e.target.value
-      if (model === currentModel) return
-      const provider = providerForModel(model)
-      if (!provider) { e.target.value = currentModel; return } // fail closed: no authed provider serves it
-      const ok = await confirmDialog(AGENT_COPY.switchConfirm(model), AGENT_COPY.switchOk, AGENT_COPY.cancel)
-      if (!ok) { e.target.value = currentModel; return }
-      const prevModel = currentModel
-      const prevProvider = currentProvider
-      currentModel = model
-      currentProvider = provider
-      const accepted = await fireControl('model', provider !== prevProvider ? { model, provider } : { model })
-      if (!accepted) {
-        currentModel = prevModel
-        currentProvider = prevProvider
-        e.target.value = prevModel
-      }
-    }
-
-    $('agent-effort-select').onchange = async (e) => {
-      const effort = e.target.value
-      if (effort === currentEffort) return
-      const ok = await confirmDialog(AGENT_COPY.effortConfirm(effort), AGENT_COPY.switchOk, AGENT_COPY.cancel)
-      if (!ok) { e.target.value = currentEffort; return }
-      const prevEffort = currentEffort
-      currentEffort = effort
-      const accepted = await fireControl('effort', { effort })
-      if (!accepted) {
-        currentEffort = prevEffort
-        e.target.value = prevEffort
-      }
-    }
-
-    $('agent-btn-startstop').onclick = async () => {
-      const action = $('agent-btn-startstop').dataset.action
-      if (action === 'stop') {
-        const ok = await confirmDialog(AGENT_COPY.stopConfirm, AGENT_COPY.stopOk, AGENT_COPY.cancel)
-        if (!ok) return
-      }
-      await fireControl(action)
-    }
-    $('agent-btn-restart').onclick = () => fireControl('restart')
-
-    // Discord-open button (moved here from wizard renderStep5Live, which the
-    // onboarding auto-nav now skips). Needs BOTH ids: guild from .agent-config
-    // (persisted at discord/validate), channel from .env via the camelCase
-    // ride-along. Installs onboarded before HOME_GUILD_ID persistence existed
-    // won't have the guild id -> button stays hidden until re-onboarding.
-    // Deliberately NOT part of setAgentControlsDisabled: opening a browser tab
-    // is independent of agent lifecycle.
-    const discordBtn = $('agent-btn-discord')
-    if (cfg.HOME_GUILD_ID && cfg.homeChannelId) {
-      discordBtn.textContent = AGENT_COPY.openDiscord
-      discordBtn.classList.remove('hidden')
-      discordBtn.onclick = async () => {
-        try {
-          await api('/api/discord/open', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ guildId: cfg.HOME_GUILD_ID, channelId: cfg.homeChannelId }),
-          })
-        } catch (err) {
-          console.error('discord open failed:', err)
-          showToast(GEN(err.message))
-        }
-      }
-    }
-
-    stopAgentPoll()
-    pollAgentStatusOnce()
   }
 
   async function init() {
@@ -659,7 +246,6 @@
       }
     }
 
-    renderAgentControl()
     renderJournal()
     renderPointers()
     await loadSessionGroup()
@@ -838,7 +424,7 @@
     }
 
     clearBtn.onclick = async () => {
-      const ok = await confirmDialog(P.clearConfirm, P.clearOk, AGENT_COPY.cancel)
+      const ok = await confirmDialog(P.clearConfirm, P.clearOk, NAV.cancel)
       if (!ok) return
       clearBtn.disabled = true
       try {
