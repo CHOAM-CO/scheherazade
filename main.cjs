@@ -242,11 +242,16 @@ function createMainWindow(url) {
 //     side) + http-server.cjs's GET /api/agent/status (combines that with
 //     channel.mjs's DATA_HOME/.agent-live Discord-heartbeat marker).
 function resolveClaudeBin() {
+  const isWin = process.platform === 'win32'
   if (app.isPackaged) {
     // electron-builder extraResources target -- see package.json's
-    // build.extraResources (`claude-cli/claude`) and the RESOLVED comment
-    // above for how this gets populated at build time.
-    const bundled = path.join(process.resourcesPath, 'claude-cli', 'claude')
+    // per-platform build.{mac,win}.extraResources and the RESOLVED comment
+    // above for how this gets populated at build time. The name is
+    // platform-conditional (win-port Phase 2): the old global `to:
+    // claude-cli/claude` stripped the .exe extension, which is harmless on
+    // mac (the postinstall put a Mach-O behind the .exe placeholder name)
+    // and FATAL on Windows (an extensionless PE binary is not executable).
+    const bundled = path.join(process.resourcesPath, 'claude-cli', isWin ? 'claude.exe' : 'claude')
     if (fs.existsSync(bundled)) {
       try {
         fs.accessSync(bundled, fs.constants.X_OK)
@@ -256,9 +261,15 @@ function resolveClaudeBin() {
       }
     }
   }
+  // PATH fallback. On win, ONLY claude.exe: detection must mirror what the
+  // supervisor's pty.spawn can actually exec -- a claude.cmd npm shim would
+  // "detect" here and then fail at ConPTY spawn time (CreateProcess does not
+  // interpret .cmd), a false-working state worse than a clean not-found.
+  // UNVERIFIED on magi-win (flag class as supervisor.mjs's win lanes).
+  const exeName = isWin ? 'claude.exe' : 'claude'
   const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean)
   for (const dir of dirs) {
-    const candidate = path.join(dir, 'claude')
+    const candidate = path.join(dir, exeName)
     try {
       fs.accessSync(candidate, fs.constants.X_OK)
       return { bin: candidate, source: 'system-path' }

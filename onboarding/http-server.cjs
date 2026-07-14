@@ -1562,11 +1562,22 @@ const loginStarting = { chatgpt: false, ollama: false }
 // A dev box with the CLI in some custom prefix can symlink it into
 // DATA_HOME/bin; consumer installs get it there via bootstrap.
 function resolveBin(name) {
-  const fixed = [
-    path.join(DATA_HOME, 'bin', name),
-    `/opt/homebrew/bin/${name}`,
-    `/usr/local/bin/${name}`,
-  ]
+  // Same FIXED-locations-only posture on both platforms (no PATH walk --
+  // the Codex-review reasoning above is platform-independent). Win list
+  // (win-port Phase 2, UNVERIFIED on magi-win): DATA_HOME/bin is the
+  // app-managed bootstrap dir on both platforms; the Ollama entry is its
+  // installer's default user-scope location (harmlessly absent for other
+  // names, same shape as probing /opt/homebrew/bin/<name> on mac).
+  const fixed = process.platform === 'win32'
+    ? [
+        path.join(DATA_HOME, 'bin', `${name}.exe`),
+        path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Programs', 'Ollama', `${name}.exe`),
+      ]
+    : [
+        path.join(DATA_HOME, 'bin', name),
+        `/opt/homebrew/bin/${name}`,
+        `/usr/local/bin/${name}`,
+      ]
   for (const candidate of fixed) {
     try {
       fs.accessSync(candidate, fs.constants.X_OK)

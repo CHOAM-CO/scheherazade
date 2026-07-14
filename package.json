@@ -63,13 +63,13 @@
       "autonomy/**",
       "calendar/**"
     ],
-    "extraResources": [
-      {
-        "from": "node_modules/@anthropic-ai/claude-code/bin/claude.exe",
-        "to": "claude-cli/claude"
-      }
-    ],
     "mac": {
+      "extraResources": [
+        {
+          "from": "node_modules/@anthropic-ai/claude-code/bin/claude.exe",
+          "to": "claude-cli/claude"
+        }
+      ],
       "target": [
         {
           "target": "dmg",
@@ -92,6 +92,14 @@
     },
     "dmg": {
       "sign": false
+    },
+    "win": {
+      "extraResources": [
+        {
+          "from": "node_modules/@anthropic-ai/claude-code/bin/claude.exe",
+          "to": "claude-cli/claude.exe"
+        }
+      ]
     },
     "asar": true,
     "npmRebuild": false

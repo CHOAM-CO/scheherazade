@@ -158,6 +158,26 @@ ok('repo node_modules unixTerminal.js is patched (postinstall ran)', fs.readFile
   }
 }
 
+console.log('\n-- bundled claude CLI: per-platform extraResources (win-port Phase 2)')
+{
+  // The old GLOBAL extraResources entry mapped bin/claude.exe -> claude-cli/
+  // claude for every platform. That extension strip is deliberate on mac
+  // (the claude-code postinstall hardlinks a Mach-O over the .exe
+  // placeholder) and FATAL on Windows (an extensionless PE is not
+  // executable). The mapping is now per-platform and resolveClaudeBin()
+  // picks the matching name -- these three checks keep that trio welded.
+  ok('no GLOBAL extraResources entry (the extension-strip-everywhere shape)', !pkg.build.extraResources,
+    'a global entry silently re-breaks the win artifact; keep the mapping under build.mac / build.win')
+  const macER = (pkg.build.mac && pkg.build.mac.extraResources) || []
+  ok('mac lane bundles the CLI as claude-cli/claude (extensionless Mach-O)',
+    macER.some((e) => e.from === 'node_modules/@anthropic-ai/claude-code/bin/claude.exe' && e.to === 'claude-cli/claude'))
+  const winER = (pkg.build.win && pkg.build.win.extraResources) || []
+  ok('win lane bundles the CLI as claude-cli/claude.exe (extension preserved)',
+    winER.some((e) => e.from === 'node_modules/@anthropic-ai/claude-code/bin/claude.exe' && e.to === 'claude-cli/claude.exe'))
+  const mainSrc = fs.readFileSync(path.join(ROOT, 'main.cjs'), 'utf8')
+  ok("resolveClaudeBin picks the platform-matching bundled name", mainSrc.includes("isWin ? 'claude.exe' : 'claude'"))
+}
+
 console.log('\n-- the permission strings the OS shows the user')
 const info = (pkg.build.mac && pkg.build.mac.extendInfo) || {}
 ok('calendar full-access usage string is declared', typeof info.NSCalendarsFullAccessUsageDescription === 'string' && info.NSCalendarsFullAccessUsageDescription.length > 10,
