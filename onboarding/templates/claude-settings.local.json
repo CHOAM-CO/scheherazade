@@ -24,7 +24,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash {AGENT_DIR}/hooks/session-start.sh"
+            "command": "node {AGENT_DIR}/hooks/session-start.mjs"
           },
           {
             "type": "command",
@@ -61,11 +61,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash {AGENT_DIR}/hooks/felt-check.sh"
+            "command": "node {AGENT_DIR}/hooks/felt-check.mjs"
           },
           {
             "type": "command",
-            "command": "bash {AGENT_DIR}/hooks/checkpoint-nudge.sh"
+            "command": "node {AGENT_DIR}/hooks/checkpoint-nudge.mjs"
           },
           {
             "type": "command",

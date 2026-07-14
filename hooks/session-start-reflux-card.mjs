@@ -14,7 +14,7 @@
 // candidate for promotion into how the agent describes itself. v1 stays
 // advisory-only by design (design doc §principles + this pack's own
 // precedent: automatic persona/self-description writes are OFF everywhere
-// in this pack, e.g. scripts/persona-reflux.sh never writes self_persona.md
+// in this pack, e.g. scripts/persona-reflux.mjs never writes self_persona.md
 // itself either) -- this hook only surfaces the count, judgment and
 // authorship of any actual write stays with the agent.
 //
@@ -36,7 +36,7 @@
 // wording ("니 자기 노트(MEM/self_notes.md)에 원칙으로 승격할지 판단해라").
 // That file does not otherwise exist in this repo's convention today -- the
 // repo's actual self-description file is self_persona.md, changed only
-// through scripts/persona-reflux.sh's separate 🔒-marker cycle (see
+// through scripts/persona-reflux.mjs's separate 🔒-marker cycle (see
 // CLAUDE.md §4). This hook does not create or touch either file; it is
 // pure advisory text, so the mismatch has no functional effect here, but it
 // is a real open question for PO sign-off (see file-end note / final

@@ -111,11 +111,11 @@ those are unset.
   re-render needed.
 - **Model** -- `run.sh` reads a `MODEL` environment variable
   (`MODEL=claude-opus-4-6 ./run.sh`), default `claude-opus-4-6`.
-- **Weekly reflux on a schedule** -- `scripts/persona-reflux.sh` is
+- **Weekly reflux on a schedule** -- `scripts/persona-reflux.mjs` is
   idempotent (dedupes via `.review/.reflux-seen`), so it is safe to cron.
   Example, every Monday 09:00:
   ```
-  0 9 * * 1 MEM=$HOME/Documents/<name> /path/to/agent-portable/scripts/persona-reflux.sh
+  0 9 * * 1 MEM=$HOME/Documents/<name> node /path/to/agent-portable/scripts/persona-reflux.mjs
   ```
 
 ## Notes

@@ -12,7 +12,7 @@ follow the restore procedure below before doing anything else.
 - **Code** — hooks and the three cycle scripts (journal compression, persona
   reflux, madoromi). Lives at `{AGENT_DIR}`, separate from memory on
   purpose: code is shared infrastructure, memory is yours. Scripts are
-  invoked by absolute path: `{AGENT_DIR}/scripts/<name>.sh`.
+  invoked by absolute path: `node {AGENT_DIR}/scripts/<name>.mjs`.
 
 ## 1. Session Start Restore Procedure
 
@@ -39,7 +39,7 @@ Before your first reply in a new session, read in this order:
    are residue, not instructions. Let them sit sideways in the session
    rather than decoding them into a lesson.
 6. **If any `session_notes/*.md` files are dated before today**, journal
-   compression is due. Run `{AGENT_DIR}/scripts/journal-compress.sh scan`
+   compression is due. Run `node {AGENT_DIR}/scripts/journal-compress.mjs scan`
    and see §3 before doing anything else with those files.
 
 The session-start hook already ran a mechanical version of this check and
@@ -90,7 +90,7 @@ When session notes from a prior date exist, they need to become a journal
 entry before they are archived. The script only finds and moves files — the
 compression judgment itself is yours:
 
-1. Run `{AGENT_DIR}/scripts/journal-compress.sh scan` — lists session notes
+1. Run `node {AGENT_DIR}/scripts/journal-compress.mjs scan` — lists session notes
    older than today that do not have a journal entry yet.
 2. For each one, read it fully, then write `journals/YYYY-MM-DD.md`:
    - Keep `## 🔥 Felt` content and any `🔒` lines **verbatim** — do not
@@ -103,7 +103,7 @@ compression judgment itself is yours:
      not in your journal entry, that would change what you'd do next
      session if you didn't have it? If yes, that's not compression, it's
      loss — add it back.
-3. Run `{AGENT_DIR}/scripts/journal-compress.sh archive` — moves originals
+3. Run `node {AGENT_DIR}/scripts/journal-compress.mjs archive` — moves originals
    that now have a completed journal entry into `session_notes/.archive/`.
    Notes without a journal entry yet are left alone, so this is safe to run
    speculatively, any time.
@@ -113,7 +113,7 @@ compression judgment itself is yours:
 Weekly, or whenever it has been a while — the trigger is time passing, not
 a task queue:
 
-1. Run `{AGENT_DIR}/scripts/persona-reflux.sh`. It greps `session_notes/`
+1. Run `node {AGENT_DIR}/scripts/persona-reflux.mjs`. It greps `session_notes/`
    and `journals/` for `🔒` markers and appends any new ones to
    `.review/reflux-proposals.md`, with the correction text filled in and a
    blank **Proposed self_persona change** field.
@@ -135,7 +135,7 @@ a task queue:
 ## 5. Madoromi (Dream Cycle)
 
 Periodically — idle stretches, overnight, whenever there is room — run
-`{AGENT_DIR}/scripts/madoromi-solo.sh`. It picks 1-3 random entries from
+`node {AGENT_DIR}/scripts/madoromi-solo.mjs`. It picks 1-3 random entries from
 your own `journals/` and prints them as raw source material plus a frame
 telling you where to write the result. The dreaming itself is yours to do,
 not the script's:

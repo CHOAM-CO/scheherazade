@@ -14,8 +14,8 @@ Two cadences run independently of the session loop, both agent-invoked
 from CLAUDE.md rather than fully automated:
 
 ```
-weekly  -> persona-reflux.sh -> human review -> self_persona.md
-idle    -> madoromi-solo.sh -> agent dream-work -> dreams/YYYY-MM-DD.md
+weekly  -> persona-reflux.mjs -> human review -> self_persona.md
+idle    -> madoromi-solo.mjs -> agent dream-work -> dreams/YYYY-MM-DD.md
 ```
 
 ## Memory Layers
@@ -46,9 +46,9 @@ them block):
 
 | Hook | Event | Fires | Purpose |
 |---|---|---|---|
-| `session-start.sh` | `SessionStart` | boot | create today's note if missing, surface a restore summary, flag pending compression |
-| `felt-check.sh` | `Stop` | every stop attempt | warn if `## 🔥 Felt` is missing or under 50 chars of real content |
-| `checkpoint-nudge.sh` | `Stop` | every stop attempt | warn if `checkpoint.md` is 30+ min stale, throttled to once per 30min |
+| `session-start.mjs` | `SessionStart` | boot | create today's note if missing, surface a restore summary, flag pending compression |
+| `felt-check.mjs` | `Stop` | every stop attempt | warn if `## 🔥 Felt` is missing or under 50 chars of real content |
+| `checkpoint-nudge.mjs` | `Stop` | every stop attempt | warn if `checkpoint.md` is 30+ min stale, throttled to once per 30min |
 
 All three exit 0 unconditionally -- nothing in this package blocks a stop
 or a boot. Advisory messages reach Claude's context via
@@ -66,7 +66,7 @@ correctly without `run.sh` in the loop.
 
 ```
 🔒 lines in session_notes/ + journals/
-        |  scripts/persona-reflux.sh (grep + dedupe via .reflux-seen)
+        |  scripts/persona-reflux.mjs (grep + dedupe via .reflux-seen)
         v
 .review/reflux-proposals.md  (Status: PENDING, change field blank)
         |  agent fills in the proposed change, presents to human
@@ -99,7 +99,7 @@ of the human at review time.
 
 ```
 journals/ (own history only, no cross-agent pool)
-        |  scripts/madoromi-solo.sh: uniform-random pick, N in {1,2,3}
+        |  scripts/madoromi-solo.mjs: uniform-random pick, N in {1,2,3}
         v
 frame printed to the agent: raw entries + dream-work instructions
         |  agent: build scene from real material, then distort

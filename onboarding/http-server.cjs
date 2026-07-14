@@ -449,6 +449,10 @@ function seedSettingsLocal() {
 //   - hooks.Stop += stop-reply-guard.mjs (silent-text regression detector,
 //     added after the agent composed replies without calling the reply tool
 //     and looked dead from Discord -- "돌연사" report, 2026-07-13 19:10)
+//   - hooks.PreToolUse += pre-reply-negation-check.mjs (v0.0.4)
+//   - bash hook commands -> node .mjs ports (win-port Phase 3; the .sh
+//     files were deleted from the bundle, see the rewrite block below for
+//     why this one is a rewrite rather than an addition)
 function ensureSettingsLocalAdditions() {
   if (!fs.existsSync(SETTINGS_LOCAL_PATH)) return // fresh install: seeder covers it
   let settings
@@ -506,10 +510,32 @@ function ensureSettingsLocalAdditions() {
     })
   }
 
+  // win-port Phase 3: the 3 bash hooks were ported to .mjs and the .sh
+  // files DELETED from the bundle -- an existing install's settings still
+  // says `bash .../hooks/session-start.sh`, which now fails on every fire
+  // (session-start dying = the boot restore summary silently gone). This is
+  // the one place the additive-only contract allows a REWRITE: only
+  // commands matching the exact seeded shape `bash <path>/hooks/<one of
+  // the 3>.sh` are touched, and they point at files that no longer exist,
+  // so there is nothing of the user's to preserve. Hand-edited commands
+  // that don't match the shape are left alone.
+  const BASH_HOOK_PORT = /^bash .*[\\/]hooks[\\/](session-start|felt-check|checkpoint-nudge)\.sh$/
+  for (const groups of Object.values(settings.hooks)) {
+    if (!Array.isArray(groups)) continue
+    for (const group of groups) {
+      if (!group || !Array.isArray(group.hooks)) continue
+      for (const h of group.hooks) {
+        if (typeof h.command !== 'string') continue
+        const m = h.command.match(BASH_HOOK_PORT)
+        if (m) h.command = `node ${path.join(toUnpackedPath(REPO_ROOT), 'hooks', `${m[1]}.mjs`)}`
+      }
+    }
+  }
+
   const afterText = JSON.stringify(settings, null, 2)
   if (afterText !== beforeText) {
     fs.writeFileSync(SETTINGS_LOCAL_PATH, afterText + '\n')
-    log('settings.local.json additive migration applied (send_file permission / stop-reply-guard hook)')
+    log('settings.local.json additive migration applied (send_file permission / stop-reply-guard hook / bash-hook .mjs port)')
   }
 }
 
@@ -1307,7 +1333,7 @@ function renderAgentSubstrate({ displayName, tone, primaryTask }) {
         '',
         '> Identity, not instructions. CLAUDE.md governs behavior; this file',
         '> governs who is behaving. It changes only through the persona reflux',
-        '> cycle (see CLAUDE.md §4 and scripts/persona-reflux.sh) -- never edited',
+        '> cycle (see CLAUDE.md §4 and scripts/persona-reflux.mjs) -- never edited',
         '> on impulse.',
         '',
         '## Identity',

@@ -15,7 +15,7 @@
 // whether a specific pattern is worth keeping — that stays the agent's call
 // (design doc §principles: "유저 강제 없음").
 //
-// Consumption pairing: this is the WRITE side only. session-start.sh
+// Consumption pairing: this is the WRITE side only. session-start.mjs
 // (extended separately) is the READ side — it lists skills/ at boot so a
 // file written here is not a dead drawer.
 //
