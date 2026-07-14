@@ -356,12 +356,27 @@ async function startBootstrap(dep) {
   }
 }
 
+// win-port Phase 3 (Mino LOCKED call 2026-07-13 18:35: Windows v1 =
+// detection-only deps). Managed download/install stays mac-only -- this
+// whole module is hdiutil/xattr/darwin-arch specific, and the Windows
+// analog (MSI/EXE + Authenticode pinning) was priced out of v1. On win the
+// app only DETECTS existing installs (resolveBin) and points at the
+// official install pages below; the wizard renders link + re-detect
+// instead of the download button.
+const MANAGED_INSTALL_SUPPORTED = process.platform !== 'win32'
+const MANUAL_INSTALL_PAGES = {
+  codex: 'https://github.com/openai/codex/releases/latest',
+  ollama: 'https://ollama.com/download',
+}
+
 module.exports = {
   BOOTSTRAP_DEPS,
   startBootstrap,
   getBootstrapStatus,
   verifyManagedBin,
   MANAGED_BIN_DIR,
+  MANAGED_INSTALL_SUPPORTED,
+  MANUAL_INSTALL_PAGES,
   // Exported for onboarding/ollama-daemon.cjs (2026-07-07): the reuse-path
   // identity check verifies an already-listening daemon's executable
   // against the same pinned Team ID this installer pins at install time --

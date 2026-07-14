@@ -308,9 +308,58 @@
         .then((bs) => {
           const dep = bs[DEP]
           if (dep && (dep.present || dep.state === 'installed')) buildLoginUI()
+          else if (dep && dep.managed === false) buildManualInstallUI() // win: detection-only, no managed download
           else buildInstallUI()
         })
         .catch(() => buildLoginUI()) // status probe failed: fall through to login UI; its cli_missing path still guards
+
+      // Windows v1 (detection-only deps, Mino locked 07-13): the server has
+      // no managed installer on this platform -- offer the official install
+      // page (opened server-side, fixed URL) and a re-detect button that
+      // re-probes resolveBin until the CLI shows up.
+      function buildManualInstallUI() {
+        areaEl.innerHTML = ''
+        const lead = document.createElement('p')
+        lead.textContent = L.install.manualNeeded(DEP_DISPLAY)
+        areaEl.appendChild(lead)
+        const openBtn = document.createElement('button')
+        openBtn.type = 'button'
+        openBtn.textContent = L.install.manualOpenButton
+        areaEl.appendChild(openBtn)
+        const redetectBtn = document.createElement('button')
+        redetectBtn.type = 'button'
+        redetectBtn.textContent = L.install.redetectButton
+        areaEl.appendChild(redetectBtn)
+        openBtn.onclick = async () => {
+          try {
+            await api(`/api/onboarding/bootstrap/${DEP}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+            statusEl.className = 'status-line pending'
+            statusEl.textContent = L.install.manualOpened
+          } catch (err) {
+            statusEl.className = 'status-line failure'
+            statusEl.textContent = C.genericError(err.message)
+          }
+        }
+        redetectBtn.onclick = async () => {
+          redetectBtn.disabled = true
+          try {
+            const bs = await api('/api/onboarding/bootstrap/status')
+            if (bs[DEP] && bs[DEP].present) {
+              statusEl.className = 'status-line success'
+              statusEl.textContent = L.install.done
+              buildLoginUI()
+            } else {
+              statusEl.className = 'status-line failure'
+              statusEl.textContent = L.install.stillMissing(DEP_DISPLAY)
+            }
+          } catch (err) {
+            statusEl.className = 'status-line failure'
+            statusEl.textContent = C.genericError(err.message)
+          } finally {
+            redetectBtn.disabled = false
+          }
+        }
+      }
 
       function buildInstallUI() {
         areaEl.innerHTML = ''

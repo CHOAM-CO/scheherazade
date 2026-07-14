@@ -210,6 +210,13 @@ window.COPY = {
         done: '설치됐습니다. 이제 로그인할 수 있습니다.',
         failed: '설치에 실패했습니다. 네트워크를 확인하고 다시 시도해주세요.',
         retryButton: '다시 시도',
+        // Windows v1 = detection-only (managed install is mac-only): the
+        // wizard shows link + re-detect instead of the download button.
+        manualNeeded: (name) => `${name} 구성 요소가 이 PC에 아직 없습니다. Windows에서는 공식 설치 페이지에서 직접 설치한 뒤 다시 확인해주세요.`,
+        manualOpenButton: '설치 페이지 열기',
+        manualOpened: '브라우저에서 설치 페이지를 열었습니다. 설치가 끝나면 "다시 확인"을 눌러주세요.',
+        redetectButton: '다시 확인',
+        stillMissing: (name) => `${name}을(를) 아직 찾지 못했습니다. 설치를 마친 뒤 다시 확인해주세요.`,
       },
     },
     // Folded-away fallback path. Field-level hint text is unchanged from

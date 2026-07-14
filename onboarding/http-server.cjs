@@ -69,7 +69,7 @@ const { LOGIN_PROVIDERS, setLoginStatus, getLoginStatus } = require('./login-sta
 // Fresh-Mac dependency bootstrap (2026-07-07): app-managed download/install
 // of the codex/ollama CLIs into DATA_HOME/bin + sha256 manifest. See
 // bootstrap.cjs's header for the full design (brew-free, 0 admin prompts).
-const { BOOTSTRAP_DEPS, startBootstrap, getBootstrapStatus, verifyManagedBin } = require('./bootstrap.cjs')
+const { BOOTSTRAP_DEPS, startBootstrap, getBootstrapStatus, verifyManagedBin, MANAGED_INSTALL_SUPPORTED, MANUAL_INSTALL_PAGES } = require('./bootstrap.cjs')
 
 const REPO_ROOT = path.join(__dirname, '..')
 const PUBLIC_DIR = path.join(__dirname, 'public')
@@ -2293,7 +2293,15 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
   if (pathname === '/api/onboarding/bootstrap/status' && req.method === 'GET') {
     const out = {}
     for (const dep of BOOTSTRAP_DEPS) {
-      out[dep] = { ...getBootstrapStatus(dep), present: Boolean(resolveBin(dep)) }
+      // `managed: false` (win) tells the wizard to render the manual
+      // link + re-detect UI instead of the download button -- detection
+      // (`present`, via the win-aware resolveBin) works on both platforms.
+      out[dep] = {
+        ...getBootstrapStatus(dep),
+        present: Boolean(resolveBin(dep)),
+        managed: MANAGED_INSTALL_SUPPORTED,
+        installUrl: MANUAL_INSTALL_PAGES[dep] || null,
+      }
     }
     sendJson(res, 200, out)
     return
@@ -2303,6 +2311,20 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     const dep = bootstrapMatch[1]
     if (!BOOTSTRAP_DEPS.includes(dep)) {
       sendJson(res, 400, { error: `unknown bootstrap dependency: ${dep}` })
+      return
+    }
+    if (!MANAGED_INSTALL_SUPPORTED) {
+      // Windows v1 = detection-only (Mino LOCKED 07-13 18:35). Open the
+      // official install page -- a FIXED constant, same shape as the
+      // fda/open route's pinned pane URL, no request data near it -- and
+      // tell the wizard this is a manual flow.
+      const installUrl = MANUAL_INSTALL_PAGES[dep]
+      if (installUrl) {
+        try { getElectron().shell.openExternal(installUrl) } catch (err) {
+          console.error(`[scheherazade/onboarding] openExternal(${dep} install page) failed:`, err.message)
+        }
+      }
+      sendJson(res, 200, { dep, state: 'manual', manual: true, installUrl: installUrl || null })
       return
     }
     // Fire-and-poll like the login flow: the response is the CURRENT

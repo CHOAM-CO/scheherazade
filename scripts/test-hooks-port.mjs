@@ -76,6 +76,27 @@ console.log('\n-- wiring: the .sh originals are gone and nothing still points at
   }
 }
 
+// ── detection-only deps gate (win-port Phase 3, Mino LOCKED 07-13 18:35) ───
+console.log('\n-- detection-only deps: the win gate exists and mac keeps managed installs')
+{
+  const { createRequire } = await import('node:module')
+  const req = createRequire(import.meta.url)
+  const b = req(path.join(ROOT, 'onboarding', 'bootstrap.cjs'))
+  ok('mac still reports managed installs supported', b.MANAGED_INSTALL_SUPPORTED === (process.platform !== 'win32'))
+  ok('manual install pages are FIXED constants for both deps',
+    typeof b.MANUAL_INSTALL_PAGES.codex === 'string' && b.MANUAL_INSTALL_PAGES.codex.startsWith('https://github.com/openai/codex') &&
+    typeof b.MANUAL_INSTALL_PAGES.ollama === 'string' && b.MANUAL_INSTALL_PAGES.ollama.startsWith('https://ollama.com'))
+  const httpSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'http-server.cjs'), 'utf8')
+  const gateIdx = httpSrc.indexOf('if (!MANAGED_INSTALL_SUPPORTED)')
+  const startIdx = httpSrc.indexOf('startBootstrap(dep).catch')
+  ok('POST bootstrap route gates BEFORE ever reaching startBootstrap', gateIdx !== -1 && startIdx !== -1 && gateIdx < startIdx)
+  ok('status route tells the wizard which mode to render (managed flag)', httpSrc.includes('managed: MANAGED_INSTALL_SUPPORTED'))
+  const wizardSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'public', 'js', 'wizard.js'), 'utf8')
+  ok('wizard renders manual UI when managed === false', wizardSrc.includes('dep.managed === false') && wizardSrc.includes('function buildManualInstallUI'))
+  const copySrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'public', 'js', 'copy.js'), 'utf8')
+  ok('manual-flow copy strings exist', ['manualNeeded', 'manualOpenButton', 'manualOpened', 'redetectButton', 'stillMissing'].every((k) => copySrc.includes(k)))
+}
+
 // ── session-start ───────────────────────────────────────────────────────────
 console.log('\n-- session-start.mjs')
 {
