@@ -1378,6 +1378,53 @@ function renderAgentSubstrate({ displayName, tone, primaryTask }) {
   log('rendered agent substrate into DATA_HOME (CLAUDE.md, ONTOLOGY_GUIDE.md, system_prompt.md; persona/checkpoint seeded if absent)')
 }
 
+// Net-change collapse for the session feed. Live catch (Mino, 2026-07-14,
+// 춘식3 second-device install): ONE correction row rendered TWICE -- once
+// "추가됨", once "수정됨", identical preview text, because both previews
+// resolve to the row's CURRENT content. The write side was innocent: every
+// memory_write logs exactly one audit event, and the agent genuinely did
+// insert the row and then update it. The defect was the FEED rendering raw
+// audit bookkeeping on a surface whose own title promises "이번 세션에서
+// 기억한 것" -- what the session NET-remembered. One row = one line:
+//   - inserted today (whatever followed)             -> one "추가됨"
+//   - updated today on a pre-existing row            -> one "수정됨"
+//     (update outranks confirm: a recency bump must not mask a content
+//     change; the shown timestamp is still the newest event's)
+//   - only confirmed today                           -> "확인됨"
+//   - inserted AND deleted today                     -> nothing (net no-op)
+//   - deleted today (pre-existing row)               -> "삭제됨"
+// memory_events itself stays a complete append-only audit log -- this
+// collapses the VIEW only. Input must be newest-first; output preserves
+// each row's first-appearance (i.e. newest-activity) order.
+function collapseSessionEvents(todays) {
+  const groups = new Map()
+  const order = []
+  for (const ev of todays) {
+    // row_id-less events can't be attributed to a row, so they never merge.
+    const key = ev.row_id == null ? `solo:${ev.id}` : `${ev.table_name}:${ev.row_id}`
+    let g = groups.get(key)
+    if (!g) {
+      g = { newest: ev, hasInsert: false, hasUpdate: false }
+      groups.set(key, g)
+      order.push(g)
+    }
+    if (ev.event === 'insert') g.hasInsert = true
+    if (ev.event === 'update') g.hasUpdate = true
+  }
+  const out = []
+  for (const g of order) {
+    const ev = g.newest
+    if (ev.event === 'delete') {
+      if (g.hasInsert) continue
+      out.push(ev)
+      continue
+    }
+    const netEvent = g.hasInsert ? 'insert' : g.hasUpdate ? 'update' : ev.event
+    out.push(netEvent === ev.event ? ev : { ...ev, event: netEvent })
+  }
+  return out
+}
+
 // "이번 세션에서 기억한 것" -- grouped by calendar date of the most recent
 // memory_events row (not the free-text `session` column, which callers may
 // leave null). Same date-derivation-over-session-string principle this
@@ -1388,7 +1435,7 @@ async function getSessionEvents() {
   if (rows.length === 0) return { date: null, events: [] }
   const sorted = [...rows].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
   const latestDate = sorted[0].at.slice(0, 10)
-  const todays = sorted.filter((r) => r.at.slice(0, 10) === latestDate)
+  const todays = collapseSessionEvents(sorted.filter((r) => r.at.slice(0, 10) === latestDate))
 
   const resolved = []
   for (const ev of todays) {
@@ -2684,6 +2731,10 @@ module.exports = {
   isMarkerFresh,
   readLivenessMarker,
   computeAgentStatus,
+  // Exported for scripts/test-session-feed.mjs -- pure function, no db, so
+  // the net-change collapse (Mino live catch 2026-07-14, duplicate feed
+  // lines) is attackable without spinning up Electron or a memory db.
+  collapseSessionEvents,
   isPidAlive,
   // Exported for testability/tuning visibility (Step 5 onboarding-wiring
   // fix, 2026-07-03, PIECE 2 + PIECE 3) -- same rationale as the Fix D
