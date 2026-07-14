@@ -11,7 +11,8 @@
   "scripts": {
     "start": "node channel.mjs",
     "electron:dev": "electron .",
-    "dist": "electron-builder --mac dmg"
+    "dist": "electron-builder --mac dmg",
+    "postinstall": "node scripts/fix-pty-helper.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-code": "^2.1.199",
@@ -19,6 +20,7 @@
     "codex-as-api": "0.5.2",
     "discord.js": "^14.26.4",
     "dotenv": "^17.4.2",
+    "node-pty": "^1.1.0",
     "zod": "^4.4.3"
   },
   "build": {
@@ -89,7 +91,8 @@
     "dmg": {
       "sign": false
     },
-    "asar": true
+    "asar": true,
+    "npmRebuild": false
   },
   "devDependencies": {
     "electron": "^43.0.0",

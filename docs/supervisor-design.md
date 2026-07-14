@@ -33,26 +33,37 @@
   `spawn(process.execPath, [SUPERVISOR_PATH, '__loop'], {env: {...,
   ELECTRON_RUN_AS_NODE: '1'}})`. No system-node dependency on either OS;
   the runtime is Electron's own node.
-- Consequence: node-pty's native binding must match ELECTRON's ABI in the
-  packaged app, and the SYSTEM node's ABI in the dev/CLI lane. Two builds,
-  both standard: `npm install` builds for dev node; electron-builder
-  rebuilds native deps for Electron at package time.
-  - UNVERIFIED (highest-risk assumption in this design): electron-builder's
-    auto-rebuild interacting with this repo's `asarUnpack: node_modules/**`
-    and the plain-node children (channel.mjs is spawned by the claude CLI,
-    NOT by Electron — if channel.mjs ever required node-pty it would need
-    the NODE-abi binding from inside an Electron-rebuilt tree; it does not
-    and must not). Check: `npm run dist` after adding node-pty, open the
-    built app, supervisor spawns a pty child; then `node scripts/test-*.mjs`
-    still green from the repo (dev-node lane unaffected).
-  - Fallback if dual-ABI turns painful: `@homebridge/node-pty-prebuilt-multiarch`
-    (prebuilds for both ABIs). Decide only on observed failure, not
-    preemptively.
+- ~~UNVERIFIED dual-ABI assumption~~ → **VERIFIED BY EXECUTION, 2026-07-14
+  — and the design's reasoning was wrong in both directions.** node-pty
+  1.1.0 is N-API: ONE npm prebuilt binding passed the probe
+  (scripts/probe-pty.mjs) under all four lanes — dev node v24.7 (abi 137),
+  dev Electron 43 (abi 148), the packaged app binary against the repo tree,
+  and the packaged app binary against the built artifact's unpacked tree.
+  No dual build exists; electron-builder rebuild is disabled
+  (`npmRebuild: false`) because it only adds a second binary lineage that
+  SHADOWS the tested prebuild (node-pty loads build/Release before
+  prebuilds/).
+- What execution found that reasoning missed (both fatal, neither in this
+  doc's original risk list):
+  1. **Upstream tarball defect**: node-pty 1.1.0's published tarball ships
+     `prebuilds/darwin-*/spawn-helper` WITHOUT the exec bit → every
+     pty.spawn dies with `posix_spawnp failed`. Repaired by postinstall
+     (scripts/fix-pty-helper.mjs), gated in test-packaging.mjs.
+  2. **helperPath double-replace**: `lib/unixTerminal.js` rewrites
+     `app.asar` → `app.asar.unpacked` unconditionally; a module loaded
+     from an ALREADY-unpacked path (exactly our plain-node-children
+     architecture) resolves its helper to `app.asar.unpacked.unpacked` →
+     ENOENT → `posix_spawnp failed`. Patched idempotently by the same
+     postinstall, gated in test-packaging (repo AND artifact copies).
+  - Honest note: the failure was first mis-attributed to the rebuilt
+    binding — a plausible story the early split-tests appeared to support,
+    dead once repo-tree runs with the same rebuilt binding passed. Recorded
+    in the gate comment so the dead cause cannot be re-adopted.
 - First native module in the repo — this was a deliberate zero-native
   policy (`node:sqlite` chosen for exactly this). The scoping doc already
-  concedes the PTY requirement is structural. The cost gets an explicit
-  line in the release notes and test-packaging.mjs grows a check that the
-  unpacked binding actually exists in the artifact.
+  concedes the PTY requirement is structural. test-packaging now gates:
+  prebuild present as real file, helper executable, no build/Release
+  shadow, helperPath patch present in repo and artifact. 24/24 at close.
 
 ## The 7 inventory flags — verdicts
 

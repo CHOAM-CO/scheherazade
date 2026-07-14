@@ -113,6 +113,51 @@ for (const d of [...mustBeReal].sort()) {
     `add "${d}${isDir ? '/**' : ''}" to build.asarUnpack -- plain node cannot read inside app.asar`)
 }
 
+console.log('\n-- node-pty: the one native module (supervisor lane)')
+// node-pty 1.1.0's published tarball ships spawn-helper WITHOUT the exec bit
+// (verified against the registry tarball, 2026-07-14) -- every pty.spawn on
+// macOS dies with "posix_spawnp failed". Our postinstall
+// (scripts/fix-pty-helper.mjs) repairs the repo copy; THIS check is the hard
+// gate on what actually ships. Artifact checks skip LOUDLY when no build
+// output exists (fresh clone) -- a skip that looks like a pass would defeat
+// the point of this file.
+ok('postinstall wires the spawn-helper exec-bit repair', (pkg.scripts.postinstall || '').includes('fix-pty-helper'),
+  'npm-installed node-pty arrives broken on macOS without it')
+// node-pty is N-API: the npm prebuilt binding passed the pty probe under BOTH
+// runtimes (node abi 137, electron abi 148 -- receipts in
+// docs/supervisor-design.md), so electron-builder's rebuild buys nothing and
+// adds a second binary lineage (build/Release shadows prebuilds in node-pty's
+// loader order). Honest history: the artifact probe failure was FIRST blamed
+// on the rebuilt binding -- wrong. The real cause was node-pty's helperPath
+// double-replace (see fix-pty-helper.mjs defect 2), which breaks ANY binding
+// loaded from an app.asar.unpacked path. npmRebuild stays false for the
+// determinism reason, not the debunked one.
+ok('electron-builder native rebuild is OFF (npmRebuild:false)', pkg.build.npmRebuild === false,
+  'the N-API prebuild already works under both runtimes; a rebuild only adds a shadowing second lineage')
+const PATCHED_LINE = "if (!helperPath.includes('app.asar.unpacked')) helperPath = helperPath.replace('app.asar', 'app.asar.unpacked');"
+ok('postinstall carries the helperPath double-replace patch', fs.readFileSync(path.join(ROOT, 'scripts', 'fix-pty-helper.mjs'), 'utf8').includes(PATCHED_LINE),
+  'without it, pty.spawn from the unpacked tree resolves spawn-helper to app.asar.unpacked.unpacked -> ENOENT')
+ok('repo node_modules unixTerminal.js is patched (postinstall ran)', fs.readFileSync(path.join(ROOT, 'node_modules', 'node-pty', 'lib', 'unixTerminal.js'), 'utf8').includes(PATCHED_LINE),
+  'run node scripts/fix-pty-helper.mjs (or npm install) -- the unpatched line corrupts helperPath in the packed app')
+{
+  const unpackedPty = path.join(ROOT, 'release', 'mac-arm64', 'Scheherazade.app', 'Contents', 'Resources', 'app.asar.unpacked', 'node_modules', 'node-pty')
+  if (!fs.existsSync(unpackedPty)) {
+    console.log('  SKIP  built-artifact node-pty checks -- no release/mac-arm64 build output present (run npm run dist first); NOT a pass')
+  } else {
+    const helper = path.join(unpackedPty, 'prebuilds', 'darwin-arm64', 'spawn-helper')
+    const binding = path.join(unpackedPty, 'prebuilds', 'darwin-arm64', 'pty.node')
+    ok('artifact carries the darwin-arm64 pty.node prebuild as a real file', fs.existsSync(binding))
+    ok('artifact spawn-helper exists as a real file', fs.existsSync(helper))
+    ok('artifact spawn-helper is EXECUTABLE (the upstream tarball defect, caught at ship time)',
+      fs.existsSync(helper) && Boolean(fs.statSync(helper).mode & 0o111),
+      'a stripped exec bit means pty.spawn posix_spawnp-fails in the shipped app')
+    ok('artifact has NO build/Release shadowing the prebuild', !fs.existsSync(path.join(unpackedPty, 'build', 'Release')),
+      'node-pty loads build/Release FIRST; a second lineage there silently wins over the tested prebuild (rm -rf node_modules/node-pty/build before dist)')
+    ok('artifact unixTerminal.js carries the helperPath patch', fs.readFileSync(path.join(unpackedPty, 'lib', 'unixTerminal.js'), 'utf8').includes(PATCHED_LINE),
+      'the shipped app would corrupt helperPath to app.asar.unpacked.unpacked at first pty.spawn')
+  }
+}
+
 console.log('\n-- the permission strings the OS shows the user')
 const info = (pkg.build.mac && pkg.build.mac.extendInfo) || {}
 ok('calendar full-access usage string is declared', typeof info.NSCalendarsFullAccessUsageDescription === 'string' && info.NSCalendarsFullAccessUsageDescription.length > 10,
