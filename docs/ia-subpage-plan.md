@@ -57,6 +57,17 @@
 4. 셸 구현 = 클라이언트 nav.js. Melchior 판정 채택.
 5. Discord 연결상태 줄 = 커넥터에 추가. Idea 폴드 (커넥터 = 연결 헬스 모니터 리프레임이면 표시 자체가 기능).
 
+## 커넥터 재연결 설계 (Mino 11:31 스코프 추가: "이미 세팅한 상태에서 디코 → 슬랙 → 텔레그램 해보게")
+
+이번 빌드 = 디코 재연결 + 멀티클라이언트 자리 예약. 전송 레인 (슬랙/텔레그램 채널 구현)은 별도 순번.
+
+1. **디코 재연결 플로우 (2단계)**: 커넥터 페이지 Discord 줄의 재연결 버튼 →
+   - Step 1 `POST /api/discord/reconnect/validate`: 기존 validateDiscordToken의 3-체크 (토큰/intent/초대) 재사용하되 **자동 픽 없이 서버·채널 후보 목록 반환**. 온보딩의 "첫 서버 첫 채널" 추론은 갓 만든 서버 전제라 재연결에선 틀림 — 갈아타는 유저는 다른 서버/채널을 고르러 옴. 후보 1개뿐이면 UI가 자동 선택.
+   - Step 2 `POST /api/discord/reconnect/apply` {token, guildId, channelId}: storeDiscordTokenVerified + writeEnv(homeChannelId) + writeAgentConfig(HOME_GUILD_ID) 후 restartAgent. **온보딩 스탬프 (ONBOARDING_COMPLETE/COMPLETED_AT/STEP) 재기록 금지** — COMPLETED_AT은 역사 기록이라 재스탬프는 기록 위조. 기존 /api/discord/validate는 온보딩 전용으로 현행 유지 (동작 변경 없음, 코어 3-체크만 함수 추출 공유).
+   - 에이전트 실행 중이면 apply가 재시작을 잇고, UI는 기존 status 폴로 수렴 확인 (202 + 폴 패턴 재사용).
+2. **슬랙/텔레그램**: 커넥터에 비활성 슬롯 줄 ("준비 중"). 클라이언트 전환 스위치는 전송 레인 구현 시점에.
+3. **셸 채널 열기 추상화**: 디코 하드코딩 버튼 → 활성 클라이언트 라우팅 (오늘은 항상 discord). 레드팀 기각 #4 철회분 (Mino 지시로 가정이 사실이 됨).
+
 ## 마이그레이션 노트
 - PAGES 맵에 /connectors 추가. /settings 경로 유지 (기존 진입점 부담 없음).
 - copy.js: connectors 키 신설, memoryPane에서 agentControl/pointers 분리는 하지 않음 (문구 이동만, 사전 구조 재편은 별도).
