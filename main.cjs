@@ -455,6 +455,11 @@ let agentSupervisorPid = null
 // dual-supervisor mutual-kill class from the 07-06 run-agent incident is
 // structurally impossible here), no orphan on crash (server dies with the
 // process), and no binary resolution/spawn surface at all.
+// Last spawn's birth config (model/effort/provider/at) -- set at the spawn
+// moment in spawnRealAgentChild, served via agentControls.spawnInfo() for
+// GET /api/agent/spawn-info. null until the first spawn of this app run.
+let lastSpawnInfo = null
+
 let codexProxyServer = null
 // The MODEL the live in-process proxy was built for (null = proxy default).
 // Compared on every ensure so a model swap rebuilds the proxy instead of
@@ -1006,6 +1011,18 @@ async function spawnRealAgentChildLocked() {
 
   agentChild = child
   agentSupervisorPid = child.pid
+  // Spawn-time reality record for GET /api/agent/spawn-info ("셸은 현실",
+  // IA v0.0.9): what THIS child was born with. Config can drift the moment
+  // the user touches a dropdown; this snapshot cannot -- the shell and the
+  // settings apply-state line read it instead of guessing from config.
+  // Deliberately NOT cleared on stop: "last run's reality" plus the status
+  // endpoint's 'stopped' is the honest pair.
+  lastSpawnInfo = {
+    model: config.MODEL || null,
+    effort: config.EFFORT_LEVEL || null,
+    provider: config.PROVIDER || null,
+    at: new Date().toISOString(),
+  }
   // Timeout backstop (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 2):
   // this is the SPAWN ATTEMPT moment -- agent-status.cjs's setAgentStatus()
   // re-stamps `since` on every call, so calling it here (not once at
@@ -1371,7 +1388,7 @@ async function proxyHealth() {
 // channel as onOnboardingComplete: these run in THIS Electron main process and
 // mutate its agent-child state, so they can't live in http-server.cjs -- it
 // calls back into them.
-const agentControls = { stopAgent, startAgent, restartAgent, proxyHealth }
+const agentControls = { stopAgent, startAgent, restartAgent, proxyHealth, spawnInfo: () => lastSpawnInfo }
 
 // ── boot sequence ────────────────────────────────────────────────────────
 app.whenReady().then(async () => {

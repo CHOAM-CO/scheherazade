@@ -2171,6 +2171,16 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     return
   }
 
+  // Spawn-time reality (IA v0.0.9): what the CURRENT/LAST child was born
+  // with, recorded at the spawn moment in main.cjs -- the shell's model/
+  // effort display and settings' apply-state line read this instead of
+  // config, so a changed dropdown can never masquerade as a running state.
+  if (pathname === '/api/agent/spawn-info' && req.method === 'GET') {
+    const spawn = agentControls && typeof agentControls.spawnInfo === 'function' ? agentControls.spawnInfo() : null
+    sendJson(res, 200, { spawn })
+    return
+  }
+
   // ── control panel: agent lifecycle (2026-07-09) ─────────────────────────
   // #5 on/off + #4 restart/model-swap. Delegate to main.cjs's serialized
   // lifecycle fns (passed in as agentControls; the pkill-race + intentional-

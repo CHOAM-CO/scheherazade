@@ -131,6 +131,7 @@
         '<span class="status-line" id="nav-status-line"></span>' +
         '<span class="nav-status-detail" id="nav-status-model"></span>' +
         '<span class="nav-status-detail" id="nav-status-effort"></span>' +
+        '<span class="nav-status-detail" id="nav-status-autonomy"></span>' +
         '<div class="agent-control-actions">' +
           '<button class="secondary" id="nav-btn-startstop"></button>' +
           '<button class="secondary hidden" id="nav-btn-restart"></button>' +
@@ -167,6 +168,26 @@
   let busyStartState = null
   let busySawChange = false
   let busyDeadline = 0
+  // Spawn-time reality (IA v0.0.9, "셸은 현실"): the running child's birth
+  // model/effort from GET /api/agent/spawn-info -- NOT config. Refetched on
+  // every state transition (a restart births a new child), blanked when
+  // nothing runs: a stopped agent has no live model, and showing config
+  // there would be intent dressed as status.
+  let spawnInfo = null
+
+  async function refreshSpawnInfo() {
+    try {
+      spawnInfo = (await window.api('/api/agent/spawn-info')).spawn
+    } catch (err) {
+      console.error('spawn-info fetch failed:', err)
+    }
+  }
+
+  function renderRealityDetails(state) {
+    const running = state === 'live' || state === 'connecting'
+    $('nav-status-model').textContent = running && spawnInfo ? (spawnInfo.model || '') : ''
+    $('nav-status-effort').textContent = running && spawnInfo ? (spawnInfo.effort || '') : ''
+  }
 
   function renderAgentStatus(state) {
     const line = $('nav-status-line')
@@ -180,6 +201,7 @@
     toggle.textContent = running ? NAV.stop : NAV.start
     toggle.dataset.action = running ? 'stop' : 'start'
     $('nav-btn-restart').classList.toggle('hidden', !running)
+    renderRealityDetails(state)
   }
 
   function setControlsDisabled(disabled) {
@@ -198,6 +220,10 @@
   async function pollAgentStatusOnce() {
     try {
       const result = await window.api('/api/agent/status')
+      // A state transition can mean a NEW child (restart, model swap) --
+      // refetch its birth record before rendering, so the model/effort
+      // details never describe the previous child.
+      if (result.state !== lastPolledState) await refreshSpawnInfo()
       renderAgentStatus(result.state)
       lastPolledState = result.state
       if (controlsBusy) {
@@ -259,9 +285,12 @@
       const accepted = await fireControl('model', body)
       if (accepted) {
         banner.hidden = true
-        // Shell shows model as plain text (no select to repopulate here --
-        // that lives in settings.js now), so reflect the revert directly.
-        $('nav-status-model').textContent = s.previousModel
+        // No direct model-text write here (the old line set it to
+        // previousModel by hand): the revert restarts the child, the next
+        // status poll sees the state transition and refetches spawn-info,
+        // and the reality slot updates from the NEW child's birth record.
+        // Hand-writing intent into the reality slot is the exact class
+        // this file's own header principle forbids.
       }
     }
     banner.hidden = false
@@ -302,23 +331,37 @@
     $('nav-btn-startstop').onclick = async () => {
       const action = $('nav-btn-startstop').dataset.action
       if (action === 'stop') {
-        const ok = await window.confirmDialog(NAV.stopConfirm, NAV.stopOk, NAV.cancel)
+        // Honest autonomy note, composed at click time from the CURRENT
+        // config: stopping the agent stops tonight's cycle too (the tick
+        // runs inside the agent's own channel process). Never the reverse
+        // claim -- see the copy entry's own comment.
+        const autonomyOn = String(cfg.AUTONOMY || '').toLowerCase() === 'yes'
+        const text = autonomyOn ? NAV.stopConfirm + NAV.stopConfirmAutonomyNote : NAV.stopConfirm
+        const ok = await window.confirmDialog(text, NAV.stopOk, NAV.cancel)
         if (!ok) return
       }
       await fireControl(action)
     }
     $('nav-btn-restart').onclick = () => fireControl('restart')
 
-    // Read-only display only -- current model/effort as plain text (the
-    // SELECT config controls that write these live in settings.js). This is
-    // a one-time snapshot from /api/config, same data source
-    // renderAgentControl used to read; it does not live-refresh on the 2s
-    // poll (that poll only ever carried .state -- see pollAgentStatusOnce),
-    // so a model/effort switch made on /settings shows here on next
-    // navigation, not instantly on this same page load.
-    $('nav-status-model').textContent = cfg.MODEL || ''
-    $('nav-status-effort').textContent = cfg.EFFORT_LEVEL || ''
+    // Model/effort details are REALITY, not config: filled by
+    // renderRealityDetails() from spawn-info once the first status poll
+    // lands (blank while stopped -- a stopped agent has no live model).
+    // The config snapshot display this replaces showed the dropdown value
+    // as if it were a running state; that is the live-lie class the 07-14
+    // model-mismatch catch was about, and the merge principle ("셸은 현실,
+    // 설정은 의도") exists to kill it.
+    //
+    // Autonomy badge (red-team fold #3): the one setting that spends money
+    // while nobody watches gets a permanent spot in the always-visible bar.
+    const autonomyEl = $('nav-status-autonomy')
+    if (String(cfg.AUTONOMY || '').toLowerCase() === 'yes') {
+      autonomyEl.textContent = NAV.autonomyBadge(cfg.AUTONOMY_WINDOW_START || '02:00', cfg.AUTONOMY_WINDOW_END || '06:00')
+    } else {
+      autonomyEl.textContent = ''
+    }
 
+    await refreshSpawnInfo()
     pollAgentStatusOnce()
   }
 

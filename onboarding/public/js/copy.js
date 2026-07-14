@@ -494,12 +494,23 @@ window.COPY = {
     restart: 'Restart',
     openDiscord: 'Open Discord',
     stopConfirm: 'Stop the agent?',
+    // Autonomy runs INSIDE the agent's own channel process (autonomy/tick.cjs
+    // is driven from channel.mjs), so stopping the agent stops the night
+    // cycle with it -- this note states that fact. It must never claim the
+    // opposite ("autonomy will wake it back up" would be a lie in this
+    // architecture; verified against tick.cjs before wording this).
+    stopConfirmAutonomyNote: " Tonight's autonomous cycle stops with it.",
     stopOk: 'Stop',
     cancel: 'Cancel',
     switchOk: 'Switch',
     muteWarn: (n, m) => `${m} was asked to reply ${n}× and didn't. The agent may be unable to send messages.`,
     muteRevert: (m) => `Go back to ${m}`,
     muteRevertConfirm: (m) => `Switch back to ${m}? The agent will restart.`,
+    // Shell reality additions (IA v0.0.9): autonomy visibility badge (the
+    // one setting that spends money while nobody watches deserves a spot in
+    // the always-visible bar) -- same eng-placeholder register as the rest
+    // of this section, pending the copy-track localization pass.
+    autonomyBadge: (start, end) => `autonomy ${start}-${end}`,
   },
 
   // AUTHORED (not in copy file) -- settings page, minimal v1.
@@ -509,6 +520,17 @@ window.COPY = {
     renameLabel: '이름',
     renameButton: '저장',
     renameSaved: '저장됐습니다.',
+    // AUTHORED -- apply-state line under the model/effort selects (IA
+    // v0.0.9, red-team fold #1): the shell shows reality, this line explains
+    // the GAP. Its highest-value state is the failure one -- a spawn refused
+    // by the proxy model-receipt gate (07-14 catch) surfaces its reason HERE,
+    // next to the picker that caused it, instead of only in the app log.
+    applyChecking: '적용 상태 확인 중',
+    applyApplied: (m, e) => `적용됨 · ${m} / ${e}`,
+    applyStopped: '정지 중입니다. 시작하면 이 설정으로 뜹니다',
+    applyPending: (m) => `재시작 중입니다 (직전 실행: ${m})`,
+    applyMismatch: (m) => `지금 도는 건 ${m}입니다. 재시작하면 이 설정이 적용됩니다`,
+    applyFailed: (detail) => `시작 실패: ${detail}`,
     // Moved verbatim from memory.js's inline AGENT_COPY (Slice 2,
     // 2026-07-09) -- the SELECT-driven half (model/effort config). The
     // read-only status-display half of that same const moved to `nav` above.

@@ -295,6 +295,65 @@
     }
   }
 
+  // ── apply-state line (IA v0.0.9, red-team fold #1) ───────────────────────
+  // The selects above are INTENT; the running child is REALITY (recorded at
+  // spawn, GET /api/agent/spawn-info). This line explains the gap between
+  // them -- most importantly the FAILED state: a spawn refused by the proxy
+  // model-receipt gate (07-14 live catch class) lands its reason here, next
+  // to the picker that caused it, not only in the app log.
+  async function renderApplyState() {
+    const el = $('set-apply-state')
+    if (!el) return
+    el.textContent = C.applyChecking
+    let status = null
+    let spawn = null
+    try {
+      status = await api('/api/agent/status')
+      spawn = (await api('/api/agent/spawn-info')).spawn
+    } catch (err) {
+      console.error('apply-state probe failed:', err)
+      el.textContent = ''
+      return
+    }
+    if (status.state === 'failed') {
+      el.textContent = C.applyFailed(status.detail || status.code || 'unknown')
+      return
+    }
+    if (status.state === 'stopped' || status.state === 'idle') {
+      el.textContent = C.applyStopped
+      return
+    }
+    if (status.state === 'connecting') {
+      el.textContent = C.applyPending(spawn && spawn.model ? spawn.model : '?')
+      return
+    }
+    // live: compare reality against the current selects' intent.
+    const intentModel = $('set-model-select').value
+    const intentEffort = $('set-effort-select').value
+    if (spawn && spawn.model === intentModel && (spawn.effort || EFFORT_DEFAULT) === intentEffort) {
+      el.textContent = C.applyApplied(spawn.model, spawn.effort || EFFORT_DEFAULT)
+    } else {
+      el.textContent = C.applyMismatch(spawn && spawn.model ? spawn.model : '?')
+    }
+  }
+
+  // After a model/effort change fires a restart, follow the settle rather
+  // than leaving a stale line: poll status until it leaves 'connecting'
+  // (bounded), then render the final verdict. This page deliberately has no
+  // standing poller (nav.js owns the 2s one); this loop exists only while a
+  // change is in flight.
+  async function settleApplyState() {
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 2000))
+      try {
+        const status = await api('/api/agent/status')
+        if (status.state !== 'connecting') break
+        $('set-apply-state').textContent = C.applyPending($('set-model-select').value)
+      } catch { break }
+    }
+    renderApplyState()
+  }
+
   // The provider a model switch must run under: keep the current provider
   // when it can serve the model, otherwise the first authenticated provider
   // that can. Returns null when none can (shouldn't happen for an enabled
@@ -337,7 +396,9 @@
         currentModel = prevModel
         currentProvider = prevProvider
         e.target.value = prevModel
+        return
       }
+      settleApplyState()
     }
 
     $('set-effort-select').onchange = async (e) => {
@@ -351,8 +412,12 @@
       if (!accepted) {
         currentEffort = prevEffort
         e.target.value = prevEffort
+        return
       }
+      settleApplyState()
     }
+
+    renderApplyState()
   }
 
   init()

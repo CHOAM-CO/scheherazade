@@ -40,6 +40,11 @@
           <label for="set-effort-select" id="set-effort-label"></label>
           <select id="set-effort-select"></select>
         </div>
+        <!-- Apply-state line (IA v0.0.9): explains any gap between these
+             selects (intent) and the running child (reality). A spawn
+             refused by the proxy model-receipt gate surfaces its reason
+             here, next to the picker that caused it. -->
+        <div class="field-hint" id="set-apply-state"></div>
       </div>
 
       <!-- Autonomous cycle (v0.0.6). The only setting on this page that spends
