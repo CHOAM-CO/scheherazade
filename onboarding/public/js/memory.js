@@ -269,40 +269,23 @@
   const MODEL_CATALOG = [
     { id: 'opus', label: 'Claude Opus', providers: ['claude', 'claude-cli', 'claude-subscription'] },
     { id: 'sonnet', label: 'Claude Sonnet', providers: ['claude', 'claude-cli', 'claude-subscription'] },
-    // Kimi: DISABLED because it went mute in production, cause UNRESOLVED.
-    //
-    // ⚠️ The mechanism this entry used to assert -- "the ollama Anthropic-compat
-    // lane never produced a tool_use block" -- is FALSE. It came from the
-    // agent's own transcript self-diagnosis (2026-07-13 19:15-19:20, transcript
-    // cd209c48, relayed by Mino) and was welded into this file at 638fbf7
-    // WITHOUT anyone verifying it against the lane. It was falsified at ~20:5x
-    // the same night, live, in 7 conditions:
-    //   1-2. POST /v1/messages, tool_choice forced AND free  -> tool_use block
-    //   3.   streaming (what the CLI actually does) -> content_block_start
-    //        type=tool_use + input_json_delta + stop_reason=tool_use
-    //   4.   15-tool + system-prompt harness shape -> called reply, right channelId
-    //   5.   36k-token context -> still clean
-    //   6.   the REAL Claude Code CLI (not curl) -> executed a Bash tool
-    //   7.   the REAL CLI against a REAL MCP server -> the server wrote a file
-    //        receipt proving the tool executed
-    // Kimi's tool calls work on this lane. Something else made it mute in Mino's
-    // install, and the failing transcript lives on his machine, so the true
-    // cause is still unnamed.
-    //
-    // It stays OFF anyway: a model observed mute in production, with no known
-    // cause, is not a model to hand a user. But the reason recorded here is now
-    // what we actually know, not a story that reads well.
-    //
-    // This is also why there is no swap-time tool-call smoke test: every probe
-    // above PASSES the model that was mute. Such a gate can only convict, never
-    // acquit -- it would have stamped kimi healthy. The replacement is a
-    // post-swap convicter on real behavior (hooks/stop-reply-guard.mjs ledger +
-    // /api/agent/mute-status + the revert banner), which catches mute agents
-    // whatever the cause, including the one nobody has named.
-    { id: 'kimi-k2.7-code:cloud', label: 'Kimi K2.7 Code (프로덕션 무응답, 원인미상)', providers: ['ollama'], disabled: true },
-    // Same lane, tool-call format UNVERIFIED in this harness -- selectable
-    // (that's what click-testing is for) but labeled so a mute agent after
-    // swapping here is a known suspect, not a mystery.
+    // Kimi: DROPPED entirely (Mino, 2026-07-14 09:27 "키미는 프로바이더째로
+    // 드랍하자"). History compressed so nobody re-litigates it:
+    //   - Went mute in Mino's install (07-13). The first diagnosis ("ollama
+    //     lane can't produce tool_use", welded here at 638fbf7) was FALSIFIED
+    //     live the same night in 7 conditions incl. the real CLI + a real MCP
+    //     server with file receipts -- the lane DOES carry kimi tool calls.
+    //   - The failing transcript itself (chunsik session cd209c48, read 07-14
+    //     01:3x) showed kimi emitting raw <|tool_call...|> token sequences
+    //     that leaked as text in THAT session: the emission is intermittent,
+    //     and when it happens the lane cannot translate it. The fix would have
+    //     been a translating proxy (est. half-day+); Mino called the lane not
+    //     worth it.
+    //   - The mute-strike ledger (hooks/stop-reply-guard.mjs +
+    //     /api/agent/mute-status + revert banner) was born from this case and
+    //     STAYS: it convicts mute agents on real behavior, whatever the model.
+    //     (A swap-time smoke test can only acquit falsely -- every probe
+    //     passed the model that was mute in production.)
     // deepseek verified live by Mino (2026-07-13 19:41 "딥시크 정상작동 확인",
     // same round as glm/sonnet-5/opus-4.8; model-swap continuity also held).
     { id: 'deepseek-v4-pro:cloud', label: 'DeepSeek V4 Pro', providers: ['ollama'] },

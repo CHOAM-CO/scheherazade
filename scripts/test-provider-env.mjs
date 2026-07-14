@@ -183,11 +183,17 @@ function fakeReadProviderKey(store) {
   const angryReadProviderKey = () => {
     throw new Error('buildProviderEnv should never call readProviderKey() for ollama')
   }
-  const result = buildProviderEnv('ollama', { MODEL: 'kimi-k2.7-code:cloud' }, { readProviderKey: angryReadProviderKey })
+  // Fixture model tag: glm (a live catalog model). Was kimi-k2.7-code:cloud
+  // until kimi was dropped from the catalog (Mino 2026-07-14) -- this test is
+  // a generic passthrough check and a dropped model as its fixture reads as
+  // "still supported". test-mute-ledger.mjs deliberately KEEPS the kimi tag:
+  // that suite memorializes the exact production incident the ledger was
+  // built for, and the ledger is model-agnostic anyway.
+  const result = buildProviderEnv('ollama', { MODEL: 'glm-5.2:cloud' }, { readProviderKey: angryReadProviderKey })
   assert(!result.error, 'ollama: no error with a model configured (no secret required)')
   assert(result.env.ANTHROPIC_BASE_URL === OLLAMA_BASE_URL, `ollama: ANTHROPIC_BASE_URL == ${OLLAMA_BASE_URL} (matches run-agent.sh:203 exactly)`)
   assert(result.env.ANTHROPIC_API_KEY === 'ollama', 'ollama: ANTHROPIC_API_KEY == "ollama" (matches run-agent.sh:204 exactly)')
-  assert(result.env.MODEL === 'kimi-k2.7-code:cloud', 'ollama: MODEL == config model tag (overrides the generic claude-model default)')
+  assert(result.env.MODEL === 'glm-5.2:cloud', 'ollama: MODEL == config model tag (overrides the generic claude-model default)')
   assert(result.env.SKIP_MODEL_GUARD === '1', 'ollama: SKIP_MODEL_GUARD == "1" (matches run-agent.sh:205 shape; NOTE run.sh has no such guard today -- see task report gaps)')
   assert(result.env.CLAUDE_CODE_OAUTH_TOKEN === undefined && 'CLAUDE_CODE_OAUTH_TOKEN' in result.env, 'ollama: CLAUDE_CODE_OAUTH_TOKEN explicitly cleared (force api-key auth precedence)')
 }
