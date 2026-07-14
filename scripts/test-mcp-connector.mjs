@@ -77,9 +77,12 @@ console.log('mcp connector intercept (parser + url regex + lane gate)\n')
 {
   check('claude-cli lane is greenlit (no warning)', connectorLaneWarning({ PROVIDER: 'claude-cli' }) === null)
   check('default/undefined lane treated as claude-cli (no warning)', connectorLaneWarning({}) === null)
-  check('chatgpt lane WARNS (base_url→proxy suppresses connectors)', connectorLaneWarning({ PROVIDER: 'chatgpt' }) === 'chatgpt')
-  check('ollama lane WARNS', connectorLaneWarning({ PROVIDER: 'ollama' }) === 'ollama')
-  check('claude BYOK lane WARNS (API key suppresses connectors)', connectorLaneWarning({ PROVIDER: 'claude' }) === 'claude')
+  // The suppressor is ANTHROPIC_API_KEY, not base_url (empirical 07-14). Each
+  // of these lanes WARNS because it injects a key -- chatgpt a placeholder,
+  // ollama the literal 'ollama', claude a real BYOK key (provider-env.cjs).
+  check('chatgpt lane WARNS (injects placeholder key -> suppresses)', connectorLaneWarning({ PROVIDER: 'chatgpt' }) === 'chatgpt')
+  check('ollama lane WARNS (injects key=ollama -> suppresses)', connectorLaneWarning({ PROVIDER: 'ollama' }) === 'ollama')
+  check('claude BYOK lane WARNS (injects real key -> suppresses)', connectorLaneWarning({ PROVIDER: 'claude' }) === 'claude')
   check('claude-subscription WARNS (setup-token connector loading UNVERIFIED -- fail toward honesty)',
     connectorLaneWarning({ PROVIDER: 'claude-subscription' }) === 'claude-subscription')
 }

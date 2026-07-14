@@ -1626,13 +1626,17 @@ const LOGIN_SPECS = {
 // an env scrub: ANTHROPIC_API_KEY suppresses claude.ai connectors, so the
 // auth child must run WITHOUT it (child env only -- parent untouched).
 //
-// LOAD-BEARING CAVEAT (Idea review, verified against provider-env.cjs): the
-// key-scrub that lets the auth child SEE connectors is the same reason the
-// running agent often CAN'T use them. Connectors load only when the agent's
-// own lane is subscription-OAuth (claude-cli: injects no key, no base_url).
-// On chatgpt/ollama (base_url→proxy) or claude BYOK (real key) the runtime
-// env suppresses them, so an authorized connector is inert. connectorLane
-// Warning() below drives the UI to say so instead of shipping a dead button.
+// LOAD-BEARING CAVEAT (Idea review; mechanism CORRECTED 07-14 by empirical
+// test, not docs): the SOLE suppressor is ANTHROPIC_API_KEY. Verified on
+// claude CLI 2.1.208 -- `ANTHROPIC_API_KEY=x claude mcp list` prints
+// "connectors are disabled ..."; `ANTHROPIC_BASE_URL=... claude mcp list`
+// with NO key still lists them. base_url/proxy alone does NOT suppress. So
+// the key-scrub that lets the auth child SEE connectors is the same reason a
+// running agent that carries a key CAN'T use them. Per provider-env.cjs each
+// non-cli lane sets a key (chatgpt=placeholder, ollama='ollama', claude=real
+// BYOK) -> all three suppress; claude-cli injects nothing -> connectors load.
+// The verdicts below are right for that reason (the key), not because of the
+// proxy. connectorLaneWarning() drives the UI to say so vs a dead button.
 const MCP_CONNECTOR_SPEC = {
   argv: (connectorName) => ['mcp', 'login', '--no-browser', `claude.ai ${connectorName}`],
   // Fix #1 (춘식3 counter-pass, Mino 07-14 re-flag): the query string is
@@ -1648,13 +1652,14 @@ const MCP_CONNECTOR_SPEC = {
 }
 
 // The lanes on which an authorized claude.ai connector will actually load at
-// agent runtime. VERIFIED (provider-env.cjs): claude-cli injects no key and
-// no base_url -> the CLI falls back to subscription OAuth (/login), the one
-// state the docs confirm loads claude.ai connectors. claude-subscription
-// (setup-token / CLAUDE_CODE_OAUTH_TOKEN) is a DIFFERENT auth tier and is
-// UNVERIFIED for connector loading -- deliberately excluded from the green
-// set rather than promised (fail toward honesty). chatgpt/ollama/claude are
-// verified suppressors.
+// agent runtime. The gate is on the KEY (verified 07-14, see caveat above):
+// claude-cli injects no ANTHROPIC_API_KEY -> the CLI falls back to
+// subscription OAuth (/login), which loads claude.ai connectors. chatgpt/
+// ollama/claude each inject a key (provider-env.cjs) -> keyed suppressor ->
+// warn. claude-subscription (setup-token / CLAUDE_CODE_OAUTH_TOKEN) sets no
+// key but IS a distinct auth source; whether that token suppresses connectors
+// is UNVERIFIED, so it is excluded from the green set rather than promised
+// (fail toward honesty). base_url alone is NOT a suppressor.
 const CONNECTOR_CAPABLE_LANES = new Set(['claude-cli'])
 function connectorLaneWarning(config) {
   const provider = (config && config.PROVIDER) || 'claude-cli'
