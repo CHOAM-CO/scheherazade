@@ -100,6 +100,18 @@
         </div>
       </div>
 
+      <!-- claude.ai connectors (Gmail/Calendar/Atlassian/…). In-app OAuth
+           intercept: authorize button -> URL from `claude mcp login` ->
+           user opens it in the browser. Lane warning shows first when the
+           running lane can't actually USE connectors even once authorized. -->
+      <div class="category" style="margin-top: 2.5rem" id="conn-mcp">
+        <div class="category-label" id="conn-mcp-label"></div>
+        <p class="subtitle" id="conn-mcp-note"></p>
+        <div class="field-hint hidden" id="conn-mcp-lane-warning"></div>
+        <div class="status-line" id="conn-mcp-status"></div>
+        <div class="entries" id="conn-mcp-entries"></div>
+      </div>
+
       <div class="banner" style="margin-top: 2.5rem">
         <div class="entry-row" style="border-bottom: none; padding: 0">
           <div class="entry-main">

@@ -1388,7 +1388,21 @@ async function proxyHealth() {
 // channel as onOnboardingComplete: these run in THIS Electron main process and
 // mutate its agent-child state, so they can't live in http-server.cjs -- it
 // calls back into them.
-const agentControls = { stopAgent, startAgent, restartAgent, proxyHealth, spawnInfo: () => lastSpawnInfo }
+// resolveClaudeBin injected for the MCP-connector intercept (IA v0.0.9,
+// 춘식3 design): http-server's own resolveBin is FIXED-locations-only and
+// cannot find the bundled/native claude, but THIS resolver already locates
+// the exact binary the agent itself spawns (bundled claude-cli in packaged
+// builds, PATH claude in dev). The connector-auth child reads the user's
+// ~/.claude login from that binary, same as the agent. Returns the path
+// string or null. Same injection channel as proxyHealth/spawnInfo above.
+const agentControls = {
+  stopAgent,
+  startAgent,
+  restartAgent,
+  proxyHealth,
+  spawnInfo: () => lastSpawnInfo,
+  resolveClaudeBin: () => { const r = resolveClaudeBin(); return r ? r.bin : null },
+}
 
 // ── boot sequence ────────────────────────────────────────────────────────
 app.whenReady().then(async () => {

@@ -673,6 +673,24 @@ window.COPY = {
     // path: 디코 -> 슬랙 -> 텔레그램).
     telegramLabel: 'Telegram',
     telegramNote: '나중에 지원 예정',
+    // AUTHORED -- claude.ai connector intercept (춘식3 design, 07-14). The
+    // lane warning is the load-bearing honesty line: on a non-subscription
+    // lane an authorized connector is inert, so we SAY so instead of shipping
+    // a dead button.
+    mcpLabel: 'Claude 커넥터',
+    mcpNote: 'Gmail, Google Calendar, Atlassian 같은 Claude 연동을 이 앱에서 인증합니다',
+    mcpLaneWarning: (lane) => `지금 에이전트는 ${lane} 레인으로 돌고 있어서, 여기서 인증해도 커넥터를 쓰지 못합니다. Claude 구독 로그인 레인일 때만 작동합니다.`,
+    mcpLoading: '커넥터 목록을 불러오는 중입니다',
+    mcpCliMissing: 'claude 실행 파일을 찾지 못해 커넥터를 확인할 수 없습니다',
+    mcpNone: '연동 가능한 Claude 커넥터가 없습니다',
+    mcpConnected: '연결됨',
+    mcpNeedsAuth: '인증 필요',
+    mcpAuthButton: '인증하기',
+    mcpAuthStarting: '인증을 준비하는 중입니다',
+    mcpUrlReady: '아래 링크를 브라우저에서 열어 승인한 뒤, 에이전트를 재시작하세요',
+    mcpOpenLink: '승인 페이지 열기',
+    mcpAuthTimeout: '인증이 제한 시간을 넘겼습니다. 다시 시도해주세요',
+    mcpAuthFailed: '인증에 실패했습니다. 앱 로그를 확인해주세요',
   },
 
   // Sourced from the source file's Step 4 폴백 note: "waiting.html 카피

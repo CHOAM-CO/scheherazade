@@ -311,6 +311,107 @@
     }
   }
 
+  // ── claude.ai connector intercept (IA v0.0.9, 춘식3 design) ───────────────
+  // List connectors, authorize via the in-app URL-capture flow. The lane
+  // warning renders FIRST when the running lane can't use connectors even
+  // after authorizing -- honesty over a dead button.
+  const MCP_POLL_MS = 2000
+
+  async function renderMcpConnectors() {
+    $('conn-mcp-label').textContent = C.mcpLabel
+    $('conn-mcp-note').textContent = C.mcpNote
+    const statusEl = $('conn-mcp-status')
+    const entriesEl = $('conn-mcp-entries')
+    const warnEl = $('conn-mcp-lane-warning')
+    statusEl.textContent = C.mcpLoading
+    entriesEl.innerHTML = ''
+
+    let result
+    try {
+      result = await api('/api/mcp-connectors')
+    } catch (err) {
+      statusEl.textContent = GEN(err.message)
+      return
+    }
+
+    if (result.laneWarning) {
+      warnEl.textContent = C.mcpLaneWarning(result.laneWarning)
+      warnEl.classList.remove('hidden')
+    } else {
+      warnEl.classList.add('hidden')
+    }
+
+    if (!result.ok && result.reason === 'cli_missing') { statusEl.textContent = C.mcpCliMissing; return }
+    const connectors = Array.isArray(result.connectors) ? result.connectors : []
+    if (connectors.length === 0) { statusEl.textContent = C.mcpNone; return }
+    statusEl.textContent = ''
+
+    for (const conn of connectors) {
+      const row = document.createElement('div')
+      row.className = 'entry-row'
+      const main = document.createElement('div')
+      main.className = 'entry-main'
+      const nameEl = document.createElement('div')
+      nameEl.className = 'entry-value'
+      nameEl.textContent = conn.name
+      const statusLine = document.createElement('div')
+      statusLine.className = 'entry-meta'
+      statusLine.textContent = conn.status === 'connected' ? C.mcpConnected : C.mcpNeedsAuth
+      main.appendChild(nameEl)
+      main.appendChild(statusLine)
+      row.appendChild(main)
+      if (conn.status !== 'connected') {
+        const btn = document.createElement('button')
+        btn.className = 'secondary'
+        btn.textContent = C.mcpAuthButton
+        btn.onclick = () => startMcpAuth(conn.name, statusLine, btn)
+        row.appendChild(btn)
+      }
+      entriesEl.appendChild(row)
+    }
+  }
+
+  function startMcpAuth(name, statusLine, btn) {
+    btn.disabled = true
+    statusLine.textContent = C.mcpAuthStarting
+    api('/api/mcp-connector/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ connectorName: name }),
+    })
+      .then(() => pollMcpAuth(name, statusLine, btn))
+      .catch((err) => { btn.disabled = false; statusLine.textContent = GEN(err.message) })
+  }
+
+  function pollMcpAuth(name, statusLine, btn) {
+    setTimeout(async () => {
+      let status
+      try {
+        status = await api(`/api/mcp-connector/status?name=${encodeURIComponent(name)}`)
+      } catch (err) {
+        btn.disabled = false
+        statusLine.textContent = GEN(err.message)
+        return
+      }
+      if (status.state === 'url_ready') {
+        // The URL is the deliverable. Render it as an open-page action plus
+        // the "approve then restart" note -- approval is stored remotely and
+        // only loads on the NEXT agent start.
+        statusLine.textContent = C.mcpUrlReady
+        btn.disabled = false
+        btn.textContent = C.mcpOpenLink
+        btn.onclick = () => { window.open(status.detail, '_blank', 'noopener') }
+        return
+      }
+      if (status.state === 'failed') {
+        btn.disabled = false
+        statusLine.textContent = status.code === 'timeout' ? C.mcpAuthTimeout : C.mcpAuthFailed
+        return
+      }
+      pollMcpAuth(name, statusLine, btn) // running -> keep polling
+    }, MCP_POLL_MS)
+  }
+
   async function init() {
     $('conn-title').textContent = C.title
     $('conn-back-link').textContent = C.backToMemory
@@ -325,6 +426,7 @@
     initDiscordReconnect()
     initClaudeKeyRow(Array.isArray(cfg.availableProviders) ? cfg.availableProviders : [])
     renderChatgptReceipt()
+    renderMcpConnectors()
 
     await renderProviderAuth()
   }

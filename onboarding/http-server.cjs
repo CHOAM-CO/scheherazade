@@ -1614,6 +1614,93 @@ const LOGIN_SPECS = {
   },
 }
 
+// ── MCP connector OAuth intercept (IA v0.0.9, 춘식3 design + Idea review) ──
+// In-app authorization of claude.ai connectors (Gmail/Calendar/Atlassian/…):
+// spawn `claude mcp login --no-browser "claude.ai <name>"`, capture the
+// authorize URL it prints to stdout, hand it to the UI for the user to open.
+// The user never touches a terminal (Mino constraint: non-programmers).
+//
+// Distinct from LOGIN_SPECS (chatgpt/ollama), which have static keys, fixed
+// argv, and a LOCAL artifact. Connectors have dynamic names, a name in argv,
+// NO local artifact (approval is stored remotely by claude.ai), and require
+// an env scrub: ANTHROPIC_API_KEY suppresses claude.ai connectors, so the
+// auth child must run WITHOUT it (child env only -- parent untouched).
+//
+// LOAD-BEARING CAVEAT (Idea review, verified against provider-env.cjs): the
+// key-scrub that lets the auth child SEE connectors is the same reason the
+// running agent often CAN'T use them. Connectors load only when the agent's
+// own lane is subscription-OAuth (claude-cli: injects no key, no base_url).
+// On chatgpt/ollama (base_url→proxy) or claude BYOK (real key) the runtime
+// env suppresses them, so an authorized connector is inert. connectorLane
+// Warning() below drives the UI to say so instead of shipping a dead button.
+const MCP_CONNECTOR_SPEC = {
+  argv: (connectorName) => ['mcp', 'login', '--no-browser', `claude.ai ${connectorName}`],
+  // Fix #1 (춘식3 counter-pass, Mino 07-14 re-flag): the query string is
+  // MANDATORY. The real authorize URL carries `?product_surface=sdk-cli`
+  // and WITHOUT it the approval page does not appear, so the regex requires
+  // both the query AND that param -- a bare .../mcpsrv_x with no query is a
+  // capture MISS, not a match. Origin is pinned to https://claude.ai
+  // literally, so a captured string can only ever be a claude.ai authorize
+  // endpoint (Idea hardening #3; the child is our own claude, but defense in
+  // depth is cheap here).
+  urlRegex: /https:\/\/claude\.ai\/api\/organizations\/[\w-]+\/mcp\/start-auth\/mcpsrv_[\w]+\?[^\s]*product_surface=sdk-cli[^\s]*/,
+  installHint: 'claude 실행 파일을 찾을 수 없습니다. 앱을 다시 설치해주세요.',
+}
+
+// The lanes on which an authorized claude.ai connector will actually load at
+// agent runtime. VERIFIED (provider-env.cjs): claude-cli injects no key and
+// no base_url -> the CLI falls back to subscription OAuth (/login), the one
+// state the docs confirm loads claude.ai connectors. claude-subscription
+// (setup-token / CLAUDE_CODE_OAUTH_TOKEN) is a DIFFERENT auth tier and is
+// UNVERIFIED for connector loading -- deliberately excluded from the green
+// set rather than promised (fail toward honesty). chatgpt/ollama/claude are
+// verified suppressors.
+const CONNECTOR_CAPABLE_LANES = new Set(['claude-cli'])
+function connectorLaneWarning(config) {
+  const provider = (config && config.PROVIDER) || 'claude-cli'
+  if (CONNECTOR_CAPABLE_LANES.has(provider)) return null
+  return provider // non-null = the UI shows the "this lane can't use connectors" note, naming the lane
+}
+
+// Dynamic-keyed connector login state (names are runtime-discovered, and the
+// vocabulary adds a 'url_ready' state login-status.cjs doesn't have, so this
+// is a local map rather than that fixed-provider module). Written and read
+// only within this file.
+const mcpConnectorStatus = {}   // name -> { state, code, detail, since }
+const mcpLoginChildren = {}     // name -> ChildProcess (ownership token)
+const mcpLoginTimers = {}       // name -> timeout handle
+const mcpLoginStarting = {}     // name -> bool (double-spawn race guard, LOGIN #4 pattern)
+function setMcpStatus(name, state, code = null, detail = null) {
+  mcpConnectorStatus[name] = { state, code, detail, since: new Date().toISOString() }
+}
+function getMcpStatus(name) {
+  return mcpConnectorStatus[name] || { state: 'idle', code: null, detail: null, since: null }
+}
+function clearMcpLoginChild(name) {
+  mcpLoginChildren[name] = null
+  if (mcpLoginTimers[name]) { clearTimeout(mcpLoginTimers[name]); mcpLoginTimers[name] = null }
+}
+
+// Parser for `claude mcp list` (Fix: real output has a health-check preamble
+// line and local servers marked "⏸ Pending approval", not just the doc's two
+// states -- verified on a live machine 07-14). Line-based match naturally
+// skips the preamble; we keep ONLY `claude.ai <name>` rows (the connectors),
+// dropping local servers (agent-channel/memory/calendar) and plugin:* rows.
+function parseMcpConnectorList(text) {
+  const out = []
+  for (const line of String(text).split('\n')) {
+    const m = line.match(/^claude\.ai (.+?):\s+.*?-\s+(.*)$/)
+    if (!m) continue
+    const name = m[1].trim()
+    const tail = m[2]
+    const status = /needs? authentication/i.test(tail) ? 'needs_auth'
+      : /connected/i.test(tail) ? 'connected'
+      : 'unknown'
+    out.push({ name, status })
+  }
+  return out
+}
+
 // Which providers have a usable credential/auth artifact RIGHT NOW.
 // (post-onboarding multi-provider unlock, Mino 07-13 click-test item 3:
 // "인증키 있으면 Model Dropdown에서 셀렉 가능하게"). Rides along on GET
@@ -1859,6 +1946,111 @@ function killAllLoginChildren(signal = 'SIGTERM') {
       log(`killAllLoginChildren: ${signal} to ${provider} pgid=${child.pid} failed (${err.message}) -- likely already gone`)
     }
     loginChildren[provider] = null
+  }
+  // MCP connector auth children ride the SAME detached-child cleanup (Codex
+  // finding #3 class): an orphaned `claude mcp login` could otherwise finish
+  // its exchange after the app is gone. Folded here so it shares main.cjs's
+  // existing before-quit/fatal wiring rather than needing a second export.
+  for (const name of Object.keys(mcpLoginChildren)) {
+    const child = mcpLoginChildren[name]
+    if (!child) continue
+    try {
+      process.kill(-child.pid, signal)
+      log(`killAllLoginChildren: sent ${signal} to mcp-connector "${name}" pgroup (pgid=${child.pid})`)
+    } catch (err) {
+      log(`killAllLoginChildren: ${signal} to mcp "${name}" pgid=${child.pid} failed (${err.message}) -- likely already gone`)
+    }
+    mcpLoginChildren[name] = null
+  }
+}
+
+// List the account's claude.ai connectors. Read-only, no token needed. Runs
+// `claude mcp list` with ANTHROPIC_API_KEY scrubbed from the CHILD env only
+// (the key would suppress the very connectors we're enumerating). resolveBin
+// is injected (the bundled/native claude, not http-server's fixed-locations
+// resolveBin -- see agentControls.resolveClaudeBin in main.cjs).
+function listMcpConnectors(binPath) {
+  return new Promise((resolve) => {
+    const childEnv = { ...process.env }
+    delete childEnv.ANTHROPIC_API_KEY
+    execFile(binPath, ['mcp', 'list'], { timeout: 15_000, env: childEnv }, (err, stdout) => {
+      // `claude mcp list` exits non-zero if any server is unhealthy, but its
+      // stdout still carries the rows we parse -- so we parse stdout
+      // regardless of exit code, and only treat a truly empty stdout as a
+      // failure. (err is logged, never silently swallowed.)
+      if (err) log(`listMcpConnectors: exit ${err.code ?? '?'} (parsing stdout anyway): ${err.message}`)
+      resolve(parseMcpConnectorList(stdout || ''))
+    })
+  })
+}
+
+// Start the connector authorize flow: spawn `claude mcp login --no-browser`,
+// capture the authorize URL from stdout, expose it via status. Mirrors
+// startProviderLoginLocked's shape (double-spawn guard, timeout, detached
+// pgroup, coarse client detail + raw stderr to log only).
+function startMcpConnectorLogin(name, binPath) {
+  if (mcpLoginStarting[name] || mcpLoginChildren[name]) return // idempotent
+  mcpLoginStarting[name] = true
+  try {
+    setMcpStatus(name, 'running', null, `${name} 인증 대기`)
+    // Child-only env scrub: the parent's ANTHROPIC_API_KEY is never touched
+    // (credentials not modified), but the child must run without it or the
+    // connectors are suppressed (verified 07-14).
+    const childEnv = { ...process.env }
+    delete childEnv.ANTHROPIC_API_KEY
+    const child = spawn(binPath, MCP_CONNECTOR_SPEC.argv(name), {
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: childEnv,
+    })
+    mcpLoginChildren[name] = child
+
+    // Fix #2 (춘식3): accumulate stdout across chunks. A per-chunk match
+    // would drop the URL when it straddles a chunk boundary. Once captured,
+    // keep draining (never re-match) so a late chunk can't overwrite it.
+    let capturedUrl = ''
+    let stdoutBuf = ''
+    child.stdout.on('data', (chunk) => {
+      stdoutBuf += chunk.toString()
+      if (capturedUrl) return
+      const m = stdoutBuf.match(MCP_CONNECTOR_SPEC.urlRegex)
+      if (m) {
+        capturedUrl = m[0]
+        // The captured string cleared urlRegex, so it is a pinned
+        // https://claude.ai authorize endpoint -- a verified URL, not raw
+        // child output (Codex finding #5 exception: only a regex-cleared
+        // claude.ai URL rides the wire; raw stderr stays log-only below).
+        setMcpStatus(name, 'url_ready', null, capturedUrl)
+      }
+    })
+    let stderrTail = ''
+    child.stderr.on('data', (chunk) => { stderrTail = (stderrTail + chunk.toString()).slice(-400) })
+
+    mcpLoginTimers[name] = setTimeout(() => {
+      if (getMcpStatus(name).state === 'running') {
+        setMcpStatus(name, 'failed', 'timeout', `인증이 ${LOGIN_TIMEOUT_MS / 1000}s 내 시작되지 않았습니다`)
+        try { process.kill(-child.pid, 'SIGTERM') } catch (err) { log(`mcp login timeout SIGTERM (${name}) failed: ${err.message}`) }
+      }
+    }, LOGIN_TIMEOUT_MS)
+
+    child.on('error', (err) => {
+      if (getMcpStatus(name).state === 'running') setMcpStatus(name, 'failed', 'unknown', `spawn failed: ${err.message}`)
+      clearMcpLoginChild(name)
+    })
+    child.on('close', (code) => {
+      const st = getMcpStatus(name)
+      // url_ready is terminal-good: the deliverable (URL) was captured; the
+      // child exiting 0 afterward is expected (--no-browser prints and quits).
+      if (st.state === 'running') {
+        if (code === 0 && capturedUrl) setMcpStatus(name, 'url_ready', null, capturedUrl)
+        else if (code === 0) setMcpStatus(name, 'failed', 'unknown', 'login이 종료됐지만 인증 URL을 캡처하지 못했습니다')
+        else setMcpStatus(name, 'failed', 'exit_nonzero', 'login 프로세스가 에러로 종료됐습니다 -- 앱 로그를 확인하세요')
+      }
+      log(`mcp login: "${name}" exited (code=${code}) -> ${getMcpStatus(name).state}${stderrTail ? ` | stderr: ${stderrTail.trim()}` : ''}`)
+      clearMcpLoginChild(name)
+    })
+  } finally {
+    mcpLoginStarting[name] = false
   }
 }
 
@@ -2163,6 +2355,51 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
       return
     }
     sendJson(res, 200, await agentControls.proxyHealth())
+    return
+  }
+
+  // ── MCP connector intercept (IA v0.0.9) ──────────────────────────────────
+  // GET list: read-only, no token. Also reports the lane warning so the UI
+  // can tell the user up front when the current lane can't USE connectors
+  // even after authorizing (the load-bearing caveat, see connectorLaneWarning).
+  if (pathname === '/api/mcp-connectors' && req.method === 'GET') {
+    const binPath = agentControls && typeof agentControls.resolveClaudeBin === 'function' ? agentControls.resolveClaudeBin() : null
+    const laneWarning = connectorLaneWarning(readAgentConfig())
+    if (!binPath) {
+      sendJson(res, 200, { ok: false, reason: 'cli_missing', connectors: [], laneWarning })
+      return
+    }
+    const connectors = await listMcpConnectors(binPath)
+    sendJson(res, 200, { ok: true, connectors, laneWarning })
+    return
+  }
+  // POST login: mutating -> per-launch token gate (handled by the caller's
+  // X-Onboard-Token check). Fire-and-forget; the client polls status.
+  if (pathname === '/api/mcp-connector/login' && req.method === 'POST') {
+    const { connectorName } = await readJsonBody(req)
+    if (!connectorName || typeof connectorName !== 'string') {
+      sendJson(res, 400, { error: 'connectorName is required' })
+      return
+    }
+    const binPath = agentControls && typeof agentControls.resolveClaudeBin === 'function' ? agentControls.resolveClaudeBin() : null
+    if (!binPath) {
+      setMcpStatus(connectorName, 'failed', 'cli_missing', MCP_CONNECTOR_SPEC.installHint)
+      sendJson(res, 200, { ok: false, reason: 'cli_missing' })
+      return
+    }
+    startMcpConnectorLogin(connectorName, binPath)
+    sendJson(res, 202, { ok: true })
+    return
+  }
+  // GET status: read-only poll. name via query string (handleApi gets only
+  // pathname, so parse the query from req.url here).
+  if (pathname === '/api/mcp-connector/status' && req.method === 'GET') {
+    const name = new URL(req.url, 'http://127.0.0.1').searchParams.get('name')
+    if (!name) {
+      sendJson(res, 400, { error: 'name query param is required' })
+      return
+    }
+    sendJson(res, 200, { name, ...getMcpStatus(name) })
     return
   }
 
@@ -2886,6 +3123,12 @@ module.exports = {
   // so every branch (3-check failures, truncation, channel filtering) runs
   // against fixtures, never the live Discord API.
   enumerateDiscordTargets,
+  // Exported for scripts/test-mcp-connector.mjs -- pure functions, no spawn:
+  // the list parser (against real captured output), the mandatory-query URL
+  // regex, and the lane-capability gate.
+  parseMcpConnectorList,
+  MCP_CONNECTOR_SPEC,
+  connectorLaneWarning,
   isPidAlive,
   // Exported for testability/tuning visibility (Step 5 onboarding-wiring
   // fix, 2026-07-03, PIECE 2 + PIECE 3) -- same rationale as the Fix D
