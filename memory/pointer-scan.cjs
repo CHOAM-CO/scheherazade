@@ -71,6 +71,23 @@ const DENY_DIRS = new Set([
   '.ssh', '.aws', '.gnupg', '.gpg', 'keys', 'secrets', 'node_modules', '.git',
 ])
 
+// Electron/Chromium RUNTIME NOISE -- a different axis from DENY_DIRS (those
+// are secrets; these are garbage). Found live on Mino's second-device install
+// (2026-07-14 10:33, his own paste): the claude-desktop source filled its
+// entire 200-pointer quota with `Cache/Cache_Data/<hex>_0` HTTP-cache blobs,
+// crowding out any real memory file AND making the coverage line ("거의
+// 없습니다") contradict the list right under it. Memory files live in
+// markdown/config locations, never inside a browser runtime dir, so these
+// names are skipped at any depth. Over-excluding here costs one junk pointer
+// fewer; under-excluding costs the whole quota.
+const NOISE_DIRS = new Set([
+  'cache', 'cache_data', 'code cache', 'gpucache', 'dawngraphitecache',
+  'dawnwebgpucache', 'dawncache', 'blob_storage', 'session storage',
+  'local storage', 'indexeddb', 'service worker', 'cachestorage',
+  'shared_proto_db', 'crashpad', 'sentry', 'logs', 'webstorage', 'tmp',
+  'network', 'dictionaries', 'component_crx_cache', 'optimization_guide',
+])
+
 // ── Secret-SHAPED text, wherever it appears ─────────────────────────────────
 // The DENY list above asks "does this path look like a secret's home?". That is
 // not enough, and the gap was found by red team (2026-07-13): the scanner also
@@ -262,6 +279,7 @@ function walk(root, depth, acc, source, realRoots, tally) {
     try { stat = fs.statSync(real) } catch { continue }
 
     if (stat.isDirectory()) {
+      if (NOISE_DIRS.has(entry.name.toLowerCase())) continue
       walk(full, depth + 1, acc, source, realRoots, tally)
       continue
     }

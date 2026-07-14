@@ -264,5 +264,32 @@ console.log('pointer-scan adversarial fixtures\n')
   check('a clean scan reports suppressed: 0, not undefined', cc2 && cc2.suppressed === 0, JSON.stringify(cc2))
 }
 
+// ── Runtime noise: cache blobs must not eat the pointer quota ───────────────
+// Live repro (Mino's second-device install, 2026-07-14 10:33, his own UI
+// paste): claude-desktop's 200-pointer quota was ENTIRELY Cache/Cache_Data
+// hex blobs -- garbage listed as "memory", real files crowded out, and the
+// honest coverage line contradicted by the list under it.
+{
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-noise-'))
+  const desktopRoot = path.join(home, 'Library', 'Application Support', 'Claude')
+  const cacheData = path.join(desktopRoot, 'Cache', 'Cache_Data')
+  fs.mkdirSync(cacheData, { recursive: true })
+  for (let i = 0; i < 30; i++) fs.writeFileSync(path.join(cacheData, `53b9e1829c68d2c${i}_0`), 'http cache blob')
+  fs.mkdirSync(path.join(desktopRoot, 'Code Cache', 'js'), { recursive: true })
+  fs.writeFileSync(path.join(desktopRoot, 'Code Cache', 'js', 'index-blob'), 'v8 bytecode')
+  fs.mkdirSync(path.join(desktopRoot, 'Local Storage', 'leveldb'), { recursive: true })
+  fs.writeFileSync(path.join(desktopRoot, 'Local Storage', 'leveldb', '000003.log'), 'leveldb')
+  // The one thing that IS a memory file in this tree.
+  fs.writeFileSync(path.join(desktopRoot, 'memory-notes.md'), '# Desktop memory\n')
+
+  const desktopOnly = defaultSources(home).filter((s) => s.tool === 'claude-desktop')
+  const { pointers } = scanPointers({ homedir: home, sources: desktopOnly })
+  const paths = pointers.map((p) => p.path)
+  check('cache blobs are NOT pointers (Cache_Data skipped)', !paths.some((p) => p.includes('Cache_Data')), paths.slice(0, 3).join(','))
+  check('Code Cache / Local Storage skipped too', !paths.some((p) => p.includes('Code Cache') || p.includes('Local Storage')), paths.join(','))
+  check('the real memory file still gets its pointer (quota not eaten by junk)', paths.some((p) => p.endsWith('memory-notes.md')), paths.join(','))
+  check('the pointer list is exactly the one real file', pointers.length === 1, `${pointers.length} pointers`)
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)
