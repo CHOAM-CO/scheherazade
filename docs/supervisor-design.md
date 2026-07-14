@@ -70,10 +70,13 @@
 1. **Leaf identity (blind pkill)** → FIX. The supervisor kills by child
    HANDLE (pty.kill / taskkill /PID <child> /T /F), which is exact by
    construction. Keep ONE pattern sweep (`--name <AGENT>` substring) only as
-   ORPHAN CLEANUP at supervisor start, mirroring run.sh:372's pre-spawn
-   sweep — an orphan from a crashed supervisor has no live handle anywhere,
-   so the pattern is the only tool that reaches it. stop-path blind sweeps
-   (run.sh:455,475) are dropped; the handle replaces them.
+   ORPHAN CLEANUP mirroring run.sh:372's pre-spawn sweep — which sits INSIDE
+   the while loop (every iteration, pre-spawn), not merely at supervisor
+   start as this verdict's first wording said; the port replicates the
+   per-iteration placement, and the sweep only ever runs when our own child
+   handle is dead. An orphan from a crashed supervisor has no live handle
+   anywhere, so the pattern is the only tool that reaches it. stop-path
+   blind sweeps (run.sh:455,475) are dropped; the handle replaces them.
 2. **Decorative EXIT_CODE** → REPLICATE semantics, record honestly. Restart
    decisions stay UPTIME-ONLY (battle-tested); the real exit code node gives
    us goes into the log and the failure marker reason, clearly labeled, but
