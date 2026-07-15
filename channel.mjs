@@ -259,12 +259,50 @@ async function fetchTextChannel(channelId) {
   return ch
 }
 
+// ── Current-conversation channel tracking (2026-07-15 GLM confabulation fix) ─
+// WHY: on long/debris-heavy contexts, weaker models (glm-5.2 repro, 3/4 reply
+// calls) confabulate channelId values ("researcher", stale ids). The old
+// contract made every outbound call carry a channelId that must match LIVE
+// Discord state -- a confabulated id threw in fetchTextChannel and the user
+// saw NOTHING (silent swallow, "툴호출 씹힘"). Structural fix: the server
+// already knows where the conversation is happening; the model no longer has
+// to carry that fact. channelId is now OPTIONAL on reply/send_file --
+// omitted -> current conversation channel; unknown/invalid -> delivered to
+// the current channel WITH a loud correction note in the tool result
+// (visible garbage beats silence for a single-user companion; the model
+// reads the note and self-corrects in-turn). "지어내지 마"를 룰이 아니라
+// 구조로 옮기는 픽스.
+let lastInboundChannelId = null
+
+// opts are test seams (scripts/test-outbound-channel.mjs) -- production call
+// sites pass only requestedId and get live module state + real fetch.
+async function resolveOutboundChannel(requestedId, opts = {}) {
+  const fetchFn = opts.fetchFn || fetchTextChannel
+  const lastId = 'lastId' in opts ? opts.lastId : lastInboundChannelId
+  const homeId = 'homeId' in opts ? opts.homeId : HOME_CHANNEL_ID
+  const fallbackId = lastId || homeId || null
+  if (requestedId) {
+    try {
+      return { ch: await fetchFn(requestedId), note: null }
+    } catch (err) {
+      if (!fallbackId || fallbackId === requestedId) throw err
+      const ch = await fetchFn(fallbackId)
+      return {
+        ch,
+        note: `NOTE: channelId ${requestedId} does not exist (${err.message}); delivered to the current conversation channel ${fallbackId} instead. Do not invent channel ids -- omit channelId to target the current conversation.`,
+      }
+    }
+  }
+  if (!fallbackId) throw new Error('no channelId given and no current conversation channel known yet')
+  return { ch: await fetchFn(fallbackId), note: null }
+}
+
 // ── MCP server ───────────────────────────────────────────────────────────
 const DEFAULT_INSTRUCTIONS = `You are ${AGENT_NAME}.
 Discord messages arrive as: <channel source="${AGENT_NAME}" sender="..." channelId="..." authorId="..." timestamp="...">content</channel>
-Reply with the "reply" tool, passing the same channelId back.
+Reply with the "reply" tool. channelId is optional -- omit it and the message goes to the current conversation channel. Never invent a channelId; only pass one when replying to a DIFFERENT channel than the one that messaged you.
 Image attachments are downloaded locally; the notification includes the local file path(s) -- open with the Read tool.
-Use "send_file_to_discord" (channelId, filePath, comment?) to upload a local file (image, document, etc.) to the channel -- "reply" is text-only.
+Use "send_file_to_discord" (filePath, comment?, channelId?) to upload a local file (image, document, etc.) -- "reply" is text-only.
 Use "read_channel_history" (channelId, limit, after?, before?) to look back through the channel. after/before each accept a Discord message ID or an ISO date.`
 const INSTRUCTIONS = process.env.CHANNEL_INSTRUCTIONS || DEFAULT_INSTRUCTIONS
 
@@ -276,27 +314,27 @@ const mcp = new Server(
 const TOOLS = [
   {
     name: 'reply',
-    description: 'Send a message to a Discord channel.',
+    description: 'Send a message to the user. Goes to the current conversation channel unless a channelId is explicitly given.',
     inputSchema: {
       type: 'object',
       properties: {
-        channelId: { type: 'string', description: 'Discord channel ID' },
         text: { type: 'string', description: 'Message text to send' },
+        channelId: { type: 'string', description: 'OPTIONAL Discord channel ID. Omit to send to the current conversation channel. Never guess or invent this value.' },
       },
-      required: ['channelId', 'text'],
+      required: ['text'],
     },
   },
   {
     name: 'send_file_to_discord',
-    description: 'Upload a local file (image, document, etc.) to a Discord channel. Use this for attachments -- the reply tool is text-only.',
+    description: 'Upload a local file (image, document, etc.). Use this for attachments -- the reply tool is text-only. Goes to the current conversation channel unless a channelId is explicitly given.',
     inputSchema: {
       type: 'object',
       properties: {
-        channelId: { type: 'string', description: 'Discord channel ID' },
         filePath: { type: 'string', description: 'Full local path of the file to upload' },
         comment: { type: 'string', description: 'Optional message text sent with the file' },
+        channelId: { type: 'string', description: 'OPTIONAL Discord channel ID. Omit to send to the current conversation channel. Never guess or invent this value.' },
       },
-      required: ['channelId', 'filePath'],
+      required: ['filePath'],
     },
   },
   {
@@ -315,8 +353,8 @@ const TOOLS = [
   },
 ]
 
-const ReplyArgs = z.object({ channelId: z.string().min(1), text: z.string().min(1) })
-const SendFileArgs = z.object({ channelId: z.string().min(1), filePath: z.string().min(1), comment: z.string().optional() })
+const ReplyArgs = z.object({ channelId: z.string().min(1).optional(), text: z.string().min(1) })
+const SendFileArgs = z.object({ channelId: z.string().min(1).optional(), filePath: z.string().min(1), comment: z.string().optional() })
 const ReadHistoryArgs = z.object({
   channelId: z.string().min(1),
   limit: z.number().int().positive().max(100).optional(),
@@ -331,12 +369,12 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
   if (name === 'reply') {
     const { channelId, text } = ReplyArgs.parse(args || {})
-    const ch = await fetchTextChannel(channelId)
+    const { ch, note } = await resolveOutboundChannel(channelId)
     const chunks = []
     for (let i = 0; i < text.length; i += 1900) chunks.push(text.slice(i, i + 1900))
     for (const chunk of chunks) await ch.send({ content: chunk, allowedMentions: SAFE_MENTIONS })
-    clearThinking(channelId).catch((err) => log('thinking reaction clear failed:', err.message))
-    return { content: [{ type: 'text', text: `sent to ${channelId} (${chunks.length} message${chunks.length > 1 ? 's' : ''})` }] }
+    clearThinking(ch.id).catch((err) => log('thinking reaction clear failed:', err.message))
+    return { content: [{ type: 'text', text: `sent to ${ch.id} (${chunks.length} message${chunks.length > 1 ? 's' : ''})${note ? `\n${note}` : ''}` }] }
   }
 
   if (name === 'send_file_to_discord') {
@@ -354,15 +392,15 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     if (stat.size > MAX_UPLOAD) {
       return { content: [{ type: 'text', text: `file too large for Discord upload: ${(stat.size / 1024 / 1024).toFixed(1)}MB (limit 10MB)` }], isError: true }
     }
-    const ch = await fetchTextChannel(parsed.channelId)
+    const { ch, note } = await resolveOutboundChannel(parsed.channelId)
     const msg = await ch.send({
       content: parsed.comment || '',
       files: [{ attachment: filePath, name: path.basename(filePath) }],
       allowedMentions: SAFE_MENTIONS,
     })
-    clearThinking(parsed.channelId).catch((err) => log('thinking reaction clear failed:', err.message))
+    clearThinking(ch.id).catch((err) => log('thinking reaction clear failed:', err.message))
     const urls = [...msg.attachments.values()].map((a) => a.url)
-    return { content: [{ type: 'text', text: `file sent to ${parsed.channelId}: ${path.basename(filePath)}${urls.length ? `\nCDN URL: ${urls.join('\n')}` : ''}` }] }
+    return { content: [{ type: 'text', text: `file sent to ${ch.id}: ${path.basename(filePath)}${urls.length ? `\nCDN URL: ${urls.join('\n')}` : ''}${note ? `\n${note}` : ''}` }] }
   }
 
   if (name === 'read_channel_history') {
@@ -647,6 +685,11 @@ discord.on(Events.MessageCreate, async (message) => {
     if (message.author.bot) return
     if (!message.channel.isDMBased() && message.channelId !== HOME_CHANNEL_ID) return
 
+    // Current-conversation tracking for resolveOutboundChannel(): the channel
+    // that last spoke to us IS the conversation, so outbound calls no longer
+    // need the model to carry (and possibly confabulate) the id.
+    lastInboundChannelId = message.channelId
+
     addThinking(message)
 
     const localPaths = []
@@ -707,7 +750,7 @@ async function boot() {
   }
 }
 
-export { writeLivenessMarker, LIVENESS_MARKER_PATH, writeFailureMarker, FAILURE_MARKER_PATH, DATA_HOME }
+export { writeLivenessMarker, LIVENESS_MARKER_PATH, writeFailureMarker, FAILURE_MARKER_PATH, DATA_HOME, resolveOutboundChannel }
 
 if (isMainModule) {
   await boot()
