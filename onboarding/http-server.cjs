@@ -66,6 +66,7 @@ const { spawn, execFile } = require('node:child_process')
 const autonomyBudget = require(path.join(__dirname, '..', 'autonomy', 'budget.cjs'))
 const autonomyCycle = require(path.join(__dirname, '..', 'autonomy', 'cycle.cjs'))
 const { LOGIN_PROVIDERS, setLoginStatus, getLoginStatus } = require('./login-status.cjs')
+const permissionProbes = require('./permission-probes.cjs')
 // Fresh-Mac dependency bootstrap (2026-07-07): app-managed download/install
 // of the codex/ollama CLIs into DATA_HOME/bin + sha256 manifest. See
 // bootstrap.cjs's header for the full design (brew-free, 0 admin prompts).
@@ -2829,6 +2830,57 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
       app.relaunch()
       app.exit(0)
     }, 300)
+    return
+  }
+
+  // ── Permission checklist routes (P0, 2026-07-15) ────────────────────────
+  // Generalizes the FDA lane above to the full wall map the agent can hit
+  // (docs/permission-visibility-design.md; probes live in
+  // permission-probes.cjs with the three macOS facts documented there).
+  // Status GET also drops a snapshot into DATA_HOME/permission-status.json
+  // so the agent side can read "what this machine can't do" at session
+  // start instead of rediscovering walls one crash at a time — P1's hook
+  // covers the moment of impact, this file covers the map.
+  if (pathname === '/api/permissions/status' && req.method === 'GET') {
+    const { systemPreferences } = getElectron()
+    const { execFileSync } = require('node:child_process')
+    const rows = permissionProbes.probeAll({ readFileSync: fs.readFileSync, execFileSync, systemPreferences })
+    try {
+      fs.writeFileSync(
+        path.join(DATA_HOME, 'permission-status.json'),
+        JSON.stringify({ checkedAt: new Date().toISOString(), rows }, null, 2)
+      )
+    } catch (err) {
+      // Snapshot write is best-effort; the UI answer must not die with it.
+      log(`permission-status.json write failed: ${err.message}`)
+    }
+    sendJson(res, 200, { rows, deepLinks: permissionProbes.DEEP_LINKS })
+    return
+  }
+  if (pathname === '/api/permissions/open' && req.method === 'POST') {
+    const { cls } = await readJsonBody(req)
+    const paneUrl = permissionProbes.DEEP_LINKS[cls]
+    if (!paneUrl) {
+      sendJson(res, 400, { error: `no settings pane for class "${cls}" (SIP/sudo have no pane — that is the point)` })
+      return
+    }
+    const { shell } = getElectron()
+    // Sequoia anchors are flaky — double-fire with a beat, same workaround
+    // as the FDA route above.
+    await shell.openExternal(paneUrl)
+    setTimeout(() => {
+      shell.openExternal(paneUrl).catch(() => {})
+    }, 1000)
+    sendJson(res, 200, { ok: true })
+    return
+  }
+  // Automation probe is POST + explicit because it SENDS an Apple event and
+  // may pop the macOS consent dialog — allowed on a user click (the dialog
+  // is how the grant happens), never on a status poll.
+  if (pathname === '/api/permissions/probe-automation' && req.method === 'POST') {
+    const { target } = await readJsonBody(req)
+    const { execFileSync } = require('node:child_process')
+    sendJson(res, 200, { row: permissionProbes.probeAutomation(target, { execFileSync }) })
     return
   }
 

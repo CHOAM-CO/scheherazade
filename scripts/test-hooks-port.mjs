@@ -121,6 +121,40 @@ console.log('\n-- session-start.mjs')
   fs.rmSync(mem, { recursive: true, force: true })
 }
 
+// session-start: permission wall map (P0, 2026-07-15). The snapshot is
+// written by /api/permissions/status; the hook's promises: denied walls get
+// ONE loud boot line, sip is excluded (informational, not a grantable wall),
+// granted/indeterminate rows stay silent, stale snapshots say their age,
+// and a garbage file says nothing rather than guessing.
+{
+  const permCtx = (snapshot) => {
+    const mem = tmp()
+    fs.mkdirSync(mem, { recursive: true })
+    if (snapshot !== undefined) fs.writeFileSync(path.join(mem, 'permission-status.json'), snapshot)
+    const ctx = JSON.parse(runPorted('hooks/session-start.mjs', mem).stdout).hookSpecificOutput.additionalContext
+    fs.rmSync(mem, { recursive: true, force: true })
+    return ctx
+  }
+  const snap = (rows, checkedAt = new Date().toISOString()) => JSON.stringify({ checkedAt, rows })
+
+  let ctx = permCtx(snap([
+    { class: 'screen', granted: false, kind: 'official' },
+    { class: 'fda', granted: true, kind: 'heuristic' },
+    { class: 'sudo', granted: 'indeterminate', kind: 'heuristic' },
+  ]))
+  ok('denied wall surfaces at boot by class name', ctx.includes('permission walls') && ctx.includes('screen'))
+  ok('granted/indeterminate rows stay out of the wall line', !/walls on this machine:.*(fda|sudo)/.test(ctx))
+
+  ctx = permCtx(snap([{ class: 'sip', granted: false, kind: 'info' }, { class: 'fda', granted: true, kind: 'heuristic' }]))
+  ok('sip-only denial -> no wall line (informational, not grantable)', !ctx.includes('permission walls'))
+
+  ctx = permCtx(snap([{ class: 'fda', granted: false, kind: 'heuristic' }], '2020-01-01T00:00:00Z'))
+  ok('stale snapshot carries its age', /may be stale/.test(ctx))
+
+  ok('no snapshot -> no wall line', !permCtx(undefined).includes('permission walls'))
+  ok('garbage snapshot -> silent, never guesses', !permCtx('{{{not json').includes('permission walls'))
+}
+
 // ── felt-check ──────────────────────────────────────────────────────────────
 console.log('\n-- felt-check.mjs')
 {

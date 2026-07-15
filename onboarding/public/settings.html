@@ -83,6 +83,17 @@
           <button id="set-autonomy-save"></button>
         </div>
       </div>
+
+      <!-- Permission checklist (P0, 2026-07-15 — docs/permission-visibility-
+           design.md). Shows the macOS wall map BEFORE the agent hits walls
+           mid-task. Rows render from /api/permissions/status; probes that
+           cannot measure say so (❓) instead of pretending ✅/❌. -->
+      <div class="category" style="margin-top: 2.5rem" id="set-perms">
+        <div class="category-label" id="set-perms-label"></div>
+        <p class="subtitle" id="set-perms-note"></p>
+        <div id="set-perms-rows"></div>
+        <div class="field-hint hidden" id="set-perms-relaunch"></div>
+      </div>
     </div>
 
     <div class="toast" id="set-toast"></div>

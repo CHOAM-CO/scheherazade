@@ -75,8 +75,30 @@ if (fs.existsSync(skillsDir)) {
   }
 }
 
+// Permission wall map (P0, 2026-07-15 -- docs/permission-visibility-design.md).
+// http-server.cjs drops a probe snapshot into DATA_HOME/permission-status.json
+// on every /api/permissions/status call; MEM and DATA_HOME are the same
+// directory in production (main.cjs injects AGENT_DATA_HOME into both). One
+// line of "what this machine can't do" at boot beats discovering each wall
+// mid-task. Additive: no file -> no lines; a granted-everything map -> no
+// lines either (silence means nothing known to be blocked, and the P1
+// translator hook covers the moment a wall IS hit).
+let permLine = null
+try {
+  const snap = JSON.parse(fs.readFileSync(path.join(MEM, 'permission-status.json'), 'utf8'))
+  const walls = (snap.rows || []).filter((r) => r.granted === false && r.class !== 'sip')
+  if (walls.length > 0) {
+    const ageDays = snap.checkedAt ? Math.floor((Date.now() - Date.parse(snap.checkedAt)) / 86400000) : null
+    const staleMark = ageDays !== null && ageDays > 7 ? ` (checked ${ageDays}d ago -- may be stale)` : ''
+    permLine = `Known permission walls on this machine: ${walls.map((r) => r.class).join(', ')}${staleMark}. Tell the user what is blocked BEFORE attempting work that needs these -- do not rediscover them mid-task.`
+  }
+} catch {
+  // no snapshot yet, or unreadable -- say nothing rather than guess.
+}
+
 const out = []
 out.push(`Session note for ${TODAY}: ${noteStatus}.`)
+if (permLine) out.push(permLine)
 out.push(`Checkpoint: ${checkpointStatus}.`)
 if (pendingCount > 0) out.push(`${pendingCount} prior-date session note(s) waiting on journal compression -- run journal-compress.mjs scan.`)
 if (dreamCount > 0) out.push(`${dreamCount} dream fragment(s) in dreams/ -- read the 5 most recent for context.`)

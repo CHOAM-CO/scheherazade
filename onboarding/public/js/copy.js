@@ -592,6 +592,39 @@ window.COPY = {
     autonomySaved: '저장됐습니다',
     autonomyInvalidWindow: '시간 형식이 올바르지 않습니다 (예: 02:00)',
     autonomyInvalidCap: '숫자를 입력해주세요',
+
+    // AUTHORED -- permission checklist (P0, 2026-07-15). Register rules for
+    // this block: a probe that cannot measure never renders as granted or
+    // denied ("확인 불가" is its own state), and rows without a Settings
+    // pane (SIP/sudo) never grow an open button -- offering a toggle that
+    // cannot fix the problem is the misroute this feature exists to kill.
+    permsLabel: '권한 상태',
+    permsNote:
+      '에이전트가 이 컴퓨터에서 부딪힐 수 있는 macOS 권한 벽입니다. ' +
+      '허용은 항상 회원님이 시스템 설정에서 직접 합니다. 여기서는 상태 확인과 설정 창 열기만 합니다.',
+    permsLoading: '확인 중',
+    permsLoadFailed: '권한 상태를 확인할 수 없습니다',
+    permsGranted: '허용됨',
+    permsDenied: '허용 안 됨',
+    permsIndeterminate: '확인 불가',
+    permsHeuristicMark: '추정',
+    permsOpenButton: '설정 열기',
+    permsProbeButton: '확인',
+    permsClassNames: {
+      fda: '전체 디스크 접근',
+      screen: '화면 기록',
+      accessibility: '손쉬운 사용',
+      automation: '자동화 (다른 앱 제어)',
+      sudo: '관리자 명령 (sudo)',
+      sip: '시스템 무결성 보호 (SIP)',
+    },
+    permsClassNotes: {
+      automation: '확인을 누르면 macOS가 허용 여부를 묻는 창을 띄울 수 있습니다',
+      sudo: '비밀번호 없이 실행 가능한지만 확인합니다. 여기서 켜고 끄는 항목이 아닙니다',
+      sip: '시스템 고정 조건입니다. 앱 권한과 무관하며 설정에서 바꾸는 항목이 아닙니다',
+    },
+    permsRelaunchNote: '설정에서 허용을 바꾸셨다면, 앱을 재실행해야 여기 반영되는 항목이 있습니다',
+    permsRelaunchButton: '앱 재실행',
   },
 
   // AUTHORED (not in copy file) -- connectors page, new in the 2026-07-14

@@ -130,6 +130,164 @@
     }
 
     renderAgentConfig()
+    renderPermissions().catch((err) => console.error(err))
+  }
+
+  // ── permission checklist (P0, 2026-07-15) ────────────────────────────────
+  // docs/permission-visibility-design.md. Render rules mirror the autonomy
+  // meter's honesty contract: 'indeterminate' is its own visible state
+  // ("확인 불가"), never coerced into granted/denied; heuristic rows carry a
+  // "추정" mark; SIP/sudo rows never grow an open-settings button. The
+  // automation row is synthesized client-side as indeterminate-until-probed:
+  // its probe SENDS an Apple event (may pop the consent dialog), so it only
+  // ever runs from its own [확인] button, never from the status load.
+  const PERMS_POLL_MS = 3000
+  const PERMS_POLL_MAX = 20
+  let permsPollTimer = null
+
+  // No emoji (product register, copy.js header) -- state is words + the
+  // existing status-line success/failure colors; indeterminate stays the
+  // default muted color, visually its own third thing.
+  function applyPermBadge(el, row) {
+    el.className = 'status-line'
+    let text
+    if (row.granted === true) { el.classList.add('success'); text = C.permsGranted }
+    else if (row.granted === false) { el.classList.add('failure'); text = C.permsDenied }
+    else { text = C.permsIndeterminate }
+    if (row.kind === 'heuristic' && row.granted !== 'indeterminate') text += ` (${C.permsHeuristicMark})`
+    el.textContent = text
+  }
+
+  function renderPermRows(rows, deepLinks) {
+    const box = $('set-perms-rows')
+    box.innerHTML = ''
+    // Server rows are the prompt-free set; automation joins client-side.
+    const all = rows.slice()
+    if (!all.some((r) => r.class === 'automation')) {
+      all.push({ class: 'automation', granted: 'indeterminate', kind: 'heuristic' })
+    }
+    for (const r of all) {
+      if (!C.permsClassNames[r.class]) continue // unknown probe row: nothing honest to label it with
+      const rowEl = document.createElement('div')
+      rowEl.className = 'agent-control-row'
+      const label = document.createElement('label')
+      label.textContent = C.permsClassNames[r.class]
+      rowEl.appendChild(label)
+
+      const right = document.createElement('span')
+      const badge = document.createElement('span')
+      applyPermBadge(badge, r)
+      right.appendChild(badge)
+
+      if (deepLinks && deepLinks[r.class]) {
+        const btn = document.createElement('button')
+        btn.textContent = C.permsOpenButton
+        btn.style.marginLeft = '0.75rem'
+        btn.onclick = async () => {
+          btn.disabled = true
+          try {
+            await api('/api/permissions/open', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ cls: r.class }),
+            })
+            showRelaunchBanner()
+            startPermsPoll()
+          } catch (err) {
+            showToast(GEN(err.message))
+          } finally {
+            btn.disabled = false
+          }
+        }
+        right.appendChild(btn)
+      }
+
+      if (r.class === 'automation') {
+        const btn = document.createElement('button')
+        btn.textContent = C.permsProbeButton
+        btn.style.marginLeft = '0.75rem'
+        btn.onclick = async () => {
+          btn.disabled = true
+          badge.className = 'status-line'
+          badge.textContent = C.permsLoading
+          try {
+            const { row: probed } = await api('/api/permissions/probe-automation', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({}),
+            })
+            applyPermBadge(badge, probed)
+          } catch (err) {
+            badge.textContent = C.permsIndeterminate
+            showToast(GEN(err.message))
+          } finally {
+            btn.disabled = false
+          }
+        }
+        right.appendChild(btn)
+      }
+
+      rowEl.appendChild(right)
+      box.appendChild(rowEl)
+
+      if (C.permsClassNotes[r.class]) {
+        const note = document.createElement('div')
+        note.className = 'field-hint'
+        note.textContent = C.permsClassNotes[r.class]
+        box.appendChild(note)
+      }
+    }
+  }
+
+  function showRelaunchBanner() {
+    const el = $('set-perms-relaunch')
+    if (!el.classList.contains('hidden')) return
+    el.classList.remove('hidden')
+    el.textContent = `${C.permsRelaunchNote} `
+    const btn = document.createElement('button')
+    btn.textContent = C.permsRelaunchButton
+    btn.style.marginLeft = '0.5rem'
+    // Reuses the FDA relaunch route -- same app, same TCC cache, one path.
+    btn.onclick = () => api('/api/onboarding/fda/relaunch', { method: 'POST' }).catch((err) => showToast(GEN(err.message)))
+    el.appendChild(btn)
+  }
+
+  // Bounded refresh after the user opens a Settings pane: live-state probes
+  // (screen/accessibility) reflect a toggle without relaunch, so polling
+  // here lets the badge flip in front of the user. FDA stays stale until
+  // relaunch -- the banner above owns that truth.
+  function startPermsPoll() {
+    if (permsPollTimer) return
+    let n = 0
+    permsPollTimer = setInterval(async () => {
+      n += 1
+      if (n > PERMS_POLL_MAX) {
+        clearInterval(permsPollTimer)
+        permsPollTimer = null
+        return
+      }
+      try {
+        const data = await api('/api/permissions/status')
+        renderPermRows(data.rows, data.deepLinks)
+      } catch {
+        clearInterval(permsPollTimer)
+        permsPollTimer = null
+      }
+    }, PERMS_POLL_MS)
+  }
+
+  async function renderPermissions() {
+    $('set-perms-label').textContent = C.permsLabel
+    $('set-perms-note').textContent = C.permsNote
+    const box = $('set-perms-rows')
+    box.textContent = C.permsLoading
+    try {
+      const data = await api('/api/permissions/status')
+      renderPermRows(data.rows, data.deepLinks)
+    } catch (err) {
+      console.error('permissions status failed:', err)
+      box.textContent = C.permsLoadFailed
+    }
   }
 
   // ── agent model/effort config ───────────────────────────────────────────
