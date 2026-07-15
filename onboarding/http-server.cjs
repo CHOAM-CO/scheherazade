@@ -510,6 +510,26 @@ function ensureSettingsLocalAdditions() {
     })
   }
 
+  // v0.0.12: permission-wall translator on Bash results (춘식3 P1 adoption,
+  // 2026-07-15 — silence-during-diagnosis killer; see the hook's header).
+  // Same additive-only contract as the negation block above.
+  const TRANSLATOR_HOOK = 'post-bash-permission-translator.mjs'
+  if (!Array.isArray(settings.hooks.PostToolUse)) settings.hooks.PostToolUse = []
+  const hasTranslator = settings.hooks.PostToolUse.some((group) =>
+    Array.isArray(group.hooks) && group.hooks.some((h) => typeof h.command === 'string' && h.command.includes(TRANSLATOR_HOOK)))
+  if (!hasTranslator) {
+    let bashGroup = settings.hooks.PostToolUse.find((g) => g && g.matcher === 'Bash')
+    if (!bashGroup) {
+      bashGroup = { matcher: 'Bash', hooks: [] }
+      settings.hooks.PostToolUse.push(bashGroup)
+    }
+    if (!Array.isArray(bashGroup.hooks)) bashGroup.hooks = []
+    bashGroup.hooks.push({
+      type: 'command',
+      command: `node ${path.join(toUnpackedPath(REPO_ROOT), 'hooks', TRANSLATOR_HOOK)}`,
+    })
+  }
+
   // win-port Phase 3: the 3 bash hooks were ported to .mjs and the .sh
   // files DELETED from the bundle -- an existing install's settings still
   // says `bash .../hooks/session-start.sh`, which now fails on every fire
