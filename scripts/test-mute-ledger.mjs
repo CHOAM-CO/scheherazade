@@ -31,17 +31,25 @@ function makeHome() {
   return home
 }
 
-// A transcript where a Discord message arrived. `replied` controls whether the
-// agent actually called the reply tool afterwards.
+// A transcript where a Discord message arrived. `replied` controls whether/how
+// the agent called the reply tool afterwards:
+//   true      -> explicit channelId matching the trigger
+//   'omitted' -> reply with NO channelId (v0.0.11 recommended path; server
+//                routes it to the current conversation channel)
+//   'wrong'   -> explicit channelId that is NOT the trigger channel
+//   false     -> composed text, never called the tool (the 돌연사 shape)
 function makeTranscript(home, { replied }) {
   const p = path.join(home, 'transcript.jsonl')
   const rows = [
     { type: 'user', message: { content: `<channel source="x" channelId="${CHANNEL_ID}">안녕</channel>` } },
   ]
-  if (replied) {
+  if (replied === true || replied === 'omitted' || replied === 'wrong') {
+    const input = replied === 'omitted' ? { text: 'hi' }
+      : replied === 'wrong' ? { channelId: '999999999999999999', text: 'hi' }
+      : { channelId: CHANNEL_ID, text: 'hi' }
     rows.push({
       type: 'assistant',
-      message: { content: [{ type: 'tool_use', name: 'mcp__agent-channel__reply', input: { channelId: CHANNEL_ID, text: 'hi' } }] },
+      message: { content: [{ type: 'tool_use', name: 'mcp__agent-channel__reply', input }] },
     })
   } else {
     rows.push({ type: 'assistant', message: { content: [{ type: 'text', text: '안녕! (never sent)' }] } })
@@ -105,6 +113,27 @@ console.log('mute-strike ledger fixtures\n')
   const { code, ledger } = runHook(home, { replied: true, capHit: false })
   check('a real reply exits 0', code === 0, `got exit ${code}`)
   check('a real reply resets strikes to 0', ledger?.strikes === 0, JSON.stringify(ledger))
+}
+
+// 4b. OMITTED channelId reply -> counts as answered (v0.0.11 regression fix,
+//     2026-07-15). Since v0.0.11 omitting channelId is the RECOMMENDED path
+//     (server routes to the current conversation channel = the trigger).
+//     Before the fix this shape drew a spurious exit-2 every turn and false
+//     strikes if the model kept omitting.
+{
+  const home = makeHome()
+  runHook(home, { replied: false, capHit: true }) // dirty ledger first
+  const { code, ledger } = runHook(home, { replied: 'omitted', capHit: false })
+  check('omitted-channelId reply exits 0 (no spurious block)', code === 0, `got exit ${code}`)
+  check('omitted-channelId reply resets strikes', ledger?.strikes === 0, JSON.stringify(ledger))
+}
+
+// 4c. Explicit WRONG channelId still blocks -- the fix must not blanket-accept
+//     every reply-tool call as "answered the trigger".
+{
+  const home = makeHome()
+  const { code } = runHook(home, { replied: 'wrong', capHit: false })
+  check('explicit wrong channelId still blocks (exit 2)', code === 2, `got exit ${code}`)
 }
 
 // 5. Model changed under a dirty ledger -> count restarts, does not inherit.

@@ -147,6 +147,16 @@ async function main() {
   }
 
   // Walk forward looking for a reply-class tool_use hitting the same channel.
+  // OMITTED channelId counts as a match (v0.0.11 regression fix, 2026-07-15,
+  // surfaced by Mino's cadence-parity question): since v0.0.11 the reply
+  // tool's channelId is optional and the RECOMMENDED path -- channel.mjs
+  // routes an omitted id to lastInboundChannelId, which is exactly the
+  // channel this guard extracted as the trigger. Matching only explicit ids
+  // made the recommended path read as "no reply" -> a spurious exit-2 every
+  // turn, and strikes (= false mute conviction) if the model kept omitting.
+  // Accepted edge: if a NEWER message landed on another channel between
+  // trigger and reply, an omitted-id reply goes there instead -- rarer and
+  // milder than convicting every correct omitted-id reply.
   let replyFound = false
   for (let i = triggerIdx + 1; i < entries.length && !replyFound; i++) {
     const e = entries[i]
@@ -156,7 +166,8 @@ async function main() {
     for (const block of content) {
       if (block?.type !== 'tool_use') continue
       if (!REPLY_TOOLS.has(block.name)) continue
-      if (String(block.input?.channelId || '') === triggerChannelId) {
+      const sentTo = String(block.input?.channelId || '')
+      if (sentTo === triggerChannelId || sentTo === '') {
         replyFound = true
         break
       }
