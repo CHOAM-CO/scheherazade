@@ -38,7 +38,10 @@ function makeHome() {
 //                routes it to the current conversation channel)
 //   'wrong'   -> explicit channelId that is NOT the trigger channel
 //   false     -> composed text, never called the tool (the 돌연사 shape)
-function makeTranscript(home, { replied }) {
+// `deliveredTo` (optional): append the tool_result with channel.mjs's
+// `delivered_channel=` receipt stamped to that id -- the guard's
+// authoritative match since the 2026-07-15 double-send fix.
+function makeTranscript(home, { replied, deliveredTo }) {
   const p = path.join(home, 'transcript.jsonl')
   const rows = [
     { type: 'user', message: { content: `<channel source="x" channelId="${CHANNEL_ID}">안녕</channel>` } },
@@ -49,8 +52,14 @@ function makeTranscript(home, { replied }) {
       : { channelId: CHANNEL_ID, text: 'hi' }
     rows.push({
       type: 'assistant',
-      message: { content: [{ type: 'tool_use', name: 'mcp__agent-channel__reply', input }] },
+      message: { content: [{ type: 'tool_use', id: 'toolu_test1', name: 'mcp__agent-channel__reply', input }] },
     })
+    if (deliveredTo) {
+      rows.push({
+        type: 'user',
+        message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_test1', content: [{ type: 'text', text: `sent to ${deliveredTo} (1 message)\ndelivered_channel=${deliveredTo}` }] }] },
+      })
+    }
   } else {
     rows.push({ type: 'assistant', message: { content: [{ type: 'text', text: '안녕! (never sent)' }] } })
   }
@@ -59,8 +68,8 @@ function makeTranscript(home, { replied }) {
 }
 
 // Returns { code, ledger }
-function runHook(home, { replied, capHit }) {
-  const transcript = makeTranscript(home, { replied })
+function runHook(home, { replied, capHit, deliveredTo }) {
+  const transcript = makeTranscript(home, { replied, deliveredTo })
   let code = 0
   try {
     execFileSync('node', [HOOK], {
@@ -128,12 +137,35 @@ console.log('mute-strike ledger fixtures\n')
   check('omitted-channelId reply resets strikes', ledger?.strikes === 0, JSON.stringify(ledger))
 }
 
-// 4c. Explicit WRONG channelId still blocks -- the fix must not blanket-accept
-//     every reply-tool call as "answered the trigger".
+// 4c. Explicit WRONG channelId with NO delivery receipt -> blocks. This is
+//     the true-failure shape: the tool threw (no fallback available), nothing
+//     reached the user. The fix must not blanket-accept every reply-tool call.
 {
   const home = makeHome()
   const { code } = runHook(home, { replied: 'wrong', capHit: false })
-  check('explicit wrong channelId still blocks (exit 2)', code === 2, `got exit ${code}`)
+  check('wrong channelId without delivery receipt blocks (exit 2)', code === 2, `got exit ${code}`)
+}
+
+// 4d. Explicit WRONG channelId but the RECEIPT says the server fallback
+//     delivered to the trigger channel -> answered (double-send fix,
+//     2026-07-15 Melchior catch). Since v0.0.11 the server delivers
+//     confabulated ids via fallback + correction note; judging by ARGS here
+//     made the guard demand a resend of an already-delivered answer -> the
+//     user got the same message twice. Receipt beats aim.
+{
+  const home = makeHome()
+  runHook(home, { replied: false, capHit: true }) // dirty ledger first
+  const { code, ledger } = runHook(home, { replied: 'wrong', capHit: false, deliveredTo: CHANNEL_ID })
+  check('wrong args but delivered-to-trigger receipt exits 0', code === 0, `got exit ${code}`)
+  check('receipt match resets strikes', ledger?.strikes === 0, JSON.stringify(ledger))
+}
+
+// 4e. Receipt delivered to a DIFFERENT channel, args also wrong -> still
+//     blocks: the trigger channel genuinely never got an answer.
+{
+  const home = makeHome()
+  const { code } = runHook(home, { replied: 'wrong', capHit: false, deliveredTo: '888888888888888888' })
+  check('receipt to a different channel still blocks (exit 2)', code === 2, `got exit ${code}`)
 }
 
 // 5. Model changed under a dirty ledger -> count restarts, does not inherit.

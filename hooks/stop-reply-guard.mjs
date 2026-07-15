@@ -146,28 +146,56 @@ async function main() {
     if (pat.test(triggerBody)) process.exit(0)
   }
 
-  // Walk forward looking for a reply-class tool_use hitting the same channel.
-  // OMITTED channelId counts as a match (v0.0.11 regression fix, 2026-07-15,
-  // surfaced by Mino's cadence-parity question): since v0.0.11 the reply
-  // tool's channelId is optional and the RECOMMENDED path -- channel.mjs
-  // routes an omitted id to lastInboundChannelId, which is exactly the
-  // channel this guard extracted as the trigger. Matching only explicit ids
-  // made the recommended path read as "no reply" -> a spurious exit-2 every
-  // turn, and strikes (= false mute conviction) if the model kept omitting.
-  // Accepted edge: if a NEWER message landed on another channel between
-  // trigger and reply, an omitted-id reply goes there instead -- rarer and
-  // milder than convicting every correct omitted-id reply.
+  // Walk forward looking for a reply-class call that ANSWERED the trigger
+  // channel. Two layers, receipt first (2026-07-15 Melchior chain review):
+  //
+  // 1. DELIVERY RECEIPT: channel.mjs stamps `delivered_channel=<id>` into
+  //    every successful reply/send_file tool result -- where the message
+  //    actually LANDED. This is the authoritative match. It exists because
+  //    since v0.0.11 the server delivers even on a wrong/omitted args id via
+  //    fallback routing: matching on ARGS alone judged where the model
+  //    AIMED, so a confabulated-id reply that the server had already
+  //    delivered to the trigger channel still drew exit 2 -> the model
+  //    resent -> the user got the same answer twice (double-send class,
+  //    Melchior catch). Guard semantics are now "actually delivered", which
+  //    is what "answered" always meant.
+  // 2. ARGS FALLBACK (receipt missing -- e.g. tool_result outside the tail
+  //    window, or an older channel.mjs without the stamp): explicit args id
+  //    matching the trigger, or OMITTED args id (v0.0.11 recommended path;
+  //    server routes it to the current conversation channel = the trigger.
+  //    Accepted edge, approved 2026-07-15: a newer inbound on another
+  //    channel between trigger and reply reroutes an omitted-id send there
+  //    -- rarer and milder than convicting every correct omitted reply).
+  const pendingReplyCalls = new Map() // tool_use id -> args channelId ('' if omitted)
   let replyFound = false
   for (let i = triggerIdx + 1; i < entries.length && !replyFound; i++) {
     const e = entries[i]
-    if (e.type !== 'assistant') continue
     const content = e.message?.content
     if (!Array.isArray(content)) continue
-    for (const block of content) {
-      if (block?.type !== 'tool_use') continue
-      if (!REPLY_TOOLS.has(block.name)) continue
-      const sentTo = String(block.input?.channelId || '')
-      if (sentTo === triggerChannelId || sentTo === '') {
+    if (e.type === 'assistant') {
+      for (const block of content) {
+        if (block?.type !== 'tool_use') continue
+        if (!REPLY_TOOLS.has(block.name)) continue
+        pendingReplyCalls.set(block.id, String(block.input?.channelId || ''))
+      }
+    } else if (e.type === 'user') {
+      for (const block of content) {
+        if (block?.type !== 'tool_result') continue
+        if (!pendingReplyCalls.has(block.tool_use_id)) continue
+        const text = Array.isArray(block.content)
+          ? block.content.map((c) => (typeof c?.text === 'string' ? c.text : '')).join('\n')
+          : typeof block.content === 'string' ? block.content : ''
+        const m = text.match(/^delivered_channel=(\d+)$/m)
+        if (m && m[1] === triggerChannelId) {
+          replyFound = true
+          break
+        }
+      }
+    }
+  }
+  if (!replyFound) {
+    for (const argsId of pendingReplyCalls.values()) {
+      if (argsId === triggerChannelId || argsId === '') {
         replyFound = true
         break
       }

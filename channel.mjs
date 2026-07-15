@@ -374,7 +374,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     for (let i = 0; i < text.length; i += 1900) chunks.push(text.slice(i, i + 1900))
     for (const chunk of chunks) await ch.send({ content: chunk, allowedMentions: SAFE_MENTIONS })
     clearThinking(ch.id).catch((err) => log('thinking reaction clear failed:', err.message))
-    return { content: [{ type: 'text', text: `sent to ${ch.id} (${chunks.length} message${chunks.length > 1 ? 's' : ''})${note ? `\n${note}` : ''}` }] }
+    // delivered_channel= line: machine-readable delivery receipt for
+    // stop-reply-guard (2026-07-15 Melchior review). The guard used to match
+    // on the tool_use ARGS channelId, but since v0.0.11 the server can
+    // deliver on a wrong/omitted id via fallback -- args say where the model
+    // AIMED, this line says where the message actually LANDED. Fixed format;
+    // the guard greps exactly this token, the human-facing text stays above it.
+    return { content: [{ type: 'text', text: `sent to ${ch.id} (${chunks.length} message${chunks.length > 1 ? 's' : ''})${note ? `\n${note}` : ''}\ndelivered_channel=${ch.id}` }] }
   }
 
   if (name === 'send_file_to_discord') {
@@ -400,7 +406,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     })
     clearThinking(ch.id).catch((err) => log('thinking reaction clear failed:', err.message))
     const urls = [...msg.attachments.values()].map((a) => a.url)
-    return { content: [{ type: 'text', text: `file sent to ${ch.id}: ${path.basename(filePath)}${urls.length ? `\nCDN URL: ${urls.join('\n')}` : ''}${note ? `\n${note}` : ''}` }] }
+    // Same delivery receipt as reply above -- see that comment.
+    return { content: [{ type: 'text', text: `file sent to ${ch.id}: ${path.basename(filePath)}${urls.length ? `\nCDN URL: ${urls.join('\n')}` : ''}${note ? `\n${note}` : ''}\ndelivered_channel=${ch.id}` }] }
   }
 
   if (name === 'read_channel_history') {
