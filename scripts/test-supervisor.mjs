@@ -560,6 +560,11 @@ console.log('\n-- stall watchdog: transcript tail verdicts (teardown Root B)')
   ok('trailing slash resolves to the same watch dir',
     transcriptDirFor('/Users/cto/Documents/Scheherazade/', '/Users/cto') ===
     transcriptDirFor('/Users/cto/Documents/Scheherazade', '/Users/cto'))
+  // Melchior counter-receipt: '_' and '.' are ALSO munged to '-' by the CLI
+  // (raw: ~/Documents/MAGI_Memory -> -Users-narr-Documents-MAGI-Memory).
+  ok('underscore and dot munge to dashes like the CLI does',
+    transcriptDirFor('/Users/x/My_Agent.data', '/h')
+      .endsWith(path.join('.claude', 'projects', '-Users-x-My-Agent-data')))
   // spark F1: symlinked MEM watches the CLI's REAL cwd munge
   {
     const real = fs.mkdtempSync(path.join(os.tmpdir(), 'real-mem-'))

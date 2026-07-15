@@ -388,10 +388,18 @@ function sweepOrphansDefault(pkillPattern, log) {
 // AGENT_DATA_HOME would otherwise make the watchdog watch a directory that
 // never exists, which fails QUIET (no transcript = no verdict = no bounce),
 // the exact silent-detector class this teardown was about.
+//
+// Munge rule: EVERY non-alphanumeric becomes '-', not just path.sep
+// (Melchior counter-receipt on the sep-only version, 07-15 19:40, confirmed
+// on this box raw: ~/Documents/MAGI_Memory -> -Users-narr-Documents-MAGI-
+// Memory, and session_notes -> session-notes inside deeper project dirs).
+// A '_' or '.' in AGENT_DATA_HOME under sep-only munge would re-open the
+// same fail-quiet hole one layer down. Default MEM (~/Documents/<name>) only
+// survived the corpus because it happened to be alphanumeric.
 export function transcriptDirFor(mem, home = os.homedir()) {
   let resolved
   try { resolved = fs.realpathSync(mem) } catch { resolved = path.resolve(mem) }
-  return path.join(home, '.claude', 'projects', resolved.replaceAll(path.sep, '-'))
+  return path.join(home, '.claude', 'projects', resolved.replace(/[^a-zA-Z0-9]/g, '-'))
 }
 
 export function newestTranscript(dir) {
