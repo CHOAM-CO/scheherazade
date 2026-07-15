@@ -32,6 +32,7 @@ import {
   newestTranscript,
   readTranscriptTail,
   stallVerdict,
+  createStallLane,
   createThrashCounter,
   THRASH_PATTERN,
   runLoop,
@@ -638,6 +639,47 @@ console.log('\n-- stall watchdog: transcript tail verdicts (teardown Root B)')
     const f = writeTranscript('f.jsonl', [bigPad, entry('user', 60_000)])
     const tail = readTranscriptTail(f, { now: nowAt(60_000 + STALL_MS + 1000) })
     ok('tail window still parses the last entry of a huge file', tail !== null && tail.type === 'user', JSON.stringify(tail))
+  }
+
+  fs.rmSync(dir, { recursive: true, force: true })
+}
+
+// ── era guard arithmetic (createStallLane, extracted for exactly this) ──────
+// The one line the whole anti-re-bounce-loop promise hangs on:
+// `now() - tail.ageMs < spawnedAt`. Attack it directly.
+console.log('\n-- stall lane: era guard + poll closure')
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'era-test-'))
+  const T0 = Date.parse('2026-07-15T00:00:00Z')
+  const STALL_MS = 900_000
+  const entry = (type, atMs) => JSON.stringify({ type, timestamp: new Date(atMs).toISOString() })
+  const lane = (nowMs, spawnedAt, lines = []) =>
+    createStallLane({ transcriptDir: dir, stallMs: STALL_MS, spawnedAt, now: () => nowMs, log: (l) => lines.push(l) })
+
+  // previous-era stalled file: tail user entry at T0, child spawned LATER at
+  // T0+2h -- aged way past the window, still must NOT bounce
+  fs.writeFileSync(path.join(dir, 's.jsonl'), entry('user', T0) + '\n')
+  ok('previous-era stalled tail never bounces a fresh child',
+    lane(T0 + 3 * 3600_000, T0 + 2 * 3600_000)() === null)
+
+  // same tail, child spawned BEFORE the entry -- this child's era, bounces
+  ok('current-era pending tail past the window bounces',
+    String(lane(T0 + STALL_MS + 60_000, T0 - 1000)()).includes('pending inbound'))
+
+  // boundary: entry written in the same ms as spawn counts as this era
+  ok('entry at exactly spawn time is this era',
+    String(lane(T0 + STALL_MS + 60_000, T0)()).includes('pending inbound'))
+
+  // clock rewind / future-stamped tail: ageMs clamps to 0 -> under window -> null
+  fs.writeFileSync(path.join(dir, 's.jsonl'), entry('user', T0 + 3600_000) + '\n')
+  ok('future-stamped tail (clock skew) never bounces', lane(T0, T0 - 1000)() === null)
+
+  // missing transcript dir: null verdict + exactly ONE log across many polls
+  {
+    const lines = []
+    const p = createStallLane({ transcriptDir: path.join(dir, 'ghost'), stallMs: STALL_MS, spawnedAt: T0, now: () => T0, log: (l) => lines.push(l) })
+    ok('no transcript -> no verdict', p() === null && p() === null && p() === null)
+    ok('...and the fail-quiet log fires exactly once', lines.length === 1 && lines[0].includes('no transcript yet'), String(lines.length))
   }
 
   fs.rmSync(dir, { recursive: true, force: true })

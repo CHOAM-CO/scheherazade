@@ -453,6 +453,35 @@ export function stallVerdict(tail, stallMs) {
   return null // old assistant/system tail = idle, not stalled
 }
 
+// The whole transcript-lane poll as ONE testable closure -- extracted from
+// spawnPtyChild so the era-guard arithmetic is unit-attackable instead of
+// verified-by-inspection only (Melchior review focus, 07-15). Returns a
+// bounce-reason string or null; the caller owns the actual kill.
+// Era guard: a tail entry timestamped BEFORE this child's spawn belongs to a
+// previous (possibly stalled-and-killed) session -- acting on it would
+// re-bounce every fresh respawn forever.
+export function createStallLane({ transcriptDir, stallMs, spawnedAt, now = () => Date.now(), log = () => {} }) {
+  let noTranscriptLogged = false
+  return function poll() {
+    const file = newestTranscript(transcriptDir)
+    if (!file) {
+      // Say it ONCE: a watchdog watching a directory that never fills is
+      // fail-quiet, and quiet detectors are how the 429-min stall lived.
+      if (!noTranscriptLogged) {
+        noTranscriptLogged = true
+        log(`watchdog: no transcript yet under ${transcriptDir} -- stall lane idle until one appears`)
+      }
+      return null
+    }
+    noTranscriptLogged = false
+    const tail = readTranscriptTail(file, { now })
+    if (!tail || tail.ageMs === null) return null
+    if (now() - tail.ageMs < spawnedAt) return null // previous-era tail
+    const verdict = stallVerdict(tail, stallMs)
+    return verdict ? `transcript stalled ${Math.round(tail.ageMs / 60000)}min: ${verdict}` : null
+  }
+}
+
 export const THRASH_PATTERN = 'Autocompact is thrashing'
 // cooldownMs exists because the TUI may repaint the same error line during
 // redraws: one real error must not count twice. Real thrash cycles in the
@@ -533,27 +562,14 @@ function spawnPtyChild(cfg, { now = () => Date.now(), log }) {
   const watchdogOn = cfg.stallTimeoutSec > 0 && !IS_WIN
   const thrash = watchdogOn ? createThrashCounter({ now }) : null
   if (watchdogOn) {
-    const stallMs = cfg.stallTimeoutSec * 1000
-    let noTranscriptLogged = false
+    const poll = createStallLane({
+      transcriptDir: transcriptDirFor(cfg.mem),
+      stallMs: cfg.stallTimeoutSec * 1000,
+      spawnedAt, now, log,
+    })
     stallTimer = setInterval(() => {
-      const file = newestTranscript(transcriptDirFor(cfg.mem))
-      if (!file) {
-        // Say it ONCE: a watchdog watching a directory that never fills is
-        // fail-quiet, and quiet detectors are how the 429-min stall lived.
-        if (!noTranscriptLogged) {
-          noTranscriptLogged = true
-          log(`watchdog: no transcript yet under ${transcriptDirFor(cfg.mem)} -- stall lane idle until one appears`)
-        }
-        return
-      }
-      noTranscriptLogged = false
-      const tail = readTranscriptTail(file, { now })
-      if (!tail) return
-      // Era guard: the tail must belong to THIS child's life, or a dead
-      // session's stalled file would re-bounce every fresh respawn forever.
-      if (tail.ageMs === null || now() - tail.ageMs < spawnedAt) return
-      const verdict = stallVerdict(tail, stallMs)
-      if (verdict) bounce(`transcript stalled ${Math.round(tail.ageMs / 60000)}min: ${verdict}`)
+      const reason = poll()
+      if (reason) bounce(reason)
     }, 60_000)
     if (typeof stallTimer.unref === 'function') stallTimer.unref()
   }
