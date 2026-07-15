@@ -228,6 +228,9 @@ export function ensureNodeShim(cfg, { execPath = process.execPath, env = process
   try {
     fs.mkdirSync(binDir, { recursive: true })
     if (IS_WIN) {
+      // Windows GA checklist (review S3c): node.cmd resolution depends on
+      // PATHEXT containing .CMD -- verify on a real win box before the port
+      // ships; a stripped PATHEXT would neuter the shim silently.
       const cmd = `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${execPath}" %*\r\n`
       const shimPath = path.join(binDir, 'node.cmd')
       if (!fs.existsSync(shimPath) || fs.readFileSync(shimPath, 'utf8') !== cmd) fs.writeFileSync(shimPath, cmd)
@@ -402,24 +405,47 @@ export function transcriptDirFor(mem, home = os.homedir()) {
   return path.join(home, '.claude', 'projects', resolved.replace(/[^a-zA-Z0-9]/g, '-'))
 }
 
-export function newestTranscript(dir) {
+// eraStart (review gate G1, Melchior 07-15): the project dir is SHARED by
+// every claude session with the same cwd -- his box holds 555 jsonl in one
+// project dir, and the teardown corpus itself is 24 sequential generations in
+// one dir. "Newest mtime" alone therefore binds the watchdog to whichever
+// session wrote last, not to OUR child: a stale prior-generation file (or a
+// foreign session resumed in the same cwd) could either bounce a healthy
+// child or mask a real stall. Filtering on birthtime >= eraStart restricts
+// the watch to files CREATED in this child's lifetime. birthtime falls back
+// to mtime on filesystems that report 0/absent. Residual risk, accepted and
+// documented: a foreign session freshly STARTED in the same cwd after our
+// spawn passes the filter -- identity beyond creation-era needs a session-id
+// handshake the CLI does not expose (and lsof is out: the corpus shows the
+// CLI append-closes, 춘식 raw 07-15 "열어놓은 jsonl이 lsof에 안 잡힘").
+export function newestTranscript(dir, { eraStart = null } = {}) {
   let best = null
   let entries
   try { entries = fs.readdirSync(dir) } catch { return null }
   for (const name of entries) {
     if (!name.endsWith('.jsonl')) continue
     const full = path.join(dir, name)
-    let mtime
-    try { mtime = fs.statSync(full).mtimeMs } catch { continue }
-    if (!best || mtime > best.mtime) best = { path: full, mtime }
+    let st
+    try { st = fs.statSync(full) } catch { continue }
+    if (eraStart !== null) {
+      const born = st.birthtimeMs > 0 ? st.birthtimeMs : st.mtimeMs
+      if (born < eraStart - 1000) continue // 1s slack for clock granularity
+    }
+    if (!best || st.mtimeMs > best.mtime) best = { path: full, mtime: st.mtimeMs }
   }
   return best ? best.path : null
 }
 
-// Reads the last parseable entry of a transcript (tail window, not the whole
-// file -- these run to hundreds of MB under thrash) and returns
-// { type, ageMs, synthetic } or null when nothing parses.
-export function readTranscriptTail(file, { now = () => Date.now(), tailBytes = 262144 } = {}) {
+// Reads the tail window of a transcript (never the whole file -- these run to
+// hundreds of MB under thrash) and returns the last parseable entry as
+// { type, ageMs, synthetic, toolResult, syntheticCount } or null when nothing
+// parses. syntheticCount counts synthetic-error entries timestamped at or
+// after countSyntheticSince within the same window -- the structural form of
+// the old pty thrash lane (review gate G2): a synthetic entry can only be
+// minted by the CLI itself (message.model === '<synthetic>'), so unlike a
+// byte-stream substring match it cannot be spoofed by a maintenance session
+// grepping this very source file, and TUI redraws cannot double-count it.
+export function readTranscriptTail(file, { now = () => Date.now(), tailBytes = 262144, countSyntheticSince = null } = {}) {
   let fd
   try {
     fd = fs.openSync(file, 'r')
@@ -428,28 +454,46 @@ export function readTranscriptTail(file, { now = () => Date.now(), tailBytes = 2
     const buf = Buffer.alloc(size - start)
     fs.readSync(fd, buf, 0, buf.length, start)
     const lines = buf.toString('utf8').split('\n').filter((l) => l.trim())
-    for (let i = lines.length - 1; i >= 0; i--) {
+    let last = null
+    let syntheticCount = 0
+    for (const line of lines) {
       let e
-      try { e = JSON.parse(lines[i]) } catch { continue } // first line may be cut by the tail window
+      try { e = JSON.parse(line) } catch { continue } // first line may be cut by the tail window
       if (!e || typeof e !== 'object' || !e.type) continue
       const ts = Date.parse(e.timestamp || '')
       const msg = e.message || {}
-      return {
+      const synthetic = msg.model === '<synthetic>' || e.isApiErrorMessage === true
+      if (countSyntheticSince !== null && synthetic && Number.isFinite(ts) && ts >= countSyntheticSince) syntheticCount++
+      const content = Array.isArray(msg.content) ? msg.content : []
+      last = {
         type: e.type,
         ageMs: Number.isFinite(ts) ? Math.max(0, now() - ts) : null,
-        synthetic: msg.model === '<synthetic>' || e.isApiErrorMessage === true,
+        synthetic,
+        toolResult: content.some((b) => b && b.type === 'tool_result'),
+        syntheticCount: 0, // filled below from the pass-wide counter
       }
     }
+    if (last) { last.syntheticCount = syntheticCount; return last }
   } catch { /* unreadable file = no verdict */ } finally {
     if (fd !== undefined) try { fs.closeSync(fd) } catch {}
   }
   return null
 }
 
-export function stallVerdict(tail, stallMs) {
-  if (!tail || !stallMs || tail.ageMs === null || tail.ageMs < stallMs) return null
-  if (tail.type === 'user' || tail.type === 'attachment') return 'pending inbound with no turn'
-  if (tail.synthetic) return 'terminal synthetic error (autocompact thrash shape)'
+// Asymmetric thresholds (review S1): most user-type tail entries are
+// tool_result blocks, not human messages (83-92% across two boxes' raw), and
+// a legitimately long streaming turn can leave a user tail warm for a while
+// -- so the user/attachment lane waits 2x as long as the synthetic lane
+// before calling it a stall. The reason string names which shape it was:
+// a tool_result tail is a turn that died mid-flight, not an ignored human.
+export function stallVerdict(tail, { userStallMs, syntheticStallMs } = {}) {
+  if (!tail || tail.ageMs === null) return null
+  if ((tail.type === 'user' || tail.type === 'attachment') && userStallMs && tail.ageMs >= userStallMs) {
+    return tail.toolResult ? 'mid-turn death (tool_result tail)' : 'pending inbound with no turn'
+  }
+  if (tail.synthetic && syntheticStallMs && tail.ageMs >= syntheticStallMs) {
+    return 'terminal synthetic error (autocompact thrash shape)'
+  }
   return null // old assistant/system tail = idle, not stalled
 }
 
@@ -457,53 +501,66 @@ export function stallVerdict(tail, stallMs) {
 // spawnPtyChild so the era-guard arithmetic is unit-attackable instead of
 // verified-by-inspection only (Melchior review focus, 07-15). Returns a
 // bounce-reason string or null; the caller owns the actual kill.
-// Era guard: a tail entry timestamped BEFORE this child's spawn belongs to a
-// previous (possibly stalled-and-killed) session -- acting on it would
-// re-bounce every fresh respawn forever.
-export function createStallLane({ transcriptDir, stallMs, spawnedAt, now = () => Date.now(), log = () => {} }) {
+// Era guard, two layers: file binding (newestTranscript eraStart, gate G1)
+// keeps prior-generation files out entirely; the tail-timestamp check stays
+// as the belt beneath it. Thrash lane (gate G2): 3+ synthetic entries inside
+// the window, counted from the transcript, no pty bytes involved.
+export function createStallLane({
+  transcriptDir, stallMs, spawnedAt,
+  now = () => Date.now(), log = () => {},
+  userStallMs = stallMs * 2,
+  thrashWindowMs = 1_800_000, thrashThreshold = 3,
+}) {
   let noTranscriptLogged = false
   return function poll() {
-    const file = newestTranscript(transcriptDir)
+    const file = newestTranscript(transcriptDir, { eraStart: spawnedAt })
     if (!file) {
       // Say it ONCE: a watchdog watching a directory that never fills is
       // fail-quiet, and quiet detectors are how the 429-min stall lived.
       if (!noTranscriptLogged) {
         noTranscriptLogged = true
-        log(`watchdog: no transcript yet under ${transcriptDir} -- stall lane idle until one appears`)
+        log(`watchdog: no this-era transcript yet under ${transcriptDir} -- stall lane idle until one appears`)
       }
       return null
     }
     noTranscriptLogged = false
-    const tail = readTranscriptTail(file, { now })
+    const tail = readTranscriptTail(file, {
+      now,
+      countSyntheticSince: Math.max(now() - thrashWindowMs, spawnedAt),
+    })
     if (!tail || tail.ageMs === null) return null
-    if (now() - tail.ageMs < spawnedAt) return null // previous-era tail
-    const verdict = stallVerdict(tail, stallMs)
+    if (now() - tail.ageMs < spawnedAt) return null // previous-era tail (belt)
+    if (tail.syntheticCount >= thrashThreshold) {
+      return `autocompact thrash: ${tail.syntheticCount} synthetic errors within ${Math.round(thrashWindowMs / 60000)}min`
+    }
+    const verdict = stallVerdict(tail, { userStallMs, syntheticStallMs: stallMs })
     return verdict ? `transcript stalled ${Math.round(tail.ageMs / 60000)}min: ${verdict}` : null
   }
 }
 
-export const THRASH_PATTERN = 'Autocompact is thrashing'
-// cooldownMs exists because the TUI may repaint the same error line during
-// redraws: one real error must not count twice. Real thrash cycles in the
-// corpus were 2-3 min apart, so 60s of dedupe costs no sensitivity.
-export function createThrashCounter({ now = () => Date.now(), windowMs = 1_800_000, threshold = 3, cooldownMs = 60_000 } = {}) {
-  let sightings = []
-  let carry = ''
-  return {
-    feed(chunk) {
-      const text = carry + chunk
-      let idx = 0
-      for (;;) {
-        const at = text.indexOf(THRASH_PATTERN, idx)
-        if (at === -1) break
-        const t = now()
-        if (sightings.length === 0 || t - sightings[sightings.length - 1] >= cooldownMs) sightings.push(t)
-        idx = at + THRASH_PATTERN.length
+// Bounce budget (review S2): during a provider outage the retry ladder can
+// legitimately eat the stall window, and an unlimited watchdog would then
+// burn a full session context every cycle -- one hour of outage = 4
+// context-loss loops. The ledger is SHARED across respawns (runLoop passes
+// one array for the supervisor's lifetime); when the budget is spent the
+// watchdog goes advisory -- it logs the verdict but stops killing, and
+// SESSION_TIMEOUT remains the blanket backstop. (Same flap-guard lesson as
+// the Sirin supervisor lane, per Melchior.) Extracted so the budget
+// arithmetic is unit-attackable, same rule as createStallLane.
+export function createBounceBudget({ ledger = [], budget = 3, windowMs = 6 * 3600_000, now = () => Date.now(), log = () => {} }) {
+  let spentLogged = false
+  return function tryConsume(reason) {
+    const cutoff = now() - windowMs
+    while (ledger.length && ledger[0] < cutoff) ledger.shift()
+    if (ledger.length >= budget) {
+      if (!spentLogged) {
+        spentLogged = true
+        log(`watchdog: bounce budget spent (${budget} in ${Math.round(windowMs / 3600_000)}h) -- verdict "${reason}" logged, NOT killing; session timeout remains the backstop`)
       }
-      carry = text.slice(-THRASH_PATTERN.length + 1)
-      sightings = sightings.filter((t) => now() - t <= windowMs)
-      return sightings.length >= threshold
-    },
+      return false
+    }
+    ledger.push(now())
+    return true
   }
 }
 
@@ -513,15 +570,24 @@ export function createThrashCounter({ now = () => Date.now(), windowMs = 1_800_0
 // gtimeout lane and the manual watchdog subshell -- TERM the child, 10s
 // grace, KILL. A node process with a real handle needs neither of bash's
 // workarounds.
-function spawnPtyChild(cfg, { now = () => Date.now(), log }) {
+function spawnPtyChild(cfg, { now = () => Date.now(), log, watchdogBounces = [] }) {
   const require_ = createRequire(import.meta.url)
   const pty = require_('node-pty') // lazy: only the __loop lane needs the native module
+  // Windows env can carry 'Path'/'path' case-variants; spreading process.env
+  // and then setting 'PATH' would leave BOTH keys and the child's resolution
+  // becomes nondeterministic -- the shim silently neutered on the exact boxes
+  // the win-port targets (Melchior solo finding, review S3b). Strip variants
+  // so exactly one PATH key survives. No-op on posix.
+  const baseEnv = { ...process.env }
+  for (const k of Object.keys(baseEnv)) {
+    if (k !== 'PATH' && k.toUpperCase() === 'PATH') delete baseEnv[k]
+  }
   const child = pty.spawn(cfg.claudeBin, buildChildArgs(cfg), {
     name: 'xterm-256color', // run.sh:313 set env(TERM)
     cols: 200, rows: 50,    // run.sh:314 stty_init "rows 50 cols 200"
     cwd: cfg.mem,           // run.sh:285 cd "$MEM"
     env: {
-      ...process.env,
+      ...baseEnv,
       // Hook-lane node shim (see ensureNodeShim): hooks inherit the CLI
       // child's env, so PATH is patched here and nowhere else.
       PATH: ensureNodeShim(cfg, { log }),
@@ -545,22 +611,29 @@ function spawnPtyChild(cfg, { now = () => Date.now(), log }) {
     graceTimer = setTimeout(() => killHandle('SIGKILL'), 10_000)
   }, cfg.sessionTimeoutSec * 1000)
 
-  // Stall/thrash watchdog (see the v0.0.15 block above). Both lanes converge
-  // on one bounce() so a child is only ever killed once per life.
+  // Stall/thrash watchdog (see the v0.0.15 block above). All verdicts
+  // converge on one bounce() so a child is only ever killed once per life.
   const spawnedAt = now()
   let bounced = false
   let stallTimer = null
+  const consumeBounce = createBounceBudget({ ledger: watchdogBounces, now, log })
   const bounce = (reason) => {
     if (bounced) return
+    if (!consumeBounce(reason)) return // budget spent: verdict logged, no kill
     bounced = true
     log(`watchdog: bouncing child ${child.pid} -- ${reason}`)
     killHandle('SIGTERM')
     graceTimer = setTimeout(() => killHandle('SIGKILL'), 10_000)
   }
-  // STALL_TIMEOUT=0 disables the WHOLE watchdog, both lanes (spark F2): one
-  // knob, no half-disabled surprises for an operator opting out of bounces.
+  // STALL_TIMEOUT=0 disables the whole watchdog (spark F2): one knob, no
+  // half-disabled surprises for an operator opting out of bounces.
   const watchdogOn = cfg.stallTimeoutSec > 0 && !IS_WIN
-  const thrash = watchdogOn ? createThrashCounter({ now }) : null
+  if (cfg.stallTimeoutSec > 0 && IS_WIN) {
+    // Intentional fail-quiet made loud (review S3a): the transcript munge is
+    // unverified on Windows, so the watchdog stays off there -- but silently
+    // off IS the silent-detector class, so say it at every spawn.
+    log('watchdog: disabled on Windows (transcript path munge unverified) -- stall protection is NOT active')
+  }
   if (watchdogOn) {
     const poll = createStallLane({
       transcriptDir: transcriptDirFor(cfg.mem),
@@ -590,10 +663,6 @@ function spawnPtyChild(cfg, { now = () => Date.now(), log }) {
     child.onData((d) => {
       process.stdout.write(d) // expect log_user 1: child output -> supervisor stdout -> logfile
       matcher.feed(d)
-      // Early thrash lane: the CLI prints its synthetic thrash error to the
-      // TUI while the loop is still spinning -- no need to wait for the
-      // terminal stall to go quiet.
-      if (thrash && thrash.feed(d)) bounce(`autocompact thrash pattern x3 in 30min ("${THRASH_PATTERN}")`)
     })
     child.onExit(({ exitCode, signal }) => {
       clearTimeout(sessionTimer)
@@ -614,7 +683,11 @@ export async function runLoop(cfg, deps = {}) {
   const now = deps.now || (() => Date.now())
   const log = deps.log || makeLog(now)
   const sleep = deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)))
-  const spawnChild = deps.spawnChild || ((c) => spawnPtyChild(c, { now, log }))
+  // One watchdog-bounce ledger for the SUPERVISOR's lifetime, shared across
+  // respawns -- the budget (see bounce() in spawnPtyChild) is meaningless if
+  // every fresh child starts with a clean slate.
+  const watchdogBounces = []
+  const spawnChild = deps.spawnChild || ((c) => spawnPtyChild(c, { now, log, watchdogBounces }))
   const sweepOrphans = deps.sweepOrphans || (() => sweepOrphansDefault(cfg.pkillPattern, log))
   const installSignalHandler = deps.installSignalHandler || ((h) => {
     for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => h(sig))

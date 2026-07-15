@@ -33,8 +33,7 @@ import {
   readTranscriptTail,
   stallVerdict,
   createStallLane,
-  createThrashCounter,
-  THRASH_PATTERN,
+  createBounceBudget,
   runLoop,
 } from '../supervisor.mjs'
 
@@ -576,26 +575,41 @@ console.log('\n-- stall watchdog: transcript tail verdicts (teardown Root B)')
     fs.unlinkSync(link); fs.rmSync(real, { recursive: true, force: true })
   }
 
-  // (a) the 429-min shape: last entry is a delivered user message, no turn after
+  const TH = { userStallMs: 2 * STALL_MS, syntheticStallMs: STALL_MS } // S1 asymmetric shape
+
+  // (a) the 429-min shape: last entry is a delivered user message, no turn
+  // after. S1: the user lane waits 2x the synthetic lane.
   {
     const f = writeTranscript('a.jsonl', [
       entry('assistant', 0, { message: { model: 'glm-5.2' } }),
       entry('user', 60_000),
     ])
-    const tail = readTranscriptTail(f, { now: nowAt(60_000 + STALL_MS + 1000) })
-    ok('pending-inbound stall detected', stallVerdict(tail, STALL_MS) === 'pending inbound with no turn', JSON.stringify(tail))
+    const tail = readTranscriptTail(f, { now: nowAt(60_000 + 2 * STALL_MS + 1000) })
+    ok('pending-inbound stall detected past the 2x user window', stallVerdict(tail, TH) === 'pending inbound with no turn', JSON.stringify(tail))
+    const between = readTranscriptTail(f, { now: nowAt(60_000 + STALL_MS + 1000) })
+    ok('user tail between 1x and 2x is NOT yet a stall (long-turn margin)', stallVerdict(between, TH) === null)
     const young = readTranscriptTail(f, { now: nowAt(120_000) })
-    ok('same tail under the window is NOT a stall', stallVerdict(young, STALL_MS) === null)
+    ok('same tail under the window is NOT a stall', stallVerdict(young, TH) === null)
   }
 
-  // (b) thrash terminal state: last entry is the CLI's synthetic error
+  // (a2) S1: a user tail that is a tool_result names the mid-turn-death shape
+  {
+    const f = writeTranscript('a2.jsonl', [
+      entry('user', 60_000, { message: { content: [{ type: 'tool_result', content: 'ok' }] } }),
+    ])
+    const tail = readTranscriptTail(f, { now: nowAt(60_000 + 2 * STALL_MS + 1000) })
+    ok('tool_result tail is classified as mid-turn death', stallVerdict(tail, TH) === 'mid-turn death (tool_result tail)', JSON.stringify(tail))
+  }
+
+  // (b) thrash terminal state: last entry is the CLI's synthetic error --
+  // fires at 1x, the tighter synthetic window
   {
     const f = writeTranscript('b.jsonl', [
       entry('user', 0),
       entry('assistant', 30_000, { message: { model: '<synthetic>', content: [{ type: 'text', text: 'Autocompact is thrashing: the context refilled to the limit' }] } }),
     ])
     const tail = readTranscriptTail(f, { now: nowAt(30_000 + STALL_MS + 1000) })
-    ok('synthetic-error terminal stall detected', String(stallVerdict(tail, STALL_MS)).includes('synthetic'), JSON.stringify(tail))
+    ok('synthetic-error terminal stall detected at 1x', String(stallVerdict(tail, TH)).includes('synthetic'), JSON.stringify(tail))
   }
 
   // (c) idle agent: old NORMAL assistant tail must never bounce
@@ -605,7 +619,7 @@ console.log('\n-- stall watchdog: transcript tail verdicts (teardown Root B)')
       entry('assistant', 30_000, { message: { model: 'glm-5.2' } }),
     ])
     const tail = readTranscriptTail(f, { now: nowAt(30_000 + 10 * STALL_MS) })
-    ok('idle agent (old assistant tail) is NOT a stall', stallVerdict(tail, STALL_MS) === null, JSON.stringify(tail))
+    ok('idle agent (old assistant tail) is NOT a stall', stallVerdict(tail, TH) === null, JSON.stringify(tail))
   }
 
   // (d) parse doubt fails safe: garbage tail = no verdict, no throw
@@ -613,8 +627,28 @@ console.log('\n-- stall watchdog: transcript tail verdicts (teardown Root B)')
     const f = path.join(dir, 'd.jsonl')
     fs.writeFileSync(f, 'not json at all\n{"broken": \n')
     const tail = readTranscriptTail(f, { now: nowAt(STALL_MS * 2) })
-    ok('unparseable transcript yields no verdict', tail === null || stallVerdict(tail, STALL_MS) === null)
+    ok('unparseable transcript yields no verdict', tail === null || stallVerdict(tail, TH) === null)
     ok('missing file yields no verdict', readTranscriptTail(path.join(dir, 'nope.jsonl')) === null)
+  }
+
+  // (d2) G2: synthetic-entry counting from the transcript (the structural
+  // replacement for the pty substring lane -- a grep of this source file in a
+  // tool_result can never mint model:'<synthetic>')
+  {
+    const f = writeTranscript('d2.jsonl', [
+      entry('assistant', 0, { message: { model: '<synthetic>' } }),          // before the count window
+      entry('assistant', 100_000, { message: { model: '<synthetic>' } }),
+      entry('user', 110_000, { message: { content: [{ type: 'tool_result', content: 'grep: Autocompact is thrashing x100' }] } }),
+      entry('assistant', 120_000, { isApiErrorMessage: true }),
+      entry('assistant', 130_000, { message: { model: '<synthetic>' } }),
+    ])
+    const scan = readTranscriptTail(f, { now: nowAt(140_000), countSyntheticSince: 90_000 + T0 })
+    ok('synthetic entries counted only inside the window', scan.syntheticCount === 3, JSON.stringify(scan))
+    ok('tool_result text mentioning the error is NOT counted', scan.syntheticCount === 3)
+    const all = readTranscriptTail(f, { now: nowAt(140_000), countSyntheticSince: T0 - 1 })
+    ok('window widened catches the earlier synthetic too', all.syntheticCount === 4)
+    const off = readTranscriptTail(f, { now: nowAt(140_000) })
+    ok('counting off by default', off.syntheticCount === 0)
   }
 
   // (e) newestTranscript picks by mtime, ignores non-jsonl
@@ -630,6 +664,22 @@ console.log('\n-- stall watchdog: transcript tail verdicts (teardown Root B)')
     fs.utimesSync(newer, new Date(T0 + 5000), new Date(T0 + 5000))
     ok('newestTranscript picks the newest jsonl', newestTranscript(sub) === newer)
     ok('newestTranscript on a missing dir is null', newestTranscript(path.join(sub, 'ghost')) === null)
+  }
+
+  // (e2) G1 era binding: eraStart filters by file CREATION, so a shared
+  // project dir full of other sessions' files cannot capture the watchdog.
+  // birthtime cannot be faked backward, so the two directions are driven by
+  // placing eraStart around the real creation instant.
+  {
+    const sub = path.join(dir, 'era')
+    fs.mkdirSync(sub)
+    fs.writeFileSync(path.join(sub, 's.jsonl'), '{}\n')
+    ok('file born before eraStart is excluded (prior generation)',
+      newestTranscript(sub, { eraStart: Date.now() + 3600_000 }) === null)
+    ok('file born after eraStart is eligible (this era)',
+      newestTranscript(sub, { eraStart: Date.now() - 3600_000 }) === path.join(sub, 's.jsonl'))
+    ok('no eraStart keeps the legacy pick-newest behavior',
+      newestTranscript(sub) === path.join(sub, 's.jsonl'))
   }
 
   // (f) tail window: entry buried past the tail window is still found via
@@ -663,12 +713,31 @@ console.log('\n-- stall lane: era guard + poll closure')
     lane(T0 + 3 * 3600_000, T0 + 2 * 3600_000)() === null)
 
   // same tail, child spawned BEFORE the entry -- this child's era, bounces
-  ok('current-era pending tail past the window bounces',
-    String(lane(T0 + STALL_MS + 60_000, T0 - 1000)()).includes('pending inbound'))
+  // (past the 2x user window per S1)
+  ok('current-era pending tail past the 2x window bounces',
+    String(lane(T0 + 2 * STALL_MS + 60_000, T0 - 1000)()).includes('pending inbound'))
 
   // boundary: entry written in the same ms as spawn counts as this era
   ok('entry at exactly spawn time is this era',
-    String(lane(T0 + STALL_MS + 60_000, T0)()).includes('pending inbound'))
+    String(lane(T0 + 2 * STALL_MS + 60_000, T0)()).includes('pending inbound'))
+
+  // G2 at lane level: 3 fresh synthetic entries trip the thrash verdict
+  // immediately -- no 15-min wait
+  fs.writeFileSync(path.join(dir, 's.jsonl'), [
+    entry('assistant', T0 + 60_000) /* normal */,
+    JSON.stringify({ type: 'assistant', timestamp: new Date(T0 + 100_000).toISOString(), message: { model: '<synthetic>' } }),
+    JSON.stringify({ type: 'assistant', timestamp: new Date(T0 + 220_000).toISOString(), message: { model: '<synthetic>' } }),
+    JSON.stringify({ type: 'assistant', timestamp: new Date(T0 + 340_000).toISOString(), message: { model: '<synthetic>' } }),
+  ].join('\n') + '\n')
+  ok('3 era-valid synthetic entries trip the thrash lane fast',
+    String(lane(T0 + 400_000, T0)()).includes('autocompact thrash'), String(lane(T0 + 400_000, T0)()))
+  // (the terminal-stall reason ALSO says "autocompact thrash shape", so the
+  // discriminator is the early lane's "autocompact thrash:" prefix)
+  {
+    const r = String(lane(T0 + 100_000 + 1_800_000 + 1000, T0)())
+    ok('narrowed window with only 2 era-valid synthetics never trips the EARLY thrash lane',
+      !r.includes('autocompact thrash:') && r.includes('transcript stalled'), r)
+  }
 
   // clock rewind / future-stamped tail: ageMs clamps to 0 -> under window -> null
   fs.writeFileSync(path.join(dir, 's.jsonl'), entry('user', T0 + 3600_000) + '\n')
@@ -679,36 +748,34 @@ console.log('\n-- stall lane: era guard + poll closure')
     const lines = []
     const p = createStallLane({ transcriptDir: path.join(dir, 'ghost'), stallMs: STALL_MS, spawnedAt: T0, now: () => T0, log: (l) => lines.push(l) })
     ok('no transcript -> no verdict', p() === null && p() === null && p() === null)
-    ok('...and the fail-quiet log fires exactly once', lines.length === 1 && lines[0].includes('no transcript yet'), String(lines.length))
+    ok('...and the fail-quiet log fires exactly once', lines.length === 1 && lines[0].includes('no this-era transcript yet'), String(lines.length))
   }
 
   fs.rmSync(dir, { recursive: true, force: true })
 }
 
-console.log('\n-- thrash counter: early pty lane')
+// ── bounce budget (review S2): outage flap guard ────────────────────────────
+// A provider outage makes stall verdicts legitimate-but-wrong; unlimited
+// bouncing burns a full session context per cycle. The ledger is shared
+// across respawns, so a fresh child cannot reset the count.
+console.log('\n-- bounce budget: outage flap guard')
 {
   let t = 0
-  const counter = createThrashCounter({ now: () => t, windowMs: 1_800_000, threshold: 3, cooldownMs: 60_000 })
-  ok('one sighting does not trip', counter.feed(`err: ${THRASH_PATTERN}: refilled`) === false)
-  // redraw storm: same line repainted immediately must count ONCE
-  ok('redraw storm within cooldown counts once', counter.feed(`${THRASH_PATTERN} ${THRASH_PATTERN}`) === false)
-  t += 120_000
-  ok('second real cycle does not trip', counter.feed(`${THRASH_PATTERN}`) === false)
-  t += 120_000
-  ok('third real cycle trips the bounce', counter.feed(`${THRASH_PATTERN}`) === true)
+  const ledger = []
+  const lines = []
+  const consume = createBounceBudget({ ledger, budget: 3, windowMs: 6 * 3600_000, now: () => t, log: (l) => lines.push(l) })
+  ok('first three bounces consume budget', consume('r1') === true && consume('r2') === true && consume('r3') === true)
+  ok('fourth is refused', consume('r4') === false)
+  ok('refusal is logged once and carries the verdict', lines.length === 1 && lines[0].includes('r4'), lines.join('|'))
+  ok('repeated refusals do not spam the log', consume('r5') === false && lines.length === 1)
+  t += 6 * 3600_000 + 1000
+  ok('window expiry restores the budget', consume('r6') === true)
 
-  // pattern split across pty chunks must still match
-  const c2 = createThrashCounter({ now: () => 0, threshold: 1 })
-  const split = THRASH_PATTERN.length >> 1
-  c2.feed(THRASH_PATTERN.slice(0, split))
-  ok('chunk-split pattern is still caught', c2.feed(THRASH_PATTERN.slice(split)) === true)
-
-  // sightings outside the 30-min window expire
-  let t3 = 0
-  const c3 = createThrashCounter({ now: () => t3, windowMs: 1_800_000, threshold: 3, cooldownMs: 60_000 })
-  c3.feed(THRASH_PATTERN); t3 += 1_900_000
-  c3.feed(THRASH_PATTERN); t3 += 61_000
-  ok('expired sightings do not accumulate to a trip', c3.feed(THRASH_PATTERN) === false)
+  // a NEW factory (fresh child after respawn) sharing the ledger continues
+  // the count instead of starting clean
+  const consume2 = createBounceBudget({ ledger, budget: 3, windowMs: 6 * 3600_000, now: () => t, log: () => {} })
+  ok('fresh child inherits the shared ledger count',
+    consume2('r7') === true && consume2('r8') === true && consume2('r9') === false, JSON.stringify(ledger))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
