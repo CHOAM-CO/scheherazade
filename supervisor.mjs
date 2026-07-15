@@ -418,6 +418,11 @@ export function transcriptDirFor(mem, home = os.homedir()) {
 // spawn passes the filter -- identity beyond creation-era needs a session-id
 // handshake the CLI does not expose (and lsof is out: the corpus shows the
 // CLI append-closes, 춘식 raw 07-15 "열어놓은 jsonl이 lsof에 안 잡힘").
+// The residual's blast radius is bounded by the bounce budget
+// (createBounceBudget): even a worst-case foreign session parked stalled in
+// our cwd costs at most 3 kills per 6h before the watchdog degrades to
+// advisory logging -- a bounded nuisance, not an unbounded kill loop.
+// (G1-residual acceptance ground #3, Melchior review 07-15.)
 export function newestTranscript(dir, { eraStart = null } = {}) {
   let best = null
   let entries
