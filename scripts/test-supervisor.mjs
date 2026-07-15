@@ -520,6 +520,17 @@ if (!process.platform.startsWith('win')) {
     ok('stale shim content is regenerated at spawn', fs.readFileSync(shimPath, 'utf8').includes(process.execPath))
   }
 
+  // (e) spark F4: a MEM containing the PATH delimiter must refuse loudly,
+  // never ship a PATH that tokenizes wrong for the whole child env
+  {
+    const evil = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-evil:colon-'))
+    const lines = []
+    const patched = ensureNodeShim({ mem: evil }, { env: { PATH: '/usr/bin:/bin' }, log: (l) => lines.push(l) })
+    ok('delimiter-poisoned MEM leaves PATH untouched', patched === '/usr/bin:/bin', patched)
+    ok('...and says so', lines.some((l) => l.includes('PATH delimiter')), lines.join('|'))
+    fs.rmSync(evil, { recursive: true, force: true })
+  }
+
   fs.rmSync(shimDir, { recursive: true, force: true })
 }
 
@@ -544,6 +555,20 @@ console.log('\n-- stall watchdog: transcript tail verdicts (teardown Root B)')
   ok('transcriptDirFor munges cwd the way Claude Code does',
     transcriptDirFor('/Users/cto/Documents/Scheherazade', '/Users/cto')
       .endsWith(path.join('.claude', 'projects', '-Users-cto-Documents-Scheherazade')))
+  // spark F1: a trailing slash must not mint a different (never-written)
+  // watch dir -- that fails quiet, the silent-detector class itself.
+  ok('trailing slash resolves to the same watch dir',
+    transcriptDirFor('/Users/cto/Documents/Scheherazade/', '/Users/cto') ===
+    transcriptDirFor('/Users/cto/Documents/Scheherazade', '/Users/cto'))
+  // spark F1: symlinked MEM watches the CLI's REAL cwd munge
+  {
+    const real = fs.mkdtempSync(path.join(os.tmpdir(), 'real-mem-'))
+    const link = `${real}-link`
+    fs.symlinkSync(real, link)
+    ok('symlinked MEM resolves to the real path munge',
+      transcriptDirFor(link, '/h') === transcriptDirFor(real, '/h'))
+    fs.unlinkSync(link); fs.rmSync(real, { recursive: true, force: true })
+  }
 
   // (a) the 429-min shape: last entry is a delivered user message, no turn after
   {

@@ -243,6 +243,13 @@ export function ensureNodeShim(cfg, { execPath = process.execPath, env = process
     log(`node shim write failed (${err.message}) -- hook lane will depend on system node`)
     return env.PATH || ''
   }
+  // A MEM containing the PATH delimiter would corrupt tokenization for the
+  // whole child env (spark F4) -- refuse loudly instead of shipping a broken
+  // PATH; the hook lane then simply depends on system node as before.
+  if (binDir.includes(path.delimiter)) {
+    log(`node shim dir contains the PATH delimiter (${binDir}) -- not appending; hook lane will depend on system node`)
+    return env.PATH || ''
+  }
   const basePath = env.PATH || ''
   if (basePath.split(path.delimiter).includes(binDir)) return basePath
   return basePath ? `${basePath}${path.delimiter}${binDir}` : binDir
@@ -376,8 +383,15 @@ function sweepOrphansDefault(pkillPattern, log) {
 // -Users-cto-Documents-Scheherazade (teardown corpus, 24 sessions). Munge is
 // mac/posix-verified only; on Windows the rule is unverified, so the
 // transcript watchdog stays off there rather than watching a fabricated path.
+// mem is realpath'd first (spark F1): the CLI munges its OWN cwd, and node
+// resolves symlinks/trailing slashes there -- a symlinked or trailing-slash
+// AGENT_DATA_HOME would otherwise make the watchdog watch a directory that
+// never exists, which fails QUIET (no transcript = no verdict = no bounce),
+// the exact silent-detector class this teardown was about.
 export function transcriptDirFor(mem, home = os.homedir()) {
-  return path.join(home, '.claude', 'projects', mem.replaceAll(path.sep, '-'))
+  let resolved
+  try { resolved = fs.realpathSync(mem) } catch { resolved = path.resolve(mem) }
+  return path.join(home, '.claude', 'projects', resolved.replaceAll(path.sep, '-'))
 }
 
 export function newestTranscript(dir) {
@@ -506,12 +520,25 @@ function spawnPtyChild(cfg, { now = () => Date.now(), log }) {
     killHandle('SIGTERM')
     graceTimer = setTimeout(() => killHandle('SIGKILL'), 10_000)
   }
-  const thrash = createThrashCounter({ now })
-  if (cfg.stallTimeoutSec > 0 && !IS_WIN) {
+  // STALL_TIMEOUT=0 disables the WHOLE watchdog, both lanes (spark F2): one
+  // knob, no half-disabled surprises for an operator opting out of bounces.
+  const watchdogOn = cfg.stallTimeoutSec > 0 && !IS_WIN
+  const thrash = watchdogOn ? createThrashCounter({ now }) : null
+  if (watchdogOn) {
     const stallMs = cfg.stallTimeoutSec * 1000
+    let noTranscriptLogged = false
     stallTimer = setInterval(() => {
       const file = newestTranscript(transcriptDirFor(cfg.mem))
-      if (!file) return
+      if (!file) {
+        // Say it ONCE: a watchdog watching a directory that never fills is
+        // fail-quiet, and quiet detectors are how the 429-min stall lived.
+        if (!noTranscriptLogged) {
+          noTranscriptLogged = true
+          log(`watchdog: no transcript yet under ${transcriptDirFor(cfg.mem)} -- stall lane idle until one appears`)
+        }
+        return
+      }
+      noTranscriptLogged = false
       const tail = readTranscriptTail(file, { now })
       if (!tail) return
       // Era guard: the tail must belong to THIS child's life, or a dead
@@ -542,7 +569,7 @@ function spawnPtyChild(cfg, { now = () => Date.now(), log }) {
       // Early thrash lane: the CLI prints its synthetic thrash error to the
       // TUI while the loop is still spinning -- no need to wait for the
       // terminal stall to go quiet.
-      if (thrash.feed(d)) bounce(`autocompact thrash pattern x3 in 30min ("${THRASH_PATTERN}")`)
+      if (thrash && thrash.feed(d)) bounce(`autocompact thrash pattern x3 in 30min ("${THRASH_PATTERN}")`)
     })
     child.onExit(({ exitCode, signal }) => {
       clearTimeout(sessionTimer)

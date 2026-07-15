@@ -113,8 +113,10 @@ for (const [label, file] of [
   ['self_persona.md', path.join(MEM, 'self_persona.md')],
 ]) {
   try {
-    const kb = Math.round(fs.statSync(file).size / 1024)
-    if (kb >= OVERSIZE_KB) oversize.push(`${label} (${kb}KB)`)
+    const size = fs.statSync(file).size
+    // compare in bytes: Math.round on the KB display would otherwise pull
+    // 23.6KB files over the stated 24KB floor.
+    if (size >= OVERSIZE_KB * 1024) oversize.push(`${label} (${Math.round(size / 1024)}KB)`)
   } catch { /* absent file = nothing to warn about */ }
 }
 
