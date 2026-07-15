@@ -27,6 +27,13 @@ import {
   isOurSupervisor,
   classifyPidfileOwner,
   buildChildArgs,
+  ensureNodeShim,
+  transcriptDirFor,
+  newestTranscript,
+  readTranscriptTail,
+  stallVerdict,
+  createThrashCounter,
+  THRASH_PATTERN,
   runLoop,
 } from '../supervisor.mjs'
 
@@ -459,6 +466,177 @@ if (process.platform === 'win32') {
   }
 
   fs.rmSync(itDir, { recursive: true, force: true })
+}
+
+// ── node shim for the hook lane (v0.0.15 Root A) ────────────────────────────
+// Attack: the shim must (a) actually run .mjs when `node` is absent from
+// PATH, (b) never shadow a real node (append semantics), (c) fail soft when
+// the write is impossible, (d) be idempotent across spawns.
+console.log('\n-- ensureNodeShim: hook-lane node absence (teardown Root A)')
+if (!process.platform.startsWith('win')) {
+  const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-test-'))
+  const cfg = { mem: shimDir }
+
+  // (a) absence: PATH without node -> shim dir appended, shim executes a .mjs
+  {
+    const noNodePath = '/usr/bin:/bin' // macOS system dirs; node is not stock there
+    const patched = ensureNodeShim(cfg, { env: { PATH: noNodePath } })
+    ok('shim dir appended when PATH lacks node', patched === `${noNodePath}:${path.join(shimDir, 'bin')}`, patched)
+    const shimPath = path.join(shimDir, 'bin', 'node')
+    ok('shim file exists and is executable', fs.existsSync(shimPath) && (fs.statSync(shimPath).mode & 0o111) !== 0)
+    const probe = path.join(shimDir, 'probe.mjs')
+    fs.writeFileSync(probe, 'console.log("shim-ran-" + (1 + 1))\n')
+    // The hook reality: /bin/sh -c "node <script>" with the patched PATH.
+    const outText = execFileSync('/bin/sh', ['-c', `node ${JSON.stringify(probe)}`], {
+      env: { PATH: patched }, encoding: 'utf8',
+    })
+    ok('sh -c "node script.mjs" runs through the shim', outText.includes('shim-ran-2'), outText.trim())
+  }
+
+  // (b) append, not prepend: a PATH that already resolves node is extended at
+  // the END, so the real node keeps winning; and a PATH already containing
+  // the shim dir is returned unchanged (idempotent across respawns).
+  {
+    const patched = ensureNodeShim(cfg, { env: { PATH: '/usr/bin:/bin' } })
+    const again = ensureNodeShim(cfg, { env: { PATH: patched } })
+    ok('re-run with shim already on PATH is a no-op', again === patched, again)
+    ok('shim dir sits at the END of PATH', patched.endsWith(path.join(shimDir, 'bin')))
+  }
+
+  // (c) fail-soft: unwritable MEM must return the original PATH and log, not throw
+  {
+    const lines = []
+    const badCfg = { mem: path.join(shimDir, 'probe.mjs') } // a FILE, mkdir fails
+    const patched = ensureNodeShim(badCfg, { env: { PATH: '/usr/bin:/bin' }, log: (l) => lines.push(l) })
+    ok('unwritable shim dir fails soft with original PATH', patched === '/usr/bin:/bin', patched)
+    ok('fail-soft is loud (logged)', lines.some((l) => l.includes('node shim write failed')), lines.join('|'))
+  }
+
+  // (d) regeneration: a stale shim pointing at a dead binary is rewritten
+  {
+    const shimPath = path.join(shimDir, 'bin', 'node')
+    fs.writeFileSync(shimPath, '#!/bin/sh\nexec "/dead/binary" "$@"\n')
+    ensureNodeShim(cfg, { env: { PATH: '/usr/bin:/bin' } })
+    ok('stale shim content is regenerated at spawn', fs.readFileSync(shimPath, 'utf8').includes(process.execPath))
+  }
+
+  fs.rmSync(shimDir, { recursive: true, force: true })
+}
+
+// ── stall/thrash watchdog (v0.0.15 Root B) ──────────────────────────────────
+// Attacks mirror the live incident shapes: 429-min pending-inbound stall,
+// synthetic-error terminal state, and the false-positive lanes the watchdog
+// must NOT fire on (idle agent, parse doubt, previous-era transcript).
+console.log('\n-- stall watchdog: transcript tail verdicts (teardown Root B)')
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stall-test-'))
+  const T0 = Date.parse('2026-07-15T00:00:00Z')
+  const STALL_MS = 900_000
+  const entry = (type, tsOffsetMs, extra = {}) =>
+    JSON.stringify({ type, timestamp: new Date(T0 + tsOffsetMs).toISOString(), ...extra })
+  const writeTranscript = (name, lines) => {
+    const f = path.join(dir, name)
+    fs.writeFileSync(f, lines.join('\n') + '\n')
+    return f
+  }
+  const nowAt = (offsetMs) => () => T0 + offsetMs
+
+  ok('transcriptDirFor munges cwd the way Claude Code does',
+    transcriptDirFor('/Users/cto/Documents/Scheherazade', '/Users/cto')
+      .endsWith(path.join('.claude', 'projects', '-Users-cto-Documents-Scheherazade')))
+
+  // (a) the 429-min shape: last entry is a delivered user message, no turn after
+  {
+    const f = writeTranscript('a.jsonl', [
+      entry('assistant', 0, { message: { model: 'glm-5.2' } }),
+      entry('user', 60_000),
+    ])
+    const tail = readTranscriptTail(f, { now: nowAt(60_000 + STALL_MS + 1000) })
+    ok('pending-inbound stall detected', stallVerdict(tail, STALL_MS) === 'pending inbound with no turn', JSON.stringify(tail))
+    const young = readTranscriptTail(f, { now: nowAt(120_000) })
+    ok('same tail under the window is NOT a stall', stallVerdict(young, STALL_MS) === null)
+  }
+
+  // (b) thrash terminal state: last entry is the CLI's synthetic error
+  {
+    const f = writeTranscript('b.jsonl', [
+      entry('user', 0),
+      entry('assistant', 30_000, { message: { model: '<synthetic>', content: [{ type: 'text', text: 'Autocompact is thrashing: the context refilled to the limit' }] } }),
+    ])
+    const tail = readTranscriptTail(f, { now: nowAt(30_000 + STALL_MS + 1000) })
+    ok('synthetic-error terminal stall detected', String(stallVerdict(tail, STALL_MS)).includes('synthetic'), JSON.stringify(tail))
+  }
+
+  // (c) idle agent: old NORMAL assistant tail must never bounce
+  {
+    const f = writeTranscript('c.jsonl', [
+      entry('user', 0),
+      entry('assistant', 30_000, { message: { model: 'glm-5.2' } }),
+    ])
+    const tail = readTranscriptTail(f, { now: nowAt(30_000 + 10 * STALL_MS) })
+    ok('idle agent (old assistant tail) is NOT a stall', stallVerdict(tail, STALL_MS) === null, JSON.stringify(tail))
+  }
+
+  // (d) parse doubt fails safe: garbage tail = no verdict, no throw
+  {
+    const f = path.join(dir, 'd.jsonl')
+    fs.writeFileSync(f, 'not json at all\n{"broken": \n')
+    const tail = readTranscriptTail(f, { now: nowAt(STALL_MS * 2) })
+    ok('unparseable transcript yields no verdict', tail === null || stallVerdict(tail, STALL_MS) === null)
+    ok('missing file yields no verdict', readTranscriptTail(path.join(dir, 'nope.jsonl')) === null)
+  }
+
+  // (e) newestTranscript picks by mtime, ignores non-jsonl
+  {
+    const sub = path.join(dir, 'pick')
+    fs.mkdirSync(sub)
+    fs.writeFileSync(path.join(sub, 'noise.txt'), 'x')
+    const older = path.join(sub, 'old.jsonl')
+    const newer = path.join(sub, 'new.jsonl')
+    fs.writeFileSync(older, '{}\n')
+    fs.writeFileSync(newer, '{}\n')
+    fs.utimesSync(older, new Date(T0), new Date(T0))
+    fs.utimesSync(newer, new Date(T0 + 5000), new Date(T0 + 5000))
+    ok('newestTranscript picks the newest jsonl', newestTranscript(sub) === newer)
+    ok('newestTranscript on a missing dir is null', newestTranscript(path.join(sub, 'ghost')) === null)
+  }
+
+  // (f) tail window: entry buried past the tail window is still found via
+  // the LAST parseable line, and a first-line cut by the window is skipped
+  {
+    const bigPad = entry('user', 0, { message: { content: 'x'.repeat(300_000) } })
+    const f = writeTranscript('f.jsonl', [bigPad, entry('user', 60_000)])
+    const tail = readTranscriptTail(f, { now: nowAt(60_000 + STALL_MS + 1000) })
+    ok('tail window still parses the last entry of a huge file', tail !== null && tail.type === 'user', JSON.stringify(tail))
+  }
+
+  fs.rmSync(dir, { recursive: true, force: true })
+}
+
+console.log('\n-- thrash counter: early pty lane')
+{
+  let t = 0
+  const counter = createThrashCounter({ now: () => t, windowMs: 1_800_000, threshold: 3, cooldownMs: 60_000 })
+  ok('one sighting does not trip', counter.feed(`err: ${THRASH_PATTERN}: refilled`) === false)
+  // redraw storm: same line repainted immediately must count ONCE
+  ok('redraw storm within cooldown counts once', counter.feed(`${THRASH_PATTERN} ${THRASH_PATTERN}`) === false)
+  t += 120_000
+  ok('second real cycle does not trip', counter.feed(`${THRASH_PATTERN}`) === false)
+  t += 120_000
+  ok('third real cycle trips the bounce', counter.feed(`${THRASH_PATTERN}`) === true)
+
+  // pattern split across pty chunks must still match
+  const c2 = createThrashCounter({ now: () => 0, threshold: 1 })
+  const split = THRASH_PATTERN.length >> 1
+  c2.feed(THRASH_PATTERN.slice(0, split))
+  ok('chunk-split pattern is still caught', c2.feed(THRASH_PATTERN.slice(split)) === true)
+
+  // sightings outside the 30-min window expire
+  let t3 = 0
+  const c3 = createThrashCounter({ now: () => t3, windowMs: 1_800_000, threshold: 3, cooldownMs: 60_000 })
+  c3.feed(THRASH_PATTERN); t3 += 1_900_000
+  c3.feed(THRASH_PATTERN); t3 += 61_000
+  ok('expired sightings do not accumulate to a trip', c3.feed(THRASH_PATTERN) === false)
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

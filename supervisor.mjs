@@ -179,6 +179,9 @@ export function resolveConfig(env = process.env, scriptDir = SCRIPT_DIR) {
     // sweep; live kills go through the child handle.
     pkillPattern: `--name ${agentName}`,
     sessionTimeoutSec: Number(merged.SESSION_TIMEOUT) > 0 ? Number(merged.SESSION_TIMEOUT) : 43200,
+    // v0.0.15 stall watchdog window (seconds). 0 disables. Default 15 min:
+    // the two live stalls it exists for ran 312 and 429 minutes.
+    stallTimeoutSec: merged.STALL_TIMEOUT !== undefined ? Math.max(0, Number(merged.STALL_TIMEOUT) || 0) : 900,
     systemPromptFile: fs.existsSync(path.join(mem, 'system_prompt.md')) ? path.join(mem, 'system_prompt.md') : null,
     // Claude Code tuning knobs (run.sh:60-63) -- resolved once, exported to
     // the child on every respawn.
@@ -199,6 +202,50 @@ export function buildChildArgs(cfg) {
   if (cfg.systemPromptFile) args.push('--append-system-prompt-file', cfg.systemPromptFile)
   args.push('--dangerously-skip-permissions', '--dangerously-load-development-channels', 'server:agent-channel')
   return args
+}
+
+// ── node shim for the hook lane (v0.0.15 Root A fix) ────────────────────────
+// Claude Code hook commands (ours AND third-party plugins') start with bare
+// `node`, executed via /bin/sh from the CLI child. On a box with no system
+// node the entire hook lane dies with exit 127 -- observed live on Mino's
+// install: ~1400 "/bin/sh: node: command not found" across 21 sessions
+// (07-13..07-15 teardown corpus), which silenced stop-reply-guard, the
+// rumination gate, and every other protection while the incidents they
+// existed for were happening. The win-port Phase 3 bash->mjs port made this
+// strictly worse: the bash hooks it replaced ran everywhere.
+//
+// Fix at the ENV layer, not the command layer: write MEM/bin/node as a tiny
+// exec shim onto the supervisor's own runtime (Electron-as-node in the app
+// lanes, plain node in dev -- either way process.execPath can run .mjs), and
+// APPEND that dir to the child PATH. Append, not prepend: a real system node
+// always wins; the shim only fills absence. Command strings in
+// settings.local.json are never rewritten, so this also heals hooks we do
+// not own (the `node "${CLAUDE_PLUGIN_ROOT}/..."` plugin hooks that fail 121x
+// each in the same corpus). Regenerated on every spawn so an app move or
+// update never leaves the shim pointing at a dead binary.
+export function ensureNodeShim(cfg, { execPath = process.execPath, env = process.env, log = () => {} } = {}) {
+  const binDir = path.join(cfg.mem, 'bin')
+  try {
+    fs.mkdirSync(binDir, { recursive: true })
+    if (IS_WIN) {
+      const cmd = `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${execPath}" %*\r\n`
+      const shimPath = path.join(binDir, 'node.cmd')
+      if (!fs.existsSync(shimPath) || fs.readFileSync(shimPath, 'utf8') !== cmd) fs.writeFileSync(shimPath, cmd)
+    } else {
+      const sh = `#!/bin/sh\n# scheherazade node shim -- regenerated at every agent spawn; do not edit.\n# Fills PATH-node absence so Claude Code hook commands (\`node ...\`) can run.\nexport ELECTRON_RUN_AS_NODE=1\nexec "${execPath}" "$@"\n`
+      const shimPath = path.join(binDir, 'node')
+      if (!fs.existsSync(shimPath) || fs.readFileSync(shimPath, 'utf8') !== sh) fs.writeFileSync(shimPath, sh)
+      fs.chmodSync(shimPath, 0o755)
+    }
+  } catch (err) {
+    // Fail-soft with a loud line: a broken shim write must not stop the agent
+    // from booting -- it just returns the child to the pre-fix hook behavior.
+    log(`node shim write failed (${err.message}) -- hook lane will depend on system node`)
+    return env.PATH || ''
+  }
+  const basePath = env.PATH || ''
+  if (basePath.split(path.delimiter).includes(binDir)) return basePath
+  return basePath ? `${basePath}${path.delimiter}${binDir}` : binDir
 }
 
 // ── failure marker (run.sh write_failure/clear_failure, same JSON shape) ────
@@ -300,6 +347,115 @@ function sweepOrphansDefault(pkillPattern, log) {
   }
 }
 
+// ── stall/thrash watchdog (v0.0.15 Root B fix) ──────────────────────────────
+// Two live incidents this exists for (07-13..07-15 teardown corpus, Mino's
+// box): a 312-min and a 429-min dead window where the CLI sat stalled with a
+// user message waiting 7 hours. Terminal state of an autocompact thrash loop:
+// each compaction re-attached ~12 session-read files, the context refilled to
+// the limit, the CLI emitted its synthetic "Autocompact is thrashing" error
+// (26x in one session) and then appended NOTHING more. SESSION_TIMEOUT
+// (12h blanket) is the only recycle today, so a morning stall eats the day.
+//
+// Detection reads the session TRANSCRIPT TAIL, not pty silence: an idle TUI
+// still redraws, so output silence lies, but a stalled brain stops appending
+// to the jsonl. Stall verdicts (age > stallTimeoutSec):
+//   (a) tail entry is user/attachment (a delivered message no turn ever
+//       answered -- also catches boot-and-mute sessions), or
+//   (b) tail entry is the CLI's own synthetic error (model '<synthetic>' /
+//       isApiErrorMessage), the thrash loop's terminal shape.
+// A normal-but-old assistant tail is just an idle agent: never bounced.
+// Parse doubt fails SAFE (no bounce) -- a watchdog that kills healthy
+// sessions on a whim is worse than the stall, because a bounce costs the
+// whole session context.
+//
+// The pty lane keeps one cheap EARLY detector: 3+ "Autocompact is thrashing"
+// sightings inside 30 min bounces without waiting for the terminal stall.
+
+// Claude Code puts transcripts under ~/.claude/projects/<cwd with '/'->'-'>.
+// Receipt: cwd /Users/cto/Documents/Scheherazade -> project dir
+// -Users-cto-Documents-Scheherazade (teardown corpus, 24 sessions). Munge is
+// mac/posix-verified only; on Windows the rule is unverified, so the
+// transcript watchdog stays off there rather than watching a fabricated path.
+export function transcriptDirFor(mem, home = os.homedir()) {
+  return path.join(home, '.claude', 'projects', mem.replaceAll(path.sep, '-'))
+}
+
+export function newestTranscript(dir) {
+  let best = null
+  let entries
+  try { entries = fs.readdirSync(dir) } catch { return null }
+  for (const name of entries) {
+    if (!name.endsWith('.jsonl')) continue
+    const full = path.join(dir, name)
+    let mtime
+    try { mtime = fs.statSync(full).mtimeMs } catch { continue }
+    if (!best || mtime > best.mtime) best = { path: full, mtime }
+  }
+  return best ? best.path : null
+}
+
+// Reads the last parseable entry of a transcript (tail window, not the whole
+// file -- these run to hundreds of MB under thrash) and returns
+// { type, ageMs, synthetic } or null when nothing parses.
+export function readTranscriptTail(file, { now = () => Date.now(), tailBytes = 262144 } = {}) {
+  let fd
+  try {
+    fd = fs.openSync(file, 'r')
+    const size = fs.fstatSync(fd).size
+    const start = Math.max(0, size - tailBytes)
+    const buf = Buffer.alloc(size - start)
+    fs.readSync(fd, buf, 0, buf.length, start)
+    const lines = buf.toString('utf8').split('\n').filter((l) => l.trim())
+    for (let i = lines.length - 1; i >= 0; i--) {
+      let e
+      try { e = JSON.parse(lines[i]) } catch { continue } // first line may be cut by the tail window
+      if (!e || typeof e !== 'object' || !e.type) continue
+      const ts = Date.parse(e.timestamp || '')
+      const msg = e.message || {}
+      return {
+        type: e.type,
+        ageMs: Number.isFinite(ts) ? Math.max(0, now() - ts) : null,
+        synthetic: msg.model === '<synthetic>' || e.isApiErrorMessage === true,
+      }
+    }
+  } catch { /* unreadable file = no verdict */ } finally {
+    if (fd !== undefined) try { fs.closeSync(fd) } catch {}
+  }
+  return null
+}
+
+export function stallVerdict(tail, stallMs) {
+  if (!tail || !stallMs || tail.ageMs === null || tail.ageMs < stallMs) return null
+  if (tail.type === 'user' || tail.type === 'attachment') return 'pending inbound with no turn'
+  if (tail.synthetic) return 'terminal synthetic error (autocompact thrash shape)'
+  return null // old assistant/system tail = idle, not stalled
+}
+
+export const THRASH_PATTERN = 'Autocompact is thrashing'
+// cooldownMs exists because the TUI may repaint the same error line during
+// redraws: one real error must not count twice. Real thrash cycles in the
+// corpus were 2-3 min apart, so 60s of dedupe costs no sensitivity.
+export function createThrashCounter({ now = () => Date.now(), windowMs = 1_800_000, threshold = 3, cooldownMs = 60_000 } = {}) {
+  let sightings = []
+  let carry = ''
+  return {
+    feed(chunk) {
+      const text = carry + chunk
+      let idx = 0
+      for (;;) {
+        const at = text.indexOf(THRASH_PATTERN, idx)
+        if (at === -1) break
+        const t = now()
+        if (sightings.length === 0 || t - sightings[sightings.length - 1] >= cooldownMs) sightings.push(t)
+        idx = at + THRASH_PATTERN.length
+      }
+      carry = text.slice(-THRASH_PATTERN.length + 1)
+      sightings = sightings.filter((t) => now() - t <= windowMs)
+      return sightings.length >= threshold
+    },
+  }
+}
+
 // ── production child spawner (replaces run_expect + the expect script) ──────
 // Returns { pid, kill, exited } where exited resolves { exitCode, signal }.
 // Session timeout (run.sh:97-109,255-279): ONE timer here replaces both the
@@ -315,6 +471,9 @@ function spawnPtyChild(cfg, { now = () => Date.now(), log }) {
     cwd: cfg.mem,           // run.sh:285 cd "$MEM"
     env: {
       ...process.env,
+      // Hook-lane node shim (see ensureNodeShim): hooks inherit the CLI
+      // child's env, so PATH is patched here and nowhere else.
+      PATH: ensureNodeShim(cfg, { log }),
       TERM: 'xterm-256color',
       // run.sh:297 export AGENT_NAME MEM CLAUDE_BIN MODEL -- each its own
       // env var (the Bug-3 spaced-path fix is structural here: argv is a
@@ -335,6 +494,35 @@ function spawnPtyChild(cfg, { now = () => Date.now(), log }) {
     graceTimer = setTimeout(() => killHandle('SIGKILL'), 10_000)
   }, cfg.sessionTimeoutSec * 1000)
 
+  // Stall/thrash watchdog (see the v0.0.15 block above). Both lanes converge
+  // on one bounce() so a child is only ever killed once per life.
+  const spawnedAt = now()
+  let bounced = false
+  let stallTimer = null
+  const bounce = (reason) => {
+    if (bounced) return
+    bounced = true
+    log(`watchdog: bouncing child ${child.pid} -- ${reason}`)
+    killHandle('SIGTERM')
+    graceTimer = setTimeout(() => killHandle('SIGKILL'), 10_000)
+  }
+  const thrash = createThrashCounter({ now })
+  if (cfg.stallTimeoutSec > 0 && !IS_WIN) {
+    const stallMs = cfg.stallTimeoutSec * 1000
+    stallTimer = setInterval(() => {
+      const file = newestTranscript(transcriptDirFor(cfg.mem))
+      if (!file) return
+      const tail = readTranscriptTail(file, { now })
+      if (!tail) return
+      // Era guard: the tail must belong to THIS child's life, or a dead
+      // session's stalled file would re-bounce every fresh respawn forever.
+      if (tail.ageMs === null || now() - tail.ageMs < spawnedAt) return
+      const verdict = stallVerdict(tail, stallMs)
+      if (verdict) bounce(`transcript stalled ${Math.round(tail.ageMs / 60000)}min: ${verdict}`)
+    }, 60_000)
+    if (typeof stallTimer.unref === 'function') stallTimer.unref()
+  }
+
   function killHandle(sig) {
     try {
       if (IS_WIN) {
@@ -351,10 +539,15 @@ function spawnPtyChild(cfg, { now = () => Date.now(), log }) {
     child.onData((d) => {
       process.stdout.write(d) // expect log_user 1: child output -> supervisor stdout -> logfile
       matcher.feed(d)
+      // Early thrash lane: the CLI prints its synthetic thrash error to the
+      // TUI while the loop is still spinning -- no need to wait for the
+      // terminal stall to go quiet.
+      if (thrash.feed(d)) bounce(`autocompact thrash pattern x3 in 30min ("${THRASH_PATTERN}")`)
     })
     child.onExit(({ exitCode, signal }) => {
       clearTimeout(sessionTimer)
       if (graceTimer) clearTimeout(graceTimer)
+      if (stallTimer) clearInterval(stallTimer)
       resolve({ exitCode, signal })
     })
   })

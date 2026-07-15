@@ -155,6 +155,35 @@ console.log('\n-- session-start.mjs')
   ok('garbage snapshot -> silent, never guesses', !permCtx('{{{not json').includes('permission walls'))
 }
 
+// session-start: oversize restore-file guard (v0.0.15 Root B mitigation).
+// Promises: a restore-order file at/over 24KB gets named with its size and
+// the excerpt instruction; small files and absent files stay silent.
+{
+  const oversizeCtx = (files) => {
+    const mem = tmp()
+    fs.mkdirSync(path.join(mem, 'session_notes'), { recursive: true })
+    for (const [rel, kb] of files) {
+      const full = path.join(mem, rel)
+      fs.mkdirSync(path.dirname(full), { recursive: true })
+      fs.writeFileSync(full, 'x'.repeat(kb * 1024))
+    }
+    const ctx = JSON.parse(runPorted('hooks/session-start.mjs', mem).stdout).hookSpecificOutput.additionalContext
+    fs.rmSync(mem, { recursive: true, force: true })
+    return ctx
+  }
+
+  let ctx = oversizeCtx([[`session_notes/${TODAY}.md`, 78], ['checkpoint.md', 3]])
+  ok('oversized today-note surfaces with size', /OVERSIZED restore files:.*session_notes\/.*\(78KB\)/.test(ctx), ctx.split('\n')[1])
+  ok('small checkpoint stays out of the oversize line', !/checkpoint\.md \(\d+KB\)/.test(ctx))
+  ok('oversize line teaches the excerpt habit, names the thrash risk', ctx.includes('offset/limit') && ctx.includes('re-attached at every compaction'))
+
+  ctx = oversizeCtx([['self_persona.md', 30]])
+  ok('oversized self_persona.md is also caught', ctx.includes('self_persona.md (30KB)'))
+
+  ctx = oversizeCtx([])
+  ok('no oversized files -> no oversize line', !ctx.includes('OVERSIZED'))
+}
+
 // ── felt-check ──────────────────────────────────────────────────────────────
 console.log('\n-- felt-check.mjs')
 {

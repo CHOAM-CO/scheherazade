@@ -96,8 +96,33 @@ try {
   // no snapshot yet, or unreadable -- say nothing rather than guess.
 }
 
+// Oversize guard on the restore-order files (v0.0.15 Root B mitigation).
+// The autocompact thrash loop in the 07-13..07-15 teardown corpus was fed by
+// compaction re-attaching every session-read file -- ~12 files, the fattest
+// being 15-18KB memory files -- so the context refilled to the limit right
+// after each compact. The app cannot change the CLI's re-attach behavior,
+// but it CAN stop teaching the agent to full-Read big files at boot: any
+// restore-order file over the threshold gets named here with an explicit
+// excerpt instruction instead of being silently swept into "read these".
+// Advisory line, not a wall: reading stays the agent's call.
+const OVERSIZE_KB = 24
+const oversize = []
+for (const [label, file] of [
+  [`session_notes/${TODAY}.md`, notesFile],
+  ['checkpoint.md', checkpointFile],
+  ['self_persona.md', path.join(MEM, 'self_persona.md')],
+]) {
+  try {
+    const kb = Math.round(fs.statSync(file).size / 1024)
+    if (kb >= OVERSIZE_KB) oversize.push(`${label} (${kb}KB)`)
+  } catch { /* absent file = nothing to warn about */ }
+}
+
 const out = []
 out.push(`Session note for ${TODAY}: ${noteStatus}.`)
+if (oversize.length > 0) {
+  out.push(`OVERSIZED restore files: ${oversize.join(', ')}. Read these with offset/limit excerpts (tail first), NOT a full Read -- fully-read files are re-attached at every compaction and large ones can thrash the context until the session stalls. Consider compressing/archiving them this session.`)
+}
 if (permLine) out.push(permLine)
 out.push(`Checkpoint: ${checkpointStatus}.`)
 if (pendingCount > 0) out.push(`${pendingCount} prior-date session note(s) waiting on journal compression -- run journal-compress.mjs scan.`)
