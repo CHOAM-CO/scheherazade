@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Scheherazade — 채널</title>
+    <link rel="stylesheet" href="/css/app.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <div id="app-nav"></div>
+
+      <div class="page-header">
+        <h1 id="ch-title"></h1>
+        <div class="page-nav">
+          <a href="/memory" id="ch-back-link"></a>
+        </div>
+      </div>
+      <p class="subtitle" id="ch-subtitle"></p>
+
+      <!-- Discord. Reconnect flow markup moved verbatim from connectors.html
+           (2026-07-16 channels split) -- ids renamed conn-* -> ch-* only. -->
+      <div class="category" id="ch-discord">
+        <div class="entries">
+          <div class="entry-row">
+            <div class="entry-main">
+              <div class="entry-value" id="ch-discord-name"></div>
+              <div class="entry-meta" id="ch-discord-status"></div>
+            </div>
+            <button class="secondary hidden" id="ch-discord-switch"></button>
+            <button class="secondary" id="ch-discord-reconnect"></button>
+          </div>
+        </div>
+        <div class="reconnect-flow hidden" id="ch-reconnect-flow">
+          <div class="field-hint" id="ch-reconnect-note"></div>
+          <div class="field">
+            <input type="password" id="ch-reconnect-token" />
+          </div>
+          <div class="step-actions">
+            <span class="status-line" id="ch-reconnect-status"></span>
+            <button class="secondary" id="ch-reconnect-enum"></button>
+          </div>
+          <div class="reconnect-pickers hidden" id="ch-reconnect-pickers">
+            <div class="agent-control-row">
+              <label for="ch-reconnect-guild" id="ch-reconnect-guild-label"></label>
+              <select id="ch-reconnect-guild"></select>
+            </div>
+            <div class="agent-control-row">
+              <label for="ch-reconnect-channel" id="ch-reconnect-channel-label"></label>
+              <select id="ch-reconnect-channel"></select>
+            </div>
+            <div class="field-hint hidden" id="ch-reconnect-truncated"></div>
+            <div class="step-actions">
+              <span></span>
+              <button id="ch-reconnect-apply"></button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Telegram -->
+      <div class="category" style="margin-top: 2.5rem" id="ch-telegram">
+        <div class="entries">
+          <div class="entry-row">
+            <div class="entry-main">
+              <div class="entry-value" id="ch-telegram-name"></div>
+              <div class="entry-meta" id="ch-telegram-status"></div>
+            </div>
+            <button class="secondary hidden" id="ch-telegram-switch"></button>
+            <button class="secondary" id="ch-telegram-connect"></button>
+          </div>
+        </div>
+        <div class="reconnect-flow hidden" id="ch-telegram-flow">
+          <div class="field-hint" id="ch-telegram-guide"></div>
+          <div class="step-actions">
+            <span></span>
+            <button class="secondary" id="ch-telegram-botfather"></button>
+          </div>
+          <div class="field-hint" id="ch-telegram-token-note"></div>
+          <div class="field">
+            <input type="password" id="ch-telegram-token" />
+          </div>
+          <div class="step-actions">
+            <span class="status-line" id="ch-telegram-flow-status"></span>
+            <button class="secondary" id="ch-telegram-enum"></button>
+          </div>
+          <div class="reconnect-pickers hidden" id="ch-telegram-pickers">
+            <div class="agent-control-row">
+              <label for="ch-telegram-chat" id="ch-telegram-chat-label"></label>
+              <select id="ch-telegram-chat"></select>
+            </div>
+            <div class="step-actions">
+              <span></span>
+              <button id="ch-telegram-apply"></button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Slack -->
+      <div class="category" style="margin-top: 2.5rem" id="ch-slack">
+        <div class="entries">
+          <div class="entry-row">
+            <div class="entry-main">
+              <div class="entry-value" id="ch-slack-name"></div>
+              <div class="entry-meta" id="ch-slack-status"></div>
+            </div>
+            <button class="secondary hidden" id="ch-slack-switch"></button>
+            <button class="secondary" id="ch-slack-connect"></button>
+          </div>
+        </div>
+        <div class="reconnect-flow hidden" id="ch-slack-flow">
+          <div class="field-hint" id="ch-slack-guide"></div>
+          <div class="step-actions">
+            <span></span>
+            <button class="secondary" id="ch-slack-console"></button>
+          </div>
+          <div class="field-hint" id="ch-slack-token-note"></div>
+          <div class="field">
+            <input type="password" id="ch-slack-bot-token" />
+          </div>
+          <div class="field">
+            <input type="password" id="ch-slack-app-token" />
+          </div>
+          <div class="step-actions">
+            <span class="status-line" id="ch-slack-flow-status"></span>
+            <button class="secondary" id="ch-slack-enum"></button>
+          </div>
+          <div class="reconnect-pickers hidden" id="ch-slack-pickers">
+            <div class="agent-control-row">
+              <label for="ch-slack-channel" id="ch-slack-channel-label"></label>
+              <select id="ch-slack-channel"></select>
+            </div>
+            <div class="step-actions">
+              <span></span>
+              <button id="ch-slack-apply"></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast" id="ch-toast"></div>
+
+    <script src="/js/copy.js"></script>
+    <script src="/js/nav.js"></script>
+    <script src="/js/channels.js"></script>
+  </body>
+</html>

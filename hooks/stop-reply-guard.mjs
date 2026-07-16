@@ -123,7 +123,10 @@ async function main() {
   const entries = tailJsonl(transcriptPath, SCAN_TAIL)
 
   // Most recent user message containing a Discord channel tag.
-  const channelRegex = /<channel\s+[^>]*channelId="(\d+)"[^>]*>([\s\S]*?)<\/channel>/
+  // -? : Telegram group/supergroup chat ids are NEGATIVE numbers (multichannel
+  // v0.0.18). Digits-only left this guard silently inert for those chats --
+  // the trigger never matched, so the reply obligation was never enforced.
+  const channelRegex = /<channel\s+[^>]*channelId="(-?\d+)"[^>]*>([\s\S]*?)<\/channel>/
   let triggerIdx = -1
   let triggerChannelId = null
   let triggerBody = ''
@@ -185,7 +188,7 @@ async function main() {
         const text = Array.isArray(block.content)
           ? block.content.map((c) => (typeof c?.text === 'string' ? c.text : '')).join('\n')
           : typeof block.content === 'string' ? block.content : ''
-        const m = text.match(/^delivered_channel=(\d+)$/m)
+        const m = text.match(/^delivered_channel=(-?\d+)$/m)
         if (m && m[1] === triggerChannelId) {
           replyFound = true
           break

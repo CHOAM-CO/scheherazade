@@ -105,6 +105,10 @@
   // connectors.title) rather than inventing new ones. Active tab is derived
   // from the URL, never hand-set, so it can't drift from reality.
   const TABS = [
+    // channels first (multichannel v0.0.18, Mino 07-16 "맨 앞에 채널 섹션").
+    // '/' still lands on /memory -- tab ORDER changed, the home page didn't;
+    // changing the landing is a separate product call, not a ride-along.
+    { id: 'channels', href: '/channels', label: NAV.tabs.channels },
     { id: 'memory', href: '/memory', label: NAV.tabs.memory },
     { id: 'connectors', href: '/connectors', label: NAV.tabs.connectors },
     { id: 'settings', href: '/settings', label: NAV.tabs.settings },
@@ -112,6 +116,7 @@
 
   function activeTabId() {
     const path = window.location.pathname
+    if (path.startsWith('/channels')) return 'channels'
     if (path.startsWith('/connectors')) return 'connectors'
     if (path.startsWith('/settings')) return 'settings'
     return 'memory' // '/memory' and '/' both read as home
@@ -311,7 +316,12 @@
     // camelCase ride-along. Installs onboarded before HOME_GUILD_ID
     // persistence existed won't have the guild id -> button stays hidden.
     const discordBtn = $('nav-btn-discord')
-    if (cfg.HOME_GUILD_ID && cfg.homeChannelId) {
+    // Multichannel (v0.0.18): the open-Discord affordance only makes sense
+    // when discord IS the active backend -- on slack/telegram it would open
+    // a channel the agent no longer lives in. CHANNEL_BACKEND rides
+    // /api/config's readAgentConfig() spread; absent = discord (legacy).
+    const activeBackend = String(cfg.CHANNEL_BACKEND || 'discord').toLowerCase()
+    if (activeBackend === 'discord' && cfg.HOME_GUILD_ID && cfg.homeChannelId) {
       discordBtn.textContent = NAV.openDiscord
       discordBtn.classList.remove('hidden')
       discordBtn.onclick = async () => {

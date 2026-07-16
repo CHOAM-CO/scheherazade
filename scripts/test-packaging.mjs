@@ -59,7 +59,8 @@ function dirsReferencedBy(file) {
   })
 }
 
-const RUNTIME_ENTRYPOINTS = ['channel.mjs', 'onboarding/http-server.cjs', 'main.cjs']
+const CHANNEL_SCRIPTS = ['channel.mjs', 'channel-slack.mjs', 'channel-telegram.mjs']
+const RUNTIME_ENTRYPOINTS = [...CHANNEL_SCRIPTS, 'onboarding/http-server.cjs', 'main.cjs']
 const referenced = new Set()
 for (const f of RUNTIME_ENTRYPOINTS) {
   if (!fs.existsSync(path.join(ROOT, f))) continue
@@ -79,6 +80,14 @@ console.log('\n-- is it in the app at all? (build.files)')
 for (const d of [...referenced].sort()) {
   ok(`${d}/ ships`, covers(pkg.build.files, d), `add "${d}/**/*" to build.files -- the DMG has no ${d}/`)
 }
+// The channel backends, named explicitly (multichannel v0.0.18): build.files
+// lists channel scripts as SINGLE FILES, so the directory scan above never
+// covers them -- a new backend that isn't named here ships as a switch
+// option whose script does not exist in the DMG. That failure is silent
+// until the user actually switches, which is the worst possible moment.
+for (const f of CHANNEL_SCRIPTS) {
+  ok(`${f} ships (named in build.files)`, pkg.build.files.includes(f), `add "${f}" to build.files -- switching to this backend in the packaged app spawns a script that is not there`)
+}
 
 console.log('\n-- is it a real file on disk? (build.asarUnpack)')
 // NOT every runtime directory needs unpacking, and the first version of this
@@ -93,7 +102,10 @@ console.log('\n-- is it a real file on disk? (build.asarUnpack)')
 //                         calendar/server.mjs from it, via .mcp.json).
 //   onboarding/        -- required by main.cjs, the Electron main process. Fine
 //                         inside the archive.
-const mustBeReal = new Set(dirsReferencedBy('channel.mjs'))
+const mustBeReal = new Set(CHANNEL_SCRIPTS.flatMap((f) => dirsReferencedBy(f)))
+// Every channel script is itself spawned by the claude CLI as a plain node
+// child (via .mcp.json) -- each must be a real file, not an asar member.
+for (const f of CHANNEL_SCRIPTS) mustBeReal.add(f)
 for (const f of RUNTIME_ENTRYPOINTS) {
   if (!fs.existsSync(path.join(ROOT, f))) continue
   const src = fs.readFileSync(path.join(ROOT, f), 'utf8')

@@ -832,7 +832,32 @@ function toUnpackedPath(p) {
   return p
 }
 
-const CHANNEL_SCRIPT_PATH = toUnpackedPath(path.join(REPO_ROOT, 'channel.mjs'))
+// ── channel backend scripts (multichannel, v0.0.18) ─────────────────────
+// One MCP server script per messenger. Which one .mcp.json's agent-channel
+// entry points at is decided by .agent-config's CHANNEL_BACKEND (default
+// discord) -- see activeChannelScriptPath() + ensureMcpJsonAgentName().
+// All three scripts expose the IDENTICAL tool surface (reply /
+// send_file_to_discord / read_channel_history): the allowlist in
+// onboarding/templates/claude-settings.local.json and every PreToolUse
+// hook match on those exact tool names, so a backend swap must never
+// rename a tool -- even though send_file_to_discord is a Discord-flavored
+// name on Slack/Telegram. Renaming = silently unapproved tool + dead hooks.
+const CHANNEL_SCRIPT_PATHS = {
+  discord: toUnpackedPath(path.join(REPO_ROOT, 'channel.mjs')),
+  slack: toUnpackedPath(path.join(REPO_ROOT, 'channel-slack.mjs')),
+  telegram: toUnpackedPath(path.join(REPO_ROOT, 'channel-telegram.mjs')),
+}
+const CHANNEL_BACKENDS = Object.keys(CHANNEL_SCRIPT_PATHS)
+function activeChannelBackend() {
+  const v = String(readAgentConfig().CHANNEL_BACKEND || 'discord').toLowerCase()
+  // Unknown value falls back to discord rather than throwing: a hand-edited
+  // .agent-config must degrade to the backend that has existed since 0.0.1,
+  // not brick the boot path that would let the user fix it.
+  return CHANNEL_SCRIPT_PATHS[v] ? v : 'discord'
+}
+function activeChannelScriptPath() {
+  return CHANNEL_SCRIPT_PATHS[activeChannelBackend()]
+}
 const MEMORY_SERVER_SCRIPT_PATH = toUnpackedPath(path.join(REPO_ROOT, 'memory', 'server.mjs'))
 const CALENDAR_SERVER_SCRIPT_PATH = toUnpackedPath(path.join(REPO_ROOT, 'calendar', 'server.mjs'))
 
@@ -885,8 +910,12 @@ function ensureMcpJsonAgentName() {
   // despite this function running (silently, no error) on every boot.
   const currentText = existing ? JSON.stringify(existing, null, 2) + '\n' : null
   const servers = existing && existing.mcpServers ? existing.mcpServers : {}
+  // agent-channel resolves per CHANNEL_BACKEND at CALL time (not module
+  // load): this function runs on every boot AND on every channel switch
+  // (POST /api/channels/switch calls it before restarting the agent), so
+  // the entry always tracks the currently-picked backend.
   const KNOWN_SERVERS = {
-    'agent-channel': CHANNEL_SCRIPT_PATH,
+    'agent-channel': activeChannelScriptPath(),
     memory: MEMORY_SERVER_SCRIPT_PATH,
     calendar: CALENDAR_SERVER_SCRIPT_PATH,
   }
@@ -902,7 +931,7 @@ function ensureMcpJsonAgentName() {
   if (!servers['agent-channel']) {
     servers['agent-channel'] = {
       command: process.execPath,
-      args: [CHANNEL_SCRIPT_PATH],
+      args: [activeChannelScriptPath()],
       cwd: DATA_HOME,
       env: { AGENT_NAME, ELECTRON_RUN_AS_NODE: '1' },
     }
@@ -1046,6 +1075,32 @@ function storeDiscordTokenVerified(token) {
 
 function readDiscordToken() {
   return readProviderKey('discord-bot')
+}
+
+// ── Slack / Telegram tokens: same safeStorage seam as the Discord token ──
+// (multichannel, v0.0.18). Same rule, verbatim: decrypted only at the
+// moment of spawn (main.cjs) and injected into that child's own env --
+// never written to .env, .agent-config, .mcp.json, or any other on-disk
+// plaintext. Slack needs TWO tokens (bot xoxb- for Web API calls, app
+// xapp- for the Socket Mode websocket), stored as separate pseudo-providers
+// so each gets its own manifest + read-back verify.
+function storeSlackBotTokenVerified(token) {
+  return storeProviderKeyVerified('slack-bot', token)
+}
+function storeSlackAppTokenVerified(token) {
+  return storeProviderKeyVerified('slack-app', token)
+}
+function readSlackBotToken() {
+  return readProviderKey('slack-bot')
+}
+function readSlackAppToken() {
+  return readProviderKey('slack-app')
+}
+function storeTelegramTokenVerified(token) {
+  return storeProviderKeyVerified('telegram-bot', token)
+}
+function readTelegramToken() {
+  return readProviderKey('telegram-bot')
 }
 
 // ── Local liveness ping (chatgpt/ollama, no-secret local-proxy modes) ────
@@ -1279,6 +1334,114 @@ async function enumerateDiscordTargets(token, fetchImpl = fetch) {
     guilds.push({ id: g.id, name: g.name, channels: textChannels })
   }
   return { ok: true, guilds, truncated }
+}
+
+// ── Telegram / Slack connect enumeration (multichannel, v0.0.18) ─────────
+// Same shape/discipline as enumerateDiscordTargets above: fetchImpl
+// injectable for tests, branch codes for user-fixable failures, throw on
+// unexpected transport errors (fail loud).
+const TELEGRAM_API = 'https://api.telegram.org'
+async function telegramApi(token, method, params, fetchImpl = fetch) {
+  const res = await fetchImpl(`${TELEGRAM_API}/bot${token}/${method}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params || {}),
+  })
+  // Telegram signals auth failures via HTTP status (401/404) and everything
+  // else via body.ok -- normalize both into one bag so callers branch once.
+  let body = {}
+  try {
+    body = await res.json()
+  } catch {
+    // non-JSON (proxy error page etc.) -- leave body empty; ok stays false
+  }
+  return { status: res.status, ok: res.ok && body.ok === true, result: body.result, description: body.description || '' }
+}
+
+async function enumerateTelegramChats(token, fetchImpl = fetch) {
+  if (!token || !token.trim()) return { ok: false, branch: 'invalid_token' }
+  const me = await telegramApi(token.trim(), 'getMe', {}, fetchImpl)
+  if (me.status === 401 || me.status === 404) return { ok: false, branch: 'invalid_token' }
+  if (!me.ok) throw new Error(`Telegram getMe failed: HTTP ${me.status} ${me.description}`)
+  // getUpdates long-poll conflicts (HTTP 409) with a RUNNING telegram
+  // backend holding its own poll. Its own branch so the UI can say "stop
+  // the agent first" instead of a generic failure.
+  const upd = await telegramApi(token.trim(), 'getUpdates', { limit: 100, timeout: 0 }, fetchImpl)
+  if (upd.status === 409) return { ok: false, branch: 'conflict_running', bot: { username: me.result.username } }
+  if (!upd.ok) throw new Error(`Telegram getUpdates failed: HTTP ${upd.status} ${upd.description}`)
+  const chats = new Map()
+  for (const u of upd.result || []) {
+    const msg = u.message || u.edited_message || u.channel_post
+    if (!msg || !msg.chat) continue
+    const c = msg.chat
+    const label = c.title || [c.first_name, c.last_name].filter(Boolean).join(' ') || c.username || String(c.id)
+    chats.set(String(c.id), { id: String(c.id), label, type: c.type })
+  }
+  // Empty chats is NOT an error: a fresh bot nobody has messaged yet has
+  // no updates. The UI turns this into "봇에게 먼저 메시지를 보내 주세요".
+  return { ok: true, bot: { username: me.result.username }, chats: [...chats.values()] }
+}
+
+const SLACK_API = 'https://slack.com/api'
+async function slackApi(token, method, params, fetchImpl = fetch) {
+  const res = await fetchImpl(`${SLACK_API}/${method}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(params || {}),
+  })
+  let body = {}
+  try {
+    body = await res.json()
+  } catch {
+    // non-JSON -- ok stays false below
+  }
+  return { status: res.status, ok: body.ok === true, error: body.error || '', body }
+}
+
+async function enumerateSlackChannels(botToken, appToken, fetchImpl = fetch) {
+  if (!botToken || !botToken.trim()) return { ok: false, branch: 'invalid_bot_token' }
+  if (!appToken || !appToken.trim()) return { ok: false, branch: 'invalid_app_token' }
+  const auth = await slackApi(botToken.trim(), 'auth.test', {}, fetchImpl)
+  if (!auth.ok) return { ok: false, branch: 'invalid_bot_token', detail: auth.error }
+  // apps.connections.open = cheapest "is this xapp token real AND is Socket
+  // Mode enabled" probe. The returned wss URL is deliberately unused here --
+  // opening the socket is the channel backend's job, not the wizard's.
+  const conn = await slackApi(appToken.trim(), 'apps.connections.open', {}, fetchImpl)
+  if (!conn.ok) return { ok: false, branch: 'invalid_app_token', detail: conn.error }
+  const list = await slackApi(
+    botToken.trim(),
+    'conversations.list',
+    { types: 'public_channel,private_channel', limit: 200, exclude_archived: true },
+    fetchImpl
+  )
+  if (!list.ok) throw new Error(`Slack conversations.list failed: ${list.error}`)
+  const channels = (list.body.channels || []).map((c) => ({ id: c.id, name: c.name, isMember: c.is_member === true }))
+  return { ok: true, team: auth.body.team || '', botUser: auth.body.user || '', channels }
+}
+
+// Per-backend readiness, computed live from the credential store + config
+// (never cached): "configured" means switch-ready -- credentials AND a home
+// picked. Labels are display-only ride-alongs, same convention as
+// HOME_GUILD_NAME on the discord reconnect path.
+function channelBackendReadiness() {
+  const cfg = readAgentConfig()
+  return {
+    discord: {
+      configured: Boolean(readDiscordToken() && readHomeChannelId()),
+      home: cfg.HOME_CHANNEL_NAME || readHomeChannelId() || '',
+      detail: cfg.HOME_GUILD_NAME || '',
+    },
+    slack: {
+      configured: Boolean(readSlackBotToken() && readSlackAppToken() && cfg.SLACK_HOME_CHANNEL_ID),
+      home: cfg.SLACK_HOME_CHANNEL_NAME || cfg.SLACK_HOME_CHANNEL_ID || '',
+      detail: cfg.SLACK_TEAM_NAME || '',
+    },
+    telegram: {
+      configured: Boolean(readTelegramToken() && cfg.TELEGRAM_HOME_CHAT_ID),
+      home: cfg.TELEGRAM_HOME_CHAT_NAME || cfg.TELEGRAM_HOME_CHAT_ID || '',
+      detail: cfg.TELEGRAM_BOT_USERNAME || '',
+    },
+  }
 }
 
 // ── memory tool bridge (bypasses MCP stdio, direct dynamic import) ───────
@@ -2370,6 +2533,155 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     return
   }
 
+  // ── multichannel (v0.0.18): status / telegram / slack connect / switch ──
+  if (pathname === '/api/channels/status' && req.method === 'GET') {
+    sendJson(res, 200, { active: activeChannelBackend(), backends: channelBackendReadiness() })
+    return
+  }
+
+  if (pathname === '/api/telegram/connect/validate' && req.method === 'POST') {
+    const { token } = await readJsonBody(req)
+    const provided = typeof token === 'string' && token.trim() !== ''
+    const effective = provided ? token.trim() : readTelegramToken()
+    if (!effective) {
+      sendJson(res, 200, { ok: false, branch: 'invalid_token' })
+      return
+    }
+    sendJson(res, 200, await enumerateTelegramChats(effective))
+    return
+  }
+
+  if (pathname === '/api/telegram/connect/apply' && req.method === 'POST') {
+    const { token, chatId, chatLabel } = await readJsonBody(req)
+    if (!chatId) {
+      sendJson(res, 400, { error: 'chatId is required' })
+      return
+    }
+    const provided = typeof token === 'string' && token.trim() !== ''
+    const effective = provided ? token.trim() : readTelegramToken()
+    if (!effective) {
+      sendJson(res, 200, { ok: false, branch: 'invalid_token' })
+      return
+    }
+    // Apply-time re-verification, discord-apply discipline: the picked chat
+    // must be reachable by THIS token right now. sendChatAction is the
+    // cheapest probe that proves reachability without posting a visible
+    // message ("typing" flashes at most). Client-sent ids are never trusted.
+    const me = await telegramApi(effective, 'getMe', {})
+    if (me.status === 401 || me.status === 404) {
+      sendJson(res, 200, { ok: false, branch: 'invalid_token' })
+      return
+    }
+    if (!me.ok) throw new Error(`Telegram getMe failed: HTTP ${me.status} ${me.description}`)
+    const ping = await telegramApi(effective, 'sendChatAction', { chat_id: String(chatId), action: 'typing' })
+    if (!ping.ok) {
+      sendJson(res, 200, { ok: false, branch: 'chat_unreachable', detail: ping.description })
+      return
+    }
+    storeTelegramTokenVerified(effective)
+    writeAgentConfig({
+      TELEGRAM_HOME_CHAT_ID: String(chatId),
+      TELEGRAM_HOME_CHAT_NAME: typeof chatLabel === 'string' ? chatLabel : '',
+      TELEGRAM_BOT_USERNAME: me.result.username || '',
+    })
+    // Restart ONLY when telegram is the active backend: configuring an
+    // inactive backend must not bounce the agent living on another one.
+    const isActive = activeChannelBackend() === 'telegram'
+    if (isActive && agentControls && typeof agentControls.restartAgent === 'function') {
+      agentControls.restartAgent().catch((err) => console.error('[scheherazade/onboarding] telegram apply restart threw:', err))
+    }
+    sendJson(res, isActive ? 202 : 200, { ok: true, chatId: String(chatId), botUsername: me.result.username || '', restarted: isActive })
+    return
+  }
+
+  if (pathname === '/api/slack/connect/validate' && req.method === 'POST') {
+    const { botToken, appToken } = await readJsonBody(req)
+    const effBot = typeof botToken === 'string' && botToken.trim() !== '' ? botToken.trim() : readSlackBotToken()
+    const effApp = typeof appToken === 'string' && appToken.trim() !== '' ? appToken.trim() : readSlackAppToken()
+    if (!effBot) {
+      sendJson(res, 200, { ok: false, branch: 'invalid_bot_token' })
+      return
+    }
+    if (!effApp) {
+      sendJson(res, 200, { ok: false, branch: 'invalid_app_token' })
+      return
+    }
+    sendJson(res, 200, await enumerateSlackChannels(effBot, effApp))
+    return
+  }
+
+  if (pathname === '/api/slack/connect/apply' && req.method === 'POST') {
+    const { botToken, appToken, channelId } = await readJsonBody(req)
+    if (!channelId) {
+      sendJson(res, 400, { error: 'channelId is required' })
+      return
+    }
+    const effBot = typeof botToken === 'string' && botToken.trim() !== '' ? botToken.trim() : readSlackBotToken()
+    const effApp = typeof appToken === 'string' && appToken.trim() !== '' ? appToken.trim() : readSlackAppToken()
+    if (!effBot || !effApp) {
+      sendJson(res, 200, { ok: false, branch: !effBot ? 'invalid_bot_token' : 'invalid_app_token' })
+      return
+    }
+    // Apply-time re-verification: both tokens live + picked channel
+    // reachable + bot actually IN it (posting from outside a channel fails
+    // at runtime -- catch it here, where the user can still fix it).
+    const auth = await slackApi(effBot, 'auth.test', {})
+    if (!auth.ok) {
+      sendJson(res, 200, { ok: false, branch: 'invalid_bot_token', detail: auth.error })
+      return
+    }
+    const conn = await slackApi(effApp, 'apps.connections.open', {})
+    if (!conn.ok) {
+      sendJson(res, 200, { ok: false, branch: 'invalid_app_token', detail: conn.error })
+      return
+    }
+    const info = await slackApi(effBot, 'conversations.info', { channel: String(channelId) })
+    if (!info.ok || !info.body.channel) {
+      sendJson(res, 400, { error: 'picked channel is not reachable by this token' })
+      return
+    }
+    if (info.body.channel.is_member !== true) {
+      sendJson(res, 200, { ok: false, branch: 'not_in_channel', channelName: info.body.channel.name || '' })
+      return
+    }
+    storeSlackBotTokenVerified(effBot)
+    storeSlackAppTokenVerified(effApp)
+    writeAgentConfig({
+      SLACK_HOME_CHANNEL_ID: String(channelId),
+      SLACK_HOME_CHANNEL_NAME: info.body.channel.name || '',
+      SLACK_TEAM_NAME: auth.body.team || '',
+    })
+    const isActive = activeChannelBackend() === 'slack'
+    if (isActive && agentControls && typeof agentControls.restartAgent === 'function') {
+      agentControls.restartAgent().catch((err) => console.error('[scheherazade/onboarding] slack apply restart threw:', err))
+    }
+    sendJson(res, isActive ? 202 : 200, { ok: true, channelId: String(channelId), channelName: info.body.channel.name || '', team: auth.body.team || '', restarted: isActive })
+    return
+  }
+
+  if (pathname === '/api/channels/switch' && req.method === 'POST') {
+    const { backend } = await readJsonBody(req)
+    if (!CHANNEL_BACKENDS.includes(backend)) {
+      sendJson(res, 400, { error: `backend must be one of: ${CHANNEL_BACKENDS.join(', ')}` })
+      return
+    }
+    const readiness = channelBackendReadiness()
+    if (!readiness[backend].configured) {
+      sendJson(res, 200, { ok: false, branch: 'not_configured', backend })
+      return
+    }
+    writeAgentConfig({ CHANNEL_BACKEND: backend })
+    // Rewrite .mcp.json NOW (not at next boot): the restart below re-spawns
+    // the claude CLI, which reads .mcp.json at ITS spawn -- the agent-channel
+    // entry must already point at the new backend script by then.
+    ensureMcpJsonAgentName()
+    if (agentControls && typeof agentControls.restartAgent === 'function') {
+      agentControls.restartAgent().catch((err) => console.error('[scheherazade/onboarding] channel switch restart threw:', err))
+    }
+    sendJson(res, 202, { ok: true, active: backend })
+    return
+  }
+
   // ── chatgpt proxy live receipt (IA v0.0.9, "셸은 현실" principle) ─────────
   // Surfaces what the proxy's own /health reports RIGHT NOW -- the product
   // form of the 07-14 live catch (dropdown gpt-5.6-sol vs engine gpt-5.5,
@@ -3043,6 +3355,7 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
 const ROUTE_TO_FILE = {
   '/': 'index.html',
   '/index.html': 'index.html',
+  '/channels': 'channels.html',
   '/memory': 'memory.html',
   '/settings': 'settings.html',
   '/connectors': 'connectors.html',
@@ -3223,4 +3536,15 @@ module.exports = {
   LOGIN_TIMEOUT_MS,
   resolveBin,
   killAllLoginChildren,
+  // Multichannel (v0.0.18): backend resolution + per-backend credential
+  // readers for main.cjs's spawn-time env injection (same seam as
+  // readDiscordToken above), plus fetchImpl-injectable enumerators for
+  // scripts/test-channel-connect.mjs.
+  activeChannelBackend,
+  readSlackBotToken,
+  readSlackAppToken,
+  readTelegramToken,
+  enumerateTelegramChats,
+  enumerateSlackChannels,
+  channelBackendReadiness,
 }

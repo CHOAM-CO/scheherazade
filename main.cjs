@@ -41,6 +41,9 @@ const {
   createOnboardingServer,
   readAgentConfig,
   readDiscordToken,
+  readSlackBotToken,
+  readSlackAppToken,
+  readTelegramToken,
   readHomeChannelId,
   readProviderKey,
   toUnpackedPath,
@@ -901,27 +904,84 @@ async function spawnRealAgentChildLocked() {
     }
   }
 
-  let token
-  try {
-    token = readDiscordToken()
-  } catch (err) {
-    console.error('[scheherazade/main] readDiscordToken failed, cannot spawn agent:', err)
-    // No dedicated code for a local safeStorage/Keychain read failure on the
-    // DISCORD token specifically (key_error is reserved for the PROVIDER
-    // key path above, discord_token_bad is reserved for the marker-driven
-    // missing/rejected-token paths in channel.mjs) -- 'unknown' fallback.
-    setAgentStatus('failed', 'unknown', `readDiscordToken failed: ${err.message}`)
-    return null
-  }
-  if (!token) {
-    log('agent spawn skipped: no validated Discord bot token on file yet')
-    return null
-  }
-
-  const homeChannelId = readHomeChannelId()
-  if (!homeChannelId) {
-    log('agent spawn skipped: no HOME_CHANNEL_ID on file yet')
-    return null
+  // Multichannel (v0.0.18): resolve the ACTIVE backend's credentials + home
+  // id at spawn time. Same seam discipline as the original Discord-only
+  // path: decrypt HERE, inject into this child's env only, never write back
+  // to disk. HOME_CHANNEL_ID stays the ONE generic key every channel script
+  // reads (discord channel id / slack channel id / telegram chat id) --
+  // main resolves which stored id it means. The injected value beats the
+  // channel scripts' dotenv read (dotenv never overrides existing env
+  // vars), so a stale .env HOME_CHANNEL_ID from the discord era cannot
+  // leak into a slack/telegram run.
+  const channelBackend = String(config.CHANNEL_BACKEND || 'discord').toLowerCase()
+  const channelEnv = {}
+  let homeChannelId
+  if (channelBackend === 'slack') {
+    let slackBot, slackApp
+    try {
+      slackBot = readSlackBotToken()
+      slackApp = readSlackAppToken()
+    } catch (err) {
+      console.error('[scheherazade/main] slack token read failed, cannot spawn agent:', err)
+      setAgentStatus('failed', 'unknown', `slack token read failed: ${err.message}`)
+      return null
+    }
+    if (!slackBot || !slackApp) {
+      log('agent spawn skipped: slack backend active but bot/app token missing')
+      return null
+    }
+    homeChannelId = config.SLACK_HOME_CHANNEL_ID
+    if (!homeChannelId) {
+      log('agent spawn skipped: slack backend active but no SLACK_HOME_CHANNEL_ID yet')
+      return null
+    }
+    channelEnv.SLACK_BOT_TOKEN = slackBot
+    channelEnv.SLACK_APP_TOKEN = slackApp
+  } else if (channelBackend === 'telegram') {
+    let tgToken
+    try {
+      tgToken = readTelegramToken()
+    } catch (err) {
+      console.error('[scheherazade/main] telegram token read failed, cannot spawn agent:', err)
+      setAgentStatus('failed', 'unknown', `telegram token read failed: ${err.message}`)
+      return null
+    }
+    if (!tgToken) {
+      log('agent spawn skipped: telegram backend active but no validated bot token yet')
+      return null
+    }
+    homeChannelId = config.TELEGRAM_HOME_CHAT_ID
+    if (!homeChannelId) {
+      log('agent spawn skipped: telegram backend active but no TELEGRAM_HOME_CHAT_ID yet')
+      return null
+    }
+    channelEnv.TELEGRAM_BOT_TOKEN = tgToken
+  } else {
+    // discord -- the default AND the unknown-value fallback, mirroring
+    // http-server.cjs's activeChannelBackend() so spawn and .mcp.json can
+    // never disagree about which backend a weird config value means.
+    let token
+    try {
+      token = readDiscordToken()
+    } catch (err) {
+      console.error('[scheherazade/main] readDiscordToken failed, cannot spawn agent:', err)
+      // No dedicated code for a local safeStorage/Keychain read failure on the
+      // DISCORD token specifically (key_error is reserved for the PROVIDER
+      // key path above, discord_token_bad is reserved for the marker-driven
+      // missing/rejected-token paths in channel.mjs) -- 'unknown' fallback.
+      setAgentStatus('failed', 'unknown', `readDiscordToken failed: ${err.message}`)
+      return null
+    }
+    if (!token) {
+      log('agent spawn skipped: no validated Discord bot token on file yet')
+      return null
+    }
+    homeChannelId = readHomeChannelId()
+    if (!homeChannelId) {
+      log('agent spawn skipped: no HOME_CHANNEL_ID on file yet')
+      return null
+    }
+    channelEnv.DISCORD_BOT_TOKEN = token
   }
 
   const agentName = config.AGENT_NAME || FIXED_AGENT_NAME
@@ -962,7 +1022,7 @@ async function spawnRealAgentChildLocked() {
   // current one, and never described this spawn() call either way).
   const supervisorEnv = {
     ...process.env,
-    DISCORD_BOT_TOKEN: token,
+    ...channelEnv,
     HOME_CHANNEL_ID: homeChannelId,
     AGENT_NAME: agentName,
     MODEL: model,

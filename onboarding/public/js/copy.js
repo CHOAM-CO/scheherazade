@@ -289,7 +289,11 @@ window.COPY = {
     connectDiscordNote: '봇 만들기 페이지가 열리고, 여기에 단계별 안내가 시작됩니다',
     connectSlack: 'Connect Slack',
     connectTelegram: 'Connect Telegram',
-    supportSoonNote: '봇 만들기 페이지만 열립니다 — 연결은 지원 예정',
+    // De-lied for v0.0.18: slack/telegram backends now EXIST, but the
+    // onboarding wizard still walks the Discord path only -- the honest
+    // pointer is "finish setup, then switch on the 채널 tab", not the old
+    // "지원 예정" (false) and not a fake in-wizard flow (doesn't exist).
+    supportSoonNote: '봇 만들기 페이지만 열립니다. 연결은 설치를 끝낸 뒤 채널 탭에서 할 수 있습니다',
     links: {
       discord: 'https://discord.com/developers/applications',
       slack: 'https://api.slack.com/apps',
@@ -486,7 +490,10 @@ window.COPY = {
   // eng placeholder pending Mino's copy-track localization pass, unchanged
   // by the move itself.
   nav: {
-    tabs: { memory: '기억', connectors: '커넥터', settings: '설정' },
+    // channels FIRST (multichannel v0.0.18, Mino 07-16: "맨 앞에 채널 섹션") --
+    // tab order is meaning here: the messenger the agent lives through
+    // outranks what it remembers and how it runs.
+    tabs: { channels: '채널', memory: '기억', connectors: '커넥터', settings: '설정' },
     label: 'AGENT',
     states: { live: 'Running', connecting: 'Starting…', stopped: 'Stopped', failed: 'Failed', idle: 'Not started' },
     start: 'Start',
@@ -625,6 +632,80 @@ window.COPY = {
     },
     permsRelaunchNote: '설정에서 허용을 바꾸셨다면, 앱을 재실행해야 여기 반영되는 항목이 있습니다',
     permsRelaunchButton: '앱 재실행',
+  },
+
+  // AUTHORED -- channels page (multichannel v0.0.18, Mino 07-16 15:07:
+  // "맨 앞에 채널 섹션 추가하고 Discord/Slack/Telegram 연동 갈아끼울 수
+  // 있게" + 15:13 "셋 다 실작동까지 이번에"). The discord reconnect strings
+  // MOVED here verbatim from `connectors` (that page no longer renders
+  // messengers); slack/telegram connect strings are new. Register: 간결
+  // 존댓말, no 이모지, no 느낌표.
+  channels: {
+    title: '채널',
+    subtitle: '에이전트가 대화하는 메신저입니다. 연결해 두고 갈아끼울 수 있습니다.',
+    activeBadge: '사용 중',
+    configuredBadge: '연결됨',
+    notConfiguredBadge: '미연결',
+    switchButton: '이 채널로 전환',
+    switchConfirm: (name) => `${name}(으)로 전환하고 에이전트를 재시작합니다. 계속할까요?`,
+    switchOk: '전환',
+    switching: '전환하고 에이전트를 재시작하는 중입니다',
+    switched: (name) => `${name}(으)로 전환됐습니다`,
+    notConfiguredYet: '먼저 연결을 끝내야 전환할 수 있습니다',
+    names: { discord: 'Discord', slack: 'Slack', telegram: 'Telegram' },
+    connectButton: '연결',
+    reconnectButton: '재연결',
+    closeButton: '접기',
+    homeLine: (label) => `홈: ${label}`,
+    invalidToken: '토큰이 유효하지 않습니다',
+    // -- discord (moved verbatim from connectors.*) --
+    discordConnected: (guild, channel) => `연결됨 · ${guild} / #${channel}`,
+    discordStoredTokenNote: '비워두면 저장된 토큰을 그대로 씁니다. 봇 토큰을 바꿨을 때만 새 토큰을 붙여넣으세요.',
+    discordTokenPlaceholder: '새 봇 토큰 (선택)',
+    discordEnumButton: '서버 목록 불러오기',
+    discordEnumRunning: '서버 목록을 불러오는 중입니다',
+    discordGuildLabel: '서버',
+    discordChannelLabel: '채널',
+    discordTruncatedNote: (max) => `봇이 있는 서버가 많아 앞 ${max}개만 표시합니다`,
+    discordNoChannels: '이 서버에 텍스트 채널이 없습니다',
+    discordApplyButton: '이 채널로 연결',
+    discordApplyConfirm: (guild, channel) => `${guild} / #${channel}(으)로 옮기고 에이전트를 재시작합니다. 계속할까요?`,
+    discordApplyOk: '옮기기',
+    discordApplying: '적용하고 에이전트를 재시작하는 중입니다',
+    discordApplied: (guild, channel) => `연결됐습니다: ${guild} / #${channel}`,
+    // -- telegram (new backend, channel-telegram.mjs) --
+    telegramGuide: '봇파더(@BotFather)에서 /newbot 으로 봇을 만들고 토큰을 붙여넣으세요. 그 다음 텔레그램에서 그 봇에게 아무 메시지나 하나 보내야 대화방이 목록에 잡힙니다.',
+    telegramOpenBotFather: '봇파더 열기',
+    telegramTokenPlaceholder: '봇 토큰 (123456:ABC-...)',
+    telegramStoredTokenNote: '비워두면 저장된 토큰을 그대로 씁니다.',
+    telegramEnumButton: '대화방 불러오기',
+    telegramEnumRunning: '대화방을 불러오는 중입니다',
+    telegramChatLabel: '대화방',
+    telegramNoChats: '봇이 받은 메시지가 없습니다. 텔레그램에서 봇에게 메시지를 하나 보내고 다시 불러오세요.',
+    telegramConflictRunning: '에이전트가 이 봇으로 돌고 있어 목록을 못 가져옵니다. 에이전트를 정지한 뒤 다시 시도해주세요.',
+    telegramApplyButton: '이 대화방으로 연결',
+    telegramApplied: (label) => `연결됐습니다: ${label}`,
+    telegramChatUnreachable: '이 대화방에 봇이 닿지 않습니다. 봇을 차단하지 않았는지 확인해주세요.',
+    // -- slack (new backend, channel-slack.mjs; Socket Mode, 토큰 2개) --
+    slackGuide: 'Slack 앱 콘솔에서 매니페스트로 앱을 만들고 Socket Mode를 켠 뒤, 앱 토큰(xapp-)과 봇 토큰(xoxb-)을 붙여넣으세요.',
+    slackOpenConsole: 'Slack 앱 콘솔 열기',
+    slackBotTokenPlaceholder: '봇 토큰 (xoxb-...)',
+    slackAppTokenPlaceholder: '앱 토큰 (xapp-...)',
+    slackStoredTokenNote: '비워두면 저장된 토큰을 그대로 씁니다.',
+    slackEnumButton: '채널 불러오기',
+    slackEnumRunning: '채널을 불러오는 중입니다',
+    slackChannelLabel: '채널',
+    slackNotMemberSuffix: ' (봇 미초대)',
+    slackNoChannels: '가져올 채널이 없습니다',
+    slackInvalidBotToken: '봇 토큰(xoxb-)이 유효하지 않습니다',
+    slackInvalidAppToken: '앱 토큰(xapp-)이 유효하지 않거나 Socket Mode가 꺼져 있습니다',
+    slackApplyButton: '이 채널로 연결',
+    slackNotInChannel: (name) => `봇이 #${name}에 없습니다. 슬랙에서 /invite 로 봇을 초대한 뒤 다시 시도해주세요.`,
+    slackApplied: (name) => `연결됐습니다: #${name}`,
+    links: {
+      telegram: 'https://t.me/botfather',
+      slack: 'https://api.slack.com/apps',
+    },
   },
 
   // AUTHORED (not in copy file) -- connectors page, new in the 2026-07-14

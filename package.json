@@ -1,6 +1,6 @@
 {
   "name": "scheherazade",
-  "version": "0.0.17",
+  "version": "0.0.18",
   "private": true,
   "type": "module",
   "description": "Mac-native local AI agent. Forked from agent-portable (Claude Code single-agent harness); P0 spike layers an Electron packaging shell on top.",
@@ -19,6 +19,8 @@
   "dependencies": {
     "@anthropic-ai/claude-code": "^2.1.199",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@slack/socket-mode": "^3.0.0",
+    "@slack/web-api": "^8.0.0",
     "codex-as-api": "0.5.2",
     "discord.js": "^14.26.4",
     "dotenv": "^17.4.2",
@@ -34,6 +36,8 @@
     "files": [
       "main.cjs",
       "channel.mjs",
+      "channel-slack.mjs",
+      "channel-telegram.mjs",
       "provider-env.cjs",
       "tcc-probe.cjs",
       "run.sh",
@@ -59,6 +63,8 @@
       "node_modules/**",
       "memory/**",
       "channel.mjs",
+      "channel-slack.mjs",
+      "channel-telegram.mjs",
       "run.sh",
       "supervisor.mjs",
       "hooks/**",
