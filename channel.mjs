@@ -274,6 +274,21 @@ async function fetchTextChannel(channelId) {
 // 구조로 옮기는 픽스.
 let lastInboundChannelId = null
 
+// ── Persisted last-conversation channel (v0.0.17) ───────────────────────────
+// lastInboundChannelId dies with the process, but the boot announce runs
+// BEFORE any inbound message of the new session -- and Mino's real setup
+// (07-16 14:06) has NO home channel at all (deleted it, DM-only). Without a
+// cross-restart memory of where the conversation lives, the boot ping of a
+// DM-only install has nowhere to go, structurally. Write-on-change only;
+// read once at announce time.
+const LAST_CHANNEL_PATH = path.join(DATA_HOME, '.last-channel')
+let persistedLastChannelId = null
+function persistLastChannel(channelId) {
+  if (!channelId || channelId === persistedLastChannelId) return
+  persistedLastChannelId = channelId
+  fs.writeFile(LAST_CHANNEL_PATH, channelId).catch((err) => log(`last-channel persist failed: ${err.message}`))
+}
+
 // ── Conversation activity clock (v0.0.16 note-cadence input) ────────────────
 // Last moment the conversation was demonstrably alive: an inbound Discord
 // message or a delivered outbound reply. Seeded with process start so a
@@ -461,7 +476,18 @@ discord.once(Events.ClientReady, (c) => {
   }, LIVENESS_HEARTBEAT_MS).unref()
   startShutdownRequestWatcher()
   startAutonomyWatcher()
-  startNoteCadenceWatcher()
+  // v0.0.17 hardening (the 0.0.16 incident, 07-16 14:05): cadence/ was
+  // missing from the packaged app, the require() below threw synchronously
+  // inside this once-handler, and the WHOLE BRIDGE died -- app stuck on
+  // "starting". Packaging is fixed (build.files + asarUnpack + the
+  // test-packaging assertion that would have caught it), but a broken
+  // optional feature must never take the bridge down with it again:
+  // degrade to a loud log, keep Discord alive.
+  try {
+    startNoteCadenceWatcher()
+  } catch (err) {
+    log(`note-cadence watcher failed to start (feature disabled this session): ${err.message}`)
+  }
   announceBoot().catch((err) => log(`boot announce failed: ${err.message}`))
 })
 
@@ -722,9 +748,31 @@ async function announceBoot() {
   // "gate the direct send": the inject has no "답장하지 마", so
   // stop-reply-guard FORCES it into Discord; an unthrottled inject would be
   // the same spam in the agent's voice instead of the system's.
+  // Where does the announce go? HOME first, then the persisted last
+  // conversation channel (v0.0.17: a DM-only install -- Mino's real setup
+  // has no home channel -- would otherwise have NOWHERE for the boot ping,
+  // structurally). Both dead -> abort the unit loudly, next restart retries.
+  let announceCh = null
   try {
-    const ch = await fetchTextChannel(HOME_CHANNEL_ID)
-    await ch.send({ content: `🔁 [system] 에이전트 세션 ${plan.label} — ${localNow()}`, allowedMentions: SAFE_MENTIONS })
+    announceCh = await fetchTextChannel(HOME_CHANNEL_ID)
+  } catch (homeErr) {
+    let lastId = null
+    try {
+      lastId = (await fs.readFile(LAST_CHANNEL_PATH, 'utf8')).trim()
+    } catch {}
+    if (lastId && lastId !== HOME_CHANNEL_ID) {
+      try {
+        announceCh = await fetchTextChannel(lastId)
+        log(`boot announce: home channel unreachable (${homeErr.message}), using persisted last channel ${lastId}`)
+      } catch {}
+    }
+    if (!announceCh) {
+      log(`boot announce: no reachable channel (home: ${homeErr.message}; persisted last: ${lastId || 'none'}) -- aborting unit, next restart retries`)
+      return
+    }
+  }
+  try {
+    await announceCh.send({ content: `🔁 [system] 에이전트 세션 ${plan.label} — ${localNow()}`, allowedMentions: SAFE_MENTIONS })
   } catch (err) {
     log(`boot announce direct send failed -- aborting this announce unit, next restart retries: ${err.message}`)
     return
@@ -738,10 +786,13 @@ async function announceBoot() {
       params: {
         content:
           `[SYSTEM] 방금 세션이 ${plan.iteration > 1 ? '재시작됐다 (오늘 이 감독 아래 ' + plan.iteration + '번째)' : '시작됐다'}. ` +
-          '홈 채널에 네 목소리로 짧게 부팅 인사를 남겨라 -- 살아있다는 신호가 목적이니 한두 문장이면 된다. ' +
+          '방금 그 채널에 네 목소리로 짧게 부팅 인사를 남겨라 -- 살아있다는 신호가 목적이니 한두 문장이면 된다. ' +
           '체크포인트에 이어받을 일이 있으면 뭘 이어가는지 한 줄 붙여. ' +
-          '그리고 이 세션 내내 지킬 것: 작업 블록에 들어가기 전에 "뭘 시작한다 + 어느 정도 걸릴 것 같다"를 먼저 홈에 한 줄로 알리고 시작해라.',
-        meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() },
+          '그리고 이 세션 내내 지킬 것: 작업 블록에 들어가기 전에 "뭘 시작한다 + 어느 정도 걸릴 것 같다"를 먼저 한 줄로 알리고 시작해라.',
+        // channelId = the channel the direct line actually LANDED on, not a
+        // hardcoded HOME: with home deleted, pointing the model at a dead
+        // channel would make its guard-enforced greeting reply fail too.
+        meta: { sender: 'SYSTEM', channelId: announceCh.id, authorId: '', timestamp: localNow() },
       },
     })
   } catch (err) {
@@ -849,6 +900,7 @@ discord.on(Events.MessageCreate, async (message) => {
     // that last spoke to us IS the conversation, so outbound calls no longer
     // need the model to carry (and possibly confabulate) the id.
     lastInboundChannelId = message.channelId
+    persistLastChannel(message.channelId) // cross-restart memory for the boot announce
     lastActivityMs = Date.now() // inbound message = live conversation (note-cadence input)
 
     addThinking(message)
