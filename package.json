@@ -12,7 +12,9 @@
     "start": "node channel.mjs",
     "electron:dev": "electron .",
     "dist": "electron-builder --mac dmg",
-    "postinstall": "node scripts/fix-pty-helper.mjs"
+    "postinstall": "node scripts/fix-pty-helper.mjs",
+    "predist": "node scripts/test-packaging.mjs",
+    "postdist": "node scripts/test-packaging.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-code": "^2.1.199",
