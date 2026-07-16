@@ -131,6 +131,139 @@
 
     renderAgentConfig()
     renderPermissions().catch((err) => console.error(err))
+    renderTopology().catch((err) => console.error(err))
+    renderSudo().catch((err) => console.error(err))
+  }
+
+  // ── sudo askpass (0.1.0 prep, P4) ────────────────────────────────────────
+  // Write-only password field: the page shows WHETHER a password exists,
+  // never the value, and clears the input after a successful save so the
+  // plaintext doesn't linger in the DOM.
+  async function renderSudo() {
+    $('set-sudo-label').textContent = C.sudoLabel
+    $('set-sudo-note').textContent = C.sudoNote
+    $('set-sudo-enabled-label').textContent = C.sudoEnableLabel
+    $('set-sudo-password-label').textContent = C.sudoPasswordLabel
+    $('set-sudo-save').textContent = C.sudoSave
+
+    let state = { enabled: false, hasPassword: false }
+    try {
+      state = await api('/api/sudo/config')
+    } catch (err) {
+      console.error(err)
+    }
+    $('set-sudo-enabled').checked = state.enabled === true
+    $('set-sudo-state').textContent = state.hasPassword ? C.sudoStateStored : C.sudoStateEmpty
+
+    $('set-sudo-save').onclick = async () => {
+      const statusEl = $('set-sudo-status')
+      const enabled = $('set-sudo-enabled').checked
+      const password = $('set-sudo-password').value
+      if (enabled && !password && !state.hasPassword) {
+        statusEl.classList.remove('hidden')
+        statusEl.textContent = C.sudoNeedPassword
+        return
+      }
+      try {
+        await api('/api/sudo/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(password ? { enabled, password } : { enabled }),
+        })
+        $('set-sudo-password').value = ''
+        state = await api('/api/sudo/config')
+        $('set-sudo-state').textContent = state.hasPassword ? C.sudoStateStored : C.sudoStateEmpty
+        showToast(C.sudoSaved)
+        statusEl.classList.add('hidden')
+      } catch (err) {
+        statusEl.classList.remove('hidden')
+        statusEl.textContent = GEN(err.message)
+      }
+    }
+  }
+
+  // ── attach topology (0.1.0 prep, design-0016) ────────────────────────────
+  // Select = intent (written to config, effective at next start/restart);
+  // the state line + bootstrap card = reality from /api/topology. The app
+  // NEVER runs the bootstrap -- it hands out the exact terminal line, because
+  // TCC attribution must descend from the user's terminal, not from this
+  // per-release binary (the entire point of the topology).
+  async function renderTopology() {
+    $('set-topology-label').textContent = C.topologyLabel
+    $('set-topology-note').textContent = C.topologyNote
+    $('set-topology-select-label').textContent = C.topologySelectLabel
+    $('set-topology-save').textContent = C.topologySave
+    $('set-topology-bootstrap-why').textContent = C.topologyBootstrapWhy
+    $('set-topology-bootstrap-copy').textContent = C.topologyBootstrapCopy
+
+    const sel = $('set-topology-select')
+    sel.innerHTML = ''
+    for (const [value, label] of [['spawn', C.topologySpawnOption], ['attach', C.topologyAttachOption]]) {
+      const opt = document.createElement('option')
+      opt.value = value
+      opt.textContent = label
+      sel.appendChild(opt)
+    }
+
+    let topo = null
+    try {
+      topo = await api('/api/topology')
+    } catch (err) {
+      $('set-topology-state').textContent = GEN(err.message)
+      return
+    }
+    sel.value = topo.topology
+    renderTopologyState(topo)
+
+    $('set-topology-bootstrap-copy').onclick = async () => {
+      try {
+        await navigator.clipboard.writeText($('set-topology-bootstrap-cmd').value)
+        showToast(C.topologyBootstrapCopied)
+      } catch (err) {
+        console.error('clipboard write failed:', err)
+      }
+    }
+
+    $('set-topology-save').onclick = async () => {
+      const statusEl = $('set-topology-status')
+      try {
+        await api('/api/topology', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ topology: sel.value }),
+        })
+        showToast(C.topologySaved)
+        statusEl.classList.add('hidden')
+        const fresh = await api('/api/topology')
+        renderTopologyState(fresh)
+      } catch (err) {
+        statusEl.classList.remove('hidden')
+        statusEl.textContent = GEN(err.message)
+      }
+    }
+  }
+
+  function renderTopologyState(topo) {
+    const stateEl = $('set-topology-state')
+    const card = $('set-topology-bootstrap-card')
+    if (topo.topology !== 'attach') {
+      stateEl.textContent = C.topologyStateSpawn
+      card.classList.add('hidden')
+      return
+    }
+    if (!topo.tmuxPresent) {
+      stateEl.textContent = C.topologyStateNoTmux
+      card.classList.add('hidden')
+      return
+    }
+    if (topo.sessionPresent) {
+      stateEl.textContent = topo.paneDead ? C.topologyStatePaneDead : C.topologyStateAttached(topo.attachCmd)
+      card.classList.add('hidden')
+      return
+    }
+    stateEl.textContent = C.topologyStateBootstrapNeeded
+    $('set-topology-bootstrap-cmd').value = topo.bootstrapCmd
+    card.classList.remove('hidden')
   }
 
   // ── permission checklist (P0, 2026-07-15) ────────────────────────────────

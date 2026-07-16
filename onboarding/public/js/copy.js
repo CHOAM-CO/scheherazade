@@ -563,6 +563,36 @@ window.COPY = {
     applyPending: (m) => `재시작 중입니다 (직전 실행: ${m})`,
     applyMismatch: (m) => `지금 도는 건 ${m}입니다. 재시작하면 이 설정이 적용됩니다`,
     applyFailed: (detail) => `시작 실패: ${detail}`,
+    // AUTHORED -- attach topology (0.1.0 prep, design-0016). Copy contract:
+    // the bootstrap NEVER runs from the app, so every string here hands the
+    // work to the user's terminal explicitly. No "안전합니다"-class promises
+    // -- the why-line states the mechanism (attribution), not a guarantee.
+    topologyLabel: '에이전트 구동 방식',
+    topologyNote: '앱이 직접 띄우거나(스폰), 터미널에서 띄운 tmux 세션에 붙습니다(어태치). 어태치는 앱을 업데이트해도 macOS 권한이 유지되고, 앱을 꺼도 에이전트가 계속 돕니다.',
+    topologySelectLabel: '방식',
+    topologySpawnOption: '스폰 — 앱이 직접 실행 (기본)',
+    topologyAttachOption: '어태치 — 터미널의 tmux 세션에 연결',
+    topologySave: '저장',
+    topologySaved: '저장됐습니다. 다음 시작/재시작부터 적용됩니다.',
+    topologyStateSpawn: '지금은 스폰 방식입니다.',
+    topologyStateNoTmux: 'tmux가 설치되어 있지 않습니다. 터미널에서: brew install tmux',
+    topologyStateBootstrapNeeded: '연결할 세션이 없습니다. 아래 명령을 터미널(Terminal/iTerm)에 붙여넣어 실행하세요. 앱이 대신 실행해주지 않는 건 의도된 동작입니다 — 권한이 터미널 계보에 붙어야 앱 업데이트를 견딥니다.',
+    topologyStatePaneDead: '세션은 있지만 에이전트가 꺼져 있습니다. 상단 바의 시작 버튼으로 살릴 수 있습니다.',
+    topologyStateAttached: (cmd) => `세션에 연결되어 있습니다. 터미널에서 직접 보려면: ${cmd}`,
+    topologyBootstrapWhy: '이 명령은 사용자의 터미널에서 실행되어야 합니다 (macOS 권한 귀속이 터미널을 따라가게 하는 장치):',
+    topologyBootstrapCopy: '명령 복사',
+    topologyBootstrapCopied: '복사됐습니다. 터미널에 붙여넣어 실행하세요.',
+    // AUTHORED -- sudo askpass (0.1.0 prep, P4). Mechanism wording only, no
+    // safety promises: where it's stored, where it never goes, when it works.
+    sudoLabel: '관리자 권한 (sudo)',
+    sudoNote: '켜면 에이전트가 sudo 명령을 쓸 수 있습니다. 비밀번호는 macOS 키체인 기반 금고에 암호화되어 저장되고, 채팅·로그·대화 기록에는 넣지 않도록 설계되어 있습니다. 앱이 꺼져 있으면 sudo도 동작하지 않습니다.',
+    sudoEnableLabel: 'sudo 허용',
+    sudoPasswordLabel: '맥 로그인 비밀번호',
+    sudoSave: '저장',
+    sudoSaved: '저장됐습니다.',
+    sudoStateStored: '비밀번호가 금고에 저장되어 있습니다. 바꾸려면 새로 입력하고 저장하세요.',
+    sudoStateEmpty: '저장된 비밀번호가 없습니다.',
+    sudoNeedPassword: 'sudo를 켜려면 비밀번호를 입력하세요.',
     // Moved verbatim from memory.js's inline AGENT_COPY (Slice 2,
     // 2026-07-09) -- the SELECT-driven half (model/effort config). The
     // read-only status-display half of that same const moved to `nav` above.

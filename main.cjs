@@ -34,6 +34,7 @@
 
 const { app, BrowserWindow } = require('electron')
 const { spawn, execFileSync } = require('node:child_process')
+const attachTopology = require('./attach-topology.cjs')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 const fs = require('node:fs')
@@ -788,6 +789,14 @@ async function spawnRealAgentChildLocked() {
   if (existingPid && isOurSupervisor(existingPid)) {
     log(`agent spawn skipped: a supervisor is already running per ${AGENT_PIDFILE} (pid=${existingPid}, identity verified via ps)`)
     agentSupervisorPid = existingPid // so app-quit still cleans this up, see killAgentSupervisor()
+    // Attach topology: the adopted supervisor is a tmux pane -- wire the
+    // logfile tail (pipe-pane mirror, see startAttachLogTail) and stamp
+    // spawn-info from config so the shell's model/effort details aren't
+    // blank for a supervisor this app process never spawned.
+    if (agentTopologyIsAttach()) {
+      startAttachLogTail()
+      stampAttachSpawnInfo()
+    }
     // Timeout-backstop gap fix (Step 5 onboarding-wiring, cross-model codex
     // review follow-up, 2026-07-03): stamp 'connecting' on THIS attach path
     // too, not just the fresh-spawn path below. Without it, reopening the
@@ -821,6 +830,18 @@ async function spawnRealAgentChildLocked() {
   if (config.ONBOARDING_COMPLETE !== '1') {
     log('agent spawn skipped: onboarding not complete yet (no validated provider/Discord token on file)')
     return null
+  }
+
+  // ── attach topology (0.1.0 prep) ──────────────────────────────────────
+  // AGENT_TOPOLOGY=attach: the supervisor lives in a user-bootstrapped tmux
+  // pane (terminal-descended, TCC-stable). The app NEVER spawns it -- it
+  // adopts a live one (the PIDFILE path above already did, for a running
+  // pane), revives a dead pane via respawn-pane (server-descended, safe), or
+  // reports that bootstrap is needed. It never falls through to the spawn
+  // code below, and it never creates a tmux server (attach-topology.cjs's
+  // allowlist enforces that invariant mechanically).
+  if ((config.AGENT_TOPOLOGY || 'spawn') === 'attach') {
+    return attachStartFromSession(config)
   }
 
   const resolved = resolveClaudeBin()
@@ -1085,6 +1106,12 @@ async function spawnRealAgentChildLocked() {
   } catch (err) {
     log(`node shim setup failed at the shared env layer (${err.message}) -- hook lane will depend on system node`)
   }
+  // sudo askpass (0.1.0 prep): `sudo -A` inside the agent resolves the
+  // password through this helper -> the app's vault endpoint. Env carries
+  // only a script PATH, never a secret; serving is double-gated (per-boot
+  // token + settings toggle) in http-server.cjs. Attach lane gets the same
+  // var baked into its bootstrap command (attach-bootstrap.sh template).
+  supervisorEnv.SUDO_ASKPASS = path.join(DATA_HOME, 'sudo-askpass.sh')
   // SUPERVISOR_LANE seam (Windows-port Phase 1): identical env, stdio, and
   // detached process-group contract in both lanes -- only the runtime
   // differs (bash running run.sh vs Electron-as-node running
@@ -1247,8 +1274,147 @@ async function spawnRealAgentChildLocked() {
 //      AGENT_PIDFILE. Fired detached + unref'd so it can finish its own
 //      short poll-and-kill loop (up to ~15s, see run.sh's stop_agent())
 //      even after Electron itself has quit.
+// ── attach-lane helpers (0.1.0 prep, docs/design-0016-attach-topology.md) ──
+// The pane mirrors its output to DATA_HOME/logs/agent.log via pipe-pane
+// (bootstrap + every respawn re-apply it); the app tails that file into the
+// same logBuffer the spawn lane feeds from child stdio, so /logs works
+// identically in both topologies. Started once per app process, kept running
+// across agent stop/start (a dead agent writes nothing; a 1s stat poll on a
+// local file is noise-free).
+const ATTACH_LOGFILE = path.join(DATA_HOME, 'logs', 'agent.log')
+let attachLogTailTimer = null
+let attachLogTailPos = -1
+
+function startAttachLogTail() {
+  if (attachLogTailTimer) return
+  log(`attach: tailing ${ATTACH_LOGFILE} into the log buffer`)
+  const tick = () => {
+    try {
+      const stat = fs.statSync(ATTACH_LOGFILE)
+      if (attachLogTailPos < 0) {
+        // First sight of the file: start at the tail minus a small replay so
+        // the /logs pane opens with context instead of a void. History stays
+        // in the file itself.
+        attachLogTailPos = Math.max(0, stat.size - 16 * 1024)
+      }
+      if (stat.size < attachLogTailPos) attachLogTailPos = 0 // truncated/rotated
+      if (stat.size > attachLogTailPos) {
+        const fd = fs.openSync(ATTACH_LOGFILE, 'r')
+        try {
+          const len = stat.size - attachLogTailPos
+          const buf = Buffer.alloc(len)
+          fs.readSync(fd, buf, 0, len, attachLogTailPos)
+          attachLogTailPos = stat.size
+          const text = buf.toString('utf8')
+          if (text) logBuffer.append('agent', text)
+        } finally {
+          fs.closeSync(fd)
+        }
+      }
+    } catch (err) {
+      if (err.code !== 'ENOENT') log(`attach log tail error (kept polling): ${err.message}`)
+    }
+    attachLogTailTimer = setTimeout(tick, 1000)
+  }
+  attachLogTailTimer = setTimeout(tick, 0)
+}
+
+function stampAttachSpawnInfo(config) {
+  const cfg = config || readAgentConfig()
+  lastSpawnInfo = {
+    model: cfg.MODEL || null,
+    effort: cfg.EFFORT_LEVEL || null,
+    provider: cfg.PROVIDER || null,
+    at: new Date().toISOString(),
+    lane: 'attach',
+  }
+}
+
+// Attach-mode start path (called from spawnRealAgentChildLocked when
+// AGENT_TOPOLOGY=attach and no live supervisor was adopted above). Three
+// honest outcomes, none of which spawn anything app-descended:
+//   1. dead pane in a live session -> respawn-pane (server-descended) + adopt
+//   2. live pane the PIDFILE missed -> adopt it directly
+//   3. no session/server/tmux -> status carries bootstrap-needed; the user
+//      runs DATA_HOME/attach-bootstrap.sh in their terminal (task-4 UI
+//      surfaces the exact command via /api/topology).
+function attachStartFromSession(config) {
+  const state = attachTopology.attachSessionState()
+  if (!state.tmuxPresent) {
+    setAgentStatus('failed', 'bootstrap-needed', 'attach 모드인데 tmux가 없습니다. 터미널에서 `brew install tmux` 후 부트스트랩을 실행하세요.')
+    return null
+  }
+  if (!state.sessionPresent) {
+    setAgentStatus('failed', 'bootstrap-needed', `attach 세션이 없습니다. 터미널에서 실행: ${attachTopology.bootstrapCommand(DATA_HOME)}`)
+    return null
+  }
+  let panePid = state.panePid
+  if (state.paneDead) {
+    const r = attachTopology.respawnAttachPane({ logFile: ATTACH_LOGFILE })
+    if (!r.ok) {
+      setAgentStatus('failed', 'unknown', `attach respawn 실패: ${r.error}`)
+      return null
+    }
+    panePid = r.panePid
+    log(`attach: respawned dead pane -> new supervisor pid=${panePid} (server-descended, attribution preserved)`)
+  } else {
+    log(`attach: adopting live pane supervisor pid=${panePid} (PIDFILE was stale/missing)`)
+  }
+  try {
+    fs.writeFileSync(AGENT_PIDFILE, String(panePid))
+  } catch (err) {
+    console.error(`[scheherazade/main] attach: failed to write PIDFILE (non-fatal): ${err.message}`)
+  }
+  agentSupervisorPid = panePid
+  stampAttachSpawnInfo(config)
+  setAgentStatus('connecting')
+  startFailurePoll()
+  startAttachLogTail()
+  return null
+}
+
+// Attach-mode counterpart of waitForAgentHandleCleared(): there is no
+// in-process child handle to clear (the app never spawned one), so
+// "confirmed dead" must come from the same identity check run.sh uses --
+// poll until the PIDFILE pid stops verifying as our supervisor. Without
+// this, stop/restart in attach mode would confirm instantly-and-vacuously
+// (agentChild is always null here) and restart could double-book the token.
+function waitForSupervisorDeath(timeoutMs = 5000, stepMs = 100) {
+  return new Promise((resolve) => {
+    const started = Number(process.hrtime.bigint() / 1000000n)
+    const tick = () => {
+      const pid = readPidFromFile(AGENT_PIDFILE) || agentSupervisorPid
+      if (!pid || !isOurSupervisor(pid)) return resolve(true)
+      const elapsed = Number(process.hrtime.bigint() / 1000000n) - started
+      if (elapsed >= timeoutMs) {
+        log('waitForSupervisorDeath: timed out; external supervisor did NOT confirm exit')
+        return resolve(false)
+      }
+      setTimeout(tick, stepMs)
+    }
+    tick()
+  })
+}
+
+function agentTopologyIsAttach() {
+  try {
+    return (readAgentConfig().AGENT_TOPOLOGY || 'spawn') === 'attach'
+  } catch {
+    return false
+  }
+}
+
 function killAgentSupervisor(signal = 'SIGTERM') {
   if (agentSupervisorPid == null) return
+  // Attach topology: the agent deliberately OUTLIVES the app (session
+  // survival is one of the two differentiators in design-0016). App quit
+  // must leave the external supervisor untouched -- the control panel's
+  // intentional stopAgent() path still works (it goes through run.sh stop,
+  // not through here).
+  if (agentTopologyIsAttach()) {
+    log('app quit: attach topology -- external agent left running (by design; stop it from the control panel or `run.sh stop` if you mean it)')
+    return
+  }
   try {
     if (agentChild) {
       // Our own live child -- Node's own bookkeeping guarantees this pid
@@ -1407,7 +1573,9 @@ async function stopAgent() {
   log('control panel: stopping agent (intentional)')
   intentionalStopMode = 'stop'
   await stopAgentAwaited()
-  const cleared = await waitForAgentHandleCleared()
+  // Attach mode has no in-process child handle to clear -- confirmation must
+  // come from the external supervisor's actual death (see the fn's comment).
+  const cleared = agentTopologyIsAttach() ? await waitForSupervisorDeath() : await waitForAgentHandleCleared()
   if (!cleared) {
     intentionalStopMode = null
     setAgentStatus('failed', 'unknown', 'stop did not confirm agent exit; it may still be running')
@@ -1436,7 +1604,8 @@ async function restartAgent() {
   log('control panel: restarting agent (intentional)')
   intentionalStopMode = 'restart'
   await stopAgentAwaited()
-  const cleared = await waitForAgentHandleCleared()
+  // Same attach-aware confirmation as stopAgent() above.
+  const cleared = agentTopologyIsAttach() ? await waitForSupervisorDeath() : await waitForAgentHandleCleared()
   if (!cleared) {
     intentionalStopMode = null
     setAgentStatus('failed', 'unknown', 'restart aborted: prior agent did not confirm exit')

@@ -1,6 +1,10 @@
 # v0.0.16 design: attach topology (agent outside the app)
 
-> Status: PROPOSAL, awaiting Mino read. Author: Idea (PO). 2026-07-16.
+> Status: O2 BUILT on branch `feat/attach-topology` (Mino ordered 20:53
+> "Tmux로 리팩토링한버전 준비 바로", + 20:55 sudo containment). Tests
+> 35/35 attach suite + 344 regression green. Gated remainder: bootstrap
+> attribution blessing on 춘식 (probe step3, Mino's hands) — see §As
+> built. Author: Idea (PO). 2026-07-16.
 > Trigger: live TCC bite 2026-07-16 11:26 KST — Screen & System Audio
 > Recording toggle ON in System Settings, yet 0.0.15 denied. Root cause:
 > ad-hoc signature. TCC stores a code requirement (csreq) keyed to the
@@ -85,9 +89,12 @@ of three wins; it was one of three conveniences, two differentiators.)
    tmux attributes to the terminal app; launchd-bootstrapped brew tmux
    gets NO grantable Settings row; the app must never bootstrap the
    session outside the legacy fallback lane.
-2. Bootstrap: launchd user agent plist starting `tmux new-session -d`
-   with run.sh; app detects/attaches on launch; falls back to current
-   spawn lane if no session found (feature-flagged, reversible).
+2. Bootstrap: ~~launchd user agent plist~~ **REVISED by step-1 rehearsal:
+   launchd-bootstrapped tmux gets NO grantable Settings row, so launchd is
+   dead as a bootstrap lane.** Bootstrap = user runs a rendered script in
+   their OWN terminal (terminal-descended = blessed attribution lane); app
+   detects/attaches on launch; falls back to current spawn lane if no
+   session found (config-flagged, reversible).
 3. Transport: keep existing HTTP/PIDFILE seams where they already work;
    add send-keys/capture only for the interactive TTY surface.
 4. Migration: current spawn lane stays as fallback for one release.
@@ -100,3 +107,62 @@ of three wins; it was one of three conveniences, two differentiators.)
   already uses tmux attach — unverified, needs one `which tmux`.)
 - Does the chat UI transport move to attach too, or only the TTY/agent
   loop? (Scope control: smallest change that kills the permission class.)
+
+## As built (2026-07-16 night, branch feat/attach-topology)
+
+Commissioned by Mino 20:53 ("그냥 기다리지 말고 Tmux로 리팩토링한버전 준비
+바로 해줄래?") + 20:55 (sudo password containment). Built overnight under
+the 21:03 autonomy grant; deliverable = this branch by morning.
+
+### Invariant (the whole design in one line)
+**The app must NEVER cause a tmux server to exist.** A server born from
+the app re-keys TCC attribution to the per-release ad-hoc signature —
+silently, which is worse than the loud failure we have today. Bootstrap
+runs in the user's terminal; everything the app does afterwards is client
+IPC against an already-running server (allowlist-enforced in code:
+`new-session`/`start-server` are banned verbs in attach-topology.cjs).
+
+### Pieces
+- `attach-topology.cjs` — safe-verb allowlist IPC (`-L scheherazade`),
+  session state probe, respawn-pane lane, bootstrap command renderer.
+- `onboarding/templates/attach-bootstrap.sh` — rendered per-boot into
+  DATA_HOME; user runs it in their terminal. Sets `exit-empty off` +
+  `remain-on-exit on` (live-verified: server survives pane death and
+  session kill), pipes pane output to logs/agent.log, writes pane_pid to
+  PIDFILE, bakes CLAUDE_BIN + SUDO_ASKPASS. Refuses if a spawn-lane
+  supervisor is alive.
+- main.cjs attach lane — `AGENT_TOPOLOGY=attach` branches spawn to
+  adopt/respawn/bootstrap-needed (3 outcomes); stop/restart confirm death
+  via PIDFILE identity poll (the old handle-wait is vacuous in attach
+  mode); app quit leaves the agent alive; log tail feeds the in-app viewer.
+- Settings UI — topology select (intent) + state line (reality) + copyable
+  bootstrap command card. The app hands out the line, never runs it.
+- sudo askpass (P4 spec) — password in safeStorage vault
+  (storeProviderKeyVerified round-trip), decrypted ONLY in
+  GET /api/sudo/password behind a double gate (per-boot random token file
+  0600 + SUDO_ENABLED toggle, default OFF). Helper curls with --max-time
+  10. Honest boundary: sudo works only while the app runs.
+
+### Live receipts (isolated-socket probes, this session)
+- `has-session` on a dead socket: exit 1, no server, no socket file.
+- Pane from `new-session -d "ENV=... exec bash run.sh __loop"` passes both
+  is_our_supervisor signature checks.
+- Default `exit-empty on` KILLS the server with the last session — the
+  bootstrap's `exit-empty off` is load-bearing, found by probe not docs.
+- `respawn-pane` revives the ORIGINAL command with a fresh pid → model
+  swap works because run.sh re-sources .agent-config.
+
+### Tests
+`scripts/test-attach-topology.mjs` 35/35 (no-server-spawn invariant, live
+lifecycle on isolated socket, 16 template/wiring tripwires, sudo helper
+e2e) + full regression 344 green (supervisor 125, packaging 36, hooks-port
+61, channel-connect 19, log-buffer 33, context-gauge 28, journal 35,
+hook-lane-path 7).
+
+### Still gated (honest remainder)
+- Probe step3 on 춘식 (Mino's hands): confirm the terminal-descended
+  bootstrap's attribution blessing on his machine. The BODY of this work
+  is step3-independent; only the bootstrap lane's grant behavior awaits it.
+- Chat UI transport stays on the existing HTTP seams (scope control —
+  smallest change that kills the permission class). send-keys interactive
+  surface = not in this cut.

@@ -84,6 +84,53 @@
         </div>
       </div>
 
+      <!-- Attach topology (0.1.0 prep, design-0016). The one setting that
+           changes WHO owns the agent process. Bootstrap must run in the
+           user's own terminal (TCC attribution) -- the card below hands out
+           the exact line, the app never runs it. -->
+      <div class="category" style="margin-top: 2.5rem" id="set-topology">
+        <div class="category-label" id="set-topology-label"></div>
+        <p class="subtitle" id="set-topology-note"></p>
+        <div class="agent-control-row">
+          <label for="set-topology-select" id="set-topology-select-label"></label>
+          <select id="set-topology-select"></select>
+        </div>
+        <div class="field-hint" id="set-topology-state"></div>
+        <div class="field hidden" id="set-topology-bootstrap-card">
+          <div class="field-hint" id="set-topology-bootstrap-why"></div>
+          <input type="text" id="set-topology-bootstrap-cmd" readonly />
+          <div class="step-actions">
+            <span></span>
+            <button class="secondary" id="set-topology-bootstrap-copy"></button>
+          </div>
+        </div>
+        <div class="step-actions">
+          <span class="field-hint hidden" id="set-topology-status"></span>
+          <button id="set-topology-save"></button>
+        </div>
+      </div>
+
+      <!-- sudo askpass (0.1.0 prep, P4 spec). Ships OFF. The password field
+           is write-only: the page never reads the stored value back, only
+           whether one exists. -->
+      <div class="category" style="margin-top: 2.5rem" id="set-sudo">
+        <div class="category-label" id="set-sudo-label"></div>
+        <p class="subtitle" id="set-sudo-note"></p>
+        <div class="agent-control-row">
+          <label for="set-sudo-enabled" id="set-sudo-enabled-label"></label>
+          <input type="checkbox" id="set-sudo-enabled" />
+        </div>
+        <div class="agent-control-row">
+          <label for="set-sudo-password" id="set-sudo-password-label"></label>
+          <input type="password" id="set-sudo-password" autocomplete="off" />
+        </div>
+        <div class="field-hint" id="set-sudo-state"></div>
+        <div class="step-actions">
+          <span class="field-hint hidden" id="set-sudo-status"></span>
+          <button id="set-sudo-save"></button>
+        </div>
+      </div>
+
       <!-- Permission checklist (P0, 2026-07-15 — docs/permission-visibility-
            design.md). Shows the macOS wall map BEFORE the agent hits walls
            mid-task. Rows render from /api/permissions/status; probes that

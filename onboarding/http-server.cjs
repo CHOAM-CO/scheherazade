@@ -67,6 +67,13 @@ const autonomyBudget = require(path.join(__dirname, '..', 'autonomy', 'budget.cj
 const autonomyCycle = require(path.join(__dirname, '..', 'autonomy', 'cycle.cjs'))
 const { LOGIN_PROVIDERS, setLoginStatus, getLoginStatus } = require('./login-status.cjs')
 const logBuffer = require('./log-buffer.cjs') // /api/logs read side; main.cjs owns the write side + sink init
+const attachTopology = require('../attach-topology.cjs') // /api/topology read side (0.1.0 prep); no Electron deps, safe here
+
+// sudo askpass per-boot token (0.1.0 prep): generated in createOnboardingServer's
+// listen callback, checked by GET /api/sudo/password. Module-level on purpose --
+// the route handler and the listen callback live in different closures. null =
+// fail closed (endpoint refuses everything).
+let askpassToken = null
 const permissionProbes = require('./permission-probes.cjs')
 // Fresh-Mac dependency bootstrap (2026-07-07): app-managed download/install
 // of the codex/ollama CLIs into DATA_HOME/bin + sha256 manifest. See
@@ -1546,6 +1553,15 @@ function renderHarnessFiles({ displayName, tone, primaryTask }) {
 
   renderHarness('CLAUDE.md', 'CLAUDE.md')
   renderHarness('ONTOLOGY_GUIDE.md', 'ONTOLOGY_GUIDE.md')
+  // Attach-topology bootstrap (0.1.0 prep): harness-rendered so RUN_SH/MEM
+  // paths always match the installed app version. Executed only ever by the
+  // USER in their terminal -- the app renders the file, never runs it (TCC
+  // attribution must descend from the terminal, see the template's header).
+  renderHarness(path.join('onboarding', 'templates', 'attach-bootstrap.sh'), 'attach-bootstrap.sh')
+  // sudo askpass helper (0.1.0 prep): must be executable -- sudo -A execs it.
+  // Content carries no secret (it fetches at run time); 0700 anyway.
+  renderHarness(path.join('onboarding', 'templates', 'sudo-askpass.sh'), 'sudo-askpass.sh')
+  fs.chmodSync(path.join(DATA_HOME, 'sudo-askpass.sh'), 0o700)
 
   const promptSrc = fs.readFileSync(
     path.join(REPO_ROOT, 'onboarding', 'templates', 'agent-system-prompt.md'),
@@ -2789,6 +2805,102 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     return
   }
 
+  // ── sudo askpass lane (0.1.0 prep, P4 spec Mino-acked 07-16 11:48) ───────
+  // Containment contract: the password lives ONLY as a safeStorage blob
+  // (Keychain-backed, same vault mechanism as the Discord bot token) and is
+  // decrypted exclusively inside GET /api/sudo/password below. It is never
+  // logged, never echoed back to the settings page, never written to any
+  // config/env file, and never enters a chat/transcript surface. `sudo -A`
+  // works only while the app runs (the askpass helper fetches from this
+  // server) -- that is the honest boundary of "앱에 컨테이닝", not a bug.
+  if (pathname === '/api/sudo/config' && req.method === 'GET') {
+    sendJson(res, 200, {
+      enabled: readAgentConfig().SUDO_ENABLED === 'yes',
+      hasPassword: fs.existsSync(path.join(CREDENTIALS_DIR, 'sudo-pass.key.enc')),
+    })
+    return
+  }
+  if (pathname === '/api/sudo/config' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    const enable = body.enabled === true
+    const password = typeof body.password === 'string' ? body.password : ''
+    const hasStored = fs.existsSync(path.join(CREDENTIALS_DIR, 'sudo-pass.key.enc'))
+    if (password) {
+      try {
+        storeProviderKeyVerified('sudo-pass', password)
+      } catch (err) {
+        // Fail-loud WITHOUT the value: the error message from the store path
+        // never contains the password (safeStorage availability/round-trip
+        // wording only).
+        sendJson(res, 500, { error: `비밀번호 저장 실패: ${err.message}` })
+        return
+      }
+    } else if (enable && !hasStored) {
+      sendJson(res, 400, { error: 'sudo를 켜려면 비밀번호가 필요합니다' })
+      return
+    }
+    writeAgentConfig({ SUDO_ENABLED: enable ? 'yes' : 'no' })
+    sendJson(res, 200, { ok: true })
+    return
+  }
+  // The askpass fetch itself. Double gate: per-boot random token (written
+  // 0600 to DATA_HOME/.sudo-askpass-endpoint.json at listen time) AND the
+  // config toggle. Plain text response -- this IS the `sudo -A` stdout.
+  if (pathname === '/api/sudo/password' && req.method === 'GET') {
+    if (!askpassToken || req.headers['x-askpass-token'] !== askpassToken) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' })
+      res.end('forbidden')
+      return
+    }
+    if (readAgentConfig().SUDO_ENABLED !== 'yes') {
+      res.writeHead(403, { 'Content-Type': 'text/plain' })
+      res.end('sudo disabled in settings')
+      return
+    }
+    const password = readProviderKey('sudo-pass')
+    if (!password) {
+      res.writeHead(404, { 'Content-Type': 'text/plain' })
+      res.end('no password stored')
+      return
+    }
+    // Audit line: the EVENT is logged, the value never is.
+    log('sudo askpass consulted (password served to askpass helper; value not logged)')
+    res.writeHead(200, { 'Content-Type': 'text/plain' })
+    res.end(password)
+    return
+  }
+
+  // ── attach topology (0.1.0 prep) ─────────────────────────────────────────
+  // GET: one honest snapshot -- configured topology (intent) + live tmux
+  // session state (reality) + the exact bootstrap line for the user's
+  // terminal. attachSessionState() never spawns a server (allowlist-enforced,
+  // see attach-topology.cjs header), so polling this is side-effect-free.
+  if (pathname === '/api/topology' && req.method === 'GET') {
+    const state = attachTopology.attachSessionState()
+    sendJson(res, 200, {
+      topology: readAgentConfig().AGENT_TOPOLOGY || 'spawn',
+      tmuxPresent: state.tmuxPresent,
+      sessionPresent: state.sessionPresent,
+      paneDead: state.paneDead,
+      bootstrapCmd: attachTopology.bootstrapCommand(DATA_HOME),
+      attachCmd: `tmux -L ${attachTopology.ATTACH_SOCKET} attach -t ${attachTopology.ATTACH_SESSION}`,
+    })
+    return
+  }
+  // POST: write intent only. Deliberately does NOT stop/restart anything --
+  // a topology flip while an agent runs takes effect at the next
+  // start/restart, and the UI says exactly that (no hidden lifecycle).
+  if (pathname === '/api/topology' && req.method === 'POST') {
+    const { topology } = await readJsonBody(req)
+    if (topology !== 'spawn' && topology !== 'attach') {
+      sendJson(res, 400, { error: `invalid topology: ${topology}` })
+      return
+    }
+    writeAgentConfig({ AGENT_TOPOLOGY: topology })
+    sendJson(res, 200, { ok: true })
+    return
+  }
+
   // GET /api/context-status — context-occupancy gauge (v0.0.22, Mino 07-16
   // "답장 하나에 4분" 진단 후속). Read side of hooks/context-gauge.mjs's
   // DATA_HOME/context-status.json snapshot (written atomically on every
@@ -3543,6 +3655,19 @@ function createOnboardingServer(onOnboardingComplete, agentControls) {
       allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`])
       const url = `http://127.0.0.1:${port}/`
       log(`onboarding server listening on ${url}`)
+      // sudo askpass endpoint file (0.1.0 prep): per-boot random token + the
+      // random port, 0600, so ONLY this user's processes can find/authorize
+      // the askpass fetch. Rotates every app boot; a stale file after quit
+      // points at a dead port (curl fails loud, nothing served).
+      try {
+        askpassToken = crypto.randomBytes(32).toString('hex')
+        const epPath = path.join(DATA_HOME, '.sudo-askpass-endpoint.json')
+        fs.writeFileSync(epPath, JSON.stringify({ port, token: askpassToken }) + '\n', { mode: 0o600 })
+        fs.chmodSync(epPath, 0o600) // writeFileSync mode is ignored if the file already existed
+      } catch (err) {
+        askpassToken = null // fail closed: no token file -> endpoint refuses everything
+        console.error('[scheherazade/onboarding] failed to write sudo-askpass endpoint file (sudo -A disabled this boot):', err.message)
+      }
       resolve({ server, url })
     })
   })
