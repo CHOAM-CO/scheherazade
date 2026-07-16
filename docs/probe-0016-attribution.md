@@ -51,7 +51,73 @@ attribution has already been wrong once today (see rehearsal result 3).
   now secondary: with terminal-descended bootstrap the subject is the
   terminal, not tmux, so brew upgrades stop mattering for grants.
 
-## 춘식 kit (paste when Mino's 0.15 test wraps)
+## Replication addendum (12:2x, same host) — finding 3 DOWNGRADED
+
+Re-runs after `tccutil reset ScreenCapture com.googlecode.iterm2`:
+- nohup-orphaned bash screencapture (clean state): denied, **no row**.
+- Fresh tmux server case re-run (clean state): denied, **no row** — the
+  12:05 iTerm2 row did NOT reproduce.
+- tccd unified log inaccessible without root (redacted/empty) — cannot
+  read attribution decisions directly.
+
+Interpretation: Settings-row creation appears to fire only on a first
+attempt and then be throttled (per-boot or timed; mechanism unverified).
+Therefore **finding 3 (launchd lane = no row) is SUSPECT**: that run came
+60s after the first probe and may have been throttled, not structurally
+row-less. Finding 2 stands as n=1 with second-level timestamp match, not
+replicated. Finding 1 (exit=0 + wallpaper-only) replicated 4x, solid.
+
+Consequence for 춘식: the kit below is ORDER-SENSITIVE and cut to the one
+case the design actually needs (terminal-descended). 춘식 has no tmux
+(Mino 12:18) — irrelevant for permissions, since the 12:05 evidence shows
+tmux does not break the terminal attribution chain; multiplexer choice is
+a transport/UX decision, decoupled from TCC. launchd lane stays
+dead-by-default (unneeded), no longer claimed dead-by-evidence.
+
+## 춘식 kit v2 — tmux-free, single-case (paste when Mino's 0.15 test wraps)
+
+BEFORE anything: System Settings > Privacy & Security > Screen & System
+Audio Recording — screenshot the current list (fresh state matters; run
+step 1 only once, first).
+
+```bash
+# 1) 첫 시도 (거부 예상 — 목적은 설정 목록에 행을 만들어 attribution을 보는 것)
+screencapture -x /tmp/p1.png; open /tmp/p1.png
+```
+→ 설정 목록 다시 보기: 새 행이 생겼나, 생겼다면 무엇으로 (Terminal? 다른 것?
+아무것도 없음?). 스크린샷. 프롬프트가 떴다면 그것도.
+
+```bash
+# 2) 새 행 토글 ON (터미널 재시작하라고 하면 재시작) 후 재시도
+screencapture -x /tmp/p2.png; open /tmp/p2.png
+```
+→ 이번엔 창들이 보여야 함. 벽지+메뉴바만이면 실패 보고.
+
+```bash
+# 3) 고아 프로세스 계승 테스트 — 설계 코어.
+#    터미널에서 시작해 백그라운드로 떨어진 프로세스(0.1.0의 에이전트 모양)가
+#    터미널의 그랜트를 계승하는지.
+nohup bash -c 'sleep 1; screencapture -x /tmp/p3.png' >/dev/null 2>&1 & disown
+sleep 3; open /tmp/p3.png
+```
+→ 창 보이면: 터미널발 상주 에이전트가 터미널 그랜트로 화면을 읽을 수 있음 =
+부트스트랩 설계 확정. 이게 이 프로브의 단 하나의 진짜 질문.
+
+```bash
+# 4) 뒷정리 (원하면): 설정에서 방금 켠 행 다시 OFF, /tmp/p*.png 삭제
+rm -f /tmp/p1.png /tmp/p2.png /tmp/p3.png
+```
+
+## Outcome matrix (v2)
+
+| Observation on 춘식 | Design branch |
+|---|---|
+| step1 adds terminal row + step2 windows + step3 windows | terminal-descended bootstrap LOCKED; build 0.1.0 on it |
+| step1 adds terminal row + step2 windows + step3 wallpaper | orphan loses grant → agent must stay terminal-childed (login item keeps a Terminal session) or revisit O3 |
+| step1 adds NO row | manual add via Settings "+" (drag Terminal.app), then step2; if still nothing, escalate to O1/O3 |
+| step2 still wallpaper after toggle ON | terminal restart missed, or per-OS quirk — rerun once, then report raw |
+
+App-must-not-bootstrap rule unchanged (independent of outcomes).
 
 Pre-step, eyeball only: System Settings > Privacy & Security >
 Screen & System Audio Recording — note which rows exist BEFORE (screenshot).
