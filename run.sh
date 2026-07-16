@@ -349,6 +349,7 @@ run_loop() {
 EXPECT_EOF
 
   RESTART_COUNT=0
+  SPAWN_SEQ=0
   LAST_KST_DATE="$(TZ=Asia/Seoul date +%Y-%m-%d)"
   # Fresh loop start (this bash process's own lifetime) -- don't carry a
   # failure marker over from a previous life of the supervisor (e.g. the
@@ -370,6 +371,23 @@ EXPECT_EOF
     fi
 
     pkill -f -- "$PKILL_PATTERN" 2>/dev/null || true
+
+    # Boot-event marker (v0.0.16): channel.mjs's announceBoot() reads this
+    # after Discord login to post the deterministic "재기동" line + inject
+    # the agent-voiced greeting turn. Written before EVERY leaf spawn (cold
+    # boot and crash-restart alike -- iteration disambiguates); tmp+mv so
+    # the reader never sees a torn JSON. Non-fatal on failure: a missing
+    # marker only costs the boot ping, never the boot. Keep the shape in
+    # sync with supervisor.mjs writeBootEvent() (lane parity).
+    SPAWN_SEQ=$((SPAWN_SEQ + 1))
+    if printf '{"ts":%s000,"iteration":%d,"lane":"bash","supervisor_pid":%d}\n' \
+        "$(date +%s)" "$SPAWN_SEQ" "$$" > "$MEM/.boot-event.json.tmp" 2>/dev/null \
+        && mv -f "$MEM/.boot-event.json.tmp" "$MEM/.boot-event.json" 2>/dev/null; then
+      :
+    else
+      log "boot-event marker write failed (non-fatal)"
+    fi
+
     STARTED="$(date +%s)"
 
     set +e

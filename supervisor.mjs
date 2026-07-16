@@ -259,6 +259,23 @@ export function ensureNodeShim(cfg, { execPath = process.execPath, env = process
 }
 
 // ── failure marker (run.sh write_failure/clear_failure, same JSON shape) ────
+// Boot-event marker (v0.0.16): written immediately before every leaf spawn;
+// channel.mjs's announceBoot() consumes it after Discord login (deterministic
+// boot ping + agent-voiced greeting). Non-fatal on failure -- a missing
+// marker costs the ping, never the boot. Shape kept in lane parity with
+// run.sh's inline printf (the v0.0.15 cadence-parity regression is exactly
+// the class this comment exists to prevent).
+export function writeBootEvent(cfg, iteration, { now = () => Date.now(), log = () => {} } = {}) {
+  const markerPath = path.join(cfg.mem, '.boot-event.json')
+  try {
+    const tmp = `${markerPath}.tmp`
+    fs.writeFileSync(tmp, JSON.stringify({ ts: now(), iteration, lane: 'node', supervisor_pid: process.pid }) + '\n')
+    fs.renameSync(tmp, markerPath)
+  } catch (err) {
+    log(`boot-event marker write failed (non-fatal): ${err.message}`)
+  }
+}
+
 // Shared path/shape with channel.mjs's writeFailureMarker() so main.cjs's
 // poller watches ONE file regardless of which layer caught the problem.
 // Atomic tmp+rename; best-effort -- diagnostic, never load-bearing for the
@@ -719,6 +736,7 @@ export async function runLoop(cfg, deps = {}) {
   })
 
   let restartCount = 0
+  let spawnSeq = 0 // boot-event iteration counter (run.sh's SPAWN_SEQ twin)
   let lastKstDate = kstDate(now())
   // Fresh loop start: don't carry a failure marker over from a previous life
   // (run.sh:353-356 -- e.g. the user fixed a bad key and relaunched).
@@ -748,6 +766,10 @@ export async function runLoop(cfg, deps = {}) {
     }
 
     sweepOrphans()
+
+    spawnSeq += 1
+    writeBootEvent(cfg, spawnSeq, { now, log })
+
     const started = now()
 
     let exitCode = null

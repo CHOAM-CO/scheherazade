@@ -274,6 +274,13 @@ async function fetchTextChannel(channelId) {
 // 구조로 옮기는 픽스.
 let lastInboundChannelId = null
 
+// ── Conversation activity clock (v0.0.16 note-cadence input) ────────────────
+// Last moment the conversation was demonstrably alive: an inbound Discord
+// message or a delivered outbound reply. Seeded with process start so a
+// fresh boot counts as "active" (the boot greeting itself is conversation).
+// Consumed by the note-cadence watcher (active 30min vs idle 3h decision).
+let lastActivityMs = Date.now()
+
 // opts are test seams (scripts/test-outbound-channel.mjs) -- production call
 // sites pass only requestedId and get live module state + real fetch.
 async function resolveOutboundChannel(requestedId, opts = {}) {
@@ -373,6 +380,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     const chunks = []
     for (let i = 0; i < text.length; i += 1900) chunks.push(text.slice(i, i + 1900))
     for (const chunk of chunks) await ch.send({ content: chunk, allowedMentions: SAFE_MENTIONS })
+    lastActivityMs = Date.now() // delivered reply = live conversation (note-cadence input)
     clearThinking(ch.id).catch((err) => log('thinking reaction clear failed:', err.message))
     // delivered_channel= line: machine-readable delivery receipt for
     // stop-reply-guard (2026-07-15 Melchior review). The guard used to match
@@ -453,6 +461,8 @@ discord.once(Events.ClientReady, (c) => {
   }, LIVENESS_HEARTBEAT_MS).unref()
   startShutdownRequestWatcher()
   startAutonomyWatcher()
+  startNoteCadenceWatcher()
+  announceBoot().catch((err) => log(`boot announce failed: ${err.message}`))
 })
 
 // ── graceful shutdown (v0.0.4, Mino 2026-07-13 19:33 directive) ─────────────
@@ -651,6 +661,124 @@ function startAutonomyWatcher() {
   }, AUTONOMY_POLL_MS).unref()
 }
 
+// ── Boot ping (v0.0.16, Mino 07-16 11:48 feedback #1) ───────────────────────
+// "재부팅되면 에이전트가 먼저 '재부팅됨' 하고 핑 찍어주기." Detection is the
+// HARNESS's job, deterministically -- a model asked to announce its own boot
+// forgets sometimes, and outside the window silence is indistinguishable
+// from death. Two-part shape (acked by Mino):
+//   1. a direct system line to the home channel (this file's first and only
+//      non-model-mediated Discord send -- deliberate: liveness must not
+//      depend on the model choosing to speak), then
+//   2. a [SYSTEM] turn injected into the session asking for a greeting in
+//      the agent's own voice. No "답장하지 마" -- stop-reply-guard then
+//      ENFORCES that the greeting actually lands in Discord.
+// The marker is written by the supervisor (run.sh / supervisor.mjs, both
+// lanes) immediately before each leaf spawn. Only leaves that live long
+// enough to reach ClientReady ping at all, so a quick-death crash loop never
+// spams the channel (those die before Discord login; the bounce budget and
+// failure marker cover that class).
+const BOOT_EVENT_PATH = path.join(DATA_HOME, '.boot-event.json')
+// A marker older than this is a leftover from a dead spawn (leaf crashed
+// before Discord login, marker survived, next leaf got a NEW marker anyway --
+// so a stale one only appears after abnormal supervisor death). Same
+// stale-marker defense shape as SHUTDOWN_REQUEST_MAX_AGE_MS.
+const BOOT_EVENT_MAX_AGE_MS = 10 * 60 * 1000
+
+async function announceBoot() {
+  let ev = null
+  try {
+    ev = JSON.parse(await fs.readFile(BOOT_EVENT_PATH, 'utf8'))
+  } catch {
+    return // no marker: manual `node channel.mjs` dev run or pre-0.0.16 supervisor
+  }
+  // Consume first -- a marker that crashes this function twice must not
+  // double-announce on some future path; ClientReady is `once` today, this
+  // is belt-and-suspenders for that assumption.
+  await fs.unlink(BOOT_EVENT_PATH).catch(() => {})
+  if (!ev || typeof ev.ts !== 'number' || Date.now() - ev.ts > BOOT_EVENT_MAX_AGE_MS) {
+    log('boot-event marker stale or malformed -- skipping boot announce')
+    return
+  }
+  const n = Number.isFinite(ev.iteration) ? ev.iteration : 1
+  const label = n > 1 ? `재기동 #${n}` : '기동'
+  try {
+    const ch = await fetchTextChannel(HOME_CHANNEL_ID)
+    await ch.send({ content: `🔁 [system] 에이전트 세션 ${label} — ${localNow()}`, allowedMentions: SAFE_MENTIONS })
+  } catch (err) {
+    log(`boot announce direct send failed (greeting inject still follows): ${err.message}`)
+  }
+  try {
+    await mcp.notification({
+      method: 'notifications/claude/channel',
+      params: {
+        content:
+          `[SYSTEM] 방금 세션이 ${n > 1 ? '재시작됐다 (오늘 이 감독 아래 ' + n + '번째)' : '시작됐다'}. ` +
+          '홈 채널에 네 목소리로 짧게 부팅 인사를 남겨라 -- 살아있다는 신호가 목적이니 한두 문장이면 된다. ' +
+          '체크포인트에 이어받을 일이 있으면 뭘 이어가는지 한 줄 붙여. ' +
+          '그리고 이 세션 내내 지킬 것: 작업 블록에 들어가기 전에 "뭘 시작한다 + 어느 정도 걸릴 것 같다"를 먼저 홈에 한 줄로 알리고 시작해라.',
+        meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() },
+      },
+    })
+  } catch (err) {
+    log(`boot greeting inject failed (direct line already sent): ${err.message}`)
+  }
+}
+
+// ── Session-note cadence (v0.0.16, Mino 07-16 12:25) ────────────────────────
+// The MAGI fleet's periodic session-note reminder never crossed over in the
+// harness port; a session that runs hours without writing its note loses
+// that time for the NEXT session ("기록이 기억이다"). Rule lives in
+// cadence/note-tick.cjs (pure, tested); this is only the IO -- same
+// split and the same 60s poll shape as the autonomy watcher above.
+const NOTE_CADENCE_POLL_MS = 5 * 60 * 1000
+let noteCadenceInFlight = false
+let noteCadenceLastRemindMs = 0
+
+function startNoteCadenceWatcher() {
+  const noteTick = require(path.join(MODULE_DIR, 'cadence', 'note-tick.cjs'))
+  setInterval(async () => {
+    if (noteCadenceInFlight) return
+    noteCadenceInFlight = true
+    try {
+      const config = await readAgentConfigFile()
+      // Filename convention MUST match hooks/session-start.mjs's TODAY
+      // exactly (currently hardcoded Asia/Seoul there -- a known port
+      // wrinkle, see release notes v0.0.16; if that ever moves to system
+      // tz, move this with it in the same commit).
+      const noteDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+      let noteMtimeMs = null
+      try {
+        noteMtimeMs = (await fs.stat(path.join(DATA_HOME, 'session_notes', `${noteDate}.md`))).mtimeMs
+      } catch {} // missing file stays null -> tick treats it as stale (midnight rollover)
+      const plan = noteTick.planNoteTick({
+        now: Date.now(),
+        config,
+        noteMtimeMs,
+        lastActivityMs,
+        lastRemindMs: noteCadenceLastRemindMs,
+        noteDate,
+      })
+      if (plan.skip) return
+      await mcp.notification({
+        method: 'notifications/claude/channel',
+        params: {
+          content: plan.content,
+          meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() },
+        },
+      })
+      // Advance ONLY on successful delivery (shutdown-watcher lesson: a
+      // marker advanced before the send turns one transient failure into
+      // "never retried").
+      noteCadenceLastRemindMs = plan.nextLastRemindMs
+      log(`note-cadence reminder injected (${plan.mode})`)
+    } catch (err) {
+      log(`note-cadence watcher error (will retry next poll): ${err.message}`)
+    } finally {
+      noteCadenceInFlight = false
+    }
+  }, NOTE_CADENCE_POLL_MS).unref()
+}
+
 discord.on(Events.Error, (err) => log('Discord client error:', err.message))
 
 // ── Thinking indicator (Mino 07-13 click-test feedback: MAGI-style 🤔
@@ -696,6 +824,7 @@ discord.on(Events.MessageCreate, async (message) => {
     // that last spoke to us IS the conversation, so outbound calls no longer
     // need the model to carry (and possibly confabulate) the id.
     lastInboundChannelId = message.channelId
+    lastActivityMs = Date.now() // inbound message = live conversation (note-cadence input)
 
     addThinking(message)
 
