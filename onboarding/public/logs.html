@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Scheherazade — 로그</title>
+    <link rel="stylesheet" href="/css/app.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <div id="app-nav"></div>
+
+      <div class="page-header">
+        <h1 id="lg-title"></h1>
+        <div class="page-nav">
+          <a href="/memory" id="lg-back-link"></a>
+        </div>
+      </div>
+      <p class="subtitle" id="lg-subtitle"></p>
+
+      <div class="log-toolbar">
+        <button class="secondary" id="lg-copy"></button>
+        <label class="log-follow"><input type="checkbox" id="lg-follow" checked /> <span id="lg-follow-label"></span></label>
+      </div>
+
+      <!-- aria-live off on purpose: a firehose pane must not narrate itself -->
+      <div class="log-pane" id="lg-pane"></div>
+      <p class="log-file-note" id="lg-file-note"></p>
+    </div>
+
+    <div class="toast" id="lg-toast"></div>
+
+    <script src="/js/copy.js"></script>
+    <script src="/js/nav.js"></script>
+    <script src="/js/logs.js"></script>
+  </body>
+</html>

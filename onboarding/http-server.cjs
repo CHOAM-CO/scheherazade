@@ -66,6 +66,7 @@ const { spawn, execFile } = require('node:child_process')
 const autonomyBudget = require(path.join(__dirname, '..', 'autonomy', 'budget.cjs'))
 const autonomyCycle = require(path.join(__dirname, '..', 'autonomy', 'cycle.cjs'))
 const { LOGIN_PROVIDERS, setLoginStatus, getLoginStatus } = require('./login-status.cjs')
+const logBuffer = require('./log-buffer.cjs') // /api/logs read side; main.cjs owns the write side + sink init
 const permissionProbes = require('./permission-probes.cjs')
 // Fresh-Mac dependency bootstrap (2026-07-07): app-managed download/install
 // of the codex/ollama CLIs into DATA_HOME/bin + sha256 manifest. See
@@ -2755,6 +2756,18 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     return
   }
 
+  // GET /api/logs?since=N — session log tail for the /logs viewer (v0.0.20,
+  // Mino 07-16 "로그 터미널 창"). Cursor-polled: `since` = last seq the
+  // client holds, response carries entries after it + nextSeq + dropped
+  // (ring overflow gap) + the disk sink path for full-history grabs.
+  // Read-only GET, localhost-bound server, and lines are token-redacted at
+  // append time in log-buffer.cjs — same exposure class as /api/config.
+  if (pathname === '/api/logs' && req.method === 'GET') {
+    const since = Number(new URL(req.url, 'http://127.0.0.1').searchParams.get('since') || 0)
+    sendJson(res, 200, logBuffer.getSince(since))
+    return
+  }
+
   // Spawn-time reality (IA v0.0.9): what the CURRENT/LAST child was born
   // with, recorded at the spawn moment in main.cjs -- the shell's model/
   // effort display and settings' apply-state line read this instead of
@@ -3365,6 +3378,7 @@ const ROUTE_TO_FILE = {
   '/': 'index.html',
   '/index.html': 'index.html',
   '/channels': 'channels.html',
+  '/logs': 'logs.html',
   '/memory': 'memory.html',
   '/settings': 'settings.html',
   '/connectors': 'connectors.html',

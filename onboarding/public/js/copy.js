@@ -493,7 +493,7 @@ window.COPY = {
     // channels FIRST (multichannel v0.0.18, Mino 07-16: "맨 앞에 채널 섹션") --
     // tab order is meaning here: the messenger the agent lives through
     // outranks what it remembers and how it runs.
-    tabs: { channels: '채널', memory: '기억', connectors: '커넥터', settings: '설정' },
+    tabs: { channels: '채널', memory: '기억', connectors: '커넥터', settings: '설정', logs: '로그' },
     label: 'AGENT',
     states: { live: 'Running', connecting: 'Starting…', stopped: 'Stopped', failed: 'Failed', idle: 'Not started' },
     start: 'Start',
@@ -518,6 +518,26 @@ window.COPY = {
     // the always-visible bar) -- same eng-placeholder register as the rest
     // of this section, pending the copy-track localization pass.
     autonomyBadge: (start, end) => `autonomy ${start}-${end}`,
+  },
+
+  // AUTHORED (v0.0.20) -- session log viewer (Mino 07-16: 개발 중 앱이
+  // 깜깜이라 로그 창 요청). Register matches the rest: 간결 존댓말, no
+  // promises the code doesn't keep -- redaction is best-effort, so the
+  // copy says tokens are "가려집니다" (mechanism) and never "안전합니다"
+  // (guarantee it can't make).
+  logs: {
+    title: '로그',
+    backToMemory: '기억으로',
+    subtitle: '앱과 에이전트 세션의 실시간 로그입니다. 토큰 등 알려진 비밀 값은 자동으로 가려집니다.',
+    copyButton: '전체 복사',
+    copied: '복사됐습니다. 그대로 붙여넣어 공유하시면 됩니다.',
+    copyFailed: '복사에 실패했습니다. 드래그로 직접 선택해 주세요.',
+    empty: '아직 로그가 없습니다. 에이전트를 시작하면 여기에 출력이 나타납니다.',
+    gapMarker: '― 이전 로그 일부가 버퍼에서 밀려났습니다. 전체 기록은 로그 파일에 있습니다 ―',
+    fileNote: (p) => `전체 기록 파일: ${p}`,
+    fileNoteMissing: '디스크 로그 파일이 아직 만들어지지 않았습니다.',
+    followOn: '자동 따라가기',
+    pollError: '로그를 불러오지 못했습니다. 앱이 실행 중인지 확인해 주세요.',
   },
 
   // AUTHORED (not in copy file) -- settings page, minimal v1.

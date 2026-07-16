@@ -53,6 +53,13 @@ const {
 } = require('./onboarding/http-server.cjs')
 const { setAgentStatus } = require('./onboarding/agent-status.cjs')
 const { ensureOllamaDaemon, killOllamaDaemon } = require('./onboarding/ollama-daemon.cjs')
+// Log viewer tap (v0.0.20): every line log()/fatal() and the agent child's
+// stdout/stderr emit is mirrored into this ring buffer + DATA_HOME/logs/
+// app.log, so GET /api/logs (-> /logs page) can show a live session log.
+// Sink dir is handed over here rather than computed in the module — see
+// log-buffer.cjs's own header on the require-cycle this avoids.
+const logBuffer = require('./onboarding/log-buffer.cjs')
+logBuffer.initSink(path.join(DATA_HOME, 'logs'))
 const { buildProviderEnv, resolveChatgptProxyPort } = require('./provider-env.cjs')
 const { probeUserFolders } = require('./tcc-probe.cjs')
 
@@ -95,11 +102,28 @@ app.on('second-instance', () => {
 // Electron's main process log is just the terminal it was launched from
 // (or Console.app once packaged). No stdio-protocol constraint here like
 // channel.mjs's MCP stdio channel has, so plain console.* is fine.
+// stringify for the log-buffer mirror: log() takes console-style varargs,
+// the buffer takes one line. JSON for objects (circular-safe fallback to
+// String) keeps spawn-info style payloads readable in the /logs view.
+function logLine(args) {
+  return args
+    .map((a) => {
+      if (typeof a === 'string') return a
+      try {
+        return JSON.stringify(a)
+      } catch {
+        return String(a)
+      }
+    })
+    .join(' ')
+}
 function log(...args) {
   console.log(`[scheherazade/main] ${new Date().toISOString()}`, ...args)
+  logBuffer.append('main', logLine(args))
 }
 function fatal(msg, err) {
   console.error(`[scheherazade/main] FATAL: ${msg}`, err ?? '')
+  logBuffer.append('main!', `FATAL: ${msg}${err ? ` ${err.stack || err.message || err}` : ''}`)
   shuttingDown = true // block any queued control action from respawning post-cleanup
   // Bug 2 fix (agent-lifecycle, 2026-07-03, cross-model adversarial
   // review): app.exit(1) below force-exits WITHOUT emitting 'before-quit',
@@ -1108,16 +1132,23 @@ async function spawnRealAgentChildLocked() {
   }
   startFailurePoll()
 
-  child.stdout.on('data', (chunk) => log(`[agent stdout] ${chunk.toString().trim()}`))
+  child.stdout.on('data', (chunk) => {
+    console.log(`[scheherazade/main] ${new Date().toISOString()} [agent stdout] ${chunk.toString().trim()}`)
+    // NOT routed through log(): the buffer keys renderer coloring off the
+    // stream tag, and agent output must read as 'agent', not 'main'.
+    logBuffer.append('agent', chunk.toString())
+  })
   child.stderr.on('data', (chunk) => {
     // Fail loud: surface child stderr immediately, don't buffer-and-drop.
     console.error(`[scheherazade/agent stderr] ${chunk.toString()}`)
+    logBuffer.append('agent!', chunk.toString())
   })
   child.on('error', (err) => {
     // e.g. ENOENT on BASH_BIN -- never swallow. This is the launcher
     // process itself failing to spawn at all, not a claude crash inside
     // run.sh's own loop (that's absorbed by run.sh's restart ladder).
     console.error('[scheherazade/main] agent child spawn error:', err)
+    logBuffer.append('main!', `agent child spawn error: ${err.message}`)
     // No dedicated code for the launcher process itself failing to spawn
     // (distinct from run.sh's OWN crash-loop detector, which only fires
     // once run.sh is actually running and restarting claude inside itself)
