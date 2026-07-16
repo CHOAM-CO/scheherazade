@@ -174,7 +174,13 @@ const db = mod.initDb()
   // weakening the procedure -- changing the default is allowed, but it must
   // touch this test in the same diff.
   check('CLAUDE.md restore procedure (§1) points the next boot at journal_read', /journal_read/.test(restoreSection))
-  check('§1 states the read window default (last 3 days), not just the tool name', /last 3 days/.test(restoreSection))
+  // Default changed 3 days -> yesterday only (v0.0.22 lazy-restore, Mino
+  // 07-16 "lazy loading좀 넣어줘" -- boot full-reads were feeding the
+  // autocompact thrash on the 372K lane). The contract FLOOR (Skia, 07-14)
+  // is "the boot read covers YESTERDAY" -- 1 day still satisfies it; this
+  // pin moves in the same diff as the §1 change, exactly as the comment
+  // above demands.
+  check('§1 states the read window default (yesterday only), not just the tool name', /yesterday only/.test(restoreSection))
 
   const channel = fs.readFileSync(path.join(repoRoot, 'channel.mjs'), 'utf8')
   check('shutdown inject still asks for journal_write (the writer half of the pair)', /journal_write/.test(channel))

@@ -29,6 +29,10 @@
           {
             "type": "command",
             "command": "node {AGENT_DIR}/hooks/session-start-reflux-card.mjs"
+          },
+          {
+            "type": "command",
+            "command": "node {AGENT_DIR}/hooks/context-gauge.mjs"
           }
         ]
       }
@@ -85,6 +89,10 @@
           {
             "type": "command",
             "command": "node {AGENT_DIR}/hooks/stop-reply-guard.mjs"
+          },
+          {
+            "type": "command",
+            "command": "node {AGENT_DIR}/hooks/context-gauge.mjs"
           }
         ]
       }

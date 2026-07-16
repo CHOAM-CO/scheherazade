@@ -274,6 +274,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 /* Row context: kill the block-layout spacing .status-line carries elsewhere. */
 .nav-status .status-line { margin-top: 0; min-height: 0; }
 .nav-status-detail { font-size: 0.85rem; color: var(--fg-dim); }
+.nav-status-detail.gauge-warn { color: var(--danger); }
 .nav-status .agent-control-actions { margin-left: auto; }
 
 .nav-tabs {

@@ -532,6 +532,27 @@ function ensureSettingsLocalAdditions() {
     })
   }
 
+  // v0.0.22: context-gauge tap on Stop + SessionStart (Mino live test
+  // 2026-07-16 -- 372K-lane agent drowned in autocompact with zero
+  // occupancy visibility from the app; see the hook's header). Advisory
+  // instrument, additive-only, both event groups checked independently so
+  // a hand-edited config missing only one still converges.
+  const GAUGE_HOOK = 'context-gauge.mjs'
+  const gaugeCommand = `node ${path.join(toUnpackedPath(REPO_ROOT), 'hooks', GAUGE_HOOK)}`
+  const hasGaugeIn = (groups) => Array.isArray(groups) && groups.some((group) =>
+    Array.isArray(group.hooks) && group.hooks.some((h) => typeof h.command === 'string' && h.command.includes(GAUGE_HOOK)))
+  if (!hasGaugeIn(settings.hooks.Stop)) {
+    // stopGroup already normalized above (reply-guard block)
+    stopGroup.hooks.push({ type: 'command', command: gaugeCommand })
+  }
+  if (!Array.isArray(settings.hooks.SessionStart)) settings.hooks.SessionStart = []
+  if (settings.hooks.SessionStart.length === 0) settings.hooks.SessionStart.push({ hooks: [] })
+  if (!hasGaugeIn(settings.hooks.SessionStart)) {
+    const ssGroup = settings.hooks.SessionStart[0]
+    if (!Array.isArray(ssGroup.hooks)) ssGroup.hooks = []
+    ssGroup.hooks.push({ type: 'command', command: gaugeCommand })
+  }
+
   // win-port Phase 3: the 3 bash hooks were ported to .mjs and the .sh
   // files DELETED from the bundle -- an existing install's settings still
   // says `bash .../hooks/session-start.sh`, which now fails on every fire
@@ -2768,6 +2789,35 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     return
   }
 
+  // GET /api/context-status — context-occupancy gauge (v0.0.22, Mino 07-16
+  // "답장 하나에 4분" 진단 후속). Read side of hooks/context-gauge.mjs's
+  // DATA_HOME/context-status.json snapshot (written atomically on every
+  // Stop + SessionStart). Attaches the model→cap table here, NOT in the
+  // hook, so cap knowledge updates ship with the app instead of being
+  // frozen into old snapshots. Read-only GET, no secrets in the payload.
+  if (pathname === '/api/context-status' && req.method === 'GET') {
+    let snap = null
+    try {
+      snap = JSON.parse(fs.readFileSync(path.join(DATA_HOME, 'context-status.json'), 'utf8'))
+    } catch { /* absent or torn-mid-write (rename makes torn ~impossible) */ }
+    if (!snap || typeof snap.contextTokens !== 'number') {
+      sendJson(res, 200, { available: false })
+      return
+    }
+    const { cap, capSource } = contextCapForModel(snap.model)
+    sendJson(res, 200, {
+      available: true,
+      ts: snap.ts,
+      model: snap.model,
+      contextTokens: snap.contextTokens,
+      usage: snap.usage || null,
+      cap,
+      capSource,
+      pct: cap ? Math.min(100, Math.round((snap.contextTokens / cap) * 100)) : null,
+    })
+    return
+  }
+
   // Spawn-time reality (IA v0.0.9): what the CURRENT/LAST child was born
   // with, recorded at the spawn moment in main.cjs -- the shell's model/
   // effort display and settings' apply-state line read this instead of
@@ -3498,10 +3548,33 @@ function createOnboardingServer(onOnboardingComplete, agentControls) {
   })
 }
 
+// Model → context cap. Two provenance tiers, labeled honestly in the
+// payload (v0.0.22):
+//   - claude-cli-table: extracted from the claude CLI 2.1.211 binary's own
+//     model table (`"<id>",context:{window:...}` entries) — what the CLI
+//     ACTUALLY budgets autocompact against for these ids.
+//   - codex-as-api-table: the proxy's model table (openai/codex
+//     models.json@6ad0e943, codex-as-api 0.6.3) — the PROXY's real cap.
+//     The CLI does not know gpt ids, so its believed window (and therefore
+//     the autocompact trigger point) may be SMALLER than this; the gauge's
+//     occupancy number is exact either way, only pct is best-effort there.
+// Unknown model → cap null, UI shows occupancy without a percentage.
+function contextCapForModel(model) {
+  if (typeof model !== 'string' || !model) return { cap: null, capSource: null }
+  const CLAUDE_1M = new Set(['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6'])
+  const base = model.replace(/\[1m\]$/, '')
+  if (CLAUDE_1M.has(base)) return { cap: 1_000_000, capSource: 'claude-cli-table' }
+  if (/^claude-(opus-4-[015]|sonnet-4-[05]|haiku-4-5)/.test(base)) return { cap: 200_000, capSource: 'claude-cli-table' }
+  if (/^gpt-5\.6/.test(base)) return { cap: 372_000, capSource: 'codex-as-api-table' }
+  if (/^gpt-5\.[245]/.test(base)) return { cap: 272_000, capSource: 'codex-as-api-table' }
+  return { cap: null, capSource: null }
+}
+
 module.exports = {
   createOnboardingServer,
   AGENT_NAME,
   DATA_HOME,
+  contextCapForModel,
   readAgentConfig,
   readDiscordToken,
   readHomeChannelId,

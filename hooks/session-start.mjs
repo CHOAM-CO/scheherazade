@@ -128,11 +128,11 @@ if (oversize.length > 0) {
 if (permLine) out.push(permLine)
 out.push(`Checkpoint: ${checkpointStatus}.`)
 if (pendingCount > 0) out.push(`${pendingCount} prior-date session note(s) waiting on journal compression -- run journal-compress.mjs scan.`)
-if (dreamCount > 0) out.push(`${dreamCount} dream fragment(s) in dreams/ -- read the 5 most recent for context.`)
+if (dreamCount > 0) out.push(`${dreamCount} dream fragment(s) in dreams/ -- skim the 2 most recent (CLAUDE.md §1 lazy-restore).`)
 if (skillLines.length > 0) {
   out.push(`${skillLines.length} skill(s) in skills/ (Read the file when one looks relevant):`)
   out.push(...skillLines)
 }
-out.push("Restore order: today's session note (Felt first), then checkpoint.md, then self_persona.md, then recent dreams.")
+out.push("Restore order: today's session note (head+tail excerpt, Felt first), then checkpoint.md, then yesterday's journal, then self_persona.md, then 2 recent dreams. Excerpt first, full Read only on a pointer -- CLAUDE.md §1.")
 
 console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: out.join('\n') } }))

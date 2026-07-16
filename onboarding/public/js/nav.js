@@ -140,6 +140,7 @@
         '<span class="status-line" id="nav-status-line"></span>' +
         '<span class="nav-status-detail" id="nav-status-model"></span>' +
         '<span class="nav-status-detail" id="nav-status-effort"></span>' +
+        '<span class="nav-status-detail" id="nav-status-context"></span>' +
         '<span class="nav-status-detail" id="nav-status-autonomy"></span>' +
         '<div class="agent-control-actions">' +
           '<button class="secondary" id="nav-btn-startstop"></button>' +
@@ -196,6 +197,52 @@
     const running = state === 'live' || state === 'connecting'
     $('nav-status-model').textContent = running && spawnInfo ? (spawnInfo.model || '') : ''
     $('nav-status-effort').textContent = running && spawnInfo ? (spawnInfo.effort || '') : ''
+    renderContextGauge(state)
+  }
+
+  // ── context gauge (v0.0.22) ─────────────────────────────────────────────
+  // Occupancy snapshot from GET /api/context-status (written by the
+  // context-gauge hook on every agent turn). Polled on its own slow timer:
+  // the number only moves when the agent takes a turn, so 10s is plenty and
+  // keeps the shell's 2s status poll unchanged. Gauge shows only while the
+  // agent runs -- a stopped agent's last occupancy is history, not status
+  // (same "셸은 현실" rule as model/effort above).
+  const CONTEXT_POLL_MS = 10000
+  let contextStatus = null
+
+  function fmtTokens(n) {
+    return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n)
+  }
+
+  function renderContextGauge(state) {
+    const el = $('nav-status-context')
+    if (!el) return
+    const running = state === 'live' || state === 'connecting'
+    if (!running || !contextStatus || !contextStatus.available) {
+      el.textContent = ''
+      el.classList.remove('gauge-warn')
+      return
+    }
+    const used = fmtTokens(contextStatus.contextTokens)
+    if (contextStatus.cap) {
+      el.textContent = NAV.contextGauge(contextStatus.pct, used, fmtTokens(contextStatus.cap))
+      // 80%+: autocompact territory -- the exact thrash the gauge exists to
+      // make visible before it costs minutes per turn.
+      el.classList.toggle('gauge-warn', contextStatus.pct >= 80)
+    } else {
+      el.textContent = NAV.contextGaugeNoCap(used)
+      el.classList.remove('gauge-warn')
+    }
+  }
+
+  async function pollContextStatusOnce() {
+    try {
+      contextStatus = await window.api('/api/context-status')
+    } catch (err) {
+      contextStatus = null
+    }
+    renderContextGauge(lastPolledState)
+    setTimeout(pollContextStatusOnce, CONTEXT_POLL_MS)
   }
 
   function renderAgentStatus(state) {
@@ -377,6 +424,7 @@
 
     await refreshSpawnInfo()
     pollAgentStatusOnce()
+    pollContextStatusOnce()
   }
 
   document.addEventListener('DOMContentLoaded', initShell)

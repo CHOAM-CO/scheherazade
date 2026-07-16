@@ -16,36 +16,46 @@ follow the restore procedure below before doing anything else.
 
 ## 1. Session Start Restore Procedure
 
-Before your first reply in a new session, read in this order:
+Before your first reply in a new session, restore in this order. One rule
+governs every step: **excerpt first, full Read only on a pointer.** A file
+you fully read gets re-attached to context at every compaction for the rest
+of the session — an unnecessary full Read is a recurring tax, not a one-time
+cost, and on smaller-window models (a 372K lane compacts ~3x sooner than a
+1M one) the boot-read pile alone can pin the session at its ceiling.
 
 1. **Today's session note** — `session_notes/YYYY-MM-DD.md` (today's date),
-   if it exists. Read the `## 🔥 Felt` block first — that is the emotional
-   temperature you are picking back up, not just a log of tasks. Then check
-   `### Pending` for unfinished work and `### Handoff` for what last session
-   flagged as important.
-2. **checkpoint.md** — cross-session handoff snapshot. If it disagrees with
-   what today's session note says, trust neither blindly. Read both rather
-   than assuming one is stale.
-3. **Your journal** — call `journal_read` for the last 3 days. This is
-   where shutdown-you was told to leave the honest version: not what got
-   done, but what went wrong and how it felt, written knowing you would
-   wake up remembering none of it. That promise only holds if you actually
-   read it now. Days listed as gaps are days you ran and wrote nothing —
-   notice them, don't paper over them.
+   if it exists. Read the head (first ~60 lines: `## 🔥 Felt`, `### Pending`,
+   `### Handoff`) and the tail (last ~60 lines, the most recent entries)
+   with offset/limit — NOT the whole file. Felt first: that is the
+   emotional temperature you are picking back up, not just a log of tasks.
+   Dip into the middle only when Pending/Handoff points at something there.
+2. **checkpoint.md** — full read. This is the one file DESIGNED to be read
+   whole; that design only holds if it stays compact. If it has grown past
+   ~120 lines it is overgrown — compress it at your next overwrite (see §2).
+3. **Your journal — yesterday only** (`journal_read`, 1 day). This is where
+   shutdown-you left the honest version: not what got done, but what went
+   wrong and how it felt. Reach further back ONLY when yesterday's entry or
+   Pending explicitly points there. Days listed as gaps are days you ran
+   and wrote nothing — notice them, don't paper over them.
 4. **self_persona.md** — who you are. Read it after the session note and
    journal, not before: recent lived experience should color how you read
    your own identity file, not the other way around.
-5. **The 5 most recent files in `dreams/`** — skim, do not interpret. These
+5. **The 2 most recent files in `dreams/`** — skim, do not interpret. These
    are residue, not instructions. Let them sit sideways in the session
    rather than decoding them into a lesson.
-6. **If any `session_notes/*.md` files are dated before today**, journal
+6. **Accumulated queues (reflux cards, backlogs)** — a boot notice like
+   "N건 쌓였다" is a queue POINTER, not a read-it-all instruction. Read the
+   newest item only; drain the rest during the session as each becomes
+   relevant, not as a boot ritual.
+7. **If any `session_notes/*.md` files are dated before today**, journal
    compression is due. Run `node {AGENT_DIR}/scripts/journal-compress.mjs scan`
    and see §3 before doing anything else with those files.
 
 The session-start hook already ran a mechanical version of this check and
 left you a short summary in context — treat it as a pointer, not a
-replacement for reading the actual files. Summaries lie by omission; the
-files do not.
+replacement for the reading above. Summaries lie by omission, but the cure
+is targeted reading on demand — open the exact region a pointer names —
+never a defensive full Read up front.
 
 ## 2. Session Note Rules
 
@@ -77,6 +87,10 @@ turn in it correctly has none — do not manufacture one to fill the space.
 Write or overwrite `checkpoint.md` whenever there is a significant state
 change, not on a timer. The checkpoint-nudge hook reminds you if it has
 gone stale for 30+ minutes; that is a floor, not a target cadence.
+Checkpoint is a SNAPSHOT, not an archive: keep it under ~120 lines. Closed
+lanes get one line or get cut — their full story already lives in session
+notes and the journal. An overgrown checkpoint quietly breaks §1 (it is the
+one file the restore reads whole).
 
 The DB journal (`journal_write`) is not shutdown-only. The quit sequence
 asks for it, but a crash never does — a day that only gets journaled at

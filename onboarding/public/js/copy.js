@@ -512,6 +512,11 @@ window.COPY = {
     switchOk: 'Switch',
     muteWarn: (n, m) => `${m} was asked to reply ${n}× and didn't. The agent may be unable to send messages.`,
     muteRevert: (m) => `Go back to ${m}`,
+    // context gauge (v0.0.22): occupancy is exact (from the transcript's own
+    // usage counters); the percentage is vs the best-known cap for the model
+    // -- honest about the gap, so no "안전" wording, just numbers.
+    contextGauge: (pct, used, cap) => `컨텍스트 ${pct}% (${used}/${cap})`,
+    contextGaugeNoCap: (used) => `컨텍스트 ${used} 토큰`,
     muteRevertConfirm: (m) => `Switch back to ${m}? The agent will restart.`,
     // Shell reality additions (IA v0.0.9): autonomy visibility badge (the
     // one setting that spends money while nobody watches deserves a spot in
