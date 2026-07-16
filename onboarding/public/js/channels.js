@@ -299,8 +299,12 @@
   let slackChannels = []
 
   function slackBranchText(result) {
-    if (result.branch === 'invalid_bot_token') return C.slackInvalidBotToken
-    if (result.branch === 'invalid_app_token') return C.slackInvalidAppToken
+    // Raw upstream detail rides along when the server carried one (0.0.19
+    // observability fix) -- a branch label tells the user WHAT to fix, the
+    // slack error code tells us WHY when the label turns out wrong.
+    const detail = result.detail ? ` (${result.detail})` : ''
+    if (result.branch === 'invalid_bot_token') return C.slackInvalidBotToken + detail
+    if (result.branch === 'invalid_app_token') return C.slackInvalidAppToken + detail
     if (result.branch === 'not_in_channel') return C.slackNotInChannel(result.channelName || '?')
     return GEN(result.error || result.branch || 'unknown')
   }

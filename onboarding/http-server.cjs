@@ -1384,10 +1384,16 @@ async function enumerateTelegramChats(token, fetchImpl = fetch) {
 
 const SLACK_API = 'https://slack.com/api'
 async function slackApi(token, method, params, fetchImpl = fetch) {
+  // form-encoded, NOT JSON (0.0.19, first live-test fix): x-www-form-
+  // urlencoded is the one format EVERY Slack Web API method accepts;
+  // per-method JSON acceptance is a docs matrix we should not be betting
+  // the connect flow on. All params this file sends are scalars.
+  const form = new URLSearchParams()
+  for (const [k, v] of Object.entries(params || {})) form.set(k, String(v))
   const res = await fetchImpl(`${SLACK_API}/${method}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: `Bearer ${token}` },
-    body: JSON.stringify(params || {}),
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: `Bearer ${token}` },
+    body: form.toString(),
   })
   let body = {}
   try {
@@ -2637,7 +2643,10 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     }
     const info = await slackApi(effBot, 'conversations.info', { channel: String(channelId) })
     if (!info.ok || !info.body.channel) {
-      sendJson(res, 400, { error: 'picked channel is not reachable by this token' })
+      // Slack's own error code rides along VERBATIM (0.0.19): the first
+      // live test hit this branch and the swallowed code made the failure
+      // undiagnosable from the screen. Never eat the upstream error.
+      sendJson(res, 400, { error: `picked channel is not reachable by this token (slack: ${info.error || 'no_channel_in_response'})` })
       return
     }
     if (info.body.channel.is_member !== true) {
