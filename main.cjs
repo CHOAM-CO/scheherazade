@@ -35,6 +35,7 @@
 const { app, BrowserWindow } = require('electron')
 const { spawn, execFileSync } = require('node:child_process')
 const path = require('node:path')
+const { pathToFileURL } = require('node:url')
 const fs = require('node:fs')
 const os = require('node:os')
 const {
@@ -1065,6 +1066,24 @@ async function spawnRealAgentChildLocked() {
     // provider-env.cjs's own doc comment on `env` for the full merge-order
     // contract, including `undefined`-valued keys meaning "actively unset".
     ...providerEnvResult.env,
+  }
+  // node shim, hoisted to the SHARED env layer (v0.0.21): v0.0.15 implemented
+  // ensureNodeShim inside supervisor.mjs's own spawn path -- the NODE lane
+  // only. Production spawns the BASH lane (run.sh, the launcher line in this
+  // very function), so packaged installs never got the shim and every Claude
+  // Code hook died with `/bin/sh: node: command not found`. Live receipt:
+  // Mino's 07-16 18:01 log paste (the /logs viewer's first real catch) --
+  // stop-reply-guard was among the dead, which is exactly why the agent's
+  // promised Discord reply was never bounced back into an actual send.
+  // Patched HERE so both lanes inherit it: bash lane via this env, node lane
+  // idempotently (its own ensureNodeShim call sees the dir already on PATH).
+  // Single-sourced from supervisor.mjs via dynamic import (ESM); on any
+  // failure the child keeps the unpatched PATH = the pre-fix behavior, loud.
+  try {
+    const { ensureNodeShim } = await import(pathToFileURL(SUPERVISOR_MJS_PATH).href)
+    supervisorEnv.PATH = ensureNodeShim({ mem: DATA_HOME }, { env: supervisorEnv, log })
+  } catch (err) {
+    log(`node shim setup failed at the shared env layer (${err.message}) -- hook lane will depend on system node`)
   }
   // SUPERVISOR_LANE seam (Windows-port Phase 1): identical env, stdio, and
   // detached process-group contract in both lanes -- only the runtime
