@@ -17,9 +17,19 @@ probe, docs/probe-0016-attribution.md).
   channel — the file's first and deliberate non-model-mediated send —
   then injects a [SYSTEM] turn asking for a greeting in the agent's own
   voice (no "답장하지 마", so stop-reply-guard enforces delivery).
-- Quick-death crash loops never spam: leaves that die before Discord
-  login never reach ClientReady; the failure marker + bounce budget
-  already own that class.
+- Crash-loop spam cap (review fix, Melchior verdict on cf39447): Discord
+  login in channel.mjs is INDEPENDENT of provider auth, so a bad-provider-
+  key crash loop can reach ClientReady on every restart (backoff caps at
+  120s ≈ up to ~30 boots/hour). The consume-on-read marker has no memory
+  across restarts, so a persistent throttle was added: `.boot-announce-
+  ts.json` (separate file, never consumed), advance-on-delivered after
+  the direct line lands, cooldown default 15 min
+  (`BOOT_PING_THROTTLE_MIN`, `BOOT_PING=off` kills the feature). Rule is
+  pure in `cadence/boot-announce.cjs` (13 tests incl. a simulated 6-
+  restart/12-min crash loop → 0 extra pings). BOTH the direct line and
+  the greeting inject sit behind the throttle — the inject is guard-
+  enforced into Discord, so unthrottled it would be the same spam in the
+  agent's voice.
 
 ## (c) Work-entry announce
 
@@ -46,6 +56,15 @@ probe, docs/probe-0016-attribution.md).
   (default 180).
 
 ## Known wrinkles (recorded, not fixed here)
+
+- **Orphan channel.mjs (pre-existing, separate track — Melchior raw-
+  verified during the cf39447 review)**: channel.mjs is a grandchild (the
+  CLI's MCP child) with no `--name` in argv, so the supervisor's pkill
+  pattern can't reach it and it has no SIGTERM/parent-death handler; a
+  hard leaf crash can leave an orphan bridge alive → duplicate replies +
+  duplicate boot pings from the NEXT session's bridge. Fix candidates
+  (next release): `--name` in the bridge argv for pkill reach, or
+  stdin-EOF self-terminate + one-live-bridge-per-agent guard.
 
 - hooks/session-start.mjs computes the note filename with hardcoded
   Asia/Seoul while channel.mjs's timestamps follow the system timezone

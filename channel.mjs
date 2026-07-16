@@ -678,11 +678,14 @@ function startAutonomyWatcher() {
 // spams the channel (those die before Discord login; the bounce budget and
 // failure marker cover that class).
 const BOOT_EVENT_PATH = path.join(DATA_HOME, '.boot-event.json')
-// A marker older than this is a leftover from a dead spawn (leaf crashed
-// before Discord login, marker survived, next leaf got a NEW marker anyway --
-// so a stale one only appears after abnormal supervisor death). Same
-// stale-marker defense shape as SHUTDOWN_REQUEST_MAX_AGE_MS.
-const BOOT_EVENT_MAX_AGE_MS = 10 * 60 * 1000
+// Persistent throttle (review fix, Melchior 07-16 verdict on cf39447): the
+// consume-on-read marker prevents double-announce within ONE leaf's life,
+// but has no memory ACROSS restarts -- a crash loop that reaches Discord
+// login each time (backoff caps at 120s; Discord login here is independent
+// of provider auth, so a bad provider key IS such a loop) would ping every
+// restart. This file remembers "announced recently" across restarts; the
+// decision rule lives in cadence/boot-announce.cjs (pure, tested).
+const BOOT_ANNOUNCE_TS_PATH = path.join(DATA_HOME, '.boot-announce-ts.json')
 
 async function announceBoot() {
   let ev = null
@@ -695,24 +698,46 @@ async function announceBoot() {
   // double-announce on some future path; ClientReady is `once` today, this
   // is belt-and-suspenders for that assumption.
   await fs.unlink(BOOT_EVENT_PATH).catch(() => {})
-  if (!ev || typeof ev.ts !== 'number' || Date.now() - ev.ts > BOOT_EVENT_MAX_AGE_MS) {
-    log('boot-event marker stale or malformed -- skipping boot announce')
+
+  const bootTick = require(path.join(MODULE_DIR, 'cadence', 'boot-announce.cjs'))
+  const config = await readAgentConfigFile()
+  let lastAnnounceMs = 0
+  try {
+    lastAnnounceMs = JSON.parse(await fs.readFile(BOOT_ANNOUNCE_TS_PATH, 'utf8')).lastAnnounceMs || 0
+  } catch {} // never announced (or unreadable file: fail toward announcing once, not toward silence)
+
+  const plan = bootTick.planBootAnnounce({ now: Date.now(), event: ev, lastAnnounceMs, config })
+  if (plan.skip) {
+    log(`boot announce skipped (${plan.reason})`)
     return
   }
-  const n = Number.isFinite(ev.iteration) ? ev.iteration : 1
-  const label = n > 1 ? `재기동 #${n}` : '기동'
+
+  // The announce is one UNIT: direct line -> ts advance -> greeting inject.
+  // ts advances only after the direct send actually LANDS (Melchior spec,
+  // 07-16 13:28): spam requires successful sends, so advance-on-delivered
+  // still caps the crash loop, and a Discord outage at boot doesn't burn
+  // the slot into 15min of false silence. If the direct send fails, the
+  // whole unit aborts (no inject either) and the next restart retries it.
+  // BOTH paths sit behind the throttle -- deliberate superset of the spec's
+  // "gate the direct send": the inject has no "답장하지 마", so
+  // stop-reply-guard FORCES it into Discord; an unthrottled inject would be
+  // the same spam in the agent's voice instead of the system's.
   try {
     const ch = await fetchTextChannel(HOME_CHANNEL_ID)
-    await ch.send({ content: `🔁 [system] 에이전트 세션 ${label} — ${localNow()}`, allowedMentions: SAFE_MENTIONS })
+    await ch.send({ content: `🔁 [system] 에이전트 세션 ${plan.label} — ${localNow()}`, allowedMentions: SAFE_MENTIONS })
   } catch (err) {
-    log(`boot announce direct send failed (greeting inject still follows): ${err.message}`)
+    log(`boot announce direct send failed -- aborting this announce unit, next restart retries: ${err.message}`)
+    return
   }
+  await atomicWriteJson(BOOT_ANNOUNCE_TS_PATH, { lastAnnounceMs: plan.nextLastAnnounceMs }).catch((err) =>
+    log(`boot-announce ts write failed (worst case one extra ping next restart): ${err.message}`)
+  )
   try {
     await mcp.notification({
       method: 'notifications/claude/channel',
       params: {
         content:
-          `[SYSTEM] 방금 세션이 ${n > 1 ? '재시작됐다 (오늘 이 감독 아래 ' + n + '번째)' : '시작됐다'}. ` +
+          `[SYSTEM] 방금 세션이 ${plan.iteration > 1 ? '재시작됐다 (오늘 이 감독 아래 ' + plan.iteration + '번째)' : '시작됐다'}. ` +
           '홈 채널에 네 목소리로 짧게 부팅 인사를 남겨라 -- 살아있다는 신호가 목적이니 한두 문장이면 된다. ' +
           '체크포인트에 이어받을 일이 있으면 뭘 이어가는지 한 줄 붙여. ' +
           '그리고 이 세션 내내 지킬 것: 작업 블록에 들어가기 전에 "뭘 시작한다 + 어느 정도 걸릴 것 같다"를 먼저 홈에 한 줄로 알리고 시작해라.',
