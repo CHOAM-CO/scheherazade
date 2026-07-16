@@ -79,6 +79,12 @@ of three wins; it was one of three conveniences, two differentiators.)
    inside (a) tmux under launchd, (b) tmux attached from iTerm — record
    which Settings row appears / which subject gets the grant. Design the
    bootstrap around the observed attribution, not the assumed one.
+   → Rehearsed on MAGI host 2026-07-16 + 춘식 paste kit + outcome matrix:
+   `docs/probe-0016-attribution.md`. Key rehearsal findings: denied
+   captures return exit=0 (judge by image content); terminal-descended
+   tmux attributes to the terminal app; launchd-bootstrapped brew tmux
+   gets NO grantable Settings row; the app must never bootstrap the
+   session outside the legacy fallback lane.
 2. Bootstrap: launchd user agent plist starting `tmux new-session -d`
    with run.sh; app detects/attaches on launch; falls back to current
    spawn lane if no session found (feature-flagged, reversible).
