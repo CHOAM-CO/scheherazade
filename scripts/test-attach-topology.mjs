@@ -163,6 +163,15 @@ console.log('template + wiring tripwires:')
   check('app quit leaves the external agent alive in attach mode', /agentTopologyIsAttach\(\)\)\s*{\s*log\('app quit: attach topology/.test(mainSrc))
   check('stop/restart use attach-aware death confirmation', (mainSrc.match(/agentTopologyIsAttach\(\) \? await waitForSupervisorDeath\(\) : await waitForAgentHandleCleared\(\)/g) || []).length === 2)
   check('spawn lane injects SUDO_ASKPASS', mainSrc.includes("supervisorEnv.SUDO_ASKPASS"))
+  // Adopt-identity guard (design-0016 §Review card 1): session name alone
+  // must not be adoption proof, and a null pane pid must never reach PIDFILE.
+  check('attach adopt path gates on pane-pid validity', /const pidValid = Number\.isInteger\(panePid\)/.test(mainSrc))
+  check('attach adopt path verifies supervisor identity before adopting', /identityOk = isOurSupervisor\(panePid\)/.test(mainSrc))
+  {
+    const guardIdx = mainSrc.indexOf('identityOk = isOurSupervisor(panePid)')
+    const writeIdx = mainSrc.indexOf('attach: failed to write PIDFILE')
+    check('attach identity guard sits before the PIDFILE write', guardIdx >= 0 && writeIdx >= 0 && guardIdx < writeIdx)
+  }
 }
 
 // ── 4. sudo askpass helper: real end-to-end against a live HTTP endpoint ───
