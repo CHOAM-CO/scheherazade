@@ -166,3 +166,66 @@ hook-lane-path 7).
 - Chat UI transport stays on the existing HTTP seams (scope control —
   smallest change that kills the permission class). send-keys interactive
   surface = not in this cut.
+
+## Review (2026-07-22 night, Idea — PO gate on d3bd707)
+
+Method: direct read of attach-topology.cjs / both templates / main.cjs +
+http-server.cjs hunks; test suite re-run TONIGHT (35/35, including the live
+negative control: has-session on a dead socket leaves no socket file and no
+server process); plus a context-stripped model-divergent blind review
+(gemini-3.6-flash-high via agy-exec, code sent raw, no findings pre-seeded).
+
+**Verdict: PASS — merge-ready from the review side.** The invariant holds
+mechanically (allowlist + throw-before-tmux + real negative-control test;
+blind reviewer independently concurred "HOLDS"). Sudo lane is sound within
+its stated boundary: loopback-only bind (`listen(0,'127.0.0.1')`,
+http-server.cjs:3653), randomBytes(32) hex token matching the askpass sed
+format, 0600 + chmod backstop, fail-closed null token, toggle read
+per-request. Probe step3 (춘식) remains the only external gate — unchanged.
+
+### Follow-up cards (none blocking)
+1. **Adopt-identity guard** (med-low, real UX path): attachStartFromSession
+   adopts `state.panePid` on socket+session name alone — no
+   `isOurSupervisor()` check (asymmetric with the PIDFILE-adopt path, which
+   verifies). A user's manual `tmux -L scheherazade new -s agent` decoy —
+   or plain experimentation — gets adopted as supervisor; stop would then
+   kill their shell. Same guard also covers the blind reviewer's null-pid
+   catch: on transient `list-panes` failure panePid=null flows through the
+   live-pane branch and writes literal "null" into PIDFILE. Fix as one
+   block: require Number.isInteger(panePid) && isOurSupervisor(panePid)
+   after adopt AND after respawn; else bootstrap-needed, loud.
+2. **Sudo containment honesty gap** (design conversation, not a code bug):
+   the double gate contains ACCIDENT, not the agent itself. The agent (or
+   anything it runs, incl. prompt-injected instructions) holds SUDO_ASKPASS
+   → endpoint file path → token, and .agent-config is same-user-writable,
+   so SUDO_ENABLED=OFF is not agent-proof either. Mechanically, "the value
+   never enters chat/transcript surfaces" is policy, not enforcement. Rec:
+   (a) amend the containment comment to say so honestly, (b) surface the
+   existing fetch-event log as a visible UI event so every consult is
+   user-seen. Deeper binding (serving only to a sudo-descended caller) =
+   later design if wanted. (Blind-review finding, confirmed against code.)
+3. **Allowlist surplus** (hygiene): send-keys / kill-session / set-option /
+   list-sessions are in SAFE_VERBS but have zero call sites (grep-verified
+   across main.cjs / attach-topology.cjs / http-server.cjs). None can spawn
+   a server, so the invariant is intact — but the doc's own scope-control
+   line says send-keys is "not in this cut". Trim to the five used verbs;
+   re-add per lane as lanes ship.
+4. **Hardening pair** (low, one-liners): crypto.timingSafeEqual for the
+   askpass token compare (same-machine other-user surface only — bind is
+   loopback); unlink-before-write for .sudo-askpass-endpoint.json so the
+   0600 mode always applies to a fresh inode (writeFileSync mode is ignored
+   on an existing file; today's chmod backstop leaves a microsecond window).
+5. **Note**: pipe-pane logFile single-quote injection is theoretical on
+   macOS (short names exclude quotes) — escape if ever touched.
+
+### Refuted blind-review claims (kept so they don't resurface)
+- "stop/restart completely broken in attach mode (killAgentSupervisor
+  no-ops)" — FALSE premise: stopAgentAwaited never routes through
+  killAgentSupervisor; it spawns `run.sh stop` (main.cjs:1496-1509), which
+  signals the PIDFILE pid externally. The attach early-return is app-quit
+  only, exactly as designed. Suite receipt: "stop/restart use attach-aware
+  death confirmation" ok.
+- "missing startFailurePoll on the adopted-supervisor path" — FALSE:
+  present at main.cjs:817 (2026-07-03 backstop fix), outside the diff hunk
+  the blind reviewer saw. Both refutations are the hunk-boundary blindness
+  class: absence inferred from context lines.
