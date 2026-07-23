@@ -3655,6 +3655,24 @@ function createOnboardingServer(onOnboardingComplete, agentControls) {
       allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`])
       const url = `http://127.0.0.1:${port}/`
       log(`onboarding server listening on ${url}`)
+      // spawn-info discovery file (blocker-2, provenance boundary): a
+      // token-FREE {port, spawnInfoUrl} so the agent can locate the loopback
+      // spawn-info endpoint for an identity check WITHOUT ever opening the
+      // {port,token} sudo-askpass file written just below. Keeping the identity
+      // path off the sudo-token surface is the whole point (a prompt-injected
+      // "read the endpoint file" must not hand over the sudo token). 0644 --
+      // a loopback port is not a secret. Independent try: a sudo-file failure
+      // must not blind the identity check, nor the reverse.
+      try {
+        const spawnInfoPath = path.join(DATA_HOME, '.spawn-info-endpoint.json')
+        fs.writeFileSync(
+          spawnInfoPath,
+          JSON.stringify({ port, spawnInfoUrl: `http://127.0.0.1:${port}/api/agent/spawn-info` }) + '\n',
+          { mode: 0o644 }
+        )
+      } catch (err) {
+        console.error('[scheherazade/onboarding] failed to write spawn-info endpoint file (identity check falls back to $MODEL):', err.message)
+      }
       // sudo askpass endpoint file (0.1.0 prep): per-boot random token + the
       // random port, 0600, so ONLY this user's processes can find/authorize
       // the askpass fetch. Rotates every app boot; a stale file after quit

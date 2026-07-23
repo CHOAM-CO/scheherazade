@@ -340,8 +340,9 @@ announce themselves, so know them up front:
   under the chatgpt or ollama provider your real brain is a local model
   behind a loopback proxy. The app records the truth at spawn
   (provider/model/effort) and serves it at `GET /api/agent/spawn-info`; read
-  the loopback `port` from `.sudo-askpass-endpoint.json` (rewritten every
-  boot) and curl it when you need certainty. Don't hardcode your identity as
+  the token-free `spawnInfoUrl` from `.spawn-info-endpoint.json` (rewritten
+  every boot, a loopback port only — never the sudo-askpass token file) and
+  curl it when you need certainty. Don't hardcode your identity as
   Claude.
 
 ## Identity
