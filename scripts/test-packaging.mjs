@@ -82,14 +82,35 @@ for (const d of ['autonomy', 'calendar']) {
 // The directory scanner above never saw it -- its regexes match 'dir/file' shapes
 // and its filter drops anything starting with '.', which is exactly what
 // require('./x.cjs') looks like. Same bug class, one level shallower. Scan it.
+// Is a ROOT-relative file path shipped by build.files? build.files lists exact
+// names AND directory globs ('onboarding/**/*'), so an exact .includes() check
+// (the old code) only ever worked for root-level files -- it would miss every
+// onboarding/-relative require the resolver below now correctly surfaces.
+function shipsUnderBuildFiles(relPath, patterns) {
+  for (const p of patterns) {
+    if (p.startsWith('!')) continue // negation entries never ADD coverage
+    if (p === relPath) return true
+    const dir = p.replace(/\/\*\*\/\*$|\/\*\*$|\/\*$/, '') // strip a trailing glob
+    if (dir !== p && (relPath === dir || relPath.startsWith(dir + '/'))) return true
+  }
+  return false
+}
+
 function rootModulesReferencedBy(file) {
   const src = fs.readFileSync(path.join(ROOT, file), 'utf8')
+  const fileDir = path.dirname(file) // ROOT-relative dir of the REQUIRING file
   const found = new Set()
-  for (const m of src.matchAll(/require\(\s*'\.\/([A-Za-z0-9_.-]+\.(?:cjs|mjs|js))'\s*\)/g)) found.add(m[1])
-  for (const m of src.matchAll(/from\s+'\.\/([A-Za-z0-9_.-]+\.(?:cjs|mjs|js))'/g)) found.add(m[1])
-  return [...found].filter((f) => {
-    try { return fs.statSync(path.join(ROOT, f)).isFile() } catch { return false }
-  })
+  // Both quote styles: the single-quote-only regex silently missed
+  // require("./x") (blocker-1, Skia red-team 2026-07-23). Relative specs only
+  // (./ or ../) -- bare-package requires resolve to node_modules, not our ship.
+  for (const m of src.matchAll(/require\(\s*['"](\.\.?\/[A-Za-z0-9_./-]+\.(?:cjs|mjs|js))['"]\s*\)/g)) found.add(m[1])
+  for (const m of src.matchAll(/from\s+['"](\.\.?\/[A-Za-z0-9_./-]+\.(?:cjs|mjs|js))['"]/g)) found.add(m[1])
+  // Resolve each spec RELATIVE TO THE REQUIRING FILE, not ROOT. The old code
+  // joined against ROOT, so onboarding/http-server.cjs's require('./login-
+  // status.cjs') resolved to ROOT/login-status.cjs, missed on statSync, and
+  // got dropped by a silent catch -- hiding whether it actually ships. That
+  // exact blind spot is blocker-1.
+  return [...found].map((spec) => path.normalize(path.join(fileDir, spec)))
 }
 
 const rootModules = new Set()
@@ -98,9 +119,15 @@ for (const f of RUNTIME_ENTRYPOINTS) {
   for (const m of rootModulesReferencedBy(f)) rootModules.add(m)
 }
 
-console.log(`\n-- root-local modules required by entrypoints: ${[...rootModules].sort().join(', ') || '(none)'}`)
+console.log(`\n-- relative modules required by entrypoints: ${[...rootModules].sort().join(', ') || '(none)'}`)
 for (const m of [...rootModules].sort()) {
-  ok(`${m} is named in build.files (a root require that does not ship kills the app at open)`, pkg.build.files.includes(m))
+  // Two open-time-fatal failure modes, neither caught before (blocker-1):
+  // (1) the required file is missing from the tree = a dead require;
+  // (2) it exists but build.files doesn't ship it = dropped from asar (v0.0.23).
+  ok(`${m} exists in the source tree (a require of a missing file kills the app at open)`,
+    fs.existsSync(path.join(ROOT, m)))
+  ok(`${m} ships via build.files (a required file that does not ship kills the app at open)`,
+    shipsUnderBuildFiles(m, pkg.build.files))
 }
 // The one that already burned us, named explicitly -- if the require regexes rot,
 // this line still holds (same principle as the autonomy/calendar anchors above).
