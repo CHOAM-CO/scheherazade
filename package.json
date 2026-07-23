@@ -1,6 +1,6 @@
 {
   "name": "scheherazade",
-  "version": "0.0.23",
+  "version": "0.0.24",
   "private": true,
   "type": "module",
   "description": "Mac-native local AI agent. Forked from agent-portable (Claude Code single-agent harness); P0 spike layers an Electron packaging shell on top.",
@@ -35,6 +35,7 @@
     },
     "files": [
       "main.cjs",
+      "attach-topology.cjs",
       "channel.mjs",
       "channel-slack.mjs",
       "channel-telegram.mjs",
