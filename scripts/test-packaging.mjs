@@ -165,16 +165,11 @@ ok('attach-topology.cjs is caught by the root-module scan', rootModules.has('att
 // ship. So mount the real DMG, list its app.asar, and prove every graph node is
 // a real member. Runs in postdist (the DMG exists); predist skips LOUDLY.
 function findDmg() {
-  const rel = path.join(ROOT, 'release')
-  if (!fs.existsSync(rel)) return null
-  const dmgs = fs.readdirSync(rel).filter((f) => f.startsWith('Scheherazade-') && f.endsWith('-arm64.dmg'))
-  if (!dmgs.length) return null
-  const exact = dmgs.find((f) => f === `Scheherazade-${pkg.version}-arm64.dmg`)
-  if (exact) return path.join(rel, exact)
-  // no version match: newest by mtime -- never string-sort ("0.0.25" < "0.0.9")
-  return path.join(rel, dmgs
-    .map((f) => ({ f, t: fs.statSync(path.join(rel, f)).mtimeMs }))
-    .sort((a, b) => b.t - a.t)[0].f)
+  // EXACT version only. A different-version dmg (e.g. an old 0.0.24 left in
+  // release/) is NOT proof of THIS build's asar; verifying it would be a version
+  // illusion (Skia catch). Absent the exact dmg -> null -> postdist FAILs.
+  const exact = path.join(ROOT, 'release', `Scheherazade-${pkg.version}-arm64.dmg`)
+  return fs.existsSync(exact) ? exact : null
 }
 
 function mountedAsarEntries() {
@@ -203,22 +198,34 @@ function mountedAsarEntries() {
 }
 
 console.log('\n-- the required graph vs the mounted DMG asar (blocker-1 closure gate)')
-const asarResult = mountedAsarEntries()
-if (asarResult.status === 'no-dmg') {
-  console.log('  SKIP  DMG asar closure -- no release/*.dmg to mount (predist; postdist mounts the freshly built one); NOT a pass')
-} else if (asarResult.status === 'error') {
-  // fail-CLOSED: the dmg EXISTS but would not mount / list. A green skip here
-  // ships an UNVERIFIED artifact -- the v0.0.23 class, and exactly the fail-open
-  // Skia's fake-hdiutil vector exposed (hdiutil exit1 -> SKIP -> process exit 0).
-  ok('the built DMG mounts and its app.asar is listable', false,
-    `hdiutil/listPackage failed on an existing dmg: ${asarResult.reason}`)
+// predist runs BEFORE the build -- there is no fresh dmg to verify yet, so it
+// legitimately skips. Every OTHER invocation (postdist, manual, CI) must find
+// the exact-version dmg; a missing one is fail-closed, not a skip. (Skia catch:
+// no-dmg postdist skipped green, and a version-fallback verified the wrong dmg.)
+const lifecycle = process.env.npm_lifecycle_event
+if (lifecycle === 'predist') {
+  console.log(`  SKIP  DMG asar closure -- predist (pre-build); postdist verifies the freshly built ${pkg.version} dmg; NOT a pass`)
 } else {
-  const asarEntries = asarResult.entries
-  ok('the mounted asar listed something (an empty listing always passes)', asarEntries.size > 0)
-  for (const m of [...rootModules].sort()) {
-    ok(`${m} is a real member of the shipped app.asar (mounted DMG, not staging)`,
-      asarEntries.has(m),
-      'the require graph reaches it but the mounted DMG asar has no such entry -- dead require at open')
+  const asarResult = mountedAsarEntries()
+  if (asarResult.status === 'no-dmg') {
+    // NOT predist: a missing exact-version dmg cannot be verified. In postdist
+    // it means the build never produced it (or built a different version).
+    ok(`the ${pkg.version} dmg exists to verify (${lifecycle || 'manual run'})`, false,
+      `no release/Scheherazade-${pkg.version}-arm64.dmg -- ${lifecycle === 'postdist' ? 'the build did not produce it (or built a different version)' : 'run npm run dist first'}`)
+  } else if (asarResult.status === 'error') {
+    // fail-CLOSED: the dmg EXISTS but would not mount / list. A green skip here
+    // ships an UNVERIFIED artifact -- the v0.0.23 class, and exactly the fail-open
+    // Skia's fake-hdiutil vector exposed (hdiutil exit1 -> SKIP -> process exit 0).
+    ok('the built DMG mounts and its app.asar is listable', false,
+      `hdiutil/listPackage failed on an existing dmg: ${asarResult.reason}`)
+  } else {
+    const asarEntries = asarResult.entries
+    ok('the mounted asar listed something (an empty listing always passes)', asarEntries.size > 0)
+    for (const m of [...rootModules].sort()) {
+      ok(`${m} is a real member of the shipped app.asar (mounted DMG, not staging)`,
+        asarEntries.has(m),
+        'the require graph reaches it but the mounted DMG asar has no such entry -- dead require at open')
+    }
   }
 }
 
