@@ -76,6 +76,36 @@ for (const d of ['autonomy', 'calendar']) {
   ok(`${d}/ is referenced by the runtime code (scan found it)`, referenced.has(d))
 }
 
+// ── root-local single-file modules ──────────────────────────────────────────
+// v0.0.23 shipped a dmg that died at open: main.cjs required ./attach-topology.cjs,
+// a NEW root-level file, and build.files is an allowlist that nobody extended.
+// The directory scanner above never saw it -- its regexes match 'dir/file' shapes
+// and its filter drops anything starting with '.', which is exactly what
+// require('./x.cjs') looks like. Same bug class, one level shallower. Scan it.
+function rootModulesReferencedBy(file) {
+  const src = fs.readFileSync(path.join(ROOT, file), 'utf8')
+  const found = new Set()
+  for (const m of src.matchAll(/require\(\s*'\.\/([A-Za-z0-9_.-]+\.(?:cjs|mjs|js))'\s*\)/g)) found.add(m[1])
+  for (const m of src.matchAll(/from\s+'\.\/([A-Za-z0-9_.-]+\.(?:cjs|mjs|js))'/g)) found.add(m[1])
+  return [...found].filter((f) => {
+    try { return fs.statSync(path.join(ROOT, f)).isFile() } catch { return false }
+  })
+}
+
+const rootModules = new Set()
+for (const f of RUNTIME_ENTRYPOINTS) {
+  if (!fs.existsSync(path.join(ROOT, f))) continue
+  for (const m of rootModulesReferencedBy(f)) rootModules.add(m)
+}
+
+console.log(`\n-- root-local modules required by entrypoints: ${[...rootModules].sort().join(', ') || '(none)'}`)
+for (const m of [...rootModules].sort()) {
+  ok(`${m} is named in build.files (a root require that does not ship kills the app at open)`, pkg.build.files.includes(m))
+}
+// The one that already burned us, named explicitly -- if the require regexes rot,
+// this line still holds (same principle as the autonomy/calendar anchors above).
+ok('attach-topology.cjs is caught by the root-module scan', rootModules.has('attach-topology.cjs'))
+
 console.log('\n-- is it in the app at all? (build.files)')
 for (const d of [...referenced].sort()) {
   ok(`${d}/ ships`, covers(pkg.build.files, d), `add "${d}/**/*" to build.files -- the DMG has no ${d}/`)

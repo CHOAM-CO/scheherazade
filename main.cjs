@@ -1338,7 +1338,7 @@ function stampAttachSpawnInfo(config) {
 //   3. no session/server/tmux -> status carries bootstrap-needed; the user
 //      runs DATA_HOME/attach-bootstrap.sh in their terminal (task-4 UI
 //      surfaces the exact command via /api/topology).
-function attachStartFromSession(config) {
+async function attachStartFromSession(config) {
   const state = attachTopology.attachSessionState()
   if (!state.tmuxPresent) {
     setAgentStatus('failed', 'bootstrap-needed', 'attach 모드인데 tmux가 없습니다. 터미널에서 `brew install tmux` 후 부트스트랩을 실행하세요.')
@@ -1359,6 +1359,33 @@ function attachStartFromSession(config) {
     log(`attach: respawned dead pane -> new supervisor pid=${panePid} (server-descended, attribution preserved)`)
   } else {
     log(`attach: adopting live pane supervisor pid=${panePid} (PIDFILE was stale/missing)`)
+  }
+  // Adopt-identity guard (design-0016 §Review card 1): a session named
+  // 'agent' on our socket is NOT proof the pane runs OUR supervisor. Without
+  // this check, a user's manual `tmux -L scheherazade new -s agent` decoy --
+  // or plain experimentation -- would be adopted here, and stop would then
+  // kill their shell. Same ps-signature check the PIDFILE-adopt path already
+  // runs (asymmetry closed). Also refuses the transient list-panes failure
+  // where panePid arrives null and String(null) would corrupt PIDFILE.
+  const pidValid = Number.isInteger(panePid) && panePid > 0
+  if (!pidValid) {
+    setAgentStatus('failed', 'bootstrap-needed',
+      `attach 세션은 있는데 pane pid를 읽지 못했습니다 (tmux 일시 오류일 수 있음). 앱을 다시 열어 재시도하거나 터미널에서 확인하세요: tmux -L ${attachTopology.ATTACH_SOCKET} list-panes -t ${attachTopology.ATTACH_SESSION}`)
+    return null
+  }
+  // A freshly respawned pane can still sit in its `sh -c` pre-exec window,
+  // where ps shows the quoted bootstrap string that the supervisor matcher
+  // deliberately rejects. Two short retries absorb that window without
+  // loosening the shared matcher for everyone else.
+  let identityOk = false
+  for (let attempt = 0; attempt < 3 && !identityOk; attempt++) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 200))
+    identityOk = isOurSupervisor(panePid)
+  }
+  if (!identityOk) {
+    setAgentStatus('failed', 'bootstrap-needed',
+      `attach 세션(${attachTopology.ATTACH_SESSION})의 pane(pid=${panePid})이 우리 supervisor 시그니처가 아닙니다. 터미널에서 세션을 정리한 뒤 부트스트랩을 다시 실행하세요: tmux -L ${attachTopology.ATTACH_SOCKET} kill-session -t ${attachTopology.ATTACH_SESSION}`)
+    return null
   }
   try {
     fs.writeFileSync(AGENT_PIDFILE, String(panePid))
