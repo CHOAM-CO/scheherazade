@@ -62,6 +62,21 @@ conventions live in its history — when in doubt, `git log` a similar change.
 - Design docs: `docs/design-NNNN-<slug>.md`, numbered, append-only
   (amendments go in dated sections, history stays).
 
+## Agent capability sync
+
+Add a feature that changes how the AGENT behaves at runtime (it uses it or
+must know it — sudo, a new tool, topology, channel/provider, restart)? You
+MUST also sync it into the agent's two instruction surfaces:
+`onboarding/templates/agent-system-prompt.md` (short, behavior-defining)
+and `CLAUDE.md` (usage detail). A capability the agent was never told about
+is how it misfires — 2026-07-23: sudo shipped with no agent-facing docs,
+the agent tried `sudo -n`, failed, and proposed a NOPASSWD self-escalation.
+
+Scope: agent BEHAVIOR only. Pure UI, onboarding flow, and build config
+don't belong in the prompt. MCP tools self-document via their own schema,
+and in-situ hooks self-explain when they fire — those earn a prompt line
+only if proactive awareness matters, not by default.
+
 ## Language
 
 - Code comments + docs: English. User-facing strings (UI, CLI output):
