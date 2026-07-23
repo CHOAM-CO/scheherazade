@@ -179,20 +179,23 @@ function findDmg() {
 
 function mountedAsarEntries() {
   const dmg = findDmg()
-  if (!dmg) return null
+  if (!dmg) return { status: 'no-dmg' } // predist: no artifact yet -- a legitimate skip
   const mnt = fs.mkdtempSync(path.join(os.tmpdir(), 'sch-dmg-closure-'))
   let attached = false
   try {
     execFileSync('hdiutil', ['attach', '-nobrowse', '-readonly', '-mountpoint', mnt, dmg], { stdio: 'pipe' })
     attached = true
     const asarPath = path.join(mnt, 'Scheherazade.app', 'Contents', 'Resources', 'app.asar')
-    if (!fs.existsSync(asarPath)) return null
+    if (!fs.existsSync(asarPath)) return { status: 'error', reason: 'app.asar absent inside the mounted dmg' }
     // listPackage yields '/onboarding/login-status.cjs' (leading slash, dirs
     // included); normalize to the ROOT-relative shape the closure produces.
     const entries = require('@electron/asar').listPackage(asarPath)
-    return new Set(entries.map((e) => e.replace(/^\/+/, '')))
-  } catch {
-    return null
+    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^\/+/, ''))) }
+  } catch (e) {
+    // A DMG that EXISTS but will not mount / list is fail-CLOSED, never a skip.
+    // (Skia fail-open catch: the old null-collapse let an hdiutil failure pass
+    // as SKIP + exit 0 -- an unverified artifact shipping green, the v0.0.23 class.)
+    return { status: 'error', reason: (e && e.message) || 'hdiutil/listPackage failed' }
   } finally {
     if (attached) { try { execFileSync('hdiutil', ['detach', mnt], { stdio: 'pipe' }) } catch {} }
     try { fs.rmSync(mnt, { recursive: true, force: true }) } catch {}
@@ -200,10 +203,17 @@ function mountedAsarEntries() {
 }
 
 console.log('\n-- the required graph vs the mounted DMG asar (blocker-1 closure gate)')
-const asarEntries = mountedAsarEntries()
-if (!asarEntries) {
-  console.log('  SKIP  DMG asar closure -- no release/*.dmg to mount (postdist mounts the freshly built one); NOT a pass')
+const asarResult = mountedAsarEntries()
+if (asarResult.status === 'no-dmg') {
+  console.log('  SKIP  DMG asar closure -- no release/*.dmg to mount (predist; postdist mounts the freshly built one); NOT a pass')
+} else if (asarResult.status === 'error') {
+  // fail-CLOSED: the dmg EXISTS but would not mount / list. A green skip here
+  // ships an UNVERIFIED artifact -- the v0.0.23 class, and exactly the fail-open
+  // Skia's fake-hdiutil vector exposed (hdiutil exit1 -> SKIP -> process exit 0).
+  ok('the built DMG mounts and its app.asar is listable', false,
+    `hdiutil/listPackage failed on an existing dmg: ${asarResult.reason}`)
 } else {
+  const asarEntries = asarResult.entries
   ok('the mounted asar listed something (an empty listing always passes)', asarEntries.size > 0)
   for (const m of [...rootModules].sort()) {
     ok(`${m} is a real member of the shipped app.asar (mounted DMG, not staging)`,
