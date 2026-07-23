@@ -21,8 +21,12 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import os from 'node:os'
+import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
 
+const require = createRequire(import.meta.url)
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
 
@@ -113,11 +117,31 @@ function rootModulesReferencedBy(file) {
   return [...found].map((spec) => path.normalize(path.join(fileDir, spec)))
 }
 
-const rootModules = new Set()
-for (const f of RUNTIME_ENTRYPOINTS) {
-  if (!fs.existsSync(path.join(ROOT, f))) continue
-  for (const m of rootModulesReferencedBy(f)) rootModules.add(m)
+// blocker-1 (Skia red-team 2026-07-23): the old scan walked ONE hop from the
+// fixed entrypoint list. A file an entrypoint requires that ITSELF requires a
+// missing module shipped 59-passed -- login-status.cjs -> nested-missing.cjs was
+// invisible to a 1-hop scan. Walk the WHOLE require graph; a visited-set
+// terminates cycles (A->B->A resolves instead of looping forever).
+function requireClosure(entrypoints) {
+  const visited = new Set()
+  const modules = new Set()
+  const queue = [...entrypoints]
+  while (queue.length) {
+    const file = queue.shift()
+    if (visited.has(file)) continue
+    visited.add(file)
+    // A dead require is caught by the existence check below; here we simply
+    // cannot recurse into a file that is not on disk.
+    if (!fs.existsSync(path.join(ROOT, file))) continue
+    for (const m of rootModulesReferencedBy(file)) {
+      modules.add(m)
+      if (!visited.has(m)) queue.push(m)
+    }
+  }
+  return modules
 }
+
+const rootModules = requireClosure(RUNTIME_ENTRYPOINTS)
 
 console.log(`\n-- relative modules required by entrypoints: ${[...rootModules].sort().join(', ') || '(none)'}`)
 for (const m of [...rootModules].sort()) {
@@ -132,6 +156,61 @@ for (const m of [...rootModules].sort()) {
 // The one that already burned us, named explicitly -- if the require regexes rot,
 // this line still holds (same principle as the autonomy/calendar anchors above).
 ok('attach-topology.cjs is caught by the root-module scan', rootModules.has('attach-topology.cjs'))
+
+// ── the required graph vs the ACTUAL shipped asar (mounted DMG, not staging) ──
+// Skia's sharpening (2026-07-23): re-checking source existence + build.files
+// coverage reproduces the staging illusion -- v0.0.23 was test-green yet its
+// app.asar was missing attach-topology.cjs. Existence-in-tree and pattern-
+// coverage are what the app WILL ship in theory; they are not what the DMG DID
+// ship. So mount the real DMG, list its app.asar, and prove every graph node is
+// a real member. Runs in postdist (the DMG exists); predist skips LOUDLY.
+function findDmg() {
+  const rel = path.join(ROOT, 'release')
+  if (!fs.existsSync(rel)) return null
+  const dmgs = fs.readdirSync(rel).filter((f) => f.startsWith('Scheherazade-') && f.endsWith('-arm64.dmg'))
+  if (!dmgs.length) return null
+  const exact = dmgs.find((f) => f === `Scheherazade-${pkg.version}-arm64.dmg`)
+  if (exact) return path.join(rel, exact)
+  // no version match: newest by mtime -- never string-sort ("0.0.25" < "0.0.9")
+  return path.join(rel, dmgs
+    .map((f) => ({ f, t: fs.statSync(path.join(rel, f)).mtimeMs }))
+    .sort((a, b) => b.t - a.t)[0].f)
+}
+
+function mountedAsarEntries() {
+  const dmg = findDmg()
+  if (!dmg) return null
+  const mnt = fs.mkdtempSync(path.join(os.tmpdir(), 'sch-dmg-closure-'))
+  let attached = false
+  try {
+    execFileSync('hdiutil', ['attach', '-nobrowse', '-readonly', '-mountpoint', mnt, dmg], { stdio: 'pipe' })
+    attached = true
+    const asarPath = path.join(mnt, 'Scheherazade.app', 'Contents', 'Resources', 'app.asar')
+    if (!fs.existsSync(asarPath)) return null
+    // listPackage yields '/onboarding/login-status.cjs' (leading slash, dirs
+    // included); normalize to the ROOT-relative shape the closure produces.
+    const entries = require('@electron/asar').listPackage(asarPath)
+    return new Set(entries.map((e) => e.replace(/^\/+/, '')))
+  } catch {
+    return null
+  } finally {
+    if (attached) { try { execFileSync('hdiutil', ['detach', mnt], { stdio: 'pipe' }) } catch {} }
+    try { fs.rmSync(mnt, { recursive: true, force: true }) } catch {}
+  }
+}
+
+console.log('\n-- the required graph vs the mounted DMG asar (blocker-1 closure gate)')
+const asarEntries = mountedAsarEntries()
+if (!asarEntries) {
+  console.log('  SKIP  DMG asar closure -- no release/*.dmg to mount (postdist mounts the freshly built one); NOT a pass')
+} else {
+  ok('the mounted asar listed something (an empty listing always passes)', asarEntries.size > 0)
+  for (const m of [...rootModules].sort()) {
+    ok(`${m} is a real member of the shipped app.asar (mounted DMG, not staging)`,
+      asarEntries.has(m),
+      'the require graph reaches it but the mounted DMG asar has no such entry -- dead require at open')
+  }
+}
 
 console.log('\n-- is it in the app at all? (build.files)')
 for (const d of [...referenced].sort()) {
