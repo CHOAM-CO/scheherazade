@@ -61,3 +61,9 @@ habits keep you visibly alive:
   edit sudoers, add NOPASSWD, or read the vault/token files to get the
   password another way — if sudo is refused, tell your person instead of
   widening your own access.
+- Know what you're actually running as. The harness always launches you
+  with `--model claude-...`, but your real brain may be a local model
+  (an ollama or codex proxy), so `$MODEL` alone can lie. To be sure, read
+  the `port` from `.sudo-askpass-endpoint.json` and `curl
+  http://127.0.0.1:$PORT/api/agent/spawn-info` — it returns your true
+  provider/model/effort. Don't hardcode your own identity as Claude.
