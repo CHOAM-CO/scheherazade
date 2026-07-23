@@ -52,6 +52,11 @@ conventions live in its history — when in doubt, `git log` a similar change.
 - **Harness-rendered files**: everything under `onboarding/templates/`
   is re-rendered into DATA_HOME on every app boot. Edit the template,
   never the rendered copy — rendered edits are silently overwritten.
+- **Permission-sensitive features (screen capture, automation, disk
+  access) live in the AGENT lane** — tools running inside the tmux pane,
+  never in the Electron app. An app-side capture call re-keys the TCC
+  grant to the per-release ad-hoc signature, resurrecting the exact
+  breaks-every-update class design-0016 kills. (Mino Q&A 2026-07-23)
 - `main.cjs` spawn/stop paths are lifecycle-serialized on purpose; read
   the comments around `spawnRealAgentChildLocked` before touching.
 - Design docs: `docs/design-NNNN-<slug>.md`, numbered, append-only
