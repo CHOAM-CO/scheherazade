@@ -666,6 +666,30 @@ function memoryDelete(db, args) {
 }
 
 // ── memory_recall_material: session-start helper, raw structured data ────
+//
+// Bloat advisory (Mino 2026-07-24): MAGI's markdown memory had no write-side
+// caps and regrew to pre-prune size within 1-3 months.  Scheherazade's DB
+// avoids the flat-file class of that problem, but row counts can still grow
+// unchecked (especially corrections, which had no LIMIT here until now).
+// Rather than a write-side gate (tried and abandoned in early MAGI for false
+// positives), this is a READ-SIDE advisory: total row counts are returned with
+// every recall, and when any table exceeds its threshold the agent gets a
+// one-line suggestion to ask the user about cleanup.  Advisory only -- never
+// blocking, never auto-deleting.
+// Provisional thresholds — tuned by gut, not by real usage data.  Adjust
+// after observing live patterns; open_threads_active is the likeliest false-
+// positive source (a user tracking 5+ life areas will sit near 15 routinely).
+const BLOAT_THRESHOLDS = {
+  user_facts: 50,
+  open_threads_active: 15,
+  corrections_active: 20,
+  preferences: 30,
+  memory_events: 500,
+}
+// Keep in sync: corrections_active threshold == recall limit, so the advisory
+// fires exactly when recall starts silently truncating older active corrections.
+const CORRECTIONS_RECALL_LIMIT = BLOAT_THRESHOLDS.corrections_active
+
 function memoryRecallMaterial(db, args) {
   const { session } = args || {}
   const open_threads = db
@@ -675,10 +699,34 @@ function memoryRecallMaterial(db, args) {
     .prepare(`SELECT * FROM user_facts ORDER BY last_confirmed_at DESC LIMIT 20`)
     .all()
   const corrections = db
-    .prepare(`SELECT * FROM corrections WHERE still_active = 1 ORDER BY corrected_at DESC`)
-    .all()
+    .prepare(`SELECT * FROM corrections WHERE still_active = 1 ORDER BY corrected_at DESC LIMIT ?`)
+    .all(CORRECTIONS_RECALL_LIMIT)
 
-  return { session: session ?? null, generated_at: nowISO(), open_threads, user_facts, corrections }
+  const counts = {
+    user_facts: db.prepare('SELECT COUNT(*) AS n FROM user_facts').get().n,
+    open_threads_active: db.prepare("SELECT COUNT(*) AS n FROM open_threads WHERE status = 'open'").get().n,
+    corrections_active: db.prepare('SELECT COUNT(*) AS n FROM corrections WHERE still_active = 1').get().n,
+    preferences: db.prepare('SELECT COUNT(*) AS n FROM preferences').get().n,
+    memory_events: db.prepare('SELECT COUNT(*) AS n FROM memory_events').get().n,
+  }
+
+  const over = Object.entries(counts).filter(([k, v]) => v > (BLOAT_THRESHOLDS[k] ?? Infinity))
+  const bloat_advisory = over.length > 0
+    ? {
+        oversized: Object.fromEntries(over.map(([k, v]) => [k, { count: v, threshold: BLOAT_THRESHOLDS[k] }])),
+        suggestion: 'Some memory tables are growing large. Ask the user if they want to review and clean up old entries (memory_query to list, memory_delete to remove stale ones).',
+      }
+    : null
+
+  return {
+    session: session ?? null,
+    generated_at: nowISO(),
+    open_threads,
+    user_facts,
+    corrections,
+    counts,
+    bloat_advisory,
+  }
 }
 
 // ── DB init ────────────────────────────────────────────────────────────
@@ -894,7 +942,7 @@ const TOOLS = [
   },
   {
     name: 'memory_recall_material',
-    description: 'Session-start helper. Returns top open threads (status=open, ordered by salience+recency) + recent user_facts + active corrections, as raw structured data (not phrased).',
+    description: 'Session-start helper. Returns top open threads (status=open, ordered by salience+recency) + recent user_facts + active corrections (capped at 20) + total row counts per table. Includes a bloat_advisory when any table exceeds its size threshold.',
     inputSchema: {
       type: 'object',
       properties: {
