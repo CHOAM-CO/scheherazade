@@ -37,16 +37,13 @@ const ATTACH_SESSION = 'agent'
 
 // Verbs that cannot create a tmux server (all error with "no server running"
 // on a dead socket). Anything not listed here throws before reaching tmux.
+// Trimmed to call-site-verified set (design-0016 card 3).
 const SAFE_VERBS = new Set([
   'has-session',
   'list-panes',
-  'list-sessions',
   'display-message',
   'respawn-pane',
   'pipe-pane',
-  'set-option',
-  'kill-session',
-  'send-keys',
 ])
 
 // Fixed locations first: a packaged Electron app's PATH is the launchd
@@ -126,7 +123,8 @@ function respawnAttachPane({ logFile }) {
   const respawn = tmuxIpc(['respawn-pane', '-t', ATTACH_SESSION])
   if (!respawn.ok) return { ok: false, error: `respawn-pane failed: ${respawn.stderr.trim()}` }
   if (logFile) {
-    const pipe = tmuxIpc(['pipe-pane', '-o', '-t', ATTACH_SESSION, `cat >> '${logFile}'`])
+    const escaped = logFile.replace(/'/g, "'\\''")
+    const pipe = tmuxIpc(['pipe-pane', '-o', '-t', ATTACH_SESSION, `cat >> '${escaped}'`])
     if (!pipe.ok) return { ok: false, error: `pipe-pane failed after respawn: ${pipe.stderr.trim()}` }
   }
   const disp = tmuxIpc(['display-message', '-p', '-t', ATTACH_SESSION, '#{pane_pid}'])

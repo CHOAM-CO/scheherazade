@@ -3680,8 +3680,8 @@ function createOnboardingServer(onOnboardingComplete, agentControls) {
       try {
         askpassToken = crypto.randomBytes(32).toString('hex')
         const epPath = path.join(DATA_HOME, '.sudo-askpass-endpoint.json')
+        try { fs.unlinkSync(epPath) } catch { /* absent = first boot */ }
         fs.writeFileSync(epPath, JSON.stringify({ port, token: askpassToken }) + '\n', { mode: 0o600 })
-        fs.chmodSync(epPath, 0o600) // writeFileSync mode is ignored if the file already existed
       } catch (err) {
         askpassToken = null // fail closed: no token file -> endpoint refuses everything
         console.error('[scheherazade/onboarding] failed to write sudo-askpass endpoint file (sudo -A disabled this boot):', err.message)

@@ -3,8 +3,7 @@
 Working agreement for this repo. Short on purpose; the repo's real
 conventions live in its history — when in doubt, `git log` a similar change.
 
-> Status: DRAFT (2026-07-22, Idea). PR-flow section awaits input from
-> 은호 + Mino. File a PR against this file to change the rules themselves.
+> File a PR against this file to change the rules themselves.
 
 ## Trunk
 
@@ -37,7 +36,7 @@ conventions live in its history — when in doubt, `git log` a similar change.
   (docs/design-0016-attach-topology.md §Invariant — read that doc first,
   it is the architecture's heart).
 
-## PR flow (PROPOSAL — settle with 은호/Mino, then delete this label)
+## PR flow
 
 - Solo runs on a feature branch: push freely, no ceremony.
 - **Merging to `master` goes through a PR** once there is more than one
