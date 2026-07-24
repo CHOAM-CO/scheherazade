@@ -5,7 +5,7 @@
       "args": [
         "./channel.mjs"
       ],
-      "cwd": "/Users/narr/Desktop/scheherazade",
+      "cwd": ".",
       "env": {
         "AGENT_NAME": "scheherazade"
       }
@@ -15,7 +15,7 @@
       "args": [
         "./memory/server.mjs"
       ],
-      "cwd": "/Users/narr/Desktop/scheherazade",
+      "cwd": ".",
       "env": {
         "AGENT_NAME": "scheherazade"
       }

@@ -6,8 +6,8 @@ process.env.AGENT_DATA_HOME = tmp
 process.env.SCHEHERAZADE_MEMORY_DB = path.join(tmp, 'memory.db')
 
 ;(async () => {
-  const { createOnboardingServer } = require('/Users/narr/Desktop/scheherazade/onboarding/http-server.cjs')
-  const memmod = await import('/Users/narr/Desktop/scheherazade/memory/server.mjs')
+  const { createOnboardingServer } = require(path.join(__dirname, '..', 'onboarding', 'http-server.cjs'))
+  const memmod = await import(new URL(path.join(__dirname, '..', 'memory', 'server.mjs'), 'file:').href)
   const db = memmod.initDb()
   memmod.journalWrite(db, { date: '2026-07-12', body: '어제의 나' })
   memmod.journalWrite(db, { date: '2026-07-13', body: '<img src=x onerror=alert(1)>' })
