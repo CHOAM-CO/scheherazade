@@ -89,7 +89,14 @@
 
   async function init() {
     $('set-title').textContent = C.title
-    $('set-back-link').textContent = C.backToMemory
+    // Three group headings (IA pass 2026-07-25) -- see settings.html.
+    // Fallbacks for the same reason waiting.js carries them: a missing key
+    // here collapses a group heading to empty space, which reads as a layout
+    // bug rather than a copy bug and is much harder to trace back.
+    $('set-group-agent').textContent = C.groupAgent || 'Agent'
+    $('set-group-engine').textContent = C.groupEngine || 'Engine'
+    $('set-group-system').textContent = C.groupSystem || 'System'
+    $('set-signin-link').textContent = C.signinLink || 'Manage sign-ins'
     $('set-rename-label').textContent = C.renameLabel
     $('set-rename-save').textContent = C.renameButton
 

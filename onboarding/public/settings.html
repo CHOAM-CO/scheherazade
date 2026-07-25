@@ -1,180 +1,218 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Scheherazade — 설정</title>
+    <title>Scheherazade — Settings</title>
     <link rel="stylesheet" href="/css/app.css" />
   </head>
   <body>
     <div class="page-shell">
       <div id="app-nav"></div>
 
+      <!-- No back-link here (IA pass 2026-07-25). Every page already carries
+           the nav.js tab bar, and a "back to memory" link implied a hierarchy
+           that does not exist -- memory is not this page's parent, it is a
+           sibling tab. Removed from settings/channels/connectors/logs alike. -->
       <div class="page-header">
         <h1 id="set-title"></h1>
-        <div class="page-nav">
-          <a href="/memory" id="set-back-link"></a>
-        </div>
       </div>
 
-      <div class="field">
-        <label id="set-rename-label"></label>
-        <input type="text" id="set-rename-input" />
-        <div class="field-hint hidden" id="set-rename-status"></div>
-      </div>
-      <div class="step-actions">
-        <span></span>
-        <button id="set-rename-save"></button>
-      </div>
+      <!-- THREE GROUPS (IA pass 2026-07-25). The page previously ran seven
+           flat blocks in the order rename -> model -> proxy -> autonomy ->
+           topology -> sudo -> permissions, interleaving three different kinds
+           of thing, which is what made it read as a junk drawer. The grouping
+           below is the organizing question each block answers:
+             AGENT   -- who is this agent and what does it do on its own
+             ENGINE  -- what powers it
+             SYSTEM  -- what it is allowed to do on this Mac
+           Category ids and every control id are UNCHANGED; settings.js binds
+           by id and must keep working untouched. -->
 
-      <!-- Agent model/effort config (moved from memory.html's agent control
-           panel, subpage split 2026-07-14). SELECT-driven config half; the
-           read-only status display half lives in the nav.js shell above. -->
-      <div class="category" style="margin-top: 2.5rem" id="set-agent-config">
-        <div class="category-label" id="set-agent-config-label"></div>
-        <div class="agent-control-row">
-          <label for="set-model-select" id="set-model-label"></label>
-          <select id="set-model-select"></select>
-        </div>
-        <div class="agent-control-row">
-          <label for="set-effort-select" id="set-effort-label"></label>
-          <select id="set-effort-select"></select>
-        </div>
-        <!-- Apply-state line (IA v0.0.9): explains any gap between these
-             selects (intent) and the running child (reality). A spawn
-             refused by the proxy model-receipt gate surfaces its reason
-             here, next to the picker that caused it. -->
-        <div class="field-hint" id="set-apply-state"></div>
-      </div>
+      <!-- ── AGENT ───────────────────────────────────────────────────────── -->
+      <section class="settings-group">
+        <h2 class="settings-group-label" id="set-group-agent"></h2>
 
-      <!-- Custom provider (generic OpenAI-compatible proxy, 2026-07-25).
-           Settings-page-only, like claude-subscription/chatgpt/ollama before
-           it (see http-server.cjs's ROUTER_WIRED comment) -- there is no
-           onboarding-wizard tab for this. Always visible (same convention as
-           every other category on this page), not gated on the current
-           provider: switching TO custom and editing an already-custom
-           install's fields share this one form. Its own status/save pair
-           (not the shared set-apply-state line above, which only settles
-           AFTER a restart is already in flight). -->
-      <div class="category" style="margin-top: 2.5rem" id="set-custom">
-        <div class="category-label" id="set-custom-label"></div>
-        <p class="subtitle" id="set-custom-note"></p>
-        <div class="agent-control-row">
-          <label for="set-custom-preset-select" id="set-custom-preset-label"></label>
-          <select id="set-custom-preset-select"></select>
-        </div>
-        <div class="agent-control-row">
-          <label for="set-custom-url-input" id="set-custom-url-label"></label>
-          <input type="text" id="set-custom-url-input" placeholder="http://localhost:18080" />
-        </div>
-        <div class="agent-control-row">
-          <label for="set-custom-key-input" id="set-custom-key-label"></label>
-          <input type="password" id="set-custom-key-input" autocomplete="off" />
-        </div>
-        <div class="agent-control-row">
-          <label for="set-custom-model-input" id="set-custom-model-label"></label>
-          <input type="text" id="set-custom-model-input" />
-        </div>
-        <div class="step-actions">
-          <span class="field-hint hidden" id="set-custom-status"></span>
-          <button id="set-custom-save"></button>
-        </div>
-      </div>
-
-      <!-- Autonomous cycle (v0.0.6). The only setting on this page that spends
-           the user's subscription while they are not watching, so it carries
-           its cost note ABOVE the switch, ships OFF, and shows today's real
-           token count next to the cap it is enforced against. -->
-      <div class="category" style="margin-top: 2.5rem" id="set-autonomy">
-        <div class="category-label" id="set-autonomy-label"></div>
-        <p class="subtitle" id="set-autonomy-note"></p>
-
-        <div class="agent-control-row">
-          <label for="set-autonomy-enabled" id="set-autonomy-enabled-label"></label>
-          <input type="checkbox" id="set-autonomy-enabled" />
-        </div>
-
-        <div class="agent-control-row">
-          <label for="set-autonomy-start" id="set-autonomy-window-label"></label>
-          <span>
-            <input type="text" id="set-autonomy-start" size="5" placeholder="02:00" />
-            <input type="text" id="set-autonomy-end" size="5" placeholder="06:00" />
-          </span>
-        </div>
-        <div class="field-hint" id="set-autonomy-window-note"></div>
-
-        <div class="agent-control-row">
-          <label for="set-autonomy-cap" id="set-autonomy-cap-label"></label>
-          <input type="text" id="set-autonomy-cap" size="12" inputmode="numeric" />
-        </div>
-        <div class="field-hint" id="set-autonomy-cap-note"></div>
-
-        <div class="status-line" id="set-autonomy-usage"></div>
-        <div class="status-line" id="set-autonomy-last"></div>
-
-        <div class="step-actions">
-          <span class="field-hint hidden" id="set-autonomy-status"></span>
-          <button id="set-autonomy-save"></button>
-        </div>
-      </div>
-
-      <!-- Attach topology (0.1.0 prep, design-0016). The one setting that
-           changes WHO owns the agent process. Bootstrap must run in the
-           user's own terminal (TCC attribution) -- the card below hands out
-           the exact line, the app never runs it. -->
-      <div class="category" style="margin-top: 2.5rem" id="set-topology">
-        <div class="category-label" id="set-topology-label"></div>
-        <p class="subtitle" id="set-topology-note"></p>
-        <div class="agent-control-row">
-          <label for="set-topology-select" id="set-topology-select-label"></label>
-          <select id="set-topology-select"></select>
-        </div>
-        <div class="field-hint" id="set-topology-state"></div>
-        <div class="field hidden" id="set-topology-bootstrap-card">
-          <div class="field-hint" id="set-topology-bootstrap-why"></div>
-          <input type="text" id="set-topology-bootstrap-cmd" readonly />
+        <div class="category" id="set-identity">
+          <div class="agent-control-row">
+            <label for="set-rename-input" id="set-rename-label"></label>
+            <input type="text" id="set-rename-input" />
+          </div>
+          <div class="agent-control-hint hidden" id="set-rename-status"></div>
           <div class="step-actions">
-            <span></span>
-            <button class="secondary" id="set-topology-bootstrap-copy"></button>
+            <button id="set-rename-save"></button>
           </div>
         </div>
-        <div class="step-actions">
-          <span class="field-hint hidden" id="set-topology-status"></span>
-          <button id="set-topology-save"></button>
-        </div>
-      </div>
 
-      <!-- sudo askpass (0.1.0 prep, P4 spec). Ships OFF. The password field
-           is write-only: the page never reads the stored value back, only
-           whether one exists. -->
-      <div class="category" style="margin-top: 2.5rem" id="set-sudo">
-        <div class="category-label" id="set-sudo-label"></div>
-        <p class="subtitle" id="set-sudo-note"></p>
-        <div class="agent-control-row">
-          <label for="set-sudo-enabled" id="set-sudo-enabled-label"></label>
-          <input type="checkbox" id="set-sudo-enabled" />
-        </div>
-        <div class="agent-control-row">
-          <label for="set-sudo-password" id="set-sudo-password-label"></label>
-          <input type="password" id="set-sudo-password" autocomplete="off" />
-        </div>
-        <div class="field-hint" id="set-sudo-state"></div>
-        <div class="step-actions">
-          <span class="field-hint hidden" id="set-sudo-status"></span>
-          <button id="set-sudo-save"></button>
-        </div>
-      </div>
+        <!-- Autonomous cycle (v0.0.6). The only setting on this page that
+             spends the user's subscription while they are not watching, so it
+             carries its cost note ABOVE the switch, ships OFF, and shows
+             today's real token count next to the cap it is enforced against. -->
+        <div class="category" id="set-autonomy">
+          <div class="category-label" id="set-autonomy-label"></div>
+          <p class="subtitle" id="set-autonomy-note"></p>
 
-      <!-- Permission checklist (P0, 2026-07-15 — docs/permission-visibility-
-           design.md). Shows the macOS wall map BEFORE the agent hits walls
-           mid-task. Rows render from /api/permissions/status; probes that
-           cannot measure say so (❓) instead of pretending ✅/❌. -->
-      <div class="category" style="margin-top: 2.5rem" id="set-perms">
-        <div class="category-label" id="set-perms-label"></div>
-        <p class="subtitle" id="set-perms-note"></p>
-        <div id="set-perms-rows"></div>
-        <div class="field-hint hidden" id="set-perms-relaunch"></div>
-      </div>
+          <div class="agent-control-row">
+            <label for="set-autonomy-enabled" id="set-autonomy-enabled-label"></label>
+            <input type="checkbox" id="set-autonomy-enabled" />
+          </div>
+
+          <div class="agent-control-row">
+            <label for="set-autonomy-start" id="set-autonomy-window-label"></label>
+            <span class="control-pair">
+              <input type="text" id="set-autonomy-start" placeholder="02:00" />
+              <span class="control-pair-sep">to</span>
+              <input type="text" id="set-autonomy-end" placeholder="06:00" />
+            </span>
+          </div>
+          <div class="agent-control-hint" id="set-autonomy-window-note"></div>
+
+          <div class="agent-control-row">
+            <label for="set-autonomy-cap" id="set-autonomy-cap-label"></label>
+            <input type="text" id="set-autonomy-cap" inputmode="numeric" />
+          </div>
+          <div class="agent-control-hint" id="set-autonomy-cap-note"></div>
+
+          <div class="status-line" id="set-autonomy-usage"></div>
+          <div class="status-line" id="set-autonomy-last"></div>
+
+          <div class="step-actions">
+            <span class="field-hint hidden" id="set-autonomy-status"></span>
+            <button id="set-autonomy-save"></button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── ENGINE ──────────────────────────────────────────────────────── -->
+      <section class="settings-group">
+        <h2 class="settings-group-label" id="set-group-engine"></h2>
+
+        <!-- Agent model/effort config (moved from memory.html's agent control
+             panel, subpage split 2026-07-14). SELECT-driven config half; the
+             read-only status display half lives in the nav.js shell above. -->
+        <div class="category" id="set-agent-config">
+          <div class="category-label" id="set-agent-config-label"></div>
+          <div class="agent-control-row">
+            <label for="set-model-select" id="set-model-label"></label>
+            <select id="set-model-select"></select>
+          </div>
+          <div class="agent-control-row">
+            <label for="set-effort-select" id="set-effort-label"></label>
+            <select id="set-effort-select"></select>
+          </div>
+          <!-- Apply-state line (IA v0.0.9): explains any gap between these
+               selects (intent) and the running child (reality). A spawn
+               refused by the proxy model-receipt gate surfaces its reason
+               here, next to the picker that caused it. -->
+          <div class="agent-control-hint" id="set-apply-state"></div>
+          <!-- Sign-in pointer (IA pass 2026-07-25). The keys that make models
+               selectable live on the connectors page, so picking a model and
+               authorising it were two tabs apart with nothing linking them --
+               connectors' own subtitle was documenting the split in prose.
+               A one-line pointer costs nothing and removes the guess; the
+               fuller fix (folding sign-ins into this group) is deferred until
+               the usability test says whether it is worth the move. -->
+          <div class="agent-control-hint">
+            <a href="/connectors" id="set-signin-link"></a>
+          </div>
+        </div>
+
+        <!-- Custom provider (generic OpenAI-compatible proxy, 2026-07-25).
+             Settings-page-only, like claude-subscription/chatgpt/ollama before
+             it (see http-server.cjs's ROUTER_WIRED comment) -- there is no
+             onboarding-wizard tab for this. Always visible (same convention as
+             every other category on this page), not gated on the current
+             provider: switching TO custom and editing an already-custom
+             install's fields share this one form. Its own status/save pair
+             (not the shared set-apply-state line above, which only settles
+             AFTER a restart is already in flight). -->
+        <div class="category" id="set-custom">
+          <div class="category-label" id="set-custom-label"></div>
+          <p class="subtitle" id="set-custom-note"></p>
+          <div class="agent-control-row">
+            <label for="set-custom-preset-select" id="set-custom-preset-label"></label>
+            <select id="set-custom-preset-select"></select>
+          </div>
+          <div class="agent-control-row">
+            <label for="set-custom-url-input" id="set-custom-url-label"></label>
+            <input type="text" id="set-custom-url-input" placeholder="http://localhost:18080" />
+          </div>
+          <div class="agent-control-row">
+            <label for="set-custom-key-input" id="set-custom-key-label"></label>
+            <input type="password" id="set-custom-key-input" autocomplete="off" />
+          </div>
+          <div class="agent-control-row">
+            <label for="set-custom-model-input" id="set-custom-model-label"></label>
+            <input type="text" id="set-custom-model-input" />
+          </div>
+          <div class="step-actions">
+            <span class="field-hint hidden" id="set-custom-status"></span>
+            <button id="set-custom-save"></button>
+          </div>
+        </div>
+
+        <!-- Attach topology (0.1.0 prep, design-0016). The one setting that
+             changes WHO owns the agent process. Bootstrap must run in the
+             user's own terminal (TCC attribution) -- the card below hands out
+             the exact line, the app never runs it. -->
+        <div class="category" id="set-topology">
+          <div class="category-label" id="set-topology-label"></div>
+          <p class="subtitle" id="set-topology-note"></p>
+          <div class="agent-control-row">
+            <label for="set-topology-select" id="set-topology-select-label"></label>
+            <select id="set-topology-select"></select>
+          </div>
+          <div class="agent-control-hint" id="set-topology-state"></div>
+          <div class="field hidden" id="set-topology-bootstrap-card">
+            <div class="field-hint" id="set-topology-bootstrap-why"></div>
+            <input type="text" id="set-topology-bootstrap-cmd" readonly />
+            <div class="step-actions">
+              <button class="secondary" id="set-topology-bootstrap-copy"></button>
+            </div>
+          </div>
+          <div class="step-actions">
+            <span class="field-hint hidden" id="set-topology-status"></span>
+            <button id="set-topology-save"></button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── SYSTEM ──────────────────────────────────────────────────────── -->
+      <section class="settings-group">
+        <h2 class="settings-group-label" id="set-group-system"></h2>
+
+        <!-- sudo askpass (0.1.0 prep, P4 spec). Ships OFF. The password field
+             is write-only: the page never reads the stored value back, only
+             whether one exists. -->
+        <div class="category" id="set-sudo">
+          <div class="category-label" id="set-sudo-label"></div>
+          <p class="subtitle" id="set-sudo-note"></p>
+          <div class="agent-control-row">
+            <label for="set-sudo-enabled" id="set-sudo-enabled-label"></label>
+            <input type="checkbox" id="set-sudo-enabled" />
+          </div>
+          <div class="agent-control-row">
+            <label for="set-sudo-password" id="set-sudo-password-label"></label>
+            <input type="password" id="set-sudo-password" autocomplete="off" />
+          </div>
+          <div class="agent-control-hint" id="set-sudo-state"></div>
+          <div class="step-actions">
+            <span class="field-hint hidden" id="set-sudo-status"></span>
+            <button id="set-sudo-save"></button>
+          </div>
+        </div>
+
+        <!-- Permission checklist (P0, 2026-07-15 — docs/permission-visibility-
+             design.md). Shows the macOS wall map BEFORE the agent hits walls
+             mid-task. Rows render from /api/permissions/status; probes that
+             cannot measure say so (❓) instead of pretending ✅/❌. -->
+        <div class="category" id="set-perms">
+          <div class="category-label" id="set-perms-label"></div>
+          <p class="subtitle" id="set-perms-note"></p>
+          <div id="set-perms-rows"></div>
+          <div class="field-hint hidden" id="set-perms-relaunch"></div>
+        </div>
+      </section>
     </div>
 
     <div class="toast" id="set-toast"></div>

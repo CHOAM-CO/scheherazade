@@ -66,23 +66,23 @@
   const ROW_FORMATTERS = {
     user_facts: (row) => ({
       value: row.value,
-      meta: `알게 된 날 ${isoDate(row.created_at)} · 마지막 확인 ${isoDate(row.last_confirmed_at)}`,
+      meta: `Learned ${isoDate(row.created_at)} · Last confirmed ${isoDate(row.last_confirmed_at)}`,
     }),
     open_threads: (row) => ({
       value: row.summary,
-      meta: `시작 ${isoDate(row.opened_at)} · ${threadStatusLabel(row)}`,
+      meta: `Started ${isoDate(row.opened_at)} · ${threadStatusLabel(row)}`,
     }),
     corrections: (row) => ({
-      value: `${row.what_was_wrong} → 이제 ${row.correct_behavior}`,
+      value: `${row.what_was_wrong} → now ${row.correct_behavior}`,
       meta: isoDate(row.corrected_at),
     }),
     preferences: (row) => ({
       value: `${C.prefKeyLabels[row.key] || row.key}: ${prefValueLabel(row.value)}`,
-      meta: `바뀐 날 ${isoDate(row.updated_at)}`,
+      meta: `Changed ${isoDate(row.updated_at)}`,
     }),
   }
 
-  let displayName = '세헤라자드'
+  let displayName = 'Scheherazade'
 
   async function loadCategory(table) {
     const container = $(`cat-${table}-entries`)
@@ -193,26 +193,26 @@
   // headings, and never enters a credential path -- if we claim that, the copy
   // has to be plain enough that the claim is checkable.
   const POINTERS_COPY = {
-    label: '다른 도구의 메모리 (위치만)',
-    intro: '다른 AI 도구가 이 Mac에 남긴 메모리 파일의 "위치"를 찾아 목록으로 둡니다. 내용을 복사해 오지 않고, 제 기억에 섞지도 않습니다. 로그인 정보가 있는 경로는 스캔 대상에서 원천 제외됩니다.',
-    scan: '지금 찾아보기',
-    clear: '목록 비우기',
-    scanning: '찾는 중…',
+    label: "Other tools' memory (locations only)",
+    intro: "Finds the locations of memory files other AI tools left on this Mac, and lists them. It doesn't copy the contents, and doesn't mix them into its own memory. Paths that contain login credentials are excluded from scanning entirely.",
+    scan: 'Scan now',
+    clear: 'Clear list',
+    scanning: 'Scanning…',
     // Truncation is stated, never silent: a capped list that reads as complete
     // is a lie the user has no way to detect.
     scanned: (n, truncated) => (truncated
-      ? `${n}개를 찾았습니다 (상한에 걸려 일부만 표시됩니다).`
-      : `${n}개를 찾았습니다.`),
-    cleared: '목록을 비웠습니다.',
-    empty: '아직 찾아본 적이 없습니다.',
-    clearConfirm: '이 목록을 전부 비울까요?',
-    clearOk: '비우기',
-    coverage: (label, found, note) => `${label}: ${found}개 — ${note}`,
+      ? `Found ${n} (capped — only some are shown).`
+      : `Found ${n}.`),
+    cleared: 'List cleared.',
+    empty: 'Nothing scanned yet.',
+    clearConfirm: 'Clear this whole list?',
+    clearOk: 'Clear',
+    coverage: (label, found, note) => `${label}: ${found} — ${note}`,
     // A heading we refused to keep because it looked like a credential. Silence
     // here would be the same bug in a friendlier coat: the user would never learn
     // that we ate a label, and could not tell a caught key from an over-strict
     // filter. Zero is normal, so this line only appears when it isn't zero.
-    suppressed: (n) => `제목 ${n}개는 열쇠처럼 보여서 목록에 담지 않았습니다 (파일 위치는 그대로 있습니다).`,
+    suppressed: (n) => `${n} heading(s) looked like a credential, so they were left out of the list (the file's location is still kept).`,
   }
 
   async function init() {
@@ -257,17 +257,17 @@
   // The journal (v0.0.5). The four tables below are what the agent knows ABOUT
   // the user; this is what its days were like. It sits first for that reason.
   const JOURNAL_COPY = {
-    label: '일지',
-    intro: '에이전트가 하루의 끝에 스스로 쓴 기록입니다. 요약이 아니라 그날의 이야기예요. 한 번 쓴 줄은 고칠 수 없고, 지울 수 있는 건 회원님뿐입니다.',
-    empty: '아직 쓴 일지가 없습니다.',
+    label: 'Journal',
+    intro: "What the agent writes for itself at the end of each day. It's the day's story, not a summary. A line, once written, can't be edited — only you can delete it.",
+    empty: 'No journal entries yet.',
     // A gap is stated, never hidden. "The agent ran that day and wrote nothing"
     // and "nothing happened that day" are different facts, and only one of them
     // is a bug -- so the user gets to tell them apart.
-    gaps: (n) => `기록이 비어있는 날이 ${n}일 있습니다 (에이전트는 그날 켜져 있었지만 아무것도 쓰지 않았어요).`,
-    del: '이 날 지우기',
-    delConfirm: (d) => `${d} 일지를 지울까요? 되돌릴 수 없습니다.`,
-    delOk: '지우기',
-    deleted: '지웠습니다.',
+    gaps: (n) => `${n} day(s) have no entry (the agent was running that day but wrote nothing).`,
+    del: 'Delete this day',
+    delConfirm: (d) => `Delete the ${d} entry? This can't be undone.`,
+    delOk: 'Delete',
+    deleted: 'Deleted.',
   }
 
   async function renderJournal() {
@@ -284,7 +284,7 @@
       data = await api('/api/journal')
     } catch (err) {
       // Fail loud: an unreachable journal must not render as an empty one.
-      statusEl.textContent = `일지를 불러오지 못했습니다 (${err.message}).`
+      statusEl.textContent = `Couldn't load the journal (${err.message}).`
       return
     }
 
@@ -323,7 +323,7 @@
           await renderJournal()
         } catch (err) {
           del.disabled = false
-          showToast(`실패: ${err.message}`)
+          showToast(`Failed: ${err.message}`)
         }
       })
       head.appendChild(del)

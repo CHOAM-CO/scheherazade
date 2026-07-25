@@ -266,7 +266,6 @@
 
   async function init() {
     $('conn-title').textContent = C.title
-    $('conn-back-link').textContent = C.backToMemory
 
     let cfg = {}
     try { cfg = await api('/api/config') } catch (err) { console.error(err) }

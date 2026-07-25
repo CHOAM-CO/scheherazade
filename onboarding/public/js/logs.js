@@ -28,7 +28,6 @@
 
   function setStatics() {
     $('lg-title').textContent = L.title
-    $('lg-back-link').textContent = L.backToMemory
     $('lg-subtitle').textContent = L.subtitle
     $('lg-copy').textContent = L.copyButton
     $('lg-follow-label').textContent = L.followOn

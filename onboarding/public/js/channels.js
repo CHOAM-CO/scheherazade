@@ -417,7 +417,6 @@
   document.addEventListener('DOMContentLoaded', async () => {
     $('ch-title').textContent = C.title
     $('ch-subtitle').textContent = C.subtitle
-    $('ch-back-link').textContent = window.COPY.connectors.backToMemory
     initDiscordReconnect()
     initTelegramConnect()
     initSlackConnect()

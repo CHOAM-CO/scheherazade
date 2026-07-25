@@ -13,7 +13,7 @@
   }
 
   async function init() {
-    let displayName = '세헤라자드'
+    let displayName = 'Scheherazade'
     try {
       const cfg = await api('/api/config')
       displayName = cfg.DISPLAY_NAME || displayName
@@ -26,6 +26,18 @@
     $('w-resume').onclick = () => {
       window.location.href = '/?step=4'
     }
+    // See waiting.html's comment: this screen had no route to the rest of
+    // the app at all.
+    //
+    // The `||` fallbacks are not defensive noise. A missing copy key here
+    // renders a BLANK button -- not a visibly broken one, an invisible one
+    // that still navigates when clicked (caught exactly this way during the
+    // 2026-07-25 pass, before the keys landed). A wrong-but-present label is
+    // a bug someone reports; a blank one is a bug nobody can describe.
+    $('w-settings').textContent = C.openSettings || 'Settings'
+    $('w-settings').onclick = () => { window.location.href = '/settings' }
+    $('w-logs').textContent = C.openLogs || 'Logs'
+    $('w-logs').onclick = () => { window.location.href = '/logs' }
   }
 
   init()

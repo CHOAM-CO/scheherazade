@@ -17,6 +17,10 @@
   --success: #5fae7c;
   --radius: 10px;
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  /* One label column width for every settings row on every page. Defined
+     once so the control column can never drift apart again (alignment pass
+     2026-07-25). */
+  --label-col: 9rem;
 }
 
 * { box-sizing: border-box; }
@@ -112,8 +116,18 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 0.75rem;
   margin-top: 1.75rem;
 }
+/* space-between alone made the primary action JUMP (alignment pass
+   2026-07-25). Settings rows pair a status <span class="field-hint hidden">
+   with a save button; while the status is hidden (display:none) the button
+   is the row's only child, so space-between parked it at the LEFT edge --
+   then it snapped to the right the instant a status message appeared. Every
+   save on the page moved its own button mid-interaction. Pushing the last
+   child right is stable in both states, and still reproduces the wizard's
+   back/next split (first child left, last child right). */
+.step-actions > *:last-child { margin-left: auto; }
 
 .button-row { display: flex; gap: 0.6rem; }
 
@@ -219,7 +233,38 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   margin-bottom: 0.6rem;
 }
 
-/* Agent control panel (Slice 2, 2026-07-09) */
+/* Settings groups (IA pass 2026-07-25). One level ABOVE .category, so the
+   settings page reads as three answers (who the agent is / what powers it /
+   what it may do here) instead of seven equal-weight blocks. The rule is the
+   group boundary -- categories inside a group sit closer together than the
+   groups do, which is the whole point: spacing has to carry the grouping or
+   the headings are decoration. */
+.settings-group {
+  margin-top: 2.75rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+}
+.settings-group:first-of-type {
+  margin-top: 1.5rem;
+  padding-top: 0;
+  border-top: none;
+}
+.settings-group-label {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--fg);
+  margin: 0 0 1.5rem;
+}
+.settings-group .category { margin-bottom: 1.75rem; }
+.settings-group .category:last-child { margin-bottom: 0; }
+
+/* Agent control panel (Slice 2, 2026-07-09)
+   FIXED LABEL COLUMN (alignment pass 2026-07-25). Previously the label was
+   `white-space: nowrap` at its natural width, so every row's control started
+   at a different x -- the control column was ragged down the whole settings
+   page, and the raggedness changed with the label text (i.e. it would shift
+   again on translation). The label now occupies a fixed column so every
+   select/input in every category shares one left edge. */
 .agent-control-row {
   display: flex;
   align-items: center;
@@ -227,12 +272,22 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   margin: 0.75rem 0;
 }
 .agent-control-row label {
+  flex: 0 0 var(--label-col);
   font-size: 0.85rem;
   color: var(--fg-dim);
-  white-space: nowrap;
+  line-height: 1.35;
 }
-.agent-control-row select {
-  flex: 1;
+/* Inputs and selects are styled identically here on purpose: the base
+   `input { width: 100% }` rule and `select { flex: 1 }` resolved to
+   different widths inside a flex row, so text rows and dropdown rows did
+   not line up with each other even when their labels matched. min-width:0
+   lets them actually shrink instead of overflowing the row. */
+.agent-control-row select,
+.agent-control-row input[type="text"],
+.agent-control-row input[type="password"] {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
   font-family: inherit;
   font-size: 0.95rem;
   padding: 0.55rem 0.7rem;
@@ -243,9 +298,58 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 }
 .agent-control-row select:focus { outline: none; border-color: var(--accent); }
 .agent-control-row select:disabled { opacity: 0.5; cursor: default; }
+/* A checkbox must NOT stretch to the control column's full width -- it sits
+   at the column's left edge, same x as every text control's left edge. */
+.agent-control-row input[type="checkbox"] {
+  flex: 0 0 auto;
+  margin: 0;
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--accent);
+}
+/* Time-window rows carry two inputs; they share the control column rather
+   than each claiming a full row, so the column's left and right edges stay
+   the same as every single-control row above and below. */
+.agent-control-row .control-pair {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.agent-control-row .control-pair input { flex: 1 1 0; min-width: 0; }
+.agent-control-row .control-pair .control-pair-sep { color: var(--fg-faint); font-size: 0.85rem; }
+/* Hints belong under the control, not under the label -- otherwise they
+   start at the page's left edge while the thing they describe starts a
+   whole column over. */
+.agent-control-hint {
+  margin-left: calc(var(--label-col) + 0.75rem);
+  font-size: 0.78rem;
+  color: var(--fg-faint);
+  margin-top: -0.35rem;
+  margin-bottom: 0.75rem;
+}
+/* A pointer to another page is still a hint, not a call to action -- the
+   default UA link blue read louder than the setting it sits under. */
+.agent-control-hint a { color: var(--fg-dim); text-decoration: underline; }
+.agent-control-hint a:hover { color: var(--fg); }
 .agent-control-actions {
   display: flex;
   gap: 0.5rem;
+}
+
+/* Narrow windows: stack instead of collide. main.cjs floors the window at
+   860px so this should not trigger in normal use, but a fixed label column
+   plus a shrinking control column has exactly one bad failure mode, and it
+   should degrade to a stacked form rather than squeeze controls to nothing. */
+@media (max-width: 620px) {
+  .agent-control-row { flex-wrap: wrap; gap: 0.35rem; }
+  .agent-control-row label { flex: 1 1 100%; }
+  .agent-control-row select,
+  .agent-control-row input[type="text"],
+  .agent-control-row input[type="password"],
+  .agent-control-row .control-pair { flex: 1 1 100%; }
+  .agent-control-hint { margin-left: 0; }
 }
 
 /* ── shared shell (nav.js, subpage split 2026-07-14) ──────────────────────
