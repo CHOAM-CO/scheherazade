@@ -41,20 +41,48 @@ needs before it can pick up work.
 
 ## Hook System
 
-Three hooks, wired in `.claude/settings.local.json`, all advisory (none of
-them block):
+Thirteen hook commands across four lifecycle stages, wired in
+`.claude/settings.local.json` (shipped as
+`onboarding/templates/claude-settings.local.json`). **Three of them can
+block.** This section used to say "three hooks, all advisory"; that was true
+of the original spec and stopped being true as hooks were added, which is the
+failure `scripts/test-hook-lifecycle-doc.mjs` now exists to prevent -- it
+fails when a registered hook is undocumented, when the stage disagrees, or
+when a hook's blocking status here disagrees with whether it can `exit(2)`.
 
-| Hook | Event | Fires | Purpose |
+### Blocking hooks
+
+`exit(2)` is how a hook refuses the action. On `PreToolUse` that means the
+tool call does not happen; on `Stop` it means the turn does not end.
+
+| Hook | Stage | Matcher | What it refuses |
 |---|---|---|---|
-| `session-start.mjs` | `SessionStart` | boot | create today's note if missing, surface a restore summary, flag pending compression |
-| `felt-check.mjs` | `Stop` | every stop attempt | warn if `## 🔥 Felt` is missing or under 50 chars of real content |
-| `checkpoint-nudge.mjs` | `Stop` | every stop attempt | warn if `checkpoint.md` is 30+ min stale, throttled to once per 30min |
+| `pre-reply-rumination-gate.mjs` | `PreToolUse` | `mcp__agent-channel__reply` | a reply containing a completion or verification claim, until it has been re-sent unchanged once (a 10-minute re-fire window) |
+| `pre-reply-negation-check.mjs` | `PreToolUse` | `mcp__agent-channel__reply` | a reply whose denial/negation reads as unsupported |
+| `stop-reply-guard.mjs` | `Stop` | all | ending a turn that owed a channel reply and never sent one |
 
-All three exit 0 unconditionally -- nothing in this package blocks a stop
-or a boot. Advisory messages reach Claude's context via
-`hookSpecificOutput.additionalContext` (confirmed against current Claude
-Code hook docs), not `systemMessage`, which is user-facing only and would
-never actually reach the agent making the decision.
+### Advisory hooks
+
+These always `exit(0)`. Their messages reach the agent's context through
+`hookSpecificOutput.additionalContext`, not `systemMessage` (which is
+user-facing only and would never reach the agent making the decision). Any
+internal error is fail-open: an advisory hook that throws must not become a
+blocker by accident.
+
+| Hook | Stage | Matcher | Purpose |
+|---|---|---|---|
+| `session-start.mjs` | `SessionStart` | all | restore continuity at boot: create today's note if missing, surface a restore summary, flag pending compression |
+| `session-start-reflux-card.mjs` | `SessionStart` | all | surface pending persona-reflux proposals |
+| `context-gauge.mjs` | `SessionStart`, `Stop` | all | context-occupancy tap (registered at two stages) |
+| `post-bash-permission-translator.mjs` | `PostToolUse` | `Bash` | turn a raw permission denial into an actionable message |
+| `pre-reply-corrections-context.mjs` | `PreToolUse` | `mcp__agent-channel__reply` | surface prior corrections relevant to the reply being sent |
+| `pre-reply-time-adverb-guard.mjs` | `PreToolUse` | `mcp__agent-channel__reply` | flag unverified time expressions ("yesterday", "an hour ago") |
+| `felt-check.mjs` | `Stop` | all | warn when the Felt section is missing or under 50 characters of real content |
+| `checkpoint-nudge.mjs` | `Stop` | all | warn when `checkpoint.md` is 30+ minutes stale, throttled to once per 30 min |
+| `stop-skill-extraction-nudge.mjs` | `Stop` | all | nudge toward extracting a reusable skill after qualifying work |
+
+`context-gauge.mjs` is registered at both `SessionStart` and `Stop`, so the
+thirteen commands cover twelve distinct hook files.
 
 One deliberate correction from the originating spec: hooks read
 `AGENT_NAME`/`MEM` from the environment (set by `run.sh`) but fall back to
