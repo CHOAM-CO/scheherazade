@@ -47,6 +47,40 @@
         <div class="field-hint" id="set-apply-state"></div>
       </div>
 
+      <!-- Custom provider (generic OpenAI-compatible proxy, 2026-07-25).
+           Settings-page-only, like claude-subscription/chatgpt/ollama before
+           it (see http-server.cjs's ROUTER_WIRED comment) -- there is no
+           onboarding-wizard tab for this. Always visible (same convention as
+           every other category on this page), not gated on the current
+           provider: switching TO custom and editing an already-custom
+           install's fields share this one form. Its own status/save pair
+           (not the shared set-apply-state line above, which only settles
+           AFTER a restart is already in flight). -->
+      <div class="category" style="margin-top: 2.5rem" id="set-custom">
+        <div class="category-label" id="set-custom-label"></div>
+        <p class="subtitle" id="set-custom-note"></p>
+        <div class="agent-control-row">
+          <label for="set-custom-preset-select" id="set-custom-preset-label"></label>
+          <select id="set-custom-preset-select"></select>
+        </div>
+        <div class="agent-control-row">
+          <label for="set-custom-url-input" id="set-custom-url-label"></label>
+          <input type="text" id="set-custom-url-input" placeholder="http://localhost:18080" />
+        </div>
+        <div class="agent-control-row">
+          <label for="set-custom-key-input" id="set-custom-key-label"></label>
+          <input type="password" id="set-custom-key-input" autocomplete="off" />
+        </div>
+        <div class="agent-control-row">
+          <label for="set-custom-model-input" id="set-custom-model-label"></label>
+          <input type="text" id="set-custom-model-input" />
+        </div>
+        <div class="step-actions">
+          <span class="field-hint hidden" id="set-custom-status"></span>
+          <button id="set-custom-save"></button>
+        </div>
+      </div>
+
       <!-- Autonomous cycle (v0.0.6). The only setting on this page that spends
            the user's subscription while they are not watching, so it carries
            its cost note ABOVE the switch, ships OFF, and shows today's real
