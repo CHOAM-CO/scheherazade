@@ -3930,6 +3930,14 @@ module.exports = {
   // decrypted in-memory only, same as this function's existing callers
   // here (storeProviderKeyVerified's round-trip check, readDiscordToken).
   readProviderKey,
+  // Exported for scripts/test-credential-store.mjs (2026-07-25): the whole
+  // store/verify path had never executed outside a packaged build, because
+  // dev-serve-ui.mjs runs in plain node. getElectron() requires 'electron'
+  // lazily precisely so this file stays testable outside an Electron main
+  // process, so the harness injects a safeStorage stub and drives the real
+  // code -- including the two refusal branches (encryption unavailable,
+  // round-trip mismatch) that must never leave a key in plaintext.
+  storeProviderKeyVerified,
   // Exported for scripts/test-custom-provider-validate.mjs (external red
   // team 2026-07-25): the 'custom' branch returns before any network call,
   // so a plain-node harness can pin the ok:false-on-invalid-URL contract
