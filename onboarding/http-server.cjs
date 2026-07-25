@@ -49,7 +49,11 @@ const { pathToFileURL } = require('node:url')
 // anymore), now shared so this file's liveness ping below can never drift
 // out of sync with it again (see that function's own header comment for the
 // concrete SSRF gap this closes).
-const { PROVIDERS_REQUIRING_STORED_CREDENTIAL, resolveChatgptProxyPort, OLLAMA_BASE_URL } = require('../provider-env.cjs')
+// resolveCustomBaseUrl added (custom-provider addition, 2026-07-25): same
+// shared-guard reasoning as resolveChatgptProxyPort, for the 'custom'
+// provider's own base-URL field -- see this file's POST
+// /api/agent/custom-provider and validateProviderKey's 'custom' branch.
+const { PROVIDERS_REQUIRING_STORED_CREDENTIAL, resolveChatgptProxyPort, resolveCustomBaseUrl, OLLAMA_BASE_URL } = require('../provider-env.cjs')
 // Login shell-out (2026-07-07): spawn/execFile for `codex login` /
 // `ollama signin` children -- the ONLY non-claude binary spawn sites in
 // this codebase (verified by repo-wide grep at design time; the chatgpt
@@ -309,7 +313,21 @@ function computeAgentStatus() {
 // externally-governed copy-source file copy.js is sourced from verbatim --
 // out of scope here, and a materially bigger/riskier diff for the same
 // outcome).
-const PROVIDERS = ['claude', 'claude-cli', 'claude-subscription', 'chatgpt', 'ollama']
+//
+// custom (generic OpenAI-compatible proxy, 2026-07-25 addition): unlike
+// chatgpt/ollama (an app-managed local proxy/daemon -- codex-as-api
+// in-process, or the bundled Ollama.app; see main.cjs's ensureCodexProxy()/
+// ensureOllamaDaemon()), 'custom' points at WHATEVER OpenAI-compatible
+// endpoint the user configures -- this app does not launch or vouch for
+// that process, so there is no ensureXProxy()-style gate for it in
+// main.cjs. Settings-page-only, same precedent as claude-subscription/
+// chatgpt/ollama above (no onboarding-wizard tab): its own two extra
+// fields (base URL, optional API key) go through the dedicated POST
+// /api/agent/custom-provider below, not /api/onboarding/complete or
+// /api/agent/model. See provider-env.cjs's buildProviderEnv() 'custom'
+// branch for the env-building contract (base URL + model both required,
+// fail loud; API key optional with a placeholder fallback).
+const PROVIDERS = ['claude', 'claude-cli', 'claude-subscription', 'chatgpt', 'ollama', 'custom']
 
 // The artifact that proves a Claude Code CLI login exists on this machine.
 // Checked for EXISTENCE ONLY and never opened (see computeAvailableProviders).
@@ -322,6 +340,14 @@ const CLAUDE_CLI_CREDENTIALS_PATH = path.join(os.homedir(), '.claude', '.credent
 // Values become CLAUDE_CODE_EFFORT_LEVEL in the spawned agent's env via
 // main.cjs -> run.sh:56; run.sh's own fallback default is 'high'.
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'max']
+
+// Shared pattern-validation for any model id accepted from the client, no
+// matter which route (POST /api/agent/model and POST /api/agent/custom-
+// provider both write this into MODEL, which becomes `--model <MODEL>`
+// argv at spawn -- run.sh). Extracted to one const (custom-provider
+// addition, 2026-07-25) so the two routes can never drift apart on what
+// counts as a safe model id.
+const MODEL_ID_PATTERN = /^[A-Za-z0-9._:/-]+$/
 
 // ROUTER_WIRED (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 3; flipped
 // 2026-07-04, 4-provider-mode wiring): all 4 PROVIDERS values now actually
@@ -1173,6 +1199,10 @@ async function checkLocalLiveness(url, label) {
 // wizard step pass the same custom port field /api/onboarding/complete
 // already accepts, without requiring it; defaults to the identical constant
 // buildProviderEnv() itself falls back to (provider-env.cjs).
+// `opts.baseUrl` is optional (only 'custom' consults it, custom-provider
+// addition 2026-07-25) -- the settings page's own POST /api/agent/custom-
+// provider is the primary way this gets configured; this route is a
+// secondary, defense-in-depth path (see 'custom' branch below).
 async function validateProviderKey(provider, key, opts = {}) {
   // chatgpt/ollama: NO user secret needed at all -- skip the generic
   // empty-key guard below entirely for these two (an empty/untouched "key"
@@ -1203,6 +1233,25 @@ async function validateProviderKey(provider, key, opts = {}) {
   }
   if (provider === 'ollama') {
     return checkLocalLiveness(OLLAMA_BASE_URL, 'Ollama daemon')
+  }
+  if (provider === 'custom') {
+    // Same "no secret required, ping instead of validate a key" shape as
+    // chatgpt/ollama above (custom-provider addition, 2026-07-25) -- except
+    // the target is WHATEVER opts.baseUrl names, not a fixed localhost
+    // port/URL. resolveCustomBaseUrl is the same single-source-of-truth
+    // guard buildProviderEnv()'s spawn-time 'custom' branch uses
+    // (provider-env.cjs), so validation-time and spawn-time can never
+    // accept a URL the other would reject. This route is not the primary
+    // way to configure 'custom' (see POST /api/agent/custom-provider
+    // below), but 'custom' being in PROVIDERS makes this generic route
+    // reachable too -- so it gets a real branch rather than falling through
+    // to the empty-key guard below (which would wrongly reject 'custom's
+    // OPTIONAL, often-blank key as an error).
+    const urlResult = resolveCustomBaseUrl(opts.baseUrl)
+    if (urlResult.error) {
+      return { ok: true, reachable: false, detail: `custom base URL is invalid -- ${urlResult.error}` }
+    }
+    return checkLocalLiveness(urlResult.url, 'custom proxy')
   }
 
   if (!key || typeof key !== 'string' || key.trim() === '') {
@@ -1971,7 +2020,36 @@ function computeAvailableProviders() {
       console.error(`[scheherazade/onboarding] availableProviders: artifact check (${provider}) failed (treating as unavailable):`, err.message)
     }
   }
+  // custom (custom-provider addition, 2026-07-25): no login/credential
+  // artifact of its own -- available once a base URL has been saved at
+  // least once (POST /api/agent/custom-provider is the only writer of
+  // CUSTOM_BASE_URL). The API key is optional either way (provider-env.cjs
+  // falls back to a placeholder), so its presence is not part of this gate
+  // -- see hasStoredCustomApiKey() below for that separate question.
+  try {
+    if (readAgentConfig().CUSTOM_BASE_URL) out.push('custom')
+  } catch (err) {
+    console.error('[scheherazade/onboarding] availableProviders: custom-provider config check failed (treating as unavailable):', err.message)
+  }
   return out
+}
+
+// Boolean-only companion to computeAvailableProviders() above: GET
+// /api/config's hasCustomApiKey field proves a custom-provider API key
+// exists WITHOUT ever exposing it, same "prove existence, never expose the
+// value" contract as GET /api/sudo/config's hasPassword field (custom-
+// provider addition, 2026-07-25). Kept as its own function rather than
+// folded into computeAvailableProviders() because it answers a DIFFERENT
+// question -- credential PRESENCE, not provider AVAILABILITY ('custom' is
+// available off the base URL alone, with or without a key, per the comment
+// above).
+function hasStoredCustomApiKey() {
+  try {
+    return Boolean(readProviderKey('custom'))
+  } catch (err) {
+    console.error('[scheherazade/onboarding] hasStoredCustomApiKey: readProviderKey(custom) failed (treating as false):', err.message)
+    return false
+  }
 }
 
 // provider -> live ChildProcess while a login child runs. Also the
@@ -2302,7 +2380,17 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     // duplicating the channel id into .agent-config would risk drift.
     // availableProviders rides along camelCase like the two above: computed
     // live (credential store + login artifacts), never a stored field.
-    sendJson(res, 200, { ...readAgentConfig(), homeChannelId: readHomeChannelId(), routerWired: ROUTER_WIRED, availableProviders: computeAvailableProviders() })
+    // hasCustomApiKey rides along the same way (custom-provider addition,
+    // 2026-07-25): computed live from the safeStorage credential store,
+    // boolean-only (see hasStoredCustomApiKey()'s own header for why this
+    // is never the key itself).
+    sendJson(res, 200, {
+      ...readAgentConfig(),
+      homeChannelId: readHomeChannelId(),
+      routerWired: ROUTER_WIRED,
+      availableProviders: computeAvailableProviders(),
+      hasCustomApiKey: hasStoredCustomApiKey(),
+    })
     return
   }
 
@@ -2311,7 +2399,11 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     // only consulted for provider === 'chatgpt' (see validateProviderKey).
     // Not sent by today's wizard.js (out of scope here) -- defaults to
     // CHATGPT_PROXY_DEFAULT_PORT when absent, additive/forward-compatible.
-    const { provider, key, proxyPort } = await readJsonBody(req)
+    // baseUrl added (custom-provider addition, 2026-07-25): optional, only
+    // consulted for provider === 'custom'. Not sent by wizard.js either
+    // (no wizard tab for 'custom' -- see PROVIDERS' own comment above); the
+    // settings page's POST /api/agent/custom-provider is the primary path.
+    const { provider, key, proxyPort, baseUrl } = await readJsonBody(req)
     if (!PROVIDERS.includes(provider)) {
       sendJson(res, 400, { error: `unknown provider: ${provider}` })
       return
@@ -2322,7 +2414,7 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     // closes the backdoor at its source rather than only at
     // onboarding-complete.
     if (rejectIfRouterNotWired(res, provider)) return
-    const result = await validateProviderKey(provider, key, { proxyPort })
+    const result = await validateProviderKey(provider, key, { proxyPort, baseUrl })
     if (!result.ok) {
       sendJson(res, 200, result)
       return
@@ -2335,7 +2427,13 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     // in the `key` field for them just persists an unused, never-read-back
     // value. PROVIDERS_REQUIRING_STORED_CREDENTIAL is the single source of
     // truth shared with /api/onboarding/complete's own credential gate below.
-    if (PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes(provider)) {
+    // 'custom' is deliberately NOT in that array (its key is optional, not
+    // required -- provider-env.cjs), but unlike chatgpt/ollama it DOES read
+    // a stored key back at spawn time when one exists (buildProviderEnv's
+    // 'custom' branch) -- so a non-empty key here is worth storing, just
+    // never REQUIRED the way PROVIDERS_REQUIRING_STORED_CREDENTIAL entries
+    // are.
+    if (PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes(provider) || (provider === 'custom' && key && key.trim())) {
       storeProviderKeyVerified(provider, key) // throws (fail loud) on storage failure -> caught by outer handler -> 500
     }
     // Spread `result` rather than a hardcoded `{ ok: true }` (server-side
@@ -2459,6 +2557,16 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
       // regardless).
       CHATGPT_PROXY_PORT: provider === 'chatgpt' && proxyPort ? String(proxyPort).trim() : '',
       MODEL: provider === 'ollama' ? String(model).trim() : '',
+      // 'custom' deliberately NOT handled here (custom-provider addition,
+      // 2026-07-25): this endpoint has no CUSTOM_BASE_URL/apiKey fields in
+      // its body, and there is no onboarding-wizard tab for 'custom' either
+      // (see PROVIDERS' own comment above) -- the settings page's POST
+      // /api/agent/custom-provider is the only supported way to configure
+      // it. A crafted onboarding-complete POST naming provider='custom'
+      // still completes (same as claude-subscription/chatgpt/ollama could
+      // before their own wizard UI shipped), but spawns nothing until that
+      // route runs once -- buildProviderEnv() reports 'not_ready' for a
+      // missing CUSTOM_BASE_URL, a quiet skip, not a crash.
     })
     await writePersonaPreferences({ tone, primaryTask, proactiveEnabled, proactiveWindowStart, proactiveWindowEnd })
     renderAgentSubstrate({ displayName, tone, primaryTask })
@@ -2999,7 +3107,7 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     }
     const { model, provider } = await readJsonBody(req)
     const value = typeof model === 'string' ? model.trim() : ''
-    if (!value || value.length > 200 || !/^[A-Za-z0-9._:/-]+$/.test(value)) {
+    if (!value || value.length > 200 || !MODEL_ID_PATTERN.test(value)) {
       sendJson(res, 400, { error: 'invalid model id' })
       return
     }
@@ -3082,6 +3190,79 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     writeAgentConfig({ EFFORT_LEVEL: effortValue })
     agentControls.restartAgent().catch((err) => console.error('[scheherazade/onboarding] restartAgent (effort swap) threw:', err))
     sendJson(res, 202, { ok: true, effort: effortValue })
+    return
+  }
+  // POST /api/agent/custom-provider {baseUrl, apiKey, model} -- the 'custom'
+  // provider's OWN entry point (custom-provider addition, 2026-07-25).
+  // Unlike /api/agent/model above (a single `model` field, provider
+  // inferred/optional), 'custom' carries two EXTRA fields no existing
+  // single-purpose endpoint accepts together (a base URL, an optional API
+  // key) -- so it gets its own route rather than overloading /api/agent/
+  // model's narrower contract, same "one endpoint per settings concern"
+  // shape as /api/agent/effort, /api/autonomy, /api/topology, /api/sudo/
+  // config.
+  //
+  // Deliberately does NOT gate on computeAvailableProviders() the way
+  // /api/agent/model's provider field does: 'custom' has no login step or
+  // pre-existing credential to check for -- the base URL IS the thing that
+  // makes it usable, and it arrives in THIS SAME request. Gating this route
+  // on computeAvailableProviders() would deadlock the very first save
+  // (nothing could ever make 'custom' available before this route runs
+  // once). No onboarding-wizard path exists for this provider either (same
+  // settings-page-only precedent as claude-subscription/chatgpt/ollama
+  // before their own wizard UI shipped -- see the ROUTER_WIRED comment
+  // above) -- this route is the only way to configure or switch to it.
+  if (pathname === '/api/agent/custom-provider' && req.method === 'POST') {
+    if (!agentControls || typeof agentControls.restartAgent !== 'function') {
+      sendJson(res, 500, { error: 'agent controls not wired' })
+      return
+    }
+    // Belt-and-suspenders, same as every other endpoint that accepts a
+    // provider choice (see ROUTER_WIRED's own comment above): this route IS
+    // implicitly a 'custom' choice even though it takes no `provider` field
+    // on the wire, so the documented kill-switch must reach it too.
+    if (rejectIfRouterNotWired(res, 'custom')) return
+    const { baseUrl, apiKey, model } = await readJsonBody(req)
+    // Single source of truth shared with provider-env.cjs's buildProviderEnv()
+    // 'custom' branch (spawn-time) -- see resolveCustomBaseUrl's own header
+    // comment for why this is not restricted to localhost.
+    const urlResult = resolveCustomBaseUrl(baseUrl)
+    if (urlResult.error) {
+      sendJson(res, 400, { error: urlResult.error })
+      return
+    }
+    const modelValue = typeof model === 'string' ? model.trim() : ''
+    if (!modelValue || modelValue.length > 200 || !MODEL_ID_PATTERN.test(modelValue)) {
+      sendJson(res, 400, { error: 'invalid model id' })
+      return
+    }
+    // API key is OPTIONAL for 'custom' (buildProviderEnv falls back to a
+    // clearly-labeled placeholder -- provider-env.cjs). Blank input means
+    // "keep whatever is already stored", same write-only convention as the
+    // Discord reconnect token field (discordStoredTokenNote copy) and the
+    // sudo password field -- never "blank means clear it", which would
+    // silently lock the user out of a proxy that DOES check the key.
+    if (typeof apiKey === 'string' && apiKey.trim()) {
+      storeProviderKeyVerified('custom', apiKey) // throws (fail loud) on storage failure -> caught by outer handler -> 500
+    }
+    // Same before/after bookkeeping as /api/agent/model above: a strike
+    // ledger is about ONE model/provider pair, and PREVIOUS_MODEL/
+    // PREVIOUS_PROVIDER are what makes the mute-revert offer possible.
+    const prior = readAgentConfig()
+    const previousFields = {}
+    if (prior.MODEL && (prior.MODEL !== modelValue || prior.PROVIDER !== 'custom')) {
+      previousFields.PREVIOUS_MODEL = prior.MODEL
+      previousFields.PREVIOUS_PROVIDER = prior.PROVIDER || ''
+    }
+    writeAgentConfig({
+      ...previousFields,
+      CUSTOM_BASE_URL: urlResult.url,
+      MODEL: modelValue,
+      PROVIDER: 'custom',
+    })
+    clearMuteStrikes()
+    agentControls.restartAgent().catch((err) => console.error('[scheherazade/onboarding] restartAgent (custom-provider swap) threw:', err))
+    sendJson(res, 202, { ok: true, provider: 'custom', model: modelValue, baseUrl: urlResult.url })
     return
   }
 

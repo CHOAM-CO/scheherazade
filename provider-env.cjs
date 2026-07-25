@@ -58,6 +58,11 @@
 // spawn() call. UNVERIFIED end-to-end (no live spawn against a real
 // codex-as-api proxy done as part of this change) -- see task report's
 // gaps list.
+//
+// 2026-07-25 addition: a 5th mode, 'custom' (generic OpenAI-compatible
+// proxy), added later/separately from the "4-provider-mode wiring" batch
+// this header otherwise describes -- not folded into the history above.
+// See that branch's own comment in buildProviderEnv below for its rationale.
 'use strict'
 
 const CHATGPT_PROXY_DEFAULT_PORT = '18080'
@@ -70,6 +75,13 @@ const OLLAMA_BASE_URL = 'http://localhost:11434'
 // sniffing today (grepped: no `sk-ant-` / `startsWith('sk-')` check outside
 // onboarding/public copy strings, which are UI hints only, not enforced).
 const CHATGPT_PLACEHOLDER_KEY = 'sk-codex-proxy-passthrough-not-a-real-key'
+
+// Same shape/reasoning as CHATGPT_PLACEHOLDER_KEY above, for the 'custom'
+// provider's own OPTIONAL key case (see that branch below): a clearly-
+// labeled placeholder, never a real Anthropic key, used only when the user
+// did not configure a key for their proxy (plenty accept any bearer value,
+// or none at all).
+const CUSTOM_PLACEHOLDER_KEY = 'sk-custom-proxy-no-key-configured'
 
 /**
  * resolveChatgptProxyPort(rawPort) -> { port } | { error }
@@ -114,6 +126,47 @@ function resolveChatgptProxyPort(rawPort) {
     return { error: `chatgpt proxy port "${p}" is not a valid TCP port (1-65535)` }
   }
   return { port: p }
+}
+
+/**
+ * resolveCustomBaseUrl(rawUrl) -> { url } | { error }
+ *
+ * Single source of truth for "is this a syntactically valid custom-provider
+ * base URL", consulted at BOTH spawn-time (buildProviderEnv's 'custom'
+ * branch below) and validation-time (onboarding/http-server.cjs's
+ * validateProviderKey 'custom' branch) -- same "extracted so the two guards
+ * can never drift apart" reasoning as resolveChatgptProxyPort above, applied
+ * to a full URL instead of a bare port.
+ *
+ * Deliberately NOT restricted to localhost (unlike resolveChatgptProxyPort's
+ * SSRF guard, which exists because THAT function's input is a bare port
+ * interpolated into a hardcoded `http://localhost:${port}` template): the
+ * entire point of the 'custom' provider is letting the user point at any
+ * OpenAI-compatible proxy, which may legitimately be a remote host. This
+ * only rejects what can never be a usable ANTHROPIC_BASE_URL: empty, not a
+ * parseable URL, or not http(s).
+ *
+ * Returns `{ url }` (the trimmed, validated URL string -- NOT re-serialized
+ * via the parsed URL object, so nothing the user typed is silently changed,
+ * e.g. no trailing slash added) on success. On failure returns
+ * `{ error: reason }`, a plain string, same convention as
+ * resolveChatgptProxyPort's error shape.
+ */
+function resolveCustomBaseUrl(rawUrl) {
+  if (rawUrl === undefined || rawUrl === null || String(rawUrl).trim() === '') {
+    return { error: 'CUSTOM_BASE_URL is required for the custom provider' }
+  }
+  const trimmed = String(rawUrl).trim()
+  let parsed
+  try {
+    parsed = new URL(trimmed)
+  } catch (err) {
+    return { error: `custom base URL "${trimmed}" is not a valid URL: ${err.message}` }
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { error: `custom base URL "${trimmed}" must use http:// or https://` }
+  }
+  return { url: trimmed }
 }
 
 /**
@@ -283,10 +336,63 @@ function buildProviderEnv(provider, config, deps) {
     }
   }
 
+  if (provider === 'custom') {
+    // NEW mode (generic OpenAI-compatible proxy, 2026-07-25): unlike
+    // chatgpt/ollama above (an app-managed local proxy/daemon -- codex-as-
+    // api in-process, or the bundled Ollama.app; see main.cjs's
+    // ensureCodexProxy()/ensureOllamaDaemon()), this mode points at
+    // WHATEVER OpenAI-compatible endpoint the user configures -- a
+    // self-hosted proxy, a local model-router bridge, a manually-run
+    // codex-as-api, Ollama's own OpenAI-compatible surface run standalone,
+    // etc. This module does not know or care which; main.cjs has no
+    // ensureXProxy()-style gate for it (nothing here for it to launch or
+    // vouch for -- see this task's own report).
+    //
+    // Both CUSTOM_BASE_URL and MODEL are required, fail loud if missing --
+    // same reasoning as 'ollama' above: a generic OpenAI-compatible proxy
+    // needs a real base URL AND a real model id it can resolve; silently
+    // falling back to config.MODEL's generic Anthropic default would send
+    // an id the proxy almost certainly does not recognize.
+    const urlResult = resolveCustomBaseUrl(config.CUSTOM_BASE_URL)
+    if (urlResult.error) {
+      return { error: { kind: 'not_ready', reason: `onboarding says PROVIDER=custom but ${urlResult.error}` } }
+    }
+    const model = config.MODEL && String(config.MODEL).trim() ? String(config.MODEL).trim() : ''
+    if (!model) {
+      return { error: { kind: 'not_ready', reason: 'onboarding says PROVIDER=custom but no MODEL (custom proxy model id) is on file yet' } }
+    }
+    // API key is OPTIONAL, unlike 'claude'/'claude-subscription' above --
+    // plenty of local/self-hosted proxies (see the settings-page presets:
+    // a local ClinePass/Grok bridge, Ollama's OpenAI-compatible surface,
+    // codex-as-api) accept any bearer value or none at all. Stored the SAME
+    // way the 'claude' BYOK key above is (safeStorage-backed, via
+    // deps.readProviderKey -- see http-server.cjs's storeProviderKeyVerified/
+    // readProviderKey), never as a plaintext .agent-config field the way
+    // CUSTOM_BASE_URL is just above: unlike the base URL, this MAY be a
+    // real secret for whatever proxy the user points this at, so it gets
+    // the exact on-disk treatment every other credential in this codebase
+    // gets.
+    let apiKey
+    try {
+      apiKey = readProviderKey('custom')
+    } catch (err) {
+      return { error: { kind: 'key_error', reason: `readProviderKey(custom) failed: ${err.message}` } }
+    }
+    return {
+      env: {
+        ANTHROPIC_BASE_URL: urlResult.url,
+        ANTHROPIC_API_KEY: apiKey || CUSTOM_PLACEHOLDER_KEY,
+        MODEL: model,
+        SKIP_MODEL_GUARD: '1', // same reasoning as 'ollama' above -- not an Anthropic model id
+        CLAUDE_CODE_OAUTH_TOKEN: undefined, // force api-key auth precedence -- see sirin ground-truth comment
+      },
+    }
+  }
+
   return {
     error: {
       kind: 'provider_not_wired',
-      reason: `provider "${provider}" is not a recognized mode -- expected one of: claude, claude-cli, claude-subscription, chatgpt, ollama`,
+      reason: `provider "${provider}" is not a recognized mode -- expected one of: claude, claude-cli, claude-subscription, chatgpt, ollama, custom`,
     },
   }
 }
@@ -296,13 +402,18 @@ function buildProviderEnv(provider, config, deps) {
 // /api/onboarding/complete gate, so the "does this provider need a secret"
 // fact lives in exactly one place). chatgpt/ollama route to a local
 // proxy/daemon and need no user secret at all -- see buildProviderEnv above.
+// 'custom' also needs none: its API key is OPTIONAL, not required (a stored
+// key is used when present, a placeholder otherwise -- see buildProviderEnv's
+// 'custom' branch), so it is never added here either.
 const PROVIDERS_REQUIRING_STORED_CREDENTIAL = ['claude', 'claude-subscription']
 
 module.exports = {
   buildProviderEnv,
   resolveChatgptProxyPort,
+  resolveCustomBaseUrl,
   PROVIDERS_REQUIRING_STORED_CREDENTIAL,
   CHATGPT_PROXY_DEFAULT_PORT,
   CHATGPT_PLACEHOLDER_KEY,
+  CUSTOM_PLACEHOLDER_KEY,
   OLLAMA_BASE_URL,
 }

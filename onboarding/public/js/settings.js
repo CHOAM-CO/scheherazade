@@ -130,6 +130,7 @@
     }
 
     renderAgentConfig()
+    renderCustomProvider().catch((err) => console.error(err))
     renderPermissions().catch((err) => console.error(err))
     renderTopology().catch((err) => console.error(err))
     renderSudo().catch((err) => console.error(err))
@@ -449,6 +450,10 @@
   // sol/luna are Mino-named siblings -- live-verify on first swap, the
   // mute-strike ledger is the backstop either way.
   const CLAUDE_PROVIDERS = ['claude', 'claude-cli', 'claude-subscription']
+  // Sentinel model-select value for the Custom catalog entry below (custom-
+  // provider addition, 2026-07-25) -- never sent to the server as a real
+  // model id (see the onchange handler's early-return branch for it).
+  const CUSTOM_MODEL_SENTINEL = '__custom__'
   const MODEL_CATALOG = [
     { id: 'claude-fable-5', label: 'Claude Fable 5', group: 'Claude', providers: CLAUDE_PROVIDERS },
     { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', group: 'Claude', providers: CLAUDE_PROVIDERS },
@@ -482,6 +487,16 @@
     // was added. sonnet-5 / opus-4.8 verified in the same test round.
     { id: 'glm-5.2:cloud', label: 'GLM 5.2', group: 'Ollama', providers: ['ollama'] },
     // (old single 'gpt' Codex entry replaced by the versioned GPT group above)
+    // Custom (custom-provider addition, 2026-07-25): NOT a real model id --
+    // an ACTION entry, not a switchable state. Selecting it never fires the
+    // normal model-swap POST (see the onchange handler below); it just
+    // points the user at the always-visible "커스텀 프록시" section further
+    // down the page, where the actual base URL / API key / model id fields
+    // live (three fields, too many for this single-select row). `custom:
+    // true` (not a `providers` entry) so populateModelSelect() below never
+    // disables it -- unlike every other row, availability here doesn't
+    // depend on computeAvailableProviders() at all.
+    { id: CUSTOM_MODEL_SENTINEL, label: C.customCatalogLabel, group: 'Custom', custom: true, providers: [] },
   ]
 
   // Effort selector (Mino 07-13 click-test item 2: sonnet-5 felt slow -- the
@@ -556,7 +571,10 @@
       opt.textContent = m.label
       // A model is selectable if ANY of its providers is authenticated --
       // not just the currently-running one (07-13 multi-provider unlock).
-      if (!m.providers.some((p) => availableProviders.includes(p))) opt.disabled = true
+      // `m.custom` entries (custom-provider addition) opt OUT of this gate
+      // entirely -- they are an action link into the section below, not a
+      // switchable state, so availableProviders never applies to them.
+      if (!m.custom && !m.providers.some((p) => availableProviders.includes(p))) opt.disabled = true
       // Models withdrawn for observed production failure (see catalog note).
       if (m.disabled) opt.disabled = true
       if (m.id === model) opt.selected = true
@@ -673,6 +691,16 @@
 
     $('set-model-select').onchange = async (e) => {
       const model = e.target.value
+      // Custom (custom-provider addition, 2026-07-25): an action, not a
+      // state -- reset the dropdown back to what is actually running and
+      // point the user at the always-visible section below instead of
+      // firing a model-swap POST with a sentinel that is not a real id.
+      if (model === CUSTOM_MODEL_SENTINEL) {
+        e.target.value = currentModel
+        const section = $('set-custom')
+        if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        return
+      }
       if (model === currentModel) return
       const provider = providerForModel(model)
       if (!provider) { e.target.value = currentModel; return } // fail closed: no authed provider serves it
@@ -709,6 +737,104 @@
     }
 
     renderApplyState()
+  }
+
+  // ── custom provider (generic OpenAI-compatible proxy) ───────────────────
+  // Settings-page-only addition (2026-07-25) -- like claude-subscription/
+  // chatgpt/ollama before it (see http-server.cjs's ROUTER_WIRED comment),
+  // there is no onboarding-wizard tab: reachable only from here, via its
+  // own dedicated POST /api/agent/custom-provider (base URL + optional API
+  // key + model id together -- no existing single-purpose endpoint accepted
+  // all three). Always visible, same convention as Autonomy/Topology/Sudo
+  // above: every category on this page is shown regardless of the current
+  // provider, not gated on it -- switching TO custom and editing an
+  // already-custom install's fields are the same form.
+  const CUSTOM_PRESETS = [
+    { label: C.customPresetClinePass, url: 'http://localhost:18084' },
+    { label: C.customPresetGrok, url: 'http://localhost:8766' },
+    { label: C.customPresetOllamaCloud, url: 'http://localhost:11434' },
+    { label: C.customPresetCodexApi, url: 'http://localhost:18080' },
+  ]
+
+  async function renderCustomProvider() {
+    $('set-custom-label').textContent = C.customLabel
+    $('set-custom-note').textContent = C.customNote
+    $('set-custom-preset-label').textContent = C.customPresetLabel
+    $('set-custom-url-label').textContent = C.customUrlLabel
+    $('set-custom-key-label').textContent = C.customKeyLabel
+    $('set-custom-model-label').textContent = C.customModelLabel
+    $('set-custom-model-input').placeholder = C.customModelPlaceholder
+    $('set-custom-save').textContent = C.customSave
+
+    const presetSel = $('set-custom-preset-select')
+    presetSel.innerHTML = ''
+    const blankOpt = document.createElement('option')
+    blankOpt.value = ''
+    blankOpt.textContent = C.customPresetPlaceholder
+    presetSel.appendChild(blankOpt)
+    for (const preset of CUSTOM_PRESETS) {
+      const opt = document.createElement('option')
+      opt.value = preset.url
+      opt.textContent = preset.label
+      presetSel.appendChild(opt)
+    }
+    // Populate the URL field on pick; the field stays a plain text input
+    // the user can still edit afterward -- the preset only pre-fills it.
+    presetSel.onchange = () => {
+      if (presetSel.value) $('set-custom-url-input').value = presetSel.value
+    }
+
+    let cfg = {}
+    try { cfg = await api('/api/config') } catch (err) { console.error(err) }
+    $('set-custom-url-input').value = cfg.CUSTOM_BASE_URL || ''
+    // Model id only pre-fills from the live config when custom is ALREADY
+    // the running provider -- otherwise cfg.MODEL belongs to whatever
+    // provider IS running, and showing it here would silently imply it is
+    // this proxy's model.
+    $('set-custom-model-input').value = cfg.PROVIDER === 'custom' ? (cfg.MODEL || '') : ''
+    // Write-only, same convention as the sudo password field: never
+    // reflects the stored value, only whether one exists (hasCustomApiKey,
+    // GET /api/config). Cleared on every render, including right after a
+    // successful save below.
+    $('set-custom-key-input').value = ''
+    $('set-custom-key-input').placeholder = cfg.hasCustomApiKey ? C.customKeyStoredPlaceholder : C.customKeyEmptyPlaceholder
+
+    $('set-custom-save').onclick = async () => {
+      const statusEl = $('set-custom-status')
+      statusEl.classList.add('hidden')
+      const baseUrl = $('set-custom-url-input').value.trim()
+      const model = $('set-custom-model-input').value.trim()
+      const apiKey = $('set-custom-key-input').value
+      if (!baseUrl || !model) {
+        statusEl.textContent = C.customMissingFields
+        statusEl.classList.remove('hidden')
+        return
+      }
+      const ok = await window.confirmDialog(C.customSwitchConfirm(model), C.switchOk, C.cancel)
+      if (!ok) return
+      const btn = $('set-custom-save')
+      btn.disabled = true
+      try {
+        await api('/api/agent/custom-provider', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ baseUrl, apiKey, model }),
+        })
+        showToast(C.customSaved)
+        // Re-read from the server, never trust the form (same principle
+        // saveAutonomy() follows above) -- this also refreshes the model
+        // select so the new custom model shows as "(current)" and
+        // availableProviders now includes 'custom'.
+        await renderCustomProvider()
+        await renderAgentConfig()
+        settleApplyState()
+      } catch (err) {
+        statusEl.textContent = GEN(err.message)
+        statusEl.classList.remove('hidden')
+      } finally {
+        btn.disabled = false
+      }
+    }
   }
 
   init()

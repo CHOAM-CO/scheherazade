@@ -608,6 +608,32 @@ window.COPY = {
     switchOk: 'Switch',
     cancel: 'Cancel',
 
+    // AUTHORED -- custom provider (generic OpenAI-compatible proxy,
+    // 2026-07-25). Register matches the rest of this page: 간결 존댓말, no
+    // 이모지, no 느낌표. Always-visible section (same convention as Autonomy/
+    // Topology/Sudo below), not gated on the current provider -- switching
+    // TO custom and editing an already-custom install's fields share this
+    // one form.
+    customLabel: '커스텀 프록시',
+    customNote: 'OpenAI 호환 API를 제공하는 프록시라면 어디든 연결할 수 있습니다. Base URL과 모델 ID가 필요하고, API 키는 프록시가 요구할 때만 입력하면 됩니다.',
+    customCatalogLabel: '커스텀 (임의의 모델 ID)',
+    customPresetLabel: '자주 쓰는 프록시',
+    customPresetPlaceholder: '직접 입력',
+    customPresetClinePass: 'ClinePass (:18084)',
+    customPresetGrok: 'Grok (:8766)',
+    customPresetOllamaCloud: 'Ollama Cloud (:11434)',
+    customPresetCodexApi: 'Codex-as-API (:18080)',
+    customUrlLabel: 'Base URL',
+    customKeyLabel: 'API 키 (선택)',
+    customKeyStoredPlaceholder: '저장된 키 있음 — 비워두면 그대로 씁니다',
+    customKeyEmptyPlaceholder: '저장된 키 없음 — 필요할 때만 입력하세요',
+    customModelLabel: '모델 ID',
+    customModelPlaceholder: '프록시가 인식하는 모델 이름을 입력하세요',
+    customMissingFields: 'Base URL과 모델 ID를 모두 입력하세요',
+    customSwitchConfirm: (m) => `커스텀 프록시(모델: ${m})로 전환하고 에이전트를 재시작합니다. 계속할까요?`,
+    customSave: '저장',
+    customSaved: '저장됐습니다. 에이전트를 재시작합니다.',
+
     // AUTHORED -- autonomous cycle (v0.0.6).
     //
     // The copy rules for this block are stricter than the rest of the page,
@@ -782,7 +808,11 @@ window.COPY = {
     // "온보딩 끝낸 이후에 ollama cloud 인증 추가 / chatGPT인증 추가").
     providersLabel: '추가 인증',
     providersNote: '인증하면 설정 페이지의 모델 선택에서 해당 모델을 고를 수 있습니다',
-    providerNames: { chatgpt: 'ChatGPT (Codex)', ollama: 'Ollama Cloud' },
+    // custom (custom-provider addition, 2026-07-25): NOT in AUTH_PROVIDERS
+    // (connectors.js), so this key is never actually looked up there today --
+    // added for display-name consistency with the other two entries and any
+    // future call site, harmless either way.
+    providerNames: { chatgpt: 'ChatGPT (Codex)', ollama: 'Ollama Cloud', custom: '커스텀 프록시' },
     providerConnected: '연결됨',
     providerNotConnected: '미연결',
     providerAuthButton: '인증하기',
