@@ -153,7 +153,13 @@ console.log('template + wiring tripwires:')
 
   const httpSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'http-server.cjs'), 'utf8')
   check('harness render includes attach-bootstrap.sh', httpSrc.includes("'attach-bootstrap.sh')"))
-  check('harness render includes sudo-askpass.sh + chmod 700', httpSrc.includes("'sudo-askpass.sh')") && /chmodSync\(.*sudo-askpass\.sh.*0o700\)/.test(httpSrc))
+  // The 0o700 used to be a chmodSync line naming the file; renderHarnessFiles
+  // became all-or-nothing (nogabi #6) so the mode now rides along with the
+  // staged write. Source-text shape moved, behaviour did not -- and the real
+  // resulting mode is asserted on disk by scripts/test-harness-refresh.mjs,
+  // which is the check that should have been here in the first place.
+  check('harness render includes sudo-askpass.sh + mode 0700',
+    /'sudo-askpass\.sh'\)?,\s*'sudo-askpass\.sh',\s*0o700/.test(httpSrc) || /sudo-askpass\.sh'\),\s*'sudo-askpass\.sh',\s*0o700/.test(httpSrc))
   check('/api/topology route exists', httpSrc.includes("pathname === '/api/topology'"))
   check('/api/sudo/password double gate: token AND settings toggle', httpSrc.includes("req.headers['x-askpass-token'] !== askpassToken") && httpSrc.includes("readAgentConfig().SUDO_ENABLED !== 'yes'"))
   check('sudo password stored via the verified vault path', httpSrc.includes("storeProviderKeyVerified('sudo-pass'"))

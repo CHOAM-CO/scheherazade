@@ -48,6 +48,7 @@ const {
   readTelegramToken,
   readHomeChannelId,
   readProviderKey,
+  readHarnessFailure,
   toUnpackedPath,
   killAllLoginChildren,
   AGENT_NAME: FIXED_AGENT_NAME,
@@ -783,6 +784,23 @@ async function spawnRealAgentChildLocked() {
   if (agentChild) {
     log(`agent spawn skipped: a child is already alive (pid=${agentChild.pid})`)
     return agentChild
+  }
+
+  // Harness gate (nogabi issue #6). The boot refresh re-renders CLAUDE.md,
+  // ONTOLOGY_GUIDE.md and system_prompt.md so a shipped fix reaches installs
+  // that already onboarded. When that render fails it used to log a line and
+  // let the agent start anyway, which mixes a new runtime with an older
+  // harness and is visible nowhere the user looks. Fail closed instead, in the
+  // same shape as the provider blockers below: an explicit failed state with a
+  // reason the UI renders. A later boot that renders cleanly deletes the marker
+  // and the agent starts again with no user action, which is the whole point of
+  // refreshing every boot.
+  const harnessFailure = readHarnessFailure()
+  if (harnessFailure) {
+    const reason = `the agent harness could not be re-rendered at boot, so the agent was not started against an out-of-date harness: ${harnessFailure.message}`
+    console.error(`[scheherazade/main] BLOCKER: ${reason}`)
+    setAgentStatus('failed', 'harness_stale', reason)
+    return null
   }
 
   // Fix C: cross-process guard. `agentChild` above only protects against a

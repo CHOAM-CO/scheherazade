@@ -59,6 +59,11 @@
 //   'provider_not_wired'  -- main.cjs spawnRealAgentChild()'s non-claude
 //                            branch (chatgpt/ollama have no router yet)
 //   'key_error'           -- main.cjs's readProviderKey() threw
+//   'harness_stale'       -- main.cjs's pre-spawn gate: the boot harness
+//                            re-render failed, so the agent was NOT started
+//                            against an out-of-date CLAUDE.md /
+//                            ONTOLOGY_GUIDE.md / system_prompt.md (nogabi #6).
+//                            Clears itself on the next boot that renders
 //   'timeout'             -- http-server.cjs's computeAgentStatus() backstop
 //                            (connecting exceeded TIMEOUT_MS with no live
 //                            marker) -- this module never sets it itself,

@@ -188,6 +188,14 @@ const { getAgentStatus } = require('./agent-status.cjs')
 // between the two files (one is ESM, one CJS -- not worth a shared module
 // for a two-field JSON contract).
 const LIVENESS_MARKER_PATH = path.join(DATA_HOME, '.agent-live')
+// Harness-refresh failure marker (nogabi issue #6). Boot re-renders the
+// harness (CLAUDE.md / ONTOLOGY_GUIDE.md / system_prompt.md / bootstrap
+// scripts) for already-onboarded installs. That refresh used to log an error
+// and continue, so a failed render meant the agent ran against whatever was
+// on disk with the fact visible only in a log nobody reads at boot. This file
+// is the durable record: written on failure, deleted on success, and checked
+// by main.cjs before it will spawn.
+const HARNESS_FAILURE_PATH = path.join(DATA_HOME, '.harness-failed')
 // Generous vs. channel.mjs's 60s heartbeat interval -- tolerates one missed
 // beat before calling the marker stale, without ever letting a real dead
 // agent's LAST marker read as perpetually "live".
@@ -1622,15 +1630,32 @@ async function writePersonaPreferences({ tone, primaryTask, proactiveEnabled, pr
 // the create-if-absent/re-render split comment above); this just adds a
 // second call site with the same semantics. Never touches self_persona.md /
 // checkpoint.md.
-function renderHarnessFiles({ displayName, tone, primaryTask }) {
+// ALL-OR-NOTHING (nogabi issue #6). This used to read, render and write each
+// file in turn, so a template that failed to read partway through left a
+// MIXED harness on disk: a new CLAUDE.md beside an old system_prompt.md. The
+// old log line called that "stale", which is the wrong word for a worse
+// state -- stale is at least internally consistent. Every source is now read
+// and rendered before anything is written, so a read or render failure
+// leaves the previous harness completely intact. The writes then go to .tmp
+// siblings and rename into place, which is atomic per file and collapses the
+// remaining window to the (disk-full class) case.
+// opts are test seams (scripts/test-harness-refresh.mjs), same shape as
+// resolveOutboundChannel's in channel.mjs: production call sites pass nothing
+// and get real fs. Needed because the two failures worth pinning here (a
+// template that cannot be READ, and a harness file that cannot be WRITTEN)
+// are otherwise only reachable by breaking the repo or the disk.
+function renderHarnessFiles({ displayName, tone, primaryTask }, opts = {}) {
+  const readFileFn = opts.readFileFn || fs.readFileSync
+  const writeFileFn = opts.writeFileFn || fs.writeFileSync
   const agentDir = toUnpackedPath(REPO_ROOT)
-  const renderHarness = (srcName, dstName) => {
-    const src = fs.readFileSync(path.join(REPO_ROOT, srcName), 'utf8')
+  const staged = []
+  const renderHarness = (srcName, dstName, mode) => {
+    const src = readFileFn(path.join(REPO_ROOT, srcName), 'utf8')
     const rendered = src
       .replaceAll('{AGENT_DIR}', agentDir)
       .replaceAll('{AGENT_NAME}', AGENT_NAME)
       .replaceAll('{MEMORY_DIR}', DATA_HOME)
-    fs.writeFileSync(path.join(DATA_HOME, dstName), rendered)
+    staged.push({ dstName, rendered, mode })
   }
 
   renderHarness('CLAUDE.md', 'CLAUDE.md')
@@ -1651,24 +1676,34 @@ function renderHarnessFiles({ displayName, tone, primaryTask }) {
   renderHarness(path.join('onboarding', 'templates', 'attach-bootstrap.sh'), 'attach-bootstrap.sh')
   // sudo askpass helper (0.1.0 prep): must be executable -- sudo -A execs it.
   // Content carries no secret (it fetches at run time); 0700 anyway.
-  renderHarness(path.join('onboarding', 'templates', 'sudo-askpass.sh'), 'sudo-askpass.sh')
-  fs.chmodSync(path.join(DATA_HOME, 'sudo-askpass.sh'), 0o700)
+  renderHarness(path.join('onboarding', 'templates', 'sudo-askpass.sh'), 'sudo-askpass.sh', 0o700)
 
-  const promptSrc = fs.readFileSync(
+  const promptSrc = readFileFn(
     path.join(REPO_ROOT, 'onboarding', 'templates', 'agent-system-prompt.md'),
     'utf8'
   )
-  const prompt = promptSrc
-    .replaceAll('{DISPLAY_NAME}', displayName)
-    .replaceAll('{TONE}', tone)
-    .replaceAll('{PRIMARY_TASK}', primaryTask || '일상 대화와 기록')
-  fs.writeFileSync(path.join(DATA_HOME, 'system_prompt.md'), prompt)
+  staged.push({
+    dstName: 'system_prompt.md',
+    rendered: promptSrc
+      .replaceAll('{DISPLAY_NAME}', displayName)
+      .replaceAll('{TONE}', tone)
+      .replaceAll('{PRIMARY_TASK}', primaryTask || '일상 대화와 기록'),
+  })
+
+  // Every source read and rendered. Only now does anything touch the harness.
+  for (const { dstName, rendered, mode } of staged) {
+    const dst = path.join(DATA_HOME, dstName)
+    const tmp = `${dst}.tmp`
+    writeFileFn(tmp, rendered)
+    if (mode !== undefined) fs.chmodSync(tmp, mode)
+    fs.renameSync(tmp, dst)
+  }
 }
 
 // Boot-time harness refresh for already-onboarded installs. Fail-loud in
 // log, non-fatal: a broken template must not stop the whole server, but it
 // must never be silent either.
-function refreshHarnessIfOnboarded() {
+function refreshHarnessIfOnboarded(opts = {}) {
   try {
     const config = readAgentConfig()
     if (!config.ONBOARDING_COMPLETE) return false
@@ -1676,12 +1711,56 @@ function refreshHarnessIfOnboarded() {
       displayName: config.DISPLAY_NAME || AGENT_NAME,
       tone: config.TONE || 'casual',
       primaryTask: config.PRIMARY_TASK || '',
-    })
+    }, opts)
+    // Success clears any previous failure: the whole point of re-rendering at
+    // every boot is that a shipped fix repairs an install without the user
+    // doing anything, so recovery must be automatic and must un-block spawn.
+    clearHarnessFailure()
     console.error('[scheherazade/onboarding] harness re-rendered at boot (CLAUDE.md / ONTOLOGY_GUIDE.md / system_prompt.md)')
     return true
   } catch (err) {
-    console.error('[scheherazade/onboarding] boot harness refresh FAILED (agent runs on stale harness):', err.message)
+    // Durable, not just logged (nogabi #6). renderHarnessFiles is all-or-nothing,
+    // so reaching here means the harness on disk is the PREVIOUS one, intact but
+    // possibly older than the runtime that is about to read it. main.cjs refuses
+    // to spawn while this file exists, and the UI shows the reason.
+    writeHarnessFailure(err)
+    console.error('[scheherazade/onboarding] boot harness refresh FAILED (agent will NOT be spawned):', err.message)
     return false
+  }
+}
+
+// Written by refreshHarnessIfOnboarded on failure, removed on the next
+// success. Deliberately a plain file rather than in-memory state: the check
+// lives in main.cjs (a different module, and on a later tick), and a crash
+// between refresh and spawn must not lose the fact.
+function writeHarnessFailure(err) {
+  try {
+    fs.writeFileSync(
+      HARNESS_FAILURE_PATH,
+      JSON.stringify({ at: new Date().toISOString(), message: err && err.message ? err.message : String(err) }, null, 2) + '\n'
+    )
+  } catch (writeErr) {
+    // Nothing left to escalate to. Say so rather than pretending the gate is armed.
+    console.error('[scheherazade/onboarding] could not record the harness failure marker:', writeErr.message)
+  }
+}
+
+function clearHarnessFailure() {
+  try {
+    fs.rmSync(HARNESS_FAILURE_PATH, { force: true })
+  } catch (err) {
+    console.error('[scheherazade/onboarding] could not clear the harness failure marker:', err.message)
+  }
+}
+
+// Read by main.cjs before spawning. Returns null when the harness is fine.
+function readHarnessFailure() {
+  try {
+    if (!fs.existsSync(HARNESS_FAILURE_PATH)) return null
+    return JSON.parse(fs.readFileSync(HARNESS_FAILURE_PATH, 'utf8'))
+  } catch {
+    // Unreadable/corrupt marker still means a failure was recorded. Fail closed.
+    return { at: null, message: 'harness failure marker exists but could not be read' }
   }
 }
 
@@ -3958,6 +4037,13 @@ module.exports = {
   // decrypted in-memory only, same as this function's existing callers
   // here (storeProviderKeyVerified's round-trip check, readDiscordToken).
   readProviderKey,
+  // Exported for main.cjs's pre-spawn gate and scripts/test-harness-refresh.mjs
+  // (nogabi issue #6): a failed boot harness refresh must stop the spawn, not
+  // just print a line. Kept here rather than in main.cjs because this file owns
+  // both DATA_HOME and the render itself.
+  readHarnessFailure,
+  HARNESS_FAILURE_PATH,
+  refreshHarnessIfOnboarded,
   // Exported for scripts/test-credential-store.mjs (2026-07-25): the whole
   // store/verify path had never executed outside a packaged build, because
   // dev-serve-ui.mjs runs in plain node. getElectron() requires 'electron'
