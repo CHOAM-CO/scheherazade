@@ -1247,9 +1247,23 @@ async function validateProviderKey(provider, key, opts = {}) {
     // reachable too -- so it gets a real branch rather than falling through
     // to the empty-key guard below (which would wrongly reject 'custom's
     // OPTIONAL, often-blank key as an error).
+    // ok:FALSE here, unlike the chatgpt invalid-port branch above which
+    // returns ok:true (external red team 2026-07-25, surviving finding).
+    // The two are not the same case: for chatgpt, `ok` has no side effect --
+    // it is not in PROVIDERS_REQUIRING_STORED_CREDENTIAL and the validate
+    // route has no chatgpt clause, so nothing is ever persisted. For
+    // 'custom' this same route DOES persist on ok:true whenever a non-blank
+    // key is present (`provider === 'custom' && key && key.trim()`), so
+    // ok:true on a URL we KNOW is unusable would store a credential for a
+    // config that can never spawn (buildProviderEnv rejects the same URL
+    // with not_ready) and report success to the caller. An unusable base URL
+    // is a validation failure, not an informational liveness miss -- the
+    // ok:true/reachable:false shape is reserved for "well-formed target,
+    // nothing listening yet", which is the legitimate not-started-yet case
+    // below.
     const urlResult = resolveCustomBaseUrl(opts.baseUrl)
     if (urlResult.error) {
-      return { ok: true, reachable: false, detail: `custom base URL is invalid -- ${urlResult.error}` }
+      return { ok: false, reachable: false, reason: `custom base URL is invalid -- ${urlResult.error}` }
     }
     return checkLocalLiveness(urlResult.url, 'custom proxy')
   }
@@ -3916,6 +3930,12 @@ module.exports = {
   // decrypted in-memory only, same as this function's existing callers
   // here (storeProviderKeyVerified's round-trip check, readDiscordToken).
   readProviderKey,
+  // Exported for scripts/test-custom-provider-validate.mjs (external red
+  // team 2026-07-25): the 'custom' branch returns before any network call,
+  // so a plain-node harness can pin the ok:false-on-invalid-URL contract
+  // without Electron or a live proxy. Same "pure enough to test directly"
+  // precedent as isMarkerFresh/readLivenessMarker below.
+  validateProviderKey,
   // Exported for Fix D verification (agent-lifecycle model-divergent
   // review, 2026-07-03): pure functions, no Electron dependency (see this
   // file's own getElectron() comment -- "stays requireable/testable
