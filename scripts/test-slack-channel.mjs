@@ -221,8 +221,19 @@ console.log('\n(bonus) resolveOutboundChannel (anti-confabulation parity with ch
   const r1 = await resolveOutboundChannel('c777', { fetchFn: fakeFetch, lastId: 'home1', homeId: null })
   check('valid explicit id honored, no note', r1.channelId === 'c777' && r1.note === null)
 
-  const r2 = await resolveOutboundChannel('confabulated', { fetchFn: fakeFetch, lastId: 'c777', homeId: null })
-  check('unknown explicit id reroutes to current channel with a loud note', r2.channelId === 'c777' && typeof r2.note === 'string' && r2.note.includes('confabulated'))
+  // Fails closed since 2026-07-25 (nogabi #7): an explicit destination the
+  // caller supplied is never swapped for another one. Parity with channel.mjs.
+  let e2 = null
+  const tried = []
+  try {
+    await resolveOutboundChannel('confabulated', {
+      fetchFn: async (id) => { tried.push(id); return fakeFetch(id) }, lastId: 'c777', homeId: null,
+    })
+  } catch (err) { e2 = err }
+  check('unknown explicit id fails closed even with a fallback available', e2 !== null)
+  check('the error names the requested id and says nothing was sent',
+    !!e2 && e2.message.includes('confabulated') && /nothing was sent/i.test(e2.message))
+  check('the fallback was never fetched', !tried.includes('c777'), `fetched: ${tried.join(',')}`)
 
   const r3 = await resolveOutboundChannel(undefined, { fetchFn: fakeFetch, lastId: 'c777', homeId: 'home1' })
   check('omitted id goes to lastInbound over HOME', r3.channelId === 'c777' && r3.note === null)

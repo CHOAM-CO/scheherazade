@@ -223,8 +223,19 @@ console.log('\nresolveOutboundChannel (protocol-agnostic contract, telegram fetc
   const fake = async (id) => { if (KNOWN[id]) return KNOWN[id]; throw new Error(`chat ${id} not found`) }
   const r1 = await resolveOutboundChannel('chatA', { fetchFn: fake, lastId: 'chatHome', homeId: null })
   check('valid explicit chat id honored, no note', r1.ch.id === 'chatA' && r1.note === null)
-  const r2 = await resolveOutboundChannel('bogus-chat', { fetchFn: fake, lastId: 'chatHome', homeId: null })
-  check('unknown chat id reroutes to current conversation with a loud note', r2.ch.id === 'chatHome' && typeof r2.note === 'string' && r2.note.includes('bogus-chat'))
+  // Fails closed since 2026-07-25 (nogabi #7): an explicit chat id the caller
+  // supplied is never swapped for another one. Parity with channel.mjs.
+  let e2 = null
+  const tried = []
+  try {
+    await resolveOutboundChannel('bogus-chat', {
+      fetchFn: async (id) => { tried.push(id); return fake(id) }, lastId: 'chatHome', homeId: null,
+    })
+  } catch (err) { e2 = err }
+  check('unknown chat id fails closed even with a fallback available', e2 !== null)
+  check('the error names the requested chat and says nothing was sent',
+    !!e2 && e2.message.includes('bogus-chat') && /nothing was sent/i.test(e2.message))
+  check('the fallback chat was never fetched', !tried.includes('chatHome'), `fetched: ${tried.join(',')}`)
   const r3 = await resolveOutboundChannel(undefined, { fetchFn: fake, lastId: null, homeId: 'chatHome' })
   check('omitted id falls back to HOME when no last-inbound chat known', r3.ch.id === 'chatHome')
 }

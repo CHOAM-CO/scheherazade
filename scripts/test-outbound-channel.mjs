@@ -7,14 +7,20 @@
 // named "researcher"). The old contract threw on unknown ids and the user saw
 // NOTHING. The promises under test:
 //   1. A valid explicit channelId is honored exactly (no note).
-//   2. An UNKNOWN explicit channelId is rerouted to the current conversation
-//      channel WITH a loud note naming both ids -- visible correction beats
-//      silent swallow.
+//   2. An UNKNOWN explicit channelId FAILS CLOSED: it throws, names the id
+//      the caller asked for, states that nothing was sent, and tells the
+//      caller how to retry. (Changed 2026-07-25, nogabi issue #7. This used
+//      to reroute to the current conversation with a loud note; the note was
+//      honest but the side effect had already happened in a destination the
+//      caller never named. Visibility now comes from the error text, which
+//      the SDK returns to the model verbatim as the JSON-RPC error message
+//      -- verified in shared/protocol.js's request-rejection path.)
 //   3. An omitted channelId goes to the current conversation channel.
 //   4. Fallback order is lastInbound > HOME.
 //   5. With no fallback available, the original error still throws (fail
 //      loud, never fail silent-drop).
-//   6. Reroute never loops: fallback === requested rethrows.
+//   6. No reroute exists to loop: an explicit id never consults the fallback
+//      at all, so the fetch for it is never issued.
 //
 // Run: node scripts/test-outbound-channel.mjs
 
@@ -57,12 +63,21 @@ async function fakeFetch(id) {
   check('valid explicit id has no note', r.note === null)
 }
 
-// 2. unknown explicit id + lastInbound -> rerouted with loud note
+// 2. unknown explicit id + a perfectly good fallback -> STILL fails closed.
+//    The fallback existing is exactly the condition under which the old code
+//    delivered anyway, so this is the assertion that pins the fix.
 {
-  const r = await resolveOutboundChannel('researcher', { fetchFn: fakeFetch, lastId: '777', homeId: null })
-  check('confabulated id rerouted to current channel', r.ch.id === '777', `got ${r.ch?.id}`)
-  check('reroute note names the bad id', typeof r.note === 'string' && r.note.includes('researcher'))
-  check('reroute note names the delivered id', typeof r.note === 'string' && r.note.includes('777'))
+  let err = null
+  const tried = []
+  const trackingFetch = async (id) => { tried.push(id); return fakeFetch(id) }
+  try {
+    await resolveOutboundChannel('researcher', { fetchFn: trackingFetch, lastId: '777', homeId: null })
+  } catch (e) { err = e }
+  check('unknown explicit id throws even when a fallback is available', err !== null)
+  check('error names the id the caller asked for', !!err && err.message.includes('researcher'))
+  check('error states nothing was sent', !!err && /nothing was sent/i.test(err.message))
+  check('error tells the caller how to retry', !!err && err.message.includes('omit channelId'))
+  check('the fallback channel was never even fetched', !tried.includes('777'), `fetched: ${tried.join(',')}`)
 }
 
 // 3. omitted id -> current conversation channel, no note
@@ -78,8 +93,9 @@ async function fakeFetch(id) {
   check('lastInbound beats HOME', r1.ch.id === '777')
   const r2 = await resolveOutboundChannel(undefined, { fetchFn: fakeFetch, lastId: null, homeId: 'home1' })
   check('HOME used when no lastInbound', r2.ch.id === 'home1', `got ${r2.ch?.id}`)
-  const r3 = await resolveOutboundChannel('bogus', { fetchFn: fakeFetch, lastId: null, homeId: 'home1' })
-  check('unknown id reroutes to HOME when no lastInbound', r3.ch.id === 'home1', `got ${r3.ch?.id}`)
+  let r3threw = false
+  try { await resolveOutboundChannel('bogus', { fetchFn: fakeFetch, lastId: null, homeId: 'home1' }) } catch { r3threw = true }
+  check('unknown explicit id does not fall through to HOME either', r3threw)
 }
 
 // 5. no fallback available -> throws (fail loud)
@@ -92,18 +108,24 @@ async function fakeFetch(id) {
   check('omitted id with no fallback throws', threw2)
 }
 
-// 6. fallback === requested -> rethrows original error (no reroute loop)
+// 6. an explicit id issues exactly ONE fetch: its own. No fallback probing.
 {
-  let threw = false
-  try { await resolveOutboundChannel('deadchan', { fetchFn: fakeFetch, lastId: 'deadchan', homeId: null }) } catch { threw = true }
-  check('fallback identical to requested rethrows', threw)
+  const tried = []
+  try {
+    await resolveOutboundChannel('deadchan', {
+      fetchFn: async (id) => { tried.push(id); return fakeFetch(id) },
+      lastId: 'home1', homeId: '777',
+    })
+  } catch { /* expected */ }
+  check('explicit id issues exactly one fetch', tried.length === 1, `fetched: ${tried.join(',')}`)
+  check('the one fetch was the requested id', tried[0] === 'deadchan')
 }
 
-// 7. fallback itself unknown -> throws from the fallback fetch (still loud)
+// 7. the omitted-id path is untouched: a broken fallback still throws loudly.
 {
   let threw = false
-  try { await resolveOutboundChannel('bogus', { fetchFn: fakeFetch, lastId: 'also-bogus', homeId: null }) } catch { threw = true }
-  check('broken fallback still throws, never silent', threw)
+  try { await resolveOutboundChannel(undefined, { fetchFn: fakeFetch, lastId: 'also-bogus', homeId: null }) } catch { threw = true }
+  check('broken fallback on the omitted path still throws, never silent', threw)
 }
 
 console.log(`\n${passed} passed, ${failed} failed`)
