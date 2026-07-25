@@ -197,6 +197,13 @@ function createMainWindow(url) {
   const win = new BrowserWindow({
     width: 980,
     height: 760,
+    // Floor the window at the layout's own width (alignment pass
+    // 2026-07-25). .page-shell is max-width 760px + 1.5rem padding each
+    // side = 808px of content; below that the settings label column and
+    // its control column start colliding and the page reads as broken
+    // rather than narrow. Nothing stopped a user from dragging it there.
+    minWidth: 860,
+    minHeight: 560,
     title: 'Scheherazade',
     webPreferences: {
       // No preload / no Node integration in the renderer -- every wizard

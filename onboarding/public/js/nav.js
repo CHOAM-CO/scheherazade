@@ -403,6 +403,14 @@
       }
       await fireControl(action)
     }
+    // LABEL THE BUTTON (alignment/copy pass 2026-07-25). renderAgentStatus()
+    // unhides #nav-btn-restart whenever the agent is running, but nothing in
+    // this file ever assigned its textContent -- so a blank, unlabeled button
+    // sat in the persistent top bar of every page the whole time the agent
+    // was up, and clicking it restarted the child. NAV.restart already
+    // existed in copy.js and was simply never read. Set here (init, once)
+    // rather than in renderAgentStatus, which runs on every poll.
+    $('nav-btn-restart').textContent = NAV.restart
     $('nav-btn-restart').onclick = () => fireControl('restart')
 
     // Model/effort details are REALITY, not config: filled by

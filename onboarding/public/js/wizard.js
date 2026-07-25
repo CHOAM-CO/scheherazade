@@ -26,8 +26,8 @@
   // in the same spirit as copy.js's own "AUTHORED (not in copy file)"
   // entries -- flagged here, replace if a real copy pass adds a sourced
   // string for this.
-  const COPY_BUTTON_LABEL = '복사'
-  const COPY_BUTTON_COPIED_LABEL = '복사됨'
+  const COPY_BUTTON_LABEL = 'Copy'
+  const COPY_BUTTON_COPIED_LABEL = 'Copied'
 
   const state = {
     provider: null,
@@ -618,7 +618,7 @@
         extraEl.appendChild(toggleBtn)
 
         hintEl.textContent = ''
-        keyInput.placeholder = '토큰을 붙여넣으세요'
+        keyInput.placeholder = 'Paste the token'
         // ACCEPTANCE TEST CONTRACT: primary (setup-token) sub-mode submits
         // provider:'claude-subscription' -- never 'claude'.
         nextBtn.textContent = primary.button
@@ -630,7 +630,7 @@
         extraEl.appendChild(introEl)
 
         hintEl.textContent = claudeFallbackHint ? claudeFallbackHint.hint : ''
-        keyInput.placeholder = '키를 붙여넣으세요'
+        keyInput.placeholder = 'Paste the key'
         // ACCEPTANCE TEST CONTRACT: fallback (sk-ant BYOK) sub-mode submits
         // provider:'claude' -- never 'claude-subscription'.
         nextBtn.textContent = C.step1.button
@@ -690,8 +690,8 @@
         } else {
           statusEl.className = 'status-line failure'
           statusEl.textContent = isSub
-            ? claudeTab.primary.failure(result.reason || '알 수 없는 오류')
-            : C.step1.fallback.failure(result.reason || '알 수 없는 오류')
+            ? claudeTab.primary.failure(result.reason || 'unknown error')
+            : C.step1.fallback.failure(result.reason || 'unknown error')
         }
       } catch (err) {
         statusEl.className = 'status-line failure'
@@ -878,7 +878,7 @@
       if (steps[idx].shot) {
         const shot = document.createElement('div')
         shot.className = 'screenshot-slot'
-        shot.textContent = `[스크린샷 ${idx + 1}: 실제 캡처 예정 — docs/discord-tutorial-shotlist.md 참고]`
+        shot.textContent = `[Screenshot ${idx + 1}: real capture pending — see docs/discord-tutorial-shotlist.md]`
         wrap.appendChild(shot)
       }
     }
@@ -975,7 +975,7 @@
             showStep('5')
           } else {
             statusEl.className = 'status-line failure'
-            statusEl.textContent = C.discordTutorial.failures[result.branch] || C.genericError('알 수 없는 실패')
+            statusEl.textContent = C.discordTutorial.failures[result.branch] || C.genericError('unknown failure')
           }
         } catch (err) {
           statusEl.className = 'status-line failure'
@@ -1060,7 +1060,7 @@
       $('s5-body').textContent = C.step5.live.body(state.displayName, channelName)
     } else {
       // AUTHORED fallback (not sourced from copy.js -- see comment above).
-      $('s5-body').textContent = `${state.displayName}가 Discord에서 기다립니다. DM도 받습니다. 첫 인사는 방금 입력한 설정을 이미 반영하고 있습니다.`
+      $('s5-body').textContent = `${state.displayName} is waiting on Discord. It also takes DMs. Its first message already reflects the settings you just entered.`
     }
     renderStep5Buttons([
       {
@@ -1127,7 +1127,7 @@
         label: C.step5.buttonLabels[kind] || kind,
         secondary: true,
         disabled: true,
-        title: '로그 열기는 아직 연결되지 않았습니다.',
+        title: "Log opening isn't wired up yet.",
       }
     })
     renderStep5Buttons(buttons)

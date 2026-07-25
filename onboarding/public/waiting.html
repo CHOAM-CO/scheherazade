@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Scheherazade — 대기 중</title>
+    <title>Scheherazade — Waiting</title>
     <link rel="stylesheet" href="/css/app.css" />
   </head>
   <body>
@@ -14,8 +14,18 @@
       <div class="card">
         <h1 id="w-title"></h1>
         <div class="banner" id="w-banner"></div>
+        <!-- Escape hatches (IA pass 2026-07-25). This screen used to offer
+             exactly ONE action, "open the tutorial again", and it carries no
+             app-nav tab bar -- so a user who picked "later" at step 4 could
+             reach the Discord tutorial and nothing else. Not settings, not
+             logs, no way to change the model or see why something failed.
+             Those two links are the whole fix; the primary action is
+             unchanged. -->
         <div class="step-actions">
-          <span></span>
+          <div class="button-row">
+            <button class="secondary" id="w-settings"></button>
+            <button class="secondary" id="w-logs"></button>
+          </div>
           <button id="w-resume"></button>
         </div>
       </div>

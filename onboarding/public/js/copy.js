@@ -29,7 +29,7 @@ window.getOnboardToken = function () {
 
 window.COPY = {
   step0: {
-    title: '설정을 시작합니다',
+    title: 'Start setup',
     // Full-autonomy disclosure (Mino 2026-07-04 16:26 "에이전트한테 권한 다
     // 주기" + 2026-07-05 02:12 "권한 최대한 열어주기, 반박 안받음"): the old
     // macOS-protected-folders sentence was REMOVED on Mino's direct order --
@@ -39,21 +39,21 @@ window.COPY = {
     // the Step-0 card below (Mino 2026-07-07 16:58 "full disk access도
     // 온보딩중에 그냥 설정창 켜버리고 받아버리셈"). Source doc §Step 0
     // updated in the same pass -- keep verbatim-synced.
-    body: '3분이면 끝납니다. 모든 정보는 이 컴퓨터에만 저장됩니다. 완성된 에이전트는 매번 허락을 묻지 않고 스스로 일합니다. 문서, 다운로드, 데스크톱 폴더는 에이전트가 직접 읽고 씁니다.',
-    button: '시작',
+    body: 'Takes about 3 minutes. Everything stays on this computer. Once set up, the agent works on its own without asking permission every time. It reads and writes directly to your Documents, Downloads, and Desktop folders.',
+    button: 'Start',
     // AUTHORED (not in copy source file) -- Full Disk Access card
     // (2026-07-07, Mino directive above). Honest about the two macOS
     // constraints: the toggle itself must be clicked by the user (no
     // programmatic grant exists), and the grant needs an app restart
     // (TCC caches at process launch).
     fda: {
-      title: '전체 디스크 접근',
-      bodyMissing: '에이전트가 Mac의 파일을 제대로 다루려면 전체 디스크 접근 권한이 필요합니다. 버튼을 누르면 설정 화면이 열립니다. 목록에서 Scheherazade를 켜주세요.',
-      bodyGrantedPendingRestart: '권한이 켜진 것 같습니다. 적용하려면 앱을 다시 시작해야 합니다.',
-      bodyGranted: '전체 디스크 접근이 켜져 있습니다.',
-      openButton: '설정 열기',
-      relaunchButton: '앱 다시 시작',
-      skipHint: '나중에 설정에서도 켤 수 있습니다.',
+      title: 'Full Disk Access',
+      bodyMissing: 'The agent needs Full Disk Access to work with files on your Mac. This button opens System Settings. Turn on Scheherazade in the list.',
+      bodyGrantedPendingRestart: 'Looks like the permission is on. Restart the app to apply it.',
+      bodyGranted: 'Full Disk Access is on.',
+      openButton: 'Open Settings',
+      relaunchButton: 'Restart App',
+      skipHint: 'You can turn this on later in Settings.',
     },
   },
 
@@ -75,8 +75,8 @@ window.COPY = {
   // below for every tab so wizard.js can render whichever the UI-scope
   // decision calls for without another copy pass either way.
   step1: {
-    title: '사용할 모델을 연결하세요',
-    body: '쓰고 있는 계정으로 로그인하면 됩니다. 구독 요금제가 그대로 적용되고, 로그인 정보는 이 Mac에만 저장됩니다.',
+    title: 'Connect a model',
+    body: 'Log in with the account you already use. Your subscription plan applies as-is, and login info stays on this Mac.',
     // Zero-auth consent card (2026-07-13). Shown only when this Mac already has
     // a Claude Code CLI login. Three rules baked into this copy:
     //   1. Say what we did NOT do (no copy, no store, no read) -- the whole
@@ -87,11 +87,11 @@ window.COPY = {
     //   3. `alt` keeps the other paths visible. A found login is an offer, not
     //      a fait accompli.
     foundLogin: {
-      title: '이 Mac에 이미 Claude Code 로그인이 있습니다',
-      body: '그 로그인을 그대로 쓸 수 있습니다. 복사하지 않고, 따로 저장하지 않고, 내용을 열어보지도 않습니다 (있는지만 확인했습니다). 붙여넣을 키도 없습니다.',
-      cost: '사용량은 회원님의 Claude 구독에서 차감됩니다.',
-      use: '이 로그인 그대로 쓰기',
-      alt: '다른 계정을 쓰고 싶다면 아래에서 직접 연결하세요.',
+      title: 'This Mac already has a Claude Code login',
+      body: "You can use that login as-is. We don't copy it, store it separately, or open its contents (we only checked that it exists). No key to paste.",
+      cost: 'Usage is deducted from your Claude subscription.',
+      use: 'Use this login',
+      alt: 'To use a different account, connect one directly below.',
       // Expired-login disclosure, placed HERE on purpose (red-team 2026-07-13,
       // axis "false availability"). We check only that the login file exists,
       // never what is in it -- so an expired login still reads as available and
@@ -103,7 +103,7 @@ window.COPY = {
       // spends the user's quota before they have agreed to spend any. So the
       // honest move is to spend one sentence, at the moment of consent, telling
       // the user what the failure will look like and how to fix it.
-      staleHint: '로그인이 만료된 상태라면 에이전트가 시작되지 않습니다. 그때는 터미널에서 claude 를 한 번 실행해 다시 로그인한 뒤 재시도해주세요.',
+      staleHint: "If this login has expired, the agent won't start. Run claude in Terminal once to log in again, then retry.",
     },
     tabs: [
       {
@@ -130,50 +130,50 @@ window.COPY = {
           // anything (no {plan} field confirmed on the validate response
           // yet); leaving it in place for whenever that lands, not a v1
           // blocker.
-          validating: '토큰을 확인하는 중입니다',
-          failure: (reason) => `토큰이 거부됐습니다 (원인: ${reason}). 명령어를 다시 실행해 새 토큰을 붙여넣어주세요.`,
-          precondition: 'Claude Pro 또는 Max 구독과 claude 명령어 설치가 필요합니다.',
+          validating: 'Checking the token…',
+          failure: (reason) => `Token rejected (reason: ${reason}). Run the command again and paste a new token.`,
+          precondition: 'Requires a Claude Pro or Max subscription and the claude command installed.',
           steps: [
-            '터미널에서 claude setup-token을 실행하세요',
-            '브라우저에서 Claude 계정으로 로그인하세요',
-            '터미널에 표시된 토큰을 아래 칸에 붙여넣으세요',
+            'Run claude setup-token in Terminal',
+            'Log in with your Claude account in the browser',
+            'Paste the token shown in Terminal into the field below',
           ],
           copyCommand: 'claude setup-token',
-          subtext: 'API 키 발급이 필요 없습니다. 구독이 그대로 적용되고, 토큰은 이 Mac의 키체인에만 저장됩니다.',
-          button: '연결 확인',
+          subtext: "No API key needed. Your subscription applies as-is, and the token is stored only in this Mac's keychain.",
+          button: 'Verify connection',
         },
       },
       {
         id: 'chatgpt',
         label: 'ChatGPT',
-        disabledLabel: 'ChatGPT (곧 지원)',
+        disabledLabel: 'ChatGPT (coming soon)',
         primary: {
-          button: '로컬 Codex에 연결',
-          precondition: 'Codex 설치와 codex login (ChatGPT 계정 브라우저 인증)이 필요합니다.',
-          subtext: '이 Mac의 Codex가 계정 인증을 대신합니다. 앱에 키를 저장하지 않습니다.',
+          button: 'Connect to local Codex',
+          precondition: 'Requires Codex installed and codex login (browser auth with your ChatGPT account).',
+          subtext: 'Codex on this Mac handles account auth. No key is stored in the app.',
         },
       },
       {
         id: 'ollama',
         label: 'Ollama Cloud',
-        disabledLabel: 'Ollama Cloud (곧 지원)',
+        disabledLabel: 'Ollama Cloud (coming soon)',
         primary: {
-          button: '로컬 Ollama에 연결 (클라우드 모델)',
-          precondition: 'Ollama 앱이 설치되어 있고 ollama signin을 마친 상태여야 합니다.',
-          subtext: '이 Mac의 Ollama가 계정 서명을 대신합니다. 앱에 키를 저장하지 않습니다.',
+          button: 'Connect to local Ollama (cloud model)',
+          precondition: 'Requires the Ollama app installed and ollama signin completed.',
+          subtext: 'Ollama on this Mac handles account sign-in. No key is stored in the app.',
           // Honesty note (source file): Path A is friction-moved, not
           // friction-removed (install+signin happen outside the app) --
           // copy must not imply one-click. In-app signin (Path B) = v1.1.
           failures: {
-            not_running: 'Ollama가 실행 중이 아닙니다. Ollama 앱을 켜고 다시 시도해주세요.',
-            not_signed_in: 'Ollama 계정 로그인이 안 되어 있습니다. 터미널에서 ollama signin을 실행한 뒤 다시 시도해주세요.',
+            not_running: "Ollama isn't running. Open the Ollama app and try again.",
+            not_signed_in: 'Not signed in to Ollama. Run ollama signin in Terminal, then try again.',
           },
         },
       },
     ],
-    loginWaiting: '브라우저에서 로그인을 마치면 이 화면이 바뀝니다.',
-    loginSuccess: (plan) => `연결됐습니다. ${plan} 요금제로 동작합니다.`,
-    loginFailure: '로그인이 완료되지 않았습니다. 다시 시도하거나, 아래에서 API 키로 연결할 수 있습니다.',
+    loginWaiting: 'This screen updates once you finish logging in in the browser.',
+    loginSuccess: (plan) => `Connected. Running on the ${plan} plan.`,
+    loginFailure: "Login didn't complete. Try again, or connect with an API key below.",
     // AUTHORED (not in copy source file) -- in-app login shell-out UI
     // strings (Path B, 2026-07-07): the app now runs `codex login` /
     // `ollama signin` itself, so these tabs show a login button instead of
@@ -183,101 +183,101 @@ window.COPY = {
     // COPY_BUTTON_LABEL precedent (wizard.js).
     login: {
       chatgpt: {
-        button: 'ChatGPT 계정으로 로그인',
-        lead: '버튼을 누르면 브라우저에서 ChatGPT 로그인이 열립니다. 키를 붙여넣을 필요가 없습니다.',
+        button: 'Log in with ChatGPT',
+        lead: 'This opens ChatGPT login in your browser. No key to paste.',
       },
       ollama: {
-        button: 'Ollama 계정으로 로그인',
-        lead: '버튼을 누르면 Ollama 계정 로그인이 진행됩니다. 키를 붙여넣을 필요가 없습니다.',
-        modelLabel: '사용할 클라우드 모델',
-        modelPlaceholder: '모델 이름을 입력하세요',
-        modelHint: 'ollama.com의 모델 목록에서 이름을 복사해 넣으세요.',
+        button: 'Log in with Ollama',
+        lead: 'This starts Ollama account login. No key to paste.',
+        modelLabel: 'Cloud model to use',
+        modelPlaceholder: 'Enter a model name',
+        modelHint: 'Copy a name from the model list on ollama.com.',
       },
-      successNoPlan: '연결됐습니다. 로그인 정보는 이 Mac에만 저장됩니다.',
-      starting: '로그인을 시작하는 중입니다',
-      cancelled: '로그인을 취소했습니다. 다시 시도할 수 있습니다.',
-      timeout: '로그인 대기 시간이 지났습니다. 다시 시도해주세요.',
-      reloginLabel: '다른 계정으로 로그인',
+      successNoPlan: 'Connected. Login info stays on this Mac.',
+      starting: 'Starting login…',
+      cancelled: 'Login cancelled. You can try again.',
+      timeout: 'Login timed out. Try again.',
+      reloginLabel: 'Log in with a different account',
       // Lazy dependency install (2026-07-07): shown INSTEAD of the login
       // button when the provider's CLI is not on this Mac yet -- the app
       // downloads and verifies it itself (Apple 서명 확인), no Terminal,
       // no admin password.
       install: {
-        needed: (name) => `${name} 구성 요소가 이 Mac에 아직 없습니다. 자동으로 설치할 수 있습니다.`,
-        button: '자동 설치',
-        downloading: (pct) => (pct == null ? '내려받는 중입니다' : `내려받는 중입니다 (${pct}%)`),
-        installing: '설치하고 확인하는 중입니다',
-        done: '설치됐습니다. 이제 로그인할 수 있습니다.',
-        failed: '설치에 실패했습니다. 네트워크를 확인하고 다시 시도해주세요.',
-        retryButton: '다시 시도',
+        needed: (name) => `${name} isn't installed on this Mac yet. It can be installed automatically.`,
+        button: 'Install automatically',
+        downloading: (pct) => (pct == null ? 'Downloading…' : `Downloading… (${pct}%)`),
+        installing: 'Installing and verifying…',
+        done: 'Installed. You can log in now.',
+        failed: 'Install failed. Check your network and try again.',
+        retryButton: 'Retry',
         // Windows v1 = detection-only (managed install is mac-only): the
         // wizard shows link + re-detect instead of the download button.
-        manualNeeded: (name) => `${name} 구성 요소가 이 PC에 아직 없습니다. Windows에서는 공식 설치 페이지에서 직접 설치한 뒤 다시 확인해주세요.`,
-        manualOpenButton: '설치 페이지 열기',
-        manualOpened: '브라우저에서 설치 페이지를 열었습니다. 설치가 끝나면 "다시 확인"을 눌러주세요.',
-        redetectButton: '다시 확인',
-        stillMissing: (name) => `${name}을(를) 아직 찾지 못했습니다. 설치를 마친 뒤 다시 확인해주세요.`,
+        manualNeeded: (name) => `${name} isn't installed on this PC yet. On Windows, install it from the official install page, then check again.`,
+        manualOpenButton: 'Open install page',
+        manualOpened: 'Opened the install page in your browser. Click "Check again" once install finishes.',
+        redetectButton: 'Check again',
+        stillMissing: (name) => `${name} still not found. Finish installing, then check again.`,
       },
     },
     // Folded-away fallback path. Field-level hint text is unchanged from
     // the pre-v2 copy (still accurate -- only its position in the flow
     // moved from primary to fallback).
     fallback: {
-      toggleLabel: 'API 키로 연결하기',
+      toggleLabel: 'Connect with an API key',
       // Sirin red-team #5: verification itself is a real POST to the
       // provider's server, so "외부로 전송되지 않습니다" was a false claim.
       // This is the corrected/honest version.
-      body: 'API 키가 있다면 직접 연결할 수 있습니다. 키는 macOS 키체인에만 저장됩니다. 입력한 제공사에 인증을 확인하는 것 외에는 어디로도 보내거나 수집하지 않습니다.',
+      body: "If you have an API key, you can connect directly. The key is stored only in the macOS keychain. It's sent only to the provider you entered, to verify it. Nothing is sent anywhere else, and nothing is collected.",
       tabs: [
-        { id: 'claude', hint: 'console.anthropic.com에서 발급. sk-ant-로 시작합니다.' },
-        { id: 'chatgpt', hint: 'platform.openai.com에서 발급. sk-로 시작합니다.' },
-        { id: 'ollama', hint: 'ollama.com 계정 설정에서 발급.' },
+        { id: 'claude', hint: 'Issued at console.anthropic.com. Starts with sk-ant-.' },
+        { id: 'chatgpt', hint: 'Issued at platform.openai.com. Starts with sk-.' },
+        { id: 'ollama', hint: 'Issued in your account settings at ollama.com.' },
       ],
-      validating: '키를 확인하는 중입니다',
-      success: '연결됐습니다',
-      failure: (reason) => `키가 거부됐습니다 (원인: ${reason}). 키를 다시 확인하거나 다른 제공사를 선택하세요.`,
+      validating: 'Checking the key…',
+      success: 'Connected',
+      failure: (reason) => `Key rejected (reason: ${reason}). Check the key again or choose a different provider.`,
     },
     // Shown beneath a tab whenever that tab is rendered disabled (UI-scope
     // decision, not directly the routerWired field -- see note above). Same
     // subtext for either disabled tab, per the source file's 폴백 B copy --
     // no date promise, no implying a choice was made.
-    routerDisabledNote: '다음 업데이트에서 연결됩니다. 지금은 Claude로 시작할 수 있습니다.',
-    button: '다음',
+    routerDisabledNote: 'Connects in a future update. You can start with Claude for now.',
+    button: 'Next',
   },
 
   step2: {
-    title: '에이전트의 이름을 지으세요',
-    body: '이 이름으로 대화하게 됩니다. 나중에 설정에서 바꿀 수 있습니다.',
-    defaultName: '세헤라자드',
-    button: '다음',
+    title: 'Name your agent',
+    body: "You'll talk to it by this name. You can change it later in Settings.",
+    defaultName: 'Scheherazade',
+    button: 'Next',
   },
 
   step3: {
-    title: '세 가지만 정합니다',
-    q1Label: '말투',
+    title: 'Three quick choices',
+    q1Label: 'Tone',
     q1Options: [
-      { value: 'casual', label: '반말' },
-      { value: 'formal', label: '존댓말' },
+      { value: 'casual', label: 'Casual' },
+      { value: 'formal', label: 'Formal' },
     ],
-    q2Label: '주로 시킬 일',
-    q2Chips: ['코드 리뷰', '일정 관리', '리서치', '글 정리', '기타'],
-    q3Label: '먼저 말 걸어도 됩니까',
-    q3YesPrefix: '예,',
-    q3YesSuffix: '사이에만',
-    q3No: '아니요',
+    q2Label: "What you'll mostly ask it to do",
+    q2Chips: ['Code review', 'Scheduling', 'Research', 'Writing', 'Other'],
+    q3Label: 'OK for it to message you first?',
+    q3YesPrefix: 'Yes, between',
+    q3YesSuffix: 'only',
+    q3No: 'No',
     // Flag-follows-copy (Idea copy spec, her lines 46-48): the note has an ON
     // and an OFF version, and it must track the proactive-feature flag so no
     // landing lies. That flag ships default OFF (proactive cycle is not wired
     // this build; only routerWired is in the API surface), so the OFF copy is
     // the truthful landing. Earlier build shipped the ON copy, which promised
     // proactive contact the build will not perform.
-    q3Note: '지금은 동의만 저장됩니다. 먼저 연락하는 기능이 켜지면 이 설정을 그대로 따릅니다. 설정에서 언제든 바꿀 수 있습니다.',
-    button: '다음',
+    q3Note: 'For now this just saves your consent. Once proactive messaging is enabled, it will follow this setting. You can change it anytime in Settings.',
+    button: 'Next',
   },
 
   step4: {
-    title: '대화할 곳을 연결하세요',
-    body: (name) => `${name}는 Discord에서 대화합니다. 봇을 하나 만들어 연결합니다. 5분 걸립니다.`,
+    title: "Connect where you'll talk",
+    body: (name) => `${name} talks through Discord. You'll create a bot and connect it. Takes about 5 minutes.`,
     // Mino 07-13 click-test: three platform buttons, each a redirect.
     // Discord keeps the real flow (opens the dev portal AND enters the
     // existing tutorial -- redirect alone would kill the guided steps,
@@ -286,14 +286,14 @@ window.COPY = {
     // trace), so their shared note says so -- otherwise the user makes
     // a token and finds no field to paste it into.
     connectDiscord: 'Connect Discord',
-    connectDiscordNote: '봇 만들기 페이지가 열리고, 여기에 단계별 안내가 시작됩니다',
+    connectDiscordNote: 'Opens the bot creation page, and step-by-step guidance starts here',
     connectSlack: 'Connect Slack',
     connectTelegram: 'Connect Telegram',
     // De-lied for v0.0.18: slack/telegram backends now EXIST, but the
     // onboarding wizard still walks the Discord path only -- the honest
     // pointer is "finish setup, then switch on the 채널 tab", not the old
     // "지원 예정" (false) and not a fake in-wizard flow (doesn't exist).
-    supportSoonNote: '봇 만들기 페이지만 열립니다. 연결은 설치를 끝낸 뒤 채널 탭에서 할 수 있습니다',
+    supportSoonNote: 'Only opens the bot creation page. You can connect it from the Channels tab after setup finishes',
     links: {
       discord: 'https://discord.com/developers/applications',
       slack: 'https://api.slack.com/apps',
@@ -302,20 +302,20 @@ window.COPY = {
     // De-lied (source file, Step 4 note): no local-chat fallback exists
     // (Mino rejected it 13:55; localhost is onboarding-only). This button
     // only saves settings and parks the user on the waiting screen.
-    laterButton: '나중에 하기 — 설정만 저장하고 대기',
+    laterButton: 'Do this later — save settings and wait',
   },
 
   discordTutorial: {
     // Shown once, before step 1 of 6 (Sirin #2) -- not a numbered step
     // itself, so wizard.js renders it at tutorialIndex === -1.
-    preWarning: 'Discord 계정에 2단계 인증(2FA)이 켜져 있으면 중간에 인증번호를 요구합니다. 인증 기기를 준비해 두세요.',
+    preWarning: 'If your Discord account has two-factor authentication (2FA) on, it will ask for a code partway through. Have your authenticator ready.',
     steps: [
-      { text: (name) => `discord.com/developers/applications 접속 → New Application → 이름 입력 (아무거나, 예: ${name})`, shot: true },
-      { text: () => '왼쪽 Bot 탭 → Reset Token → 토큰 복사. 이 토큰은 비밀번호입니다. 다른 곳에 붙여넣지 마세요.', shot: true },
+      { text: (name) => `Go to discord.com/developers/applications → New Application → enter a name (anything, e.g. ${name})`, shot: true },
+      { text: () => "Open the Bot tab on the left → Reset Token → copy the token. This token is a password. Don't paste it anywhere else.", shot: true },
       {
         // Sirin #3: switching the toggle alone does not persist it.
         text: () =>
-          '같은 화면에서 Privileged Gateway Intents 중 MESSAGE CONTENT INTENT 켜기 → 화면 하단에 나타나는 초록색 Save Changes 버튼을 눌러야 저장됩니다. 스위치만 켜고 나가면 저장되지 않습니다.',
+          'On the same screen, turn on MESSAGE CONTENT INTENT under Privileged Gateway Intents → click the green Save Changes button at the bottom to save it. Toggling the switch alone and leaving does not save it.',
         shot: true,
       },
       {
@@ -327,23 +327,23 @@ window.COPY = {
         // permissions (View Channel, Send Messages, Read Message History,
         // Add Reactions, Attach Files, Embed Links) ride along in the URL.
         text: () =>
-          '복사한 토큰을 아래 칸에 붙여넣으면 초대 링크가 만들어집니다 → 초대 링크 열기 → 봇을 넣을 서버 선택 (서버가 없으면: Discord 앱에서 + 버튼으로 개인 서버를 하나 만드세요) → 연결 확인',
+          'Paste the copied token into the field below to generate an invite link → open the invite link → choose a server to add the bot to (no server? create one in the Discord app with the + button) → verify connection',
         shot: false,
       },
     ],
-    tokenFieldLabel: '봇 토큰',
-    inviteButton: '초대 링크 열기',
-    inviteHint: '권한이 미리 담긴 초대 링크입니다',
-    validateButton: '연결 확인',
-    validating: '연결을 확인하는 중입니다',
-    success: (name) => `${name}가 서버에 들어왔습니다. Discord에서 확인하세요.`,
+    tokenFieldLabel: 'Bot token',
+    inviteButton: 'Open invite link',
+    inviteHint: 'An invite link with permissions already included',
+    validateButton: 'Verify connection',
+    validating: 'Verifying connection…',
+    success: (name) => `${name} has joined the server. Check Discord to confirm.`,
     failures: {
-      invalid_token: '토큰이 거부됐습니다. 2번 단계에서 Reset Token 후 새 토큰을 복사했는지 확인하세요.',
-      intent_off: '메시지를 읽을 수 없는 상태입니다. 3번 단계의 MESSAGE CONTENT INTENT가 켜져 있는지 확인하세요.',
-      not_invited: '봇이 아직 어느 서버에도 없습니다. 4번 단계의 초대 링크를 다시 여세요.',
+      invalid_token: 'Token rejected. Make sure you copied a new token after Reset Token in step 2.',
+      intent_off: "It can't read messages. Check that MESSAGE CONTENT INTENT is on, from step 3.",
+      not_invited: "The bot hasn't joined any server yet. Reopen the invite link from step 4.",
     },
-    prevButton: '이전',
-    nextButton: '다음',
+    prevButton: 'Back',
+    nextButton: 'Next',
   },
 
   // ── Step 5: 3-state handoff (connecting / live / failed) ────────────
@@ -355,9 +355,9 @@ window.COPY = {
   // that class of bug leaks English debug prose into the user-facing UI).
   step5: {
     connecting: {
-      title: '연결 중',
-      body: (name) => `${name}를 시작하고 있습니다. Discord 연결이 확인되면 이 화면이 바뀝니다.`,
-      button: 'Discord 열기',
+      title: 'Connecting',
+      body: (name) => `Starting ${name}. This screen updates once Discord connection is confirmed.`,
+      button: 'Open Discord',
     },
     // channelName (2026-07-04 06:35, Melchior raw-verified http-server.cjs:940
     // -- validateAndInvite's return already carried channelId/guildId, this
@@ -371,15 +371,15 @@ window.COPY = {
     // and where the 첫 발화 스펙 is written for); DM is a short second line,
     // not equal billing.
     live: {
-      title: '끝났습니다',
-      body: (name, channelName) => `${name}가 Discord의 #${channelName}에서 기다립니다. DM도 받습니다. 첫 인사는 방금 입력한 설정을 이미 반영하고 있습니다.`,
+      title: 'All set',
+      body: (name, channelName) => `${name} is waiting in #${channelName} on Discord. It also takes DMs. Its first message already reflects the settings you just entered.`,
       // Deep link via POST /api/discord/open { guildId, channelId } --
       // http-server.cjs:1234-1244, confirmed live (source file's own
       // http-server.cjs:1011 citation was stale, code moved).
-      button: (channelName) => `#${channelName} 열기`,
+      button: (channelName) => `Open #${channelName}`,
     },
     failed: {
-      title: '시작하지 못했습니다',
+      title: 'Failed to start',
       causes: {
         // action text (2026-07-04 06:5x, Melchior's wizard.js gate caught
         // this): settings.js is rename+Slack-placeholder only -- no real
@@ -392,37 +392,37 @@ window.COPY = {
         // -- opening settings is harmless, just not sufficient, and the v1.1
         // repair UI will land on the same button without another copy pass.
         crash_loop: {
-          cause: (name) => `${name} 프로세스가 반복해서 종료되고 있습니다. 정확한 원인은 확인되지 않았습니다.`,
-          action: () => '앱을 종료했다가 다시 실행해주세요. 반복되면 처음 입력한 값이 정확한지 다시 확인해주세요.',
+          cause: (name) => `${name}'s process keeps exiting repeatedly. The exact cause isn't confirmed.`,
+          action: () => 'Quit the app and reopen it. If it keeps happening, double-check the values you entered at setup.',
           buttons: ['openSettings', 'openLogs'],
         },
         discord_token_bad: {
-          cause: () => 'Discord 봇 토큰이 없거나 거부됐습니다.',
-          action: () => '토큰 단계로 돌아가 새 토큰을 붙여넣어주세요.',
+          cause: () => 'The Discord bot token is missing or was rejected.',
+          action: () => 'Go back to the token step and paste a new token.',
           buttons: ['backToToken', 'openLogs'],
         },
         provider_not_wired: {
-          cause: () => '선택한 모델 연결이 아직 준비되지 않았습니다.',
-          action: () => '설정에서 모델을 Claude로 변경한 뒤, 앱을 종료했다가 다시 실행해주세요.',
+          cause: () => "The model connection you chose isn't ready yet.",
+          action: () => 'Switch the model to Claude in Settings, then quit and reopen the app.',
           buttons: ['openSettings', 'openLogs'],
         },
         // action text: same fix as crash_loop above, same reason (no real
         // settings repair UI to send the user to).
         key_error: {
-          cause: () => '저장된 키를 읽지 못했습니다.',
-          action: () => '앱을 종료했다가 다시 실행해주세요. 반복되면 처음 입력한 값이 정확한지 다시 확인해주세요.',
+          cause: () => "Couldn't read the stored key.",
+          action: () => 'Quit the app and reopen it. If it keeps happening, double-check the values you entered at setup.',
           buttons: ['openSettings', 'openLogs'],
         },
         timeout: {
-          cause: (name) => `${name}가 시작됐는지 확인되지 않습니다.`,
-          action: () => '잠시 후 상태 다시 확인을 눌러주세요.',
+          cause: (name) => `Can't confirm whether ${name} started.`,
+          action: () => 'Wait a moment, then click Check status again.',
           buttons: ['retry', 'openLogs'],
         },
         // Fallback row -- any code not in this table (including a literal
         // "unknown") lands here.
         unknown: {
-          cause: (name) => `${name}를 시작하지 못했습니다.`,
-          action: () => '잠시 후 상태 다시 확인을 누르고, 반복되면 앱을 종료했다가 다시 실행해주세요.',
+          cause: (name) => `${name} failed to start.`,
+          action: () => 'Wait a moment and click Check status again. If it keeps happening, quit the app and reopen it.',
           buttons: ['retry', 'openLogs'],
         },
       },
@@ -432,55 +432,55 @@ window.COPY = {
     // table; wiring behind each is documented in wizard.js at the point of
     // use (openLogs and retry have no backend endpoint yet -- see there).
     buttonLabels: {
-      openSettings: '설정 열기',
-      openLogs: '로그 열기',
-      backToToken: '토큰 단계로 돌아가기',
-      retry: '상태 다시 확인',
+      openSettings: 'Open Settings',
+      openLogs: 'Open Logs',
+      backToToken: 'Back to token step',
+      retry: 'Check status again',
     },
   },
 
   memoryPane: {
-    title: '기억',
-    subtitle: (name) => `${name}가 당신에 대해 갖고 있는 것 전부입니다. 여기 없는 것은 기억하지 않습니다.`,
-    sessionGroupTitle: '이번 세션에서 기억한 것',
+    title: 'Memory',
+    subtitle: (name) => `Everything ${name} knows about you. Anything not here, it doesn't remember.`,
+    sessionGroupTitle: 'Remembered this session',
     categories: {
-      user_facts: { label: '당신에 대해', empty: '아직 없습니다. 대화하면서 쌓입니다.' },
-      open_threads: { label: '하다 만 일', empty: '지금은 없습니다. 끝내지 못한 일이 생기면 여기 남습니다.' },
+      user_facts: { label: 'About you', empty: 'Nothing yet. This fills in as you talk.' },
+      open_threads: { label: 'Unfinished things', empty: 'None right now. Anything left unfinished shows up here.' },
       corrections: {
-        label: '고쳐진 것',
-        empty: (name) => `아직 없습니다. ${name}를 고쳐주면 여기 기록되고, 같은 실수를 반복하지 않는 근거가 됩니다.`,
+        label: 'Corrections',
+        empty: (name) => `Nothing yet. Correct ${name} and it's logged here, so the same mistake isn't repeated.`,
       },
-      preferences: { label: '일하는 방식', empty: '설정에서 조정할 수 있습니다.' },
+      preferences: { label: 'How it works', empty: 'Adjust this in Settings.' },
     },
     // Tri-state status label for open_threads, verbatim from the copy row
     // format spec "상태(진행 중/완료/오래됨)". Derivation rule (status +
     // staleness -> label) is this build's own inference -- see memory.js.
-    threadStatus: { active: '진행 중', done: '완료', stale: '오래됨' },
+    threadStatus: { active: 'In progress', done: 'Done', stale: 'Stale' },
     // Preference key/value labels: these keys are this build's own
     // invention (Step 3 writes them), so their Korean labels are authored
     // here, not sourced from the copy file.
     prefKeyLabels: {
-      tone: '말투',
-      primary_task: '주로 시킬 일',
-      proactive_enabled: '먼저 말 걸기',
-      proactive_window: '먼저 말 거는 시간대',
+      tone: 'Tone',
+      primary_task: 'Main task',
+      proactive_enabled: 'Message first',
+      proactive_window: 'Proactive time window',
     },
     prefValueLabels: {
-      casual: '반말',
-      formal: '존댓말',
-      true: '켜짐',
-      false: '꺼짐',
+      casual: 'Casual',
+      formal: 'Formal',
+      true: 'On',
+      false: 'Off',
     },
-    eventLabels: { insert: '추가됨', update: '수정됨', confirm: '확인됨', delete: '삭제됨' },
-    deleteDialog: (name) => `삭제하면 복구할 수 없습니다. ${name}는 이 내용을 더 이상 기억하지 않습니다. 삭제했다는 기록만 남습니다.`,
-    deleteConfirm: '삭제',
-    deleteCancel: '취소',
-    deleteToast: '삭제됐습니다.',
-    deleteLabel: '삭제',
+    eventLabels: { insert: 'Added', update: 'Updated', confirm: 'Confirmed', delete: 'Deleted' },
+    deleteDialog: (name) => `This can't be undone. ${name} will no longer remember this. Only a record that it was deleted will remain.`,
+    deleteConfirm: 'Delete',
+    deleteCancel: 'Cancel',
+    deleteToast: 'Deleted.',
+    deleteLabel: 'Delete',
     // AUTHORED (not in copy file) -- manual refresh, Mino 07-13 click-test:
     // "기억페이지 리프레시 버튼이라도 있으면 좋겠어"
-    refreshLabel: '새로고침',
-    refreshToast: '다시 불러왔습니다.',
+    refreshLabel: 'Refresh',
+    refreshToast: 'Reloaded.',
   },
 
   // AUTHORED (not in copy file) -- shared shell (nav.js), subpage split
@@ -493,7 +493,7 @@ window.COPY = {
     // channels FIRST (multichannel v0.0.18, Mino 07-16: "맨 앞에 채널 섹션") --
     // tab order is meaning here: the messenger the agent lives through
     // outranks what it remembers and how it runs.
-    tabs: { channels: '채널', memory: '기억', connectors: '커넥터', settings: '설정', logs: '로그' },
+    tabs: { channels: 'Channels', memory: 'Memory', connectors: 'Connectors', settings: 'Settings', logs: 'Logs' },
     label: 'AGENT',
     states: { live: 'Running', connecting: 'Starting…', stopped: 'Stopped', failed: 'Failed', idle: 'Not started' },
     start: 'Start',
@@ -515,8 +515,8 @@ window.COPY = {
     // context gauge (v0.0.22): occupancy is exact (from the transcript's own
     // usage counters); the percentage is vs the best-known cap for the model
     // -- honest about the gap, so no "안전" wording, just numbers.
-    contextGauge: (pct, used, cap) => `컨텍스트 ${pct}% (${used}/${cap})`,
-    contextGaugeNoCap: (used) => `컨텍스트 ${used} 토큰`,
+    contextGauge: (pct, used, cap) => `Context ${pct}% (${used}/${cap})`,
+    contextGaugeNoCap: (used) => `Context ${used} tokens`,
     muteRevertConfirm: (m) => `Switch back to ${m}? The agent will restart.`,
     // Shell reality additions (IA v0.0.9): autonomy visibility badge (the
     // one setting that spends money while nobody watches deserves a spot in
@@ -531,68 +531,77 @@ window.COPY = {
   // copy says tokens are "가려집니다" (mechanism) and never "안전합니다"
   // (guarantee it can't make).
   logs: {
-    title: '로그',
-    backToMemory: '기억으로',
-    subtitle: '앱과 에이전트 세션의 실시간 로그입니다. 토큰 등 알려진 비밀 값은 자동으로 가려집니다.',
-    copyButton: '전체 복사',
-    copied: '복사됐습니다. 그대로 붙여넣어 공유하시면 됩니다.',
-    copyFailed: '복사에 실패했습니다. 드래그로 직접 선택해 주세요.',
-    empty: '아직 로그가 없습니다. 에이전트를 시작하면 여기에 출력이 나타납니다.',
-    gapMarker: '― 이전 로그 일부가 버퍼에서 밀려났습니다. 전체 기록은 로그 파일에 있습니다 ―',
-    fileNote: (p) => `전체 기록 파일: ${p}`,
-    fileNoteMissing: '디스크 로그 파일이 아직 만들어지지 않았습니다.',
-    followOn: '자동 따라가기',
-    pollError: '로그를 불러오지 못했습니다. 앱이 실행 중인지 확인해 주세요.',
+    title: 'Logs',
+    backToMemory: 'Back to Memory',
+    subtitle: 'Live logs from the app and agent session. Known secrets like tokens are masked automatically.',
+    copyButton: 'Copy all',
+    copied: 'Copied. Paste it as-is to share.',
+    copyFailed: 'Copy failed. Select the text manually and copy it.',
+    empty: 'No logs yet. Output appears here once the agent starts.',
+    gapMarker: '— Some earlier logs were pushed out of the buffer. The full record is in the log file —',
+    fileNote: (p) => `Full record file: ${p}`,
+    fileNoteMissing: "The disk log file hasn't been created yet.",
+    followOn: 'Auto-scroll',
+    pollError: "Couldn't load logs. Check that the app is running.",
   },
 
   // AUTHORED (not in copy file) -- settings page, minimal v1.
   settings: {
-    title: '설정',
-    backToMemory: '기억으로',
-    renameLabel: '이름',
-    renameButton: '저장',
-    renameSaved: '저장됐습니다.',
+    title: 'Settings',
+    backToMemory: 'Back to Memory', // unused since the IA pass removed the back link; kept so a future page can reuse it
+    // Three group headings (IA pass 2026-07-25). The page used to run seven
+    // flat blocks; these name the question each group answers, so the answer
+    // to "where do I change X" is one read instead of a scan.
+    groupAgent: 'Agent',
+    groupEngine: 'Engine',
+    groupSystem: 'System',
+    // Sign-ins live on the connectors page while the model picker lives
+    // here. Until that split is resolved, this link is what closes it.
+    signinLink: 'Manage sign-ins',
+    renameLabel: 'Name',
+    renameButton: 'Save',
+    renameSaved: 'Saved.',
     // AUTHORED -- apply-state line under the model/effort selects (IA
     // v0.0.9, red-team fold #1): the shell shows reality, this line explains
     // the GAP. Its highest-value state is the failure one -- a spawn refused
     // by the proxy model-receipt gate (07-14 catch) surfaces its reason HERE,
     // next to the picker that caused it, instead of only in the app log.
-    applyChecking: '적용 상태 확인 중',
-    applyApplied: (m, e) => `적용됨 · ${m} / ${e}`,
-    applyStopped: '정지 중입니다. 시작하면 이 설정으로 뜹니다',
-    applyPending: (m) => `재시작 중입니다 (직전 실행: ${m})`,
-    applyMismatch: (m) => `지금 도는 건 ${m}입니다. 재시작하면 이 설정이 적용됩니다`,
-    applyFailed: (detail) => `시작 실패: ${detail}`,
+    applyChecking: 'Checking applied state…',
+    applyApplied: (m, e) => `Applied · ${m} / ${e}`,
+    applyStopped: 'Stopped. It will start with this setting.',
+    applyPending: (m) => `Restarting… (previously running: ${m})`,
+    applyMismatch: (m) => `Currently running ${m}. Restart to apply this setting.`,
+    applyFailed: (detail) => `Failed to start: ${detail}`,
     // AUTHORED -- attach topology (0.1.0 prep, design-0016). Copy contract:
     // the bootstrap NEVER runs from the app, so every string here hands the
     // work to the user's terminal explicitly. No "안전합니다"-class promises
     // -- the why-line states the mechanism (attribution), not a guarantee.
-    topologyLabel: '에이전트 구동 방식',
-    topologyNote: '앱이 직접 띄우거나(스폰), 터미널에서 띄운 tmux 세션에 붙습니다(어태치). 어태치는 앱을 업데이트해도 macOS 권한이 유지되고, 앱을 꺼도 에이전트가 계속 돕니다.',
-    topologySelectLabel: '방식',
-    topologySpawnOption: '스폰 — 앱이 직접 실행 (기본)',
-    topologyAttachOption: '어태치 — 터미널의 tmux 세션에 연결',
-    topologySave: '저장',
-    topologySaved: '저장됐습니다. 다음 시작/재시작부터 적용됩니다.',
-    topologyStateSpawn: '지금은 스폰 방식입니다.',
-    topologyStateNoTmux: 'tmux가 설치되어 있지 않습니다. 터미널에서: brew install tmux',
-    topologyStateBootstrapNeeded: '연결할 세션이 없습니다. 아래 명령을 터미널(Terminal/iTerm)에 붙여넣어 실행하세요. 앱이 대신 실행해주지 않는 건 의도된 동작입니다 — 권한이 터미널 계보에 붙어야 앱 업데이트를 견딥니다.',
-    topologyStatePaneDead: '세션은 있지만 에이전트가 꺼져 있습니다. 상단 바의 시작 버튼으로 살릴 수 있습니다.',
-    topologyStateAttached: (cmd) => `세션에 연결되어 있습니다. 터미널에서 직접 보려면: ${cmd}`,
-    topologyBootstrapWhy: '이 명령은 사용자의 터미널에서 실행되어야 합니다 (macOS 권한 귀속이 터미널을 따라가게 하는 장치):',
-    topologyBootstrapCopy: '명령 복사',
-    topologyBootstrapCopied: '복사됐습니다. 터미널에 붙여넣어 실행하세요.',
+    topologyLabel: 'How the agent runs',
+    topologyNote: 'Either the app launches it directly (spawn), or it attaches to a tmux session you started in Terminal (attach). Attach keeps macOS permissions across app updates, and the agent keeps running even if you quit the app.',
+    topologySelectLabel: 'Mode',
+    topologySpawnOption: 'Spawn — the app runs it directly (default)',
+    topologyAttachOption: 'Attach — connect to a tmux session in Terminal',
+    topologySave: 'Save',
+    topologySaved: 'Saved. Applies from the next start or restart.',
+    topologyStateSpawn: 'Currently running in spawn mode.',
+    topologyStateNoTmux: "tmux isn't installed. In Terminal: brew install tmux",
+    topologyStateBootstrapNeeded: "No session to attach to. Paste and run the command below in Terminal (or iTerm). The app doesn't run this for you on purpose — permissions need to be attached to Terminal's lineage to survive app updates.",
+    topologyStatePaneDead: 'The session exists, but the agent is off. Use the Start button in the top bar to bring it back.',
+    topologyStateAttached: (cmd) => `Attached to the session. To view it directly in Terminal: ${cmd}`,
+    topologyBootstrapWhy: 'This command must run in your own Terminal (this is what ties macOS permissions to Terminal):',
+    topologyBootstrapCopy: 'Copy command',
+    topologyBootstrapCopied: 'Copied. Paste it into Terminal and run it.',
     // AUTHORED -- sudo askpass (0.1.0 prep, P4). Mechanism wording only, no
     // safety promises: where it's stored, where it never goes, when it works.
-    sudoLabel: '관리자 권한 (sudo)',
-    sudoNote: '켜면 에이전트가 sudo 명령을 쓸 수 있습니다. 비밀번호는 macOS 키체인 기반 금고에 암호화되어 저장되고, 채팅·로그·대화 기록에는 넣지 않도록 설계되어 있습니다. 앱이 꺼져 있으면 sudo도 동작하지 않습니다.',
-    sudoEnableLabel: 'sudo 허용',
-    sudoPasswordLabel: '맥 로그인 비밀번호',
-    sudoSave: '저장',
-    sudoSaved: '저장됐습니다.',
-    sudoStateStored: '비밀번호가 금고에 저장되어 있습니다. 바꾸려면 새로 입력하고 저장하세요.',
-    sudoStateEmpty: '저장된 비밀번호가 없습니다.',
-    sudoNeedPassword: 'sudo를 켜려면 비밀번호를 입력하세요.',
+    sudoLabel: 'Admin privileges (sudo)',
+    sudoNote: "When on, the agent can use sudo commands. The password is encrypted and stored in a macOS keychain-based vault, and is designed to never appear in chat, logs, or conversation history. sudo doesn't work while the app is off.",
+    sudoEnableLabel: 'Allow sudo',
+    sudoPasswordLabel: 'Mac login password',
+    sudoSave: 'Save',
+    sudoSaved: 'Saved.',
+    sudoStateStored: 'A password is stored in the vault. To change it, enter a new one and save.',
+    sudoStateEmpty: 'No password stored.',
+    sudoNeedPassword: 'Enter a password to turn on sudo.',
     // Moved verbatim from memory.js's inline AGENT_COPY (Slice 2,
     // 2026-07-09) -- the SELECT-driven half (model/effort config). The
     // read-only status-display half of that same const moved to `nav` above.
@@ -614,25 +623,25 @@ window.COPY = {
     // Topology/Sudo below), not gated on the current provider -- switching
     // TO custom and editing an already-custom install's fields share this
     // one form.
-    customLabel: '커스텀 프록시',
-    customNote: 'OpenAI 호환 API를 제공하는 프록시라면 어디든 연결할 수 있습니다. Base URL과 모델 ID가 필요하고, API 키는 프록시가 요구할 때만 입력하면 됩니다.',
-    customCatalogLabel: '커스텀 (임의의 모델 ID)',
-    customPresetLabel: '자주 쓰는 프록시',
-    customPresetPlaceholder: '직접 입력',
+    customLabel: 'Custom proxy',
+    customNote: 'Connect to any proxy that provides an OpenAI-compatible API. Requires a Base URL and model ID; enter an API key only if the proxy requires one.',
+    customCatalogLabel: 'Custom (any model ID)',
+    customPresetLabel: 'Common proxies',
+    customPresetPlaceholder: 'Enter manually',
     customPresetClinePass: 'ClinePass (:18084)',
     customPresetGrok: 'Grok (:8766)',
     customPresetOllamaCloud: 'Ollama Cloud (:11434)',
     customPresetCodexApi: 'Codex-as-API (:18080)',
     customUrlLabel: 'Base URL',
-    customKeyLabel: 'API 키 (선택)',
-    customKeyStoredPlaceholder: '저장된 키 있음 — 비워두면 그대로 씁니다',
-    customKeyEmptyPlaceholder: '저장된 키 없음 — 필요할 때만 입력하세요',
-    customModelLabel: '모델 ID',
-    customModelPlaceholder: '프록시가 인식하는 모델 이름을 입력하세요',
-    customMissingFields: 'Base URL과 모델 ID를 모두 입력하세요',
-    customSwitchConfirm: (m) => `커스텀 프록시(모델: ${m})로 전환하고 에이전트를 재시작합니다. 계속할까요?`,
-    customSave: '저장',
-    customSaved: '저장됐습니다. 에이전트를 재시작합니다.',
+    customKeyLabel: 'API key (optional)',
+    customKeyStoredPlaceholder: 'Key stored — leave blank to keep using it',
+    customKeyEmptyPlaceholder: 'No key stored — enter one only if needed',
+    customModelLabel: 'Model ID',
+    customModelPlaceholder: 'Enter a model name the proxy recognizes',
+    customMissingFields: 'Enter both Base URL and model ID',
+    customSwitchConfirm: (m) => `Switch to the custom proxy (model: ${m}) and restart the agent. Continue?`,
+    customSave: 'Save',
+    customSaved: 'Saved. Restarting the agent.',
 
     // AUTHORED -- autonomous cycle (v0.0.6).
     //
@@ -646,73 +655,76 @@ window.COPY = {
     //   4. When the meter cannot measure, we say so. A blank reads as zero,
     //      and "nothing was spent" is not the same sentence as "I cannot tell
     //      you what was spent."
-    autonomyLabel: '혼자 일하기',
+    autonomyLabel: 'Work on its own',
     autonomyNote:
-      '주무시는 동안 에이전트가 스스로 일을 고르고 진행합니다. ' +
-      '이 작업은 회원님의 Claude 구독 사용량을 소모하며, 그동안 아무도 보고 있지 않습니다. ' +
-      '기본값은 꺼짐이고, 켜신 뒤에도 아래 상한을 넘으면 스스로 멈춥니다.',
-    autonomyEnableLabel: '혼자 일하도록 허용',
-    autonomyWindowLabel: '작업 시간대',
-    autonomyWindowNote: '이 시간대에만 시작합니다. 자정을 넘겨도 됩니다 (예: 23:00 - 05:00)',
+      "While you sleep, the agent picks its own work and carries it out. " +
+      "This spends your Claude subscription usage, and nobody is watching while it happens. " +
+      "It's off by default, and even once on, it stops itself if it exceeds the cap below.",
+    // Just 'Enabled': the category heading directly above already says WORK
+    // ON ITS OWN, so repeating it here only made the label wrap to two lines
+    // and pushed the checkbox off the shared control baseline.
+    autonomyEnableLabel: 'Enabled',
+    autonomyWindowLabel: 'Working hours',
+    autonomyWindowNote: 'Only starts within this window. Can cross midnight (e.g. 23:00 - 05:00).',
     // "하룻밤" and not "하루": the cap is enforced per CYCLE, from the moment the
     // window opens until it closes. A 23:00-05:00 night is one night, and
     // measuring it per calendar day handed it a second budget at midnight.
-    autonomyCapLabel: '하룻밤 토큰 상한',
+    autonomyCapLabel: 'Per-night token cap',
     autonomyCapNote:
-      '한 번의 밤 동안 쓸 수 있는 최대 토큰입니다 (캐시 재사용 포함). 넘으면 스스로 멈추고, 아침 브리프에 같은 숫자가 나옵니다. ' +
-      '0으로 두면 혼자 일하지 않습니다 (무제한은 없습니다).',
+      'The most tokens it can use in one night (including cache reuse). It stops itself if it goes over, and the same number appears in the morning brief. ' +
+      'Set to 0 to disable working on its own (there is no unlimited option).',
     // Deliberately a DIFFERENT label from the cap: this is everything spent
     // today including your own conversations, and it is not what the cap is
     // measured against. One label over two measurements is how a number starts
     // lying.
-    autonomyUsageLabel: '오늘 전체 사용량 (대화 포함)',
-    autonomyTokensWord: '토큰',
+    autonomyUsageLabel: "Today's total usage (including conversations)",
+    autonomyTokensWord: 'tokens',
     autonomyUsageBlind:
-      '지금은 사용량을 측정할 수 없습니다. 측정하지 못하는 동안에는 혼자 일하지 않습니다.',
-    autonomyLastCycle: '지난밤',
-    autonomyLastCycleNone: '아직 혼자 일한 밤이 없습니다',
-    autonomyLastCycleStopped: '상한에 걸려 중간에 멈췄습니다',
-    autonomyLastCycleBriefed: '아침 브리프를 보냈습니다',
-    autonomyLastCycleRan: '작업했습니다',
-    autonomySkipCap: '상한에 이미 도달해 있어서 시작하지 않았습니다',
-    autonomySkipMeter: '사용량을 측정할 수 없어서 시작하지 않았습니다',
-    autonomySave: '저장',
-    autonomySaved: '저장됐습니다',
-    autonomyInvalidWindow: '시간 형식이 올바르지 않습니다 (예: 02:00)',
-    autonomyInvalidCap: '숫자를 입력해주세요',
+      "Usage can't be measured right now. It won't work on its own while it can't be measured.",
+    autonomyLastCycle: 'Last night',
+    autonomyLastCycleNone: "Hasn't worked on its own yet",
+    autonomyLastCycleStopped: 'Stopped partway after hitting the cap',
+    autonomyLastCycleBriefed: 'Sent the morning brief',
+    autonomyLastCycleRan: 'Worked',
+    autonomySkipCap: "Didn't start because it was already at the cap",
+    autonomySkipMeter: "Didn't start because usage couldn't be measured",
+    autonomySave: 'Save',
+    autonomySaved: 'Saved',
+    autonomyInvalidWindow: 'Invalid time format (e.g. 02:00)',
+    autonomyInvalidCap: 'Enter a number',
 
     // AUTHORED -- permission checklist (P0, 2026-07-15). Register rules for
     // this block: a probe that cannot measure never renders as granted or
     // denied ("확인 불가" is its own state), and rows without a Settings
     // pane (SIP/sudo) never grow an open button -- offering a toggle that
     // cannot fix the problem is the misroute this feature exists to kill.
-    permsLabel: '권한 상태',
+    permsLabel: 'Permission status',
     permsNote:
-      '에이전트가 이 컴퓨터에서 부딪힐 수 있는 macOS 권한 벽입니다. ' +
-      '허용은 항상 회원님이 시스템 설정에서 직접 합니다. 여기서는 상태 확인과 설정 창 열기만 합니다.',
-    permsLoading: '확인 중',
-    permsLoadFailed: '권한 상태를 확인할 수 없습니다',
-    permsGranted: '허용됨',
-    permsDenied: '허용 안 됨',
-    permsIndeterminate: '확인 불가',
-    permsHeuristicMark: '추정',
-    permsOpenButton: '설정 열기',
-    permsProbeButton: '확인',
+      'macOS permission walls the agent may run into on this computer. ' +
+      'You always grant access yourself in System Settings. This page only checks status and opens Settings for you.',
+    permsLoading: 'Checking…',
+    permsLoadFailed: "Couldn't check permission status",
+    permsGranted: 'Granted',
+    permsDenied: 'Denied',
+    permsIndeterminate: "Can't determine",
+    permsHeuristicMark: 'Estimated',
+    permsOpenButton: 'Open Settings',
+    permsProbeButton: 'Check',
     permsClassNames: {
-      fda: '전체 디스크 접근',
-      screen: '화면 기록',
-      accessibility: '손쉬운 사용',
-      automation: '자동화 (다른 앱 제어)',
-      sudo: '관리자 명령 (sudo)',
-      sip: '시스템 무결성 보호 (SIP)',
+      fda: 'Full Disk Access',
+      screen: 'Screen Recording',
+      accessibility: 'Accessibility',
+      automation: 'Automation (control other apps)',
+      sudo: 'Admin commands (sudo)',
+      sip: 'System Integrity Protection (SIP)',
     },
     permsClassNotes: {
-      automation: '확인을 누르면 macOS가 허용 여부를 묻는 창을 띄울 수 있습니다',
-      sudo: '비밀번호 없이 실행 가능한지만 확인합니다. 여기서 켜고 끄는 항목이 아닙니다',
-      sip: '시스템 고정 조건입니다. 앱 권한과 무관하며 설정에서 바꾸는 항목이 아닙니다',
+      automation: 'Clicking Check may prompt a macOS permission dialog',
+      sudo: "Only checks whether it can run without a password. Not something you toggle here.",
+      sip: 'A fixed system condition, unrelated to app permissions. Not something you change in Settings.',
     },
-    permsRelaunchNote: '설정에서 허용을 바꾸셨다면, 앱을 재실행해야 여기 반영되는 항목이 있습니다',
-    permsRelaunchButton: '앱 재실행',
+    permsRelaunchNote: 'If you changed a permission in Settings, some changes need an app restart to show up here',
+    permsRelaunchButton: 'Restart App',
   },
 
   // AUTHORED -- channels page (multichannel v0.0.18, Mino 07-16 15:07:
@@ -722,67 +734,67 @@ window.COPY = {
   // messengers); slack/telegram connect strings are new. Register: 간결
   // 존댓말, no 이모지, no 느낌표.
   channels: {
-    title: '채널',
-    subtitle: '에이전트가 대화하는 메신저입니다. 연결해 두고 갈아끼울 수 있습니다.',
-    activeBadge: '사용 중',
-    configuredBadge: '연결됨',
-    notConfiguredBadge: '미연결',
-    switchButton: '이 채널로 전환',
-    switchConfirm: (name) => `${name}(으)로 전환하고 에이전트를 재시작합니다. 계속할까요?`,
-    switchOk: '전환',
-    switching: '전환하고 에이전트를 재시작하는 중입니다',
-    switched: (name) => `${name}(으)로 전환됐습니다`,
-    notConfiguredYet: '먼저 연결을 끝내야 전환할 수 있습니다',
+    title: 'Channels',
+    subtitle: 'The messenger the agent talks through. Connect one and switch anytime.',
+    activeBadge: 'Active',
+    configuredBadge: 'Connected',
+    notConfiguredBadge: 'Not connected',
+    switchButton: 'Switch to this channel',
+    switchConfirm: (name) => `Switch to ${name} and restart the agent. Continue?`,
+    switchOk: 'Switch',
+    switching: 'Switching and restarting the agent…',
+    switched: (name) => `Switched to ${name}`,
+    notConfiguredYet: 'Finish connecting before you can switch',
     names: { discord: 'Discord', slack: 'Slack', telegram: 'Telegram' },
-    connectButton: '연결',
-    reconnectButton: '재연결',
-    closeButton: '접기',
-    homeLine: (label) => `홈: ${label}`,
-    invalidToken: '토큰이 유효하지 않습니다',
+    connectButton: 'Connect',
+    reconnectButton: 'Reconnect',
+    closeButton: 'Close',
+    homeLine: (label) => `Home: ${label}`,
+    invalidToken: 'Token is invalid',
     // -- discord (moved verbatim from connectors.*) --
-    discordConnected: (guild, channel) => `연결됨 · ${guild} / #${channel}`,
-    discordStoredTokenNote: '비워두면 저장된 토큰을 그대로 씁니다. 봇 토큰을 바꿨을 때만 새 토큰을 붙여넣으세요.',
-    discordTokenPlaceholder: '새 봇 토큰 (선택)',
-    discordEnumButton: '서버 목록 불러오기',
-    discordEnumRunning: '서버 목록을 불러오는 중입니다',
-    discordGuildLabel: '서버',
-    discordChannelLabel: '채널',
-    discordTruncatedNote: (max) => `봇이 있는 서버가 많아 앞 ${max}개만 표시합니다`,
-    discordNoChannels: '이 서버에 텍스트 채널이 없습니다',
-    discordApplyButton: '이 채널로 연결',
-    discordApplyConfirm: (guild, channel) => `${guild} / #${channel}(으)로 옮기고 에이전트를 재시작합니다. 계속할까요?`,
-    discordApplyOk: '옮기기',
-    discordApplying: '적용하고 에이전트를 재시작하는 중입니다',
-    discordApplied: (guild, channel) => `연결됐습니다: ${guild} / #${channel}`,
+    discordConnected: (guild, channel) => `Connected · ${guild} / #${channel}`,
+    discordStoredTokenNote: 'Leave blank to keep using the stored token. Paste a new one only if the bot token changed.',
+    discordTokenPlaceholder: 'New bot token (optional)',
+    discordEnumButton: 'Load server list',
+    discordEnumRunning: 'Loading server list…',
+    discordGuildLabel: 'Server',
+    discordChannelLabel: 'Channel',
+    discordTruncatedNote: (max) => `The bot is in many servers, so only the first ${max} are shown`,
+    discordNoChannels: 'No text channels in this server',
+    discordApplyButton: 'Connect to this channel',
+    discordApplyConfirm: (guild, channel) => `Move to ${guild} / #${channel} and restart the agent. Continue?`,
+    discordApplyOk: 'Move',
+    discordApplying: 'Applying and restarting the agent…',
+    discordApplied: (guild, channel) => `Connected: ${guild} / #${channel}`,
     // -- telegram (new backend, channel-telegram.mjs) --
-    telegramGuide: '봇파더(@BotFather)에서 /newbot 으로 봇을 만들고 토큰을 붙여넣으세요. 그 다음 텔레그램에서 그 봇에게 아무 메시지나 하나 보내야 대화방이 목록에 잡힙니다.',
-    telegramOpenBotFather: '봇파더 열기',
-    telegramTokenPlaceholder: '봇 토큰 (123456:ABC-...)',
-    telegramStoredTokenNote: '비워두면 저장된 토큰을 그대로 씁니다.',
-    telegramEnumButton: '대화방 불러오기',
-    telegramEnumRunning: '대화방을 불러오는 중입니다',
-    telegramChatLabel: '대화방',
-    telegramNoChats: '봇이 받은 메시지가 없습니다. 텔레그램에서 봇에게 메시지를 하나 보내고 다시 불러오세요.',
-    telegramConflictRunning: '에이전트가 이 봇으로 돌고 있어 목록을 못 가져옵니다. 에이전트를 정지한 뒤 다시 시도해주세요.',
-    telegramApplyButton: '이 대화방으로 연결',
-    telegramApplied: (label) => `연결됐습니다: ${label}`,
-    telegramChatUnreachable: '이 대화방에 봇이 닿지 않습니다. 봇을 차단하지 않았는지 확인해주세요.',
+    telegramGuide: 'Create a bot with /newbot in BotFather (@BotFather) and paste the token. Then send the bot any message in Telegram so the chat shows up in the list.',
+    telegramOpenBotFather: 'Open BotFather',
+    telegramTokenPlaceholder: 'Bot token (123456:ABC-...)',
+    telegramStoredTokenNote: 'Leave blank to keep using the stored token.',
+    telegramEnumButton: 'Load chats',
+    telegramEnumRunning: 'Loading chats…',
+    telegramChatLabel: 'Chat',
+    telegramNoChats: "The bot hasn't received any messages. Send it a message in Telegram, then reload.",
+    telegramConflictRunning: "Can't load the list because the agent is currently running on this bot. Stop the agent, then try again.",
+    telegramApplyButton: 'Connect to this chat',
+    telegramApplied: (label) => `Connected: ${label}`,
+    telegramChatUnreachable: "The bot can't reach this chat. Make sure you haven't blocked it.",
     // -- slack (new backend, channel-slack.mjs; Socket Mode, 토큰 2개) --
-    slackGuide: 'Slack 앱 콘솔에서 매니페스트로 앱을 만들고 Socket Mode를 켠 뒤, 앱 토큰(xapp-)과 봇 토큰(xoxb-)을 붙여넣으세요.',
-    slackOpenConsole: 'Slack 앱 콘솔 열기',
-    slackBotTokenPlaceholder: '봇 토큰 (xoxb-...)',
-    slackAppTokenPlaceholder: '앱 토큰 (xapp-...)',
-    slackStoredTokenNote: '비워두면 저장된 토큰을 그대로 씁니다.',
-    slackEnumButton: '채널 불러오기',
-    slackEnumRunning: '채널을 불러오는 중입니다',
-    slackChannelLabel: '채널',
-    slackNotMemberSuffix: ' (봇 미초대)',
-    slackNoChannels: '가져올 채널이 없습니다',
-    slackInvalidBotToken: '봇 토큰(xoxb-)이 유효하지 않습니다',
-    slackInvalidAppToken: '앱 토큰(xapp-)이 유효하지 않거나 Socket Mode가 꺼져 있습니다',
-    slackApplyButton: '이 채널로 연결',
-    slackNotInChannel: (name) => `봇이 #${name}에 없습니다. 슬랙에서 /invite 로 봇을 초대한 뒤 다시 시도해주세요.`,
-    slackApplied: (name) => `연결됐습니다: #${name}`,
+    slackGuide: 'Create an app from a manifest in the Slack app console, turn on Socket Mode, then paste the app token (xapp-) and bot token (xoxb-).',
+    slackOpenConsole: 'Open Slack app console',
+    slackBotTokenPlaceholder: 'Bot token (xoxb-...)',
+    slackAppTokenPlaceholder: 'App token (xapp-...)',
+    slackStoredTokenNote: 'Leave blank to keep using the stored token.',
+    slackEnumButton: 'Load channels',
+    slackEnumRunning: 'Loading channels…',
+    slackChannelLabel: 'Channel',
+    slackNotMemberSuffix: ' (bot not invited)',
+    slackNoChannels: 'No channels to load',
+    slackInvalidBotToken: 'Bot token (xoxb-) is invalid',
+    slackInvalidAppToken: 'App token (xapp-) is invalid, or Socket Mode is off',
+    slackApplyButton: 'Connect to this channel',
+    slackNotInChannel: (name) => `The bot isn't in #${name}. Invite it with /invite in Slack, then try again.`,
+    slackApplied: (name) => `Connected: #${name}`,
     links: {
       telegram: 'https://t.me/botfather',
       slack: 'https://api.slack.com/apps',
@@ -800,109 +812,114 @@ window.COPY = {
   // page for something this same refactor moved. Register unchanged: 간결
   // 존댓말, no 이모지, no 느낌표, no cheerleading.
   connectors: {
-    title: '커넥터',
-    backToMemory: '기억으로',
+    title: 'Connectors',
+    backToMemory: 'Back to Memory',
     slackLabel: 'Slack',
-    slackNote: '나중에 지원 예정',
+    slackNote: 'Support coming later',
     // AUTHORED -- post-onboarding provider auth (Mino 07-13 click-test:
     // "온보딩 끝낸 이후에 ollama cloud 인증 추가 / chatGPT인증 추가").
-    providersLabel: '추가 인증',
-    providersNote: '인증하면 설정 페이지의 모델 선택에서 해당 모델을 고를 수 있습니다',
+    providersLabel: 'Additional auth',
+    providersNote: 'Once authenticated, you can pick that model from the model select in Settings',
     // custom (custom-provider addition, 2026-07-25): NOT in AUTH_PROVIDERS
     // (connectors.js), so this key is never actually looked up there today --
     // added for display-name consistency with the other two entries and any
     // future call site, harmless either way.
-    providerNames: { chatgpt: 'ChatGPT (Codex)', ollama: 'Ollama Cloud', custom: '커스텀 프록시' },
-    providerConnected: '연결됨',
-    providerNotConnected: '미연결',
-    providerAuthButton: '인증하기',
-    providerAuthRunning: '로그인 창이 열렸습니다. 브라우저에서 로그인을 끝내면 여기가 바뀝니다',
-    providerAuthSuccess: '연결됐습니다',
+    providerNames: { chatgpt: 'ChatGPT (Codex)', ollama: 'Ollama Cloud', custom: 'Custom proxy' },
+    providerConnected: 'Connected',
+    providerNotConnected: 'Not connected',
+    providerAuthButton: 'Authenticate',
+    providerAuthRunning: 'A login window opened. This updates once you finish logging in in the browser.',
+    providerAuthSuccess: 'Connected',
     providerAuthFailures: {
       cli_missing: {
-        chatgpt: 'codex CLI가 없습니다. https://github.com/openai/codex 에서 설치 후 다시 시도해주세요',
-        ollama: 'Ollama 앱이 설치되어 있지 않습니다. https://ollama.com 에서 설치 후 다시 시도해주세요',
+        chatgpt: 'The codex CLI is not installed. Install it from https://github.com/openai/codex, then try again',
+        ollama: 'The Ollama app is not installed. Install it from https://ollama.com, then try again',
       },
-      cancelled: '인증이 취소됐습니다',
-      timeout: '인증이 제한 시간을 넘겼습니다. 다시 시도해주세요',
-      exit_nonzero: '인증이 실패했습니다. 다시 시도해주세요',
-      unknown: '인증이 실패했습니다. 다시 시도해주세요',
+      cancelled: 'Authentication cancelled',
+      timeout: 'Authentication timed out. Try again.',
+      exit_nonzero: 'Authentication failed. Try again.',
+      unknown: 'Authentication failed. Try again.',
     },
     // AUTHORED -- discord reconnect (Mino 07-14 11:31: "이미 세팅한 상태에서
     // 디코 -> 슬랙 -> 텔레그램 해보게"). Failure branches deliberately reuse
     // discordTutorial.failures VERBATIM at the call site (same three causes,
     // same fixes) -- no duplicate strings here, connectors.js reads that map.
-    discordLabel: '메시지 채널',
+    discordLabel: 'Message channel',
     discordName: 'Discord',
-    discordConnected: (guild, channel) => `연결됨 · ${guild} / #${channel}`,
-    discordNotConnected: '미연결',
-    discordReconnectButton: '재연결',
-    discordReconnectClose: '접기',
-    discordStoredTokenNote: '비워두면 저장된 토큰을 그대로 씁니다. 봇 토큰을 바꿨을 때만 새 토큰을 붙여넣으세요.',
-    discordTokenPlaceholder: '새 봇 토큰 (선택)',
-    discordEnumButton: '서버 목록 불러오기',
-    discordEnumRunning: '서버 목록을 불러오는 중입니다',
-    discordGuildLabel: '서버',
-    discordChannelLabel: '채널',
-    discordTruncatedNote: (max) => `봇이 있는 서버가 많아 앞 ${max}개만 표시합니다`,
-    discordNoChannels: '이 서버에 텍스트 채널이 없습니다',
-    discordApplyButton: '이 채널로 연결',
-    discordApplyConfirm: (guild, channel) => `${guild} / #${channel}(으)로 옮기고 에이전트를 재시작합니다. 계속할까요?`,
-    discordApplyOk: '옮기기',
-    discordApplying: '적용하고 에이전트를 재시작하는 중입니다',
-    discordApplied: (guild, channel) => `연결됐습니다: ${guild} / #${channel}`,
+    discordConnected: (guild, channel) => `Connected · ${guild} / #${channel}`,
+    discordNotConnected: 'Not connected',
+    discordReconnectButton: 'Reconnect',
+    discordReconnectClose: 'Close',
+    discordStoredTokenNote: 'Leave blank to keep using the stored token. Paste a new one only if the bot token changed.',
+    discordTokenPlaceholder: 'New bot token (optional)',
+    discordEnumButton: 'Load server list',
+    discordEnumRunning: 'Loading server list…',
+    discordGuildLabel: 'Server',
+    discordChannelLabel: 'Channel',
+    discordTruncatedNote: (max) => `The bot is in many servers, so only the first ${max} are shown`,
+    discordNoChannels: 'No text channels in this server',
+    discordApplyButton: 'Connect to this channel',
+    discordApplyConfirm: (guild, channel) => `Move to ${guild} / #${channel} and restart the agent. Continue?`,
+    discordApplyOk: 'Move',
+    discordApplying: 'Applying and restarting the agent…',
+    discordApplied: (guild, channel) => `Connected: ${guild} / #${channel}`,
     // AUTHORED -- Claude BYOK key management row (gap-close: post-onboarding
     // key status/re-entry surface did not exist; the provider block above is
     // login-capable providers only).
-    claudeKeyName: 'Claude API 키',
-    claudeKeyStored: '키 저장됨',
-    claudeKeyMissing: '키 없음',
-    claudeKeyButton: '키 재입력',
-    claudeKeyClose: '접기',
+    claudeKeyName: 'Claude API key',
+    claudeKeyStored: 'Key stored',
+    claudeKeyMissing: 'No key',
+    claudeKeyButton: 'Re-enter key',
+    claudeKeyClose: 'Close',
     claudeKeyPlaceholder: 'sk-ant-...',
-    claudeKeySave: '검증 후 저장',
-    claudeKeyValidating: '키를 검증하는 중입니다',
-    claudeKeySaved: '키가 검증되고 저장됐습니다',
+    claudeKeySave: 'Verify and save',
+    claudeKeyValidating: 'Verifying the key…',
+    claudeKeySaved: 'Key verified and saved',
     // AUTHORED -- chatgpt live serving receipt ("셸은 현실" product form of
     // the 07-14 dropdown-vs-engine model mismatch catch). Shown only when the
     // proxy actually answers; no line when it doesn't run.
-    chatgptServing: (model) => `지금 서빙 중: ${model}`,
-    chatgptServingUnknown: '프록시 응답에 모델 정보가 없습니다',
+    chatgptServing: (model) => `Currently serving: ${model}`,
+    chatgptServingUnknown: 'The proxy response has no model info',
     // AUTHORED -- future client slots (Mino 07-14 11:31 directive names the
     // path: 디코 -> 슬랙 -> 텔레그램).
     telegramLabel: 'Telegram',
-    telegramNote: '나중에 지원 예정',
+    telegramNote: 'Support coming later',
     // AUTHORED -- claude.ai connector intercept (춘식3 design, 07-14). The
     // lane warning is the load-bearing honesty line: on a non-subscription
     // lane an authorized connector is inert, so we SAY so instead of shipping
     // a dead button.
-    mcpLabel: 'Claude 커넥터',
-    mcpNote: 'Gmail, Google Calendar, Atlassian 같은 Claude 연동을 이 앱에서 인증합니다',
-    mcpLaneWarning: (lane) => `지금 에이전트는 ${lane} 레인으로 돌고 있어서, 여기서 인증해도 커넥터를 쓰지 못합니다. Claude 구독 로그인 레인일 때만 작동합니다.`,
-    mcpLoading: '커넥터 목록을 불러오는 중입니다',
-    mcpCliMissing: 'claude 실행 파일을 찾지 못해 커넥터를 확인할 수 없습니다',
-    mcpNone: '연동 가능한 Claude 커넥터가 없습니다',
-    mcpConnected: '연결됨',
-    mcpNeedsAuth: '인증 필요',
-    mcpAuthButton: '인증하기',
-    mcpAuthStarting: '인증을 준비하는 중입니다',
-    mcpUrlReady: '아래 링크를 브라우저에서 열어 승인한 뒤, 에이전트를 재시작하세요',
-    mcpOpenLink: '승인 페이지 열기',
-    mcpAuthTimeout: '인증이 제한 시간을 넘겼습니다. 다시 시도해주세요',
-    mcpAuthFailed: '인증에 실패했습니다. 앱 로그를 확인해주세요',
+    mcpLabel: 'Claude connectors',
+    mcpNote: 'Authenticate Claude integrations like Gmail, Google Calendar, and Atlassian from this app',
+    mcpLaneWarning: (lane) => `The agent is currently running on the ${lane} lane, so authenticating here won't let it use connectors. This only works on the Claude subscription login lane.`,
+    mcpLoading: 'Loading connector list…',
+    mcpCliMissing: "Can't check connectors because the claude executable was not found",
+    mcpNone: 'No Claude connectors available',
+    mcpConnected: 'Connected',
+    mcpNeedsAuth: 'Needs authentication',
+    mcpAuthButton: 'Authenticate',
+    mcpAuthStarting: 'Preparing authentication…',
+    mcpUrlReady: 'Open the link below in your browser to approve it, then restart the agent',
+    mcpOpenLink: 'Open approval page',
+    mcpAuthTimeout: 'Authentication timed out. Try again',
+    mcpAuthFailed: 'Authentication failed. Check the app log',
   },
 
   // Sourced from the source file's Step 4 폴백 note: "waiting.html 카피
   // (폴백 착지 화면)". Not a chat body (Mino rejected web-chat) -- status +
   // a single CTA back into the Discord tutorial only.
   waiting: {
-    title: '설정이 저장됐습니다',
-    banner: (name) => `${name}는 Discord 연결을 기다리고 있습니다. 연결하면 바로 대화가 시작됩니다.`,
-    resumeButton: '튜토리얼 다시 열기',
+    title: 'Settings saved',
+    banner: (name) => `${name} is waiting for Discord to connect. Once connected, the conversation starts right away.`,
+    resumeButton: 'Reopen tutorial',
+    // IA pass 2026-07-25. This screen carries no tab bar, so before these
+    // two it offered exactly one destination -- the Discord tutorial. A user
+    // who picked "later" could not reach settings or logs at all.
+    openSettings: 'Settings',
+    openLogs: 'Logs',
   },
 
   // AUTHORED (not in copy file) -- generic infra-failure banner for
   // unexpected server errors (network down, disk write failure, etc), kept
   // separate from the scripted BYOK/Discord failure copy above.
-  genericError: (message) => `오류가 발생했습니다: ${message}`,
+  genericError: (message) => `Error: ${message}`,
 }
