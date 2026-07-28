@@ -50,47 +50,24 @@ const AGENT_NAME = process.env.AGENT_NAME || 'agent'
 const DISCORD_TOKEN = process.env.DISCORD_BOT_TOKEN
 const HOME_CHANNEL_ID = process.env.HOME_CHANNEL_ID
 
-// ── DATA_HOME (agent-lifecycle fix, 2026-07-03, hardening item E1) ─────────
-// Resolved EXPLICITLY here rather than trusting process.cwd(). Previously,
-// LIVENESS_MARKER_PATH was `path.join(process.cwd(), '.agent-live')`, which
-// only worked because .mcp.json's agent-channel entry happens to set
-// cwd: DATA_HOME (see onboarding/http-server.cjs's ensureMcpJsonAgentName())
-// -- a coincidence, not a guarantee. Any future change to how this process
-// gets spawned (different cwd, a manual `node channel.mjs` from elsewhere)
-// would silently write the marker to the wrong place, and the reader
-// (http-server.cjs's GET /api/agent/status, which computes DATA_HOME
-// independently, see its own DATA_HOME constant) would never see it --
-// permanent false "connecting". The packaged Electron path always sets
-// AGENT_DATA_HOME explicitly (main.cjs's spawnRealAgentChild()) to the
-// exact fixed path http-server.cjs's own DATA_HOME constant computes, so
-// the two can't drift THERE regardless of the fallback below.
+// ── DATA_HOME ────────────────────────────────────────────────────────────
+// Resolved EXPLICITLY here rather than trusting process.cwd() -- a future
+// change to how this process gets spawned (different cwd, a manual
+// `node channel.mjs` from elsewhere) must never silently write the marker
+// to the wrong place (http-server.cjs's GET /api/agent/status computes
+// DATA_HOME independently and would never see it -- permanent false
+// "connecting").
 //
 // Fallback (AGENT_DATA_HOME unset) matches run.sh's OWN MEM resolution
 // EXACTLY -- `MEM="${AGENT_DATA_HOME:-$HOME/Documents/$AGENT_NAME}"`, same
-// env var, same formula, keyed by AGENT_NAME (not a fixed literal) --
-// FIXED here (code-review pass, 2026-07-03) after two real bugs an
-// independent review caught in the first version of this fix, which used
-// a fixed `~/Documents/Scheherazade` fallback:
-//   1. `npm start` (package.json's "start": "node channel.mjs") runs this
-//      file directly with no AGENT_DATA_HOME set. A fixed fallback meant
-//      local dev would read/write the SAME marker files
-//      (DATA_HOME/.agent-live, .agent-failed.json) the real packaged,
-//      onboarded app uses at ~/Documents/Scheherazade -- corrupting
-//      production liveness/failure state from a dev run. (Confirmed this
-//      exact failure mode once already during this fix's own verification
-//      pass, on scripts/test-liveness-marker.mjs -- see that file's own
-//      comment -- and initially only guarded there, not here.) Now, with
-//      no AGENT_DATA_HOME, it resolves to ~/Documents/agent (AGENT_NAME's
-//      own default, line above) instead -- nowhere near the real app's
-//      fixed path, so a `npm start` dev run can no longer collide with it.
-//   2. This fallback used to disagree with run.sh's OWN fallback for the
-//      exact same no-AGENT_DATA_HOME case (a standalone/non-Electron CLI
-//      deployment) -- run.sh writes its own write_failure()/clear_failure()
-//      markers to $HOME/Documents/$AGENT_NAME, channel.mjs was writing its
-//      markers to a DIFFERENT fixed directory. Now identical.
+// env var, same formula, keyed by AGENT_NAME (not a fixed literal). The
+// packaged Electron path always sets AGENT_DATA_HOME explicitly (main.cjs's
+// spawnRealAgentChild()) to the exact fixed path http-server.cjs's own
+// DATA_HOME constant computes, so the two can't drift THERE regardless of
+// the fallback here. (history: docs/HISTORY.md)
 const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', AGENT_NAME)
 
-// ── liveness + failure markers (agent-lifecycle fix, 2026-07-03) ───────────
+// ── liveness + failure markers ──────────────────────────────────────────
 // Declared here, before the DISCORD_TOKEN/HOME_CHANNEL_ID guards below, so a
 // missing-token FATAL exit can itself write a failure marker instead of
 // just dying into run.sh's restart loop with nothing but a stderr line --
@@ -99,14 +76,14 @@ const LIVENESS_MARKER_PATH = path.join(DATA_HOME, '.agent-live')
 const LIVENESS_HEARTBEAT_MS = 60_000 // http-server.cjs's LIVENESS_FRESH_MS (150s) tolerates one missed beat
 const FAILURE_MARKER_PATH = path.join(DATA_HOME, '.agent-failed.json')
 
-// Atomic write (temp file + rename): matches run.sh's own write_failure()
-// (code-review pass, 2026-07-03 -- that function's own comment explicitly
-// calls out atomic-write as necessary "so main.cjs's poller never reads a
-// half-written file"; this one shares the exact same consumer
-// (pollFailureMarker()) and file, and a plain writeFile() here left a real,
-// if self-healing, window where a 3s poll tick landing mid-write would hit
-// a JSON.parse error on a truncated read). fs.rename is atomic on the same
-// filesystem, which a temp file in the same directory always is.
+// Atomic write (temp file + rename): matches run.sh's own write_failure() --
+// that function's own comment explicitly calls out atomic-write as
+// necessary "so main.cjs's poller never reads a half-written file". This
+// one shares the exact same consumer (pollFailureMarker()) and file, and a
+// plain writeFile() here left a real, if self-healing, window where a 3s
+// poll tick landing mid-write would hit a JSON.parse error on a truncated
+// read. fs.rename is atomic on the same filesystem, which a temp file in
+// the same directory always is.
 async function atomicWriteJson(filePath, payload) {
   const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
   await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2) + '\n')
@@ -118,11 +95,11 @@ async function writeLivenessMarker() {
   await atomicWriteJson(LIVENESS_MARKER_PATH, payload)
 }
 
-// Critical B (agent-lifecycle model-divergent review, 2026-07-03): a bad/
-// revoked Discord token or a missing-token boot used to just exit this
-// process into run.sh's own restart loop with no on-disk signal beyond
-// stderr -- main.cjs's agent-status.cjs never saw it, so the onboarding UI
-// stayed on "connecting" forever. This marker is the distinct failure
+// Critical B: a bad/revoked Discord token or a missing-token boot used to
+// just exit this process into run.sh's own restart loop with no on-disk
+// signal beyond stderr -- main.cjs's agent-status.cjs never saw it, so the
+// onboarding UI stayed on "connecting" forever. This marker is the distinct
+// failure
 // signal main.cjs's failure-marker poller (see main.cjs's
 // pollFailureMarker()) surfaces as setAgentStatus('failed', code, reason)
 // within a bounded time. Shares its DATA_HOME/.agent-failed.json path +
@@ -131,14 +108,14 @@ async function writeLivenessMarker() {
 // regardless of which layer -- the bash restart loop, or this process's
 // own login failure -- detected the problem first.
 //
-// `code` (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 1): the stable
-// machine-readable cause main.cjs's pollFailureMarker() relays into
-// setAgentStatus(). Every current call site below passes 'discord_token_bad'
-// EXCEPT the missing-HOME_CHANNEL_ID guard, which is a distinct config gap
-// (not the bot token itself, and there's no dedicated code for it in the
-// enum) -- it passes 'unknown' rather than mislabeling it as a token
-// problem. Defaults to 'unknown' if a future call site forgets to pass one,
-// so this never silently emits a marker with no code field at all.
+// `code`: the stable machine-readable cause main.cjs's pollFailureMarker()
+// relays into setAgentStatus(). Every current call site below passes
+// 'discord_token_bad' EXCEPT the missing-HOME_CHANNEL_ID guard, which is a
+// distinct config gap (not the bot token itself, and there's no dedicated
+// code for it in the enum) -- it passes 'unknown' rather than mislabeling
+// it as a token problem. Defaults to 'unknown' if a future call site
+// forgets to pass one, so this never silently emits a marker with no code
+// field at all.
 async function writeFailureMarker(reason, code = 'unknown') {
   const payload = { status: 'failed', reason, code, since: new Date().toISOString(), pid: process.pid }
   await atomicWriteJson(FAILURE_MARKER_PATH, payload)
@@ -166,9 +143,8 @@ if (!HOME_CHANNEL_ID) {
 
 // ── Local-time timestamps ───────────────────────────────────────────────────
 // new Date().toISOString() is UTC; the model reads this as "now", so it needs
-// an explicit local-time offset. Was hardcoded KST (+9) -- Mino 07-13
-// click-test: "하드코딩하지말고 시스템 시간 가져와라". Offset now comes from
-// the system timezone, so the app is correct wherever the user runs it.
+// an explicit local-time offset, computed from the system timezone so the
+// app is correct wherever the user runs it.
 function localISO(ms = Date.now()) {
   const d = new Date(ms)
   const offMin = -d.getTimezoneOffset()
@@ -310,16 +286,10 @@ async function resolveOutboundChannel(requestedId, opts = {}) {
     try {
       return { ch: await fetchFn(requestedId), note: null }
     } catch (err) {
-      // FAIL CLOSED on an explicit destination (nogabi issue #7). Until now an
-      // unreachable explicit id was rerouted to the current conversation with a
-      // loud note. That was added 2026-07-15 because the previous throw left the
-      // human seeing NOTHING when a weak model confabulated an id -- a real
-      // observed failure, not a hypothetical. But the two failure modes are not
-      // symmetric: a message delivered to a channel the caller never asked for is
-      // unrecoverable and does not read as an error, while a message not yet sent
-      // is recoverable and is reported. The 2026-07-15 problem was VISIBILITY, and
-      // visibility is restored by the tool returning isError with this text rather
-      // than by delivering the payload somewhere else.
+      // FAIL CLOSED on an explicit destination (nogabi issue #7): an
+      // unreachable explicit id throws (isError) rather than being silently
+      // rerouted -- delivering to a channel nobody asked for is unrecoverable,
+      // while a message that never sent is recoverable and reported.
       const e = new Error(
         `channelId ${requestedId} could not be resolved (${err.message}). Nothing was sent. ${GUIDANCE}`
       )
@@ -410,11 +380,11 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     lastActivityMs = Date.now() // delivered reply = live conversation (note-cadence input)
     clearThinking(ch.id).catch((err) => log('thinking reaction clear failed:', err.message))
     // delivered_channel= line: machine-readable delivery receipt for
-    // stop-reply-guard (2026-07-15 Melchior review). The guard used to match
-    // on the tool_use ARGS channelId, but since v0.0.11 the server can
-    // deliver on a wrong/omitted id via fallback -- args say where the model
-    // AIMED, this line says where the message actually LANDED. Fixed format;
-    // the guard greps exactly this token, the human-facing text stays above it.
+    // stop-reply-guard. The guard used to match on the tool_use ARGS
+    // channelId, but since v0.0.11 the server can deliver on a wrong/omitted
+    // id via fallback -- args say where the model AIMED, this line says
+    // where the message actually LANDED. Fixed format; the guard greps
+    // exactly this token, the human-facing text stays above it.
     return { content: [{ type: 'text', text: `sent to ${ch.id} (${chunks.length} message${chunks.length > 1 ? 's' : ''})${note ? `\n${note}` : ''}\ndelivered_channel=${ch.id}` }] }
   }
 
@@ -473,11 +443,11 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 // ── Discord event handlers ──────────────────────────────────────────────────
 // (LIVENESS_MARKER_PATH / writeLivenessMarker() / FAILURE_MARKER_PATH /
 // writeFailureMarker() are declared up near the DATA_HOME/config block above
-// -- moved there, 2026-07-03, so the DISCORD_TOKEN/HOME_CHANNEL_ID FATAL
-// guards can call writeFailureMarker() before exiting. GET
-// /api/agent/status polls the liveness marker's freshness to gate the
-// onboarding wizard's Step 5 success screen on REAL Discord-level liveness,
-// not just the ONBOARDING_COMPLETE flag flip.)
+// -- moved there so the DISCORD_TOKEN/HOME_CHANNEL_ID FATAL guards can call
+// writeFailureMarker() before exiting. GET /api/agent/status polls the
+// liveness marker's freshness to gate the onboarding wizard's Step 5 success
+// screen on REAL Discord-level liveness, not just the ONBOARDING_COMPLETE
+// flag flip.)
 discord.once(Events.ClientReady, (c) => {
   log(`Discord ready as ${c.user.tag}`)
   writeLivenessMarker().catch((err) => log(`liveness marker write failed: ${err.message}`))
@@ -488,13 +458,8 @@ discord.once(Events.ClientReady, (c) => {
   }, LIVENESS_HEARTBEAT_MS).unref()
   startShutdownRequestWatcher()
   startAutonomyWatcher()
-  // v0.0.17 hardening (the 0.0.16 incident, 07-16 14:05): cadence/ was
-  // missing from the packaged app, the require() below threw synchronously
-  // inside this once-handler, and the WHOLE BRIDGE died -- app stuck on
-  // "starting". Packaging is fixed (build.files + asarUnpack + the
-  // test-packaging assertion that would have caught it), but a broken
-  // optional feature must never take the bridge down with it again:
-  // degrade to a loud log, keep Discord alive.
+  // An optional feature must never take the bridge down with it: degrade to
+  // a loud log, keep Discord alive. (history: docs/HISTORY.md)
   try {
     startNoteCadenceWatcher()
   } catch (err) {
@@ -700,10 +665,9 @@ function startAutonomyWatcher() {
 }
 
 // ── Boot ping (v0.0.16, Mino 07-16 11:48 feedback #1) ───────────────────────
-// "재부팅되면 에이전트가 먼저 '재부팅됨' 하고 핑 찍어주기." Detection is the
-// HARNESS's job, deterministically -- a model asked to announce its own boot
-// forgets sometimes, and outside the window silence is indistinguishable
-// from death. Two-part shape (acked by Mino):
+// Detection is the HARNESS's job, deterministically -- a model asked to
+// announce its own boot forgets sometimes, and outside the window silence is
+// indistinguishable from death. Two-part shape:
 //   1. a direct system line to the home channel (this file's first and only
 //      non-model-mediated Discord send -- deliberate: liveness must not
 //      depend on the model choosing to speak), then
@@ -716,13 +680,13 @@ function startAutonomyWatcher() {
 // spams the channel (those die before Discord login; the bounce budget and
 // failure marker cover that class).
 const BOOT_EVENT_PATH = path.join(DATA_HOME, '.boot-event.json')
-// Persistent throttle (review fix, Melchior 07-16 verdict on cf39447): the
-// consume-on-read marker prevents double-announce within ONE leaf's life,
-// but has no memory ACROSS restarts -- a crash loop that reaches Discord
-// login each time (backoff caps at 120s; Discord login here is independent
-// of provider auth, so a bad provider key IS such a loop) would ping every
-// restart. This file remembers "announced recently" across restarts; the
-// decision rule lives in cadence/boot-announce.cjs (pure, tested).
+// Persistent throttle: the consume-on-read marker prevents double-announce
+// within ONE leaf's life, but has no memory ACROSS restarts -- a crash loop
+// that reaches Discord login each time (backoff caps at 120s; Discord login
+// here is independent of provider auth, so a bad provider key IS such a
+// loop) would ping every restart. This file remembers "announced recently"
+// across restarts; the decision rule lives in cadence/boot-announce.cjs
+// (pure, tested).
 const BOOT_ANNOUNCE_TS_PATH = path.join(DATA_HOME, '.boot-announce-ts.json')
 
 async function announceBoot() {
@@ -751,19 +715,16 @@ async function announceBoot() {
   }
 
   // The announce is one UNIT: direct line -> ts advance -> greeting inject.
-  // ts advances only after the direct send actually LANDS (Melchior spec,
-  // 07-16 13:28): spam requires successful sends, so advance-on-delivered
-  // still caps the crash loop, and a Discord outage at boot doesn't burn
-  // the slot into 15min of false silence. If the direct send fails, the
-  // whole unit aborts (no inject either) and the next restart retries it.
-  // BOTH paths sit behind the throttle -- deliberate superset of the spec's
-  // "gate the direct send": the inject has no "답장하지 마", so
-  // stop-reply-guard FORCES it into Discord; an unthrottled inject would be
-  // the same spam in the agent's voice instead of the system's.
-  // Where does the announce go? HOME first, then the persisted last
-  // conversation channel (v0.0.17: a DM-only install -- Mino's real setup
-  // has no home channel -- would otherwise have NOWHERE for the boot ping,
-  // structurally). Both dead -> abort the unit loudly, next restart retries.
+  // ts advances only after the direct send actually LANDS: spam requires
+  // successful sends, so advance-on-delivered still caps the crash loop, and
+  // a Discord outage at boot doesn't burn the slot into 15min of false
+  // silence. If the direct send fails, the whole unit aborts (no inject
+  // either) and the next restart retries it. BOTH paths sit behind the
+  // throttle -- deliberate superset of "gate the direct send": the inject
+  // has no "답장하지 마", so stop-reply-guard FORCES it into Discord; an
+  // unthrottled inject would be the same spam in the agent's voice instead
+  // of the system's.
+  // HOME first, then persisted last channel -- see the persisted-last-channel note above.
   let announceCh = null
   try {
     announceCh = await fetchTextChannel(HOME_CHANNEL_ID)
@@ -869,10 +830,10 @@ function startNoteCadenceWatcher() {
 
 discord.on(Events.Error, (err) => log('Discord client error:', err.message))
 
-// ── Thinking indicator (Mino 07-13 click-test feedback: MAGI-style 🤔
-// reaction while the agent composes, removed when the reply lands, plus a
-// one-shot typing indicator for the instant cue). Both are best-effort --
-// a failed reaction must never block message forwarding. ─────────────────
+// ── Thinking indicator: MAGI-style 🤔 reaction while the agent composes,
+// removed when the reply lands, plus a one-shot typing indicator for the
+// instant cue. Both are best-effort -- a failed reaction must never block
+// message forwarding. ────────────────────────────────────────────────────
 const THINKING_EMOJI = '🤔'
 const pendingThinking = new Map() // channelId -> Set<messageId>
 

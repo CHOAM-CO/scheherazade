@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 // supervisor.mjs -- node port of run.sh (Windows-port Phase 1).
 //
-// This file REPLICATES run.sh's battle-tested semantics and FIXES exactly the
-// two things docs/supervisor-design.md verdicts 1 and 7 approved: kill by
-// child HANDLE instead of blind pkill on the stop path, and a signal handler
-// that reaps the child before exiting. Everything else -- backoff ladder,
-// uptime-only restart policy, the 25s one-shot auto-answer window, the
-// verbatim prompt table (incl. the load-bearing bare-"1"-no-CR API-key
+// This file REPLICATES run.sh's battle-tested semantics and FIXES exactly
+// the two things docs/supervisor-design.md's review verdicts approved: kill
+// by child HANDLE instead of blind pkill on the stop path, and a signal
+// handler that reaps the child before exiting. Everything else -- backoff
+// ladder, uptime-only restart policy, the 25s one-shot auto-answer window,
+// the verbatim prompt table (incl. the load-bearing bare-"1"-no-CR API-key
 // answer), asymmetric KST resets, once-per-lifetime env resolution -- is
 // copied deliberately, with run.sh line receipts in the comments. Do not
 // "improve" any of it here; improvements are their own loudly-noted changes
-// AFTER the port proves itself (design verdicts 2, 5).
+// AFTER the port proves itself -- see docs/supervisor-design.md for the
+// full verdict rationale.
 //
 // Runtime: plain node OR Electron with ELECTRON_RUN_AS_NODE=1 -- node-pty
 // 1.1.0 is N-API and one prebuilt binding passed scripts/probe-pty.mjs under
@@ -40,11 +41,11 @@ const IS_WIN = process.platform === 'win32'
 // position), and we replicate that.
 //
 // The API-key response is bare "1" with NO carriage return -- empirically
-// settled (run.sh:331-337, oracle 2026-07-05, deterministic re-runs): "1" is
-// a hotkey that fires the confirm handler; a trailing "\r" INDEPENDENTLY
-// selects the default focus (No), so "1\r" writes the key into approved AND
-// rejected at once (corrupt state that re-triggers the freeze). 3/3 vs 2/2.
-// test-supervisor.mjs pins the no-CR fact.
+// settled (run.sh:331-337): "1" is a hotkey that fires the confirm handler;
+// a trailing "\r" INDEPENDENTLY selects the default focus (No), so "1\r"
+// writes the key into approved AND rejected at once (corrupt state that
+// re-triggers the freeze). test-supervisor.mjs pins the no-CR fact.
+// (history: docs/HISTORY.md)
 export const AUTO_ANSWER_PATTERNS = [
   { pattern: 'trust', response: '\r' },
   { pattern: 'confirm', response: '\r' },
@@ -179,8 +180,8 @@ export function resolveConfig(env = process.env, scriptDir = SCRIPT_DIR) {
     // sweep; live kills go through the child handle.
     pkillPattern: `--name ${agentName}`,
     sessionTimeoutSec: Number(merged.SESSION_TIMEOUT) > 0 ? Number(merged.SESSION_TIMEOUT) : 43200,
-    // v0.0.15 stall watchdog window (seconds). 0 disables. Default 15 min:
-    // the two live stalls it exists for ran 312 and 429 minutes.
+    // v0.0.15 stall watchdog window (seconds). 0 disables. Default 15 min
+    // (see the stall/thrash watchdog block below for why).
     stallTimeoutSec: merged.STALL_TIMEOUT !== undefined ? Math.max(0, Number(merged.STALL_TIMEOUT) || 0) : 900,
     systemPromptFile: fs.existsSync(path.join(mem, 'system_prompt.md')) ? path.join(mem, 'system_prompt.md') : null,
     // Context-bleed fix (2026-07-28): same guarded shape as
@@ -215,12 +216,11 @@ export function buildChildArgs(cfg) {
 // ── node shim for the hook lane (v0.0.15 Root A fix) ────────────────────────
 // Claude Code hook commands (ours AND third-party plugins') start with bare
 // `node`, executed via /bin/sh from the CLI child. On a box with no system
-// node the entire hook lane dies with exit 127 -- observed live on Mino's
-// install: ~1400 "/bin/sh: node: command not found" across 21 sessions
-// (07-13..07-15 teardown corpus), which silenced stop-reply-guard, the
-// rumination gate, and every other protection while the incidents they
-// existed for were happening. The win-port Phase 3 bash->mjs port made this
-// strictly worse: the bash hooks it replaced ran everywhere.
+// node the entire hook lane dies with exit 127, which silences
+// stop-reply-guard, the rumination gate, and every other protection while
+// the incidents they existed for are happening. The win-port Phase 3
+// bash->mjs port made this strictly worse: the bash hooks it replaced ran
+// everywhere. (history: docs/HISTORY.md)
 //
 // Fix at the ENV layer, not the command layer: write MEM/bin/node as a tiny
 // exec shim onto the supervisor's own runtime (Electron-as-node in the app
@@ -228,9 +228,9 @@ export function buildChildArgs(cfg) {
 // APPEND that dir to the child PATH. Append, not prepend: a real system node
 // always wins; the shim only fills absence. Command strings in
 // settings.local.json are never rewritten, so this also heals hooks we do
-// not own (the `node "${CLAUDE_PLUGIN_ROOT}/..."` plugin hooks that fail 121x
-// each in the same corpus). Regenerated on every spawn so an app move or
-// update never leaves the shim pointing at a dead binary.
+// not own (third-party plugin `node "${CLAUDE_PLUGIN_ROOT}/..."` hooks).
+// Regenerated on every spawn so an app move or update never leaves the shim
+// pointing at a dead binary.
 export function ensureNodeShim(cfg, { execPath = process.execPath, env = process.env, log = () => {} } = {}) {
   const binDir = path.join(cfg.mem, 'bin')
   try {
@@ -383,13 +383,12 @@ function sweepOrphansDefault(pkillPattern, log) {
 }
 
 // ── stall/thrash watchdog (v0.0.15 Root B fix) ──────────────────────────────
-// Two live incidents this exists for (07-13..07-15 teardown corpus, Mino's
-// box): a 312-min and a 429-min dead window where the CLI sat stalled with a
-// user message waiting 7 hours. Terminal state of an autocompact thrash loop:
-// each compaction re-attached ~12 session-read files, the context refilled to
-// the limit, the CLI emitted its synthetic "Autocompact is thrashing" error
-// (26x in one session) and then appended NOTHING more. SESSION_TIMEOUT
-// (12h blanket) is the only recycle today, so a morning stall eats the day.
+// Exists for a dead window where the CLI sat stalled with a user message
+// waiting for hours: the terminal state of an autocompact thrash loop, where
+// each compaction re-attaches session-read files, the context refills to the
+// limit, the CLI emits its synthetic "Autocompact is thrashing" error, and
+// then appends NOTHING more. SESSION_TIMEOUT (12h blanket) is the only
+// recycle otherwise, so a morning stall eats the day. (history: docs/HISTORY.md)
 //
 // Detection reads the session TRANSCRIPT TAIL, not pty silence: an idle TUI
 // still redraws, so output silence lies, but a stalled brain stops appending
@@ -408,19 +407,18 @@ function sweepOrphansDefault(pkillPattern, log) {
 
 // Claude Code puts transcripts under ~/.claude/projects/<cwd with '/'->'-'>.
 // Receipt: cwd /Users/cto/Documents/Scheherazade -> project dir
-// -Users-cto-Documents-Scheherazade (teardown corpus, 24 sessions). Munge is
-// mac/posix-verified only; on Windows the rule is unverified, so the
-// transcript watchdog stays off there rather than watching a fabricated path.
+// -Users-cto-Documents-Scheherazade. Munge is mac/posix-verified only; on
+// Windows the rule is unverified, so the transcript watchdog stays off
+// there rather than watching a fabricated path.
 // mem is realpath'd first (spark F1): the CLI munges its OWN cwd, and node
 // resolves symlinks/trailing slashes there -- a symlinked or trailing-slash
 // AGENT_DATA_HOME would otherwise make the watchdog watch a directory that
 // never exists, which fails QUIET (no transcript = no verdict = no bounce),
 // the exact silent-detector class this teardown was about.
 //
-// Munge rule: EVERY non-alphanumeric becomes '-', not just path.sep
-// (Melchior counter-receipt on the sep-only version, 07-15 19:40, confirmed
-// on this box raw: ~/Documents/MAGI_Memory -> -Users-narr-Documents-MAGI-
-// Memory, and session_notes -> session-notes inside deeper project dirs).
+// Munge rule: EVERY non-alphanumeric becomes '-', not just path.sep --
+// confirmed raw: ~/Documents/MAGI_Memory -> -Users-narr-Documents-MAGI-
+// Memory, and session_notes -> session-notes inside deeper project dirs.
 // A '_' or '.' in AGENT_DATA_HOME under sep-only munge would re-open the
 // same fail-quiet hole one layer down. Default MEM (~/Documents/<name>) only
 // survived the corpus because it happened to be alphanumeric.
@@ -430,24 +428,22 @@ export function transcriptDirFor(mem, home = os.homedir()) {
   return path.join(home, '.claude', 'projects', resolved.replace(/[^a-zA-Z0-9]/g, '-'))
 }
 
-// eraStart (review gate G1, Melchior 07-15): the project dir is SHARED by
-// every claude session with the same cwd -- his box holds 555 jsonl in one
-// project dir, and the teardown corpus itself is 24 sequential generations in
-// one dir. "Newest mtime" alone therefore binds the watchdog to whichever
-// session wrote last, not to OUR child: a stale prior-generation file (or a
-// foreign session resumed in the same cwd) could either bounce a healthy
-// child or mask a real stall. Filtering on birthtime >= eraStart restricts
-// the watch to files CREATED in this child's lifetime. birthtime falls back
-// to mtime on filesystems that report 0/absent. Residual risk, accepted and
-// documented: a foreign session freshly STARTED in the same cwd after our
-// spawn passes the filter -- identity beyond creation-era needs a session-id
-// handshake the CLI does not expose (and lsof is out: the corpus shows the
-// CLI append-closes, 춘식 raw 07-15 "열어놓은 jsonl이 lsof에 안 잡힘").
-// The residual's blast radius is bounded by the bounce budget
-// (createBounceBudget): even a worst-case foreign session parked stalled in
-// our cwd costs at most 3 kills per 6h before the watchdog degrades to
-// advisory logging -- a bounded nuisance, not an unbounded kill loop.
-// (G1-residual acceptance ground #3, Melchior review 07-15.)
+// eraStart (review gate G1): the project dir is SHARED by every claude
+// session with the same cwd. "Newest mtime" alone therefore binds the
+// watchdog to whichever session wrote last, not to OUR child: a stale
+// prior-generation file (or a foreign session resumed in the same cwd)
+// could either bounce a healthy child or mask a real stall. Filtering on
+// birthtime >= eraStart restricts the watch to files CREATED in this
+// child's lifetime. birthtime falls back to mtime on filesystems that
+// report 0/absent. Residual risk, accepted and documented: a foreign
+// session freshly STARTED in the same cwd after our spawn passes the filter
+// -- identity beyond creation-era needs a session-id handshake the CLI does
+// not expose (and lsof is out: the CLI append-closes its transcript, so an
+// open jsonl never shows up there). The residual's blast radius is bounded
+// by the bounce budget (createBounceBudget): even a worst-case foreign
+// session parked stalled in our cwd costs at most 3 kills per 6h before the
+// watchdog degrades to advisory logging -- a bounded nuisance, not an
+// unbounded kill loop. (history: docs/HISTORY.md)
 export function newestTranscript(dir, { eraStart = null } = {}) {
   let best = null
   let entries
@@ -574,8 +570,7 @@ export function createStallLane({
 // context-loss loops. The ledger is SHARED across respawns (runLoop passes
 // one array for the supervisor's lifetime); when the budget is spent the
 // watchdog goes advisory -- it logs the verdict but stops killing, and
-// SESSION_TIMEOUT remains the blanket backstop. (Same flap-guard lesson as
-// the Sirin supervisor lane, per Melchior.) Extracted so the budget
+// SESSION_TIMEOUT remains the blanket backstop. Extracted so the budget
 // arithmetic is unit-attackable, same rule as createStallLane.
 export function createBounceBudget({ ledger = [], budget = 3, windowMs = 6 * 3600_000, now = () => Date.now(), log = () => {} }) {
   let spentLogged = false
@@ -606,8 +601,8 @@ function spawnPtyChild(cfg, { now = () => Date.now(), log, watchdogBounces = [] 
   // Windows env can carry 'Path'/'path' case-variants; spreading process.env
   // and then setting 'PATH' would leave BOTH keys and the child's resolution
   // becomes nondeterministic -- the shim silently neutered on the exact boxes
-  // the win-port targets (Melchior solo finding, review S3b). Strip variants
-  // so exactly one PATH key survives. No-op on posix.
+  // the win-port targets (review S3b). Strip variants so exactly one PATH
+  // key survives. No-op on posix.
   const baseEnv = { ...process.env }
   for (const k of Object.keys(baseEnv)) {
     if (k !== 'PATH' && k.toUpperCase() === 'PATH') delete baseEnv[k]

@@ -9,8 +9,7 @@
 // -- only the server-side log does. This matches memory/server.mjs's own
 // convention (see its CallToolRequestSchema handler) for the "never
 // swallow" half; the "never leak detail onto the wire" half is new
-// (model-divergent/GPT security review, confirmed by direct code read,
-// 2026-07-03).
+// (confirmed by direct code read).
 //
 // AGENT_NAME is a fixed internal identifier ("scheherazade"), independent of
 // the user-facing display name collected in the wizard (Step 2, Korean by
@@ -34,25 +33,13 @@ const path = require('node:path')
 const os = require('node:os')
 const crypto = require('node:crypto')
 const { pathToFileURL } = require('node:url')
-// 4-provider-mode wiring (2026-07-04): single source of truth for "which
-// PROVIDERS values need a stored credential before onboarding-complete",
-// shared with main.cjs's spawn-time env building -- see provider-env.cjs's
-// own header comment. Zero Electron dependency, safe to require from here.
-// OLLAMA_BASE_URL added (server-side validate fix, 2026-07-04): reused here
-// too so the local-liveness ping below checks the EXACT SAME URL
-// buildProviderEnv() actually spawns the agent against, single source of
-// truth, not a second hardcoded copy.
-// resolveChatgptProxyPort added (Codex finding #5 fix, 2026-07-04): the same
-// digits-only + 1-65535 TCP-range guard provider-env.cjs's buildProviderEnv()
-// applies at spawn-time (including its CHATGPT_PROXY_DEFAULT_PORT fallback,
-// applied internally -- no separate import of that constant needed here
-// anymore), now shared so this file's liveness ping below can never drift
-// out of sync with it again (see that function's own header comment for the
-// concrete SSRF gap this closes).
-// resolveCustomBaseUrl added (custom-provider addition, 2026-07-25): same
-// shared-guard reasoning as resolveChatgptProxyPort, for the 'custom'
-// provider's own base-URL field -- see this file's POST
-// /api/agent/custom-provider and validateProviderKey's 'custom' branch.
+// Single source of truth for "which PROVIDERS values need a stored
+// credential before onboarding-complete", "which local URL each mode's
+// liveness ping checks", and "which base-URL/port values are valid" --
+// shared with main.cjs's spawn-time env building and this file's own
+// liveness pings below, so neither can drift out of sync with
+// provider-env.cjs's buildProviderEnv(). Zero Electron dependency, safe to
+// require from here. (history: docs/HISTORY.md)
 const { PROVIDERS_REQUIRING_STORED_CREDENTIAL, resolveChatgptProxyPort, resolveCustomBaseUrl, OLLAMA_BASE_URL } = require('../provider-env.cjs')
 // Login shell-out (2026-07-07): spawn/execFile for `codex login` /
 // `ollama signin` children -- the ONLY non-claude binary spawn sites in
@@ -91,9 +78,8 @@ const PUBLIC_DIR_RESOLVED = path.resolve(PUBLIC_DIR)
 const AGENT_NAME = 'scheherazade'
 
 // ── DATA_HOME: fixed, product-keyed data directory ──────────────────────
-// PO correction (2026-07-03), overriding this file's earlier draft: DATA_HOME
-// must NOT be keyed on AGENT_NAME, and definitely not on DISPLAY_NAME.
-// DISPLAY_NAME is user-renameable from the Settings page (see
+// DATA_HOME must NOT be keyed on AGENT_NAME, and definitely not on
+// DISPLAY_NAME. DISPLAY_NAME is user-renameable from the Settings page (see
 // /api/settings/rename below) -- if the on-disk data path were keyed on it,
 // a rename would orphan memory.db (silent total memory loss, the exact
 // opposite of this product's "remembers you" promise). AGENT_NAME today
@@ -109,15 +95,10 @@ const AGENT_NAME = 'scheherazade'
 // SCHEHERAZADE_MEMORY_DB env override (used by memory/smoke.mjs) still
 // works unchanged.
 //
-// AGENT_DATA_HOME override (2026-07-13, v0.0.6): channel.mjs (line 79) and
-// run.sh (MEM=) have always honored this env var; http-server.cjs was the one
-// component that did not, so its DATA_HOME could not be redirected. That was
-// harmless only because no test had ever POSTed to a config-WRITING route --
-// the first one to do so (the autonomy consent toggle) would have written into
-// the real user's ~/Documents/Scheherazade/.agent-config from a test run.
-// Production is unaffected: main.cjs passes AGENT_DATA_HOME into the env of the
-// children it spawns, never into its own process.env, and http-server runs
-// inside main.
+// AGENT_DATA_HOME override: channel.mjs and run.sh (MEM=) have always
+// honored this env var; production is unaffected -- main.cjs passes
+// AGENT_DATA_HOME into the env of the children it spawns, never into its
+// own process.env, and http-server runs inside main. (history: docs/HISTORY.md)
 const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', 'Scheherazade')
 
 // CONFIG_DIR: where every *writable* runtime config file lives -- the same
@@ -213,8 +194,8 @@ function readLivenessMarker() {
   }
 }
 
-// Fix D (agent-lifecycle model-divergent review, 2026-07-03): the marker's
-// timestamp freshness alone is not enough -- a dead/replaced process's last
+// Fix D: the marker's timestamp freshness alone is not enough -- a
+// dead/replaced process's last
 // recent heartbeat can outlive it by up to LIVENESS_FRESH_MS (150s) and get
 // reported "live" for a broken agent. channel.mjs's writeLivenessMarker()
 // stamps its own process.pid into the marker (see channel.mjs); this checks
@@ -315,8 +296,8 @@ function computeAgentStatus() {
 
 // claude-subscription (4-provider-mode wiring, 2026-07-04): NEW mode, added
 // rather than a rename of the existing 'claude' (BYOK) value -- see
-// provider-env.cjs's header + this task's own report for why ADD was chosen
-// over renaming 'claude'->'claude-byok' (the rename would have rippled into
+// provider-env.cjs's header for why ADD was chosen over renaming
+// 'claude'->'claude-byok' (the rename would have rippled into
 // onboarding/public/js/{copy,wizard}.js's hardcoded 'claude' tab id and the
 // externally-governed copy-source file copy.js is sourced from verbatim --
 // out of scope here, and a materially bigger/riskier diff for the same
@@ -491,7 +472,7 @@ function seedSettingsLocal() {
 //   - permissions.allow += mcp__agent-channel__send_file_to_discord
 //   - hooks.Stop += stop-reply-guard.mjs (silent-text regression detector,
 //     added after the agent composed replies without calling the reply tool
-//     and looked dead from Discord -- "돌연사" report, 2026-07-13 19:10)
+//     and looked dead from Discord)
 //   - hooks.PreToolUse += pre-reply-negation-check.mjs (v0.0.4)
 //   - bash hook commands -> node .mjs ports (win-port Phase 3; the .sh
 //     files were deleted from the bundle, see the rewrite block below for
@@ -553,9 +534,9 @@ function ensureSettingsLocalAdditions() {
     })
   }
 
-  // v0.0.12: permission-wall translator on Bash results (춘식3 P1 adoption,
-  // 2026-07-15 — silence-during-diagnosis killer; see the hook's header).
-  // Same additive-only contract as the negation block above.
+  // v0.0.12: permission-wall translator on Bash results -- silence-during-
+  // diagnosis killer; see the hook's header. Same additive-only contract as
+  // the negation block above. (history: docs/HISTORY.md)
   const TRANSLATOR_HOOK = 'post-bash-permission-translator.mjs'
   if (!Array.isArray(settings.hooks.PostToolUse)) settings.hooks.PostToolUse = []
   const hasTranslator = settings.hooks.PostToolUse.some((group) =>
@@ -573,11 +554,10 @@ function ensureSettingsLocalAdditions() {
     })
   }
 
-  // v0.0.22: context-gauge tap on Stop + SessionStart (Mino live test
-  // 2026-07-16 -- 372K-lane agent drowned in autocompact with zero
-  // occupancy visibility from the app; see the hook's header). Advisory
+  // v0.0.22: context-gauge tap on Stop + SessionStart -- advisory
   // instrument, additive-only, both event groups checked independently so
-  // a hand-edited config missing only one still converges.
+  // a hand-edited config missing only one still converges. See the hook's
+  // header for the mechanism. (history: docs/HISTORY.md)
   const GAUGE_HOOK = 'context-gauge.mjs'
   const gaugeCommand = `node ${path.join(toUnpackedPath(REPO_ROOT), 'hooks', GAUGE_HOOK)}`
   const hasGaugeIn = (groups) => Array.isArray(groups) && groups.some((group) =>
@@ -665,8 +645,7 @@ function seedAgentDefinitions() {
     // tmp+rename (atomic on same volume) + per-file catch: an interrupted
     // plain copyFileSync leaves a truncated file that the exists-check
     // treats as "seeded" forever, and one throwing file used to abort the
-    // whole seedConfigFromTemplates() boot path (red-team finding #3,
-    // 2026-07-13 spark pass).
+    // whole seedConfigFromTemplates() boot path.
     try {
       fs.mkdirSync(AGENTS_DIR, { recursive: true })
       const tmp = `${target}.tmp`
@@ -699,9 +678,8 @@ function seedConfigFromTemplates() {
 // hasCompletedOnboarding (and theme) are already set there and this is a
 // no-op. On a genuinely first-ever `claude` invocation (the exact machine
 // state setup.sh's own auto-install path can produce -- it `npm install -g
-// @anthropic-ai/claude-code`'s the CLI but never runs it interactively),
-// EMPIRICALLY REPRODUCED (2026-07-03, self-test with an isolated fresh
-// $HOME): the CLI's own first-run "Choose the text style that looks best
+// @anthropic-ai/claude-code`'s the CLI but never runs it interactively):
+// the CLI's own first-run "Choose the text style that looks best
 // with your terminal" picker hangs the headless expect spawn indefinitely
 // -- run.sh's `-re "text style"` pattern matches that prompt's text and
 // sends \r, but the picker does not advance on a bare \r (repeated
@@ -713,6 +691,7 @@ function seedConfigFromTemplates() {
 // interactive Claude Code state -- OAuth account info, project trust list,
 // history -- this only fills in the three keys that gate the first-run
 // prompts, and only when they aren't already satisfied).
+// (history: docs/HISTORY.md)
 const REAL_CLAUDE_JSON_PATH = path.join(os.homedir(), '.claude.json')
 
 function ensureClaudeOnboardingDone() {
@@ -864,8 +843,8 @@ function writeAgentConfig(fields) {
 // hooks/stop-reply-guard.mjs). A grep returns a third hit -- this sentence.
 const MUTE_STRIKES_PATH = path.join(CONFIG_DIR, '.mute-strikes.json')
 // 2 strikes = 4 failed attempts to speak (each strike already contains one
-// guard-forced retry). Matches the original 돌연사 shape: two consecutive
-// silent turns, 19:10 KST 2026-07-13.
+// guard-forced retry) -- matches the original silent-turn incident shape.
+// (history: docs/HISTORY.md)
 const MUTE_STRIKE_THRESHOLD = 2
 
 function readMuteStrikes() {
@@ -891,9 +870,8 @@ function clearMuteStrikes() {
 }
 
 // ── unpacked-path mapping for spawned (ELECTRON_RUN_AS_NODE) children ────
-// Packaging bugfix (model-divergent/GPT review, 2026-07-03, high-severity):
-// the bundled Claude CLI reads this .mcp.json and spawns each server as a
-// child process. A child spawned with ELECTRON_RUN_AS_NODE does NOT get
+// Packaging bugfix: the bundled Claude CLI reads this .mcp.json and spawns
+// each server as a child process. A child spawned with ELECTRON_RUN_AS_NODE does NOT get
 // Electron's asar fs patch -- that patch lives in Electron's own process,
 // not in a bare-node child -- so channel.mjs / memory/server.mjs and every
 // node_modules import they make must resolve to REAL files on disk, never
@@ -909,7 +887,7 @@ function toUnpackedPath(p) {
   // REPO_ROOT itself IS the asar root in a packaged app (path.join(__dirname,
   // '..') = ".../app.asar", no trailing separator) -- the marker above never
   // matches it, so a rendered {AGENT_DIR} would point cycle scripts INSIDE
-  // the archive, which bash cannot exec. (Codex catch, 2026-07-08.)
+  // the archive, which bash cannot exec.
   if (p.endsWith(`${path.sep}app.asar`)) return `${p}.unpacked`
   return p
 }
@@ -1145,12 +1123,10 @@ function storeProviderKeyVerified(provider, key) {
 // CREDENTIALS_DIR's layout (0o700 dir, 0o600 files, per-name manifest)
 // without inventing a second storage mechanism.
 //
-// SEAM (documented, not wired to a real child process yet -- see main.cjs's
-// P1 wiring notes, item 1: nothing in this repo spawns the `claude`
-// CLI/channel.mjs child yet, that's still open work). Whatever eventually
-// does spawn it must call readDiscordToken() at the moment of spawn and
-// inject the result directly into that child's own `env: {...}` -- it must
-// NEVER be written back out to a .env file or any other on-disk config.
+// SEAM: main.cjs's spawnRealAgentChild() calls readDiscordToken() at the
+// moment of spawn and injects the result directly into that child's own
+// `env: {...}` -- the token must NEVER be written back out to a .env file
+// or any other on-disk config.
 function storeDiscordTokenVerified(token) {
   return storeProviderKeyVerified('discord-bot', token)
 }
@@ -1197,9 +1173,8 @@ function readTelegramToken() {
 // not read this field yet).
 //
 // AbortSignal.timeout() requires no extra dependency (global since Node
-// 17.3, this app's bundled Electron/Node is v24 -- confirmed via `node
-// --version` at fix time) and keeps a firewalled/hung local port from
-// stalling the validate response; a plain ECONNREFUSED on an unbound
+// 17.3; this app's bundled Electron/Node is v24) and keeps a firewalled/
+// hung local port from stalling the validate response; a plain ECONNREFUSED on an unbound
 // localhost port resolves near-instantly on its own, this timeout only
 // guards the non-instant edge cases.
 const LOCAL_LIVENESS_TIMEOUT_MS = 1500
@@ -1275,9 +1250,8 @@ async function validateProviderKey(provider, key, opts = {}) {
     // to the empty-key guard below (which would wrongly reject 'custom's
     // OPTIONAL, often-blank key as an error).
     // ok:FALSE here, unlike the chatgpt invalid-port branch above which
-    // returns ok:true (external red team 2026-07-25, surviving finding).
-    // The two are not the same case: for chatgpt, `ok` has no side effect --
-    // it is not in PROVIDERS_REQUIRING_STORED_CREDENTIAL and the validate
+    // returns ok:true. The two are not the same case: for chatgpt, `ok` has
+    // no side effect -- it is not in PROVIDERS_REQUIRING_STORED_CREDENTIAL and the validate
     // route has no chatgpt clause, so nothing is ever persisted. For
     // 'custom' this same route DOES persist on ok:true whenever a non-blank
     // key is present (`provider === 'custom' && key && key.trim()`), so
@@ -1405,8 +1379,7 @@ async function validateDiscordToken(token) {
   return { ok: true, guildId: guild.id, guildName: guild.name, channelId: homeChannel.id, channelName: homeChannel.name }
 }
 
-// ── Discord reconnect enumeration (IA v0.0.9, Mino 11:31 "디코→슬랙→텔레그램
-// 갈아타기") ─────────────────────────────────────────────────────────────
+// ── Discord reconnect enumeration (IA v0.0.9) ────────────────────────────
 // Same 3-check validation as validateDiscordToken above, but NO auto-pick:
 // onboarding's "first guild, first text channel" inference assumes a freshly
 // created single-server setup (see the flagged comment above) -- a RECONNECT
@@ -1503,8 +1476,8 @@ async function enumerateTelegramChats(token, fetchImpl = fetch) {
 
 const SLACK_API = 'https://slack.com/api'
 async function slackApi(token, method, params, fetchImpl = fetch) {
-  // form-encoded, NOT JSON (0.0.19, first live-test fix): x-www-form-
-  // urlencoded is the one format EVERY Slack Web API method accepts;
+  // form-encoded, NOT JSON: x-www-form-urlencoded is the one format EVERY
+  // Slack Web API method accepts;
   // per-method JSON acceptance is a docs matrix we should not be betting
   // the connect flow on. All params this file sends are scalars.
   const form = new URLSearchParams()
@@ -1826,14 +1799,14 @@ function renderAgentSubstrate({ displayName, tone, primaryTask }) {
   log('rendered agent substrate into DATA_HOME (CLAUDE.md, ONTOLOGY_GUIDE.md, system_prompt.md; persona/checkpoint seeded if absent)')
 }
 
-// Net-change collapse for the session feed. Live catch (Mino, 2026-07-14,
-// 춘식3 second-device install): ONE correction row rendered TWICE -- once
-// "추가됨", once "수정됨", identical preview text, because both previews
-// resolve to the row's CURRENT content. The write side was innocent: every
-// memory_write logs exactly one audit event, and the agent genuinely did
-// insert the row and then update it. The defect was the FEED rendering raw
-// audit bookkeeping on a surface whose own title promises "이번 세션에서
-// 기억한 것" -- what the session NET-remembered. One row = one line:
+// Net-change collapse for the session feed: without it, ONE correction row
+// can render TWICE -- once "추가됨", once "수정됨", identical preview text,
+// because both previews resolve to the row's CURRENT content. The write
+// side is innocent: every memory_write logs exactly one audit event, and
+// the agent genuinely can insert a row and then update it. The defect is
+// the FEED rendering raw audit bookkeeping on a surface whose own title
+// promises "이번 세션에서 기억한 것" -- what the session NET-remembered.
+// One row = one line: (history: docs/HISTORY.md)
 //   - inserted today (whatever followed)             -> one "추가됨"
 //   - updated today on a pre-existing row            -> one "수정됨"
 //     (update outranks confirm: a recency bump must not mask a content
@@ -2024,8 +1997,7 @@ const LOGIN_SPECS = {
 // an env scrub: ANTHROPIC_API_KEY suppresses claude.ai connectors, so the
 // auth child must run WITHOUT it (child env only -- parent untouched).
 //
-// LOAD-BEARING CAVEAT (Idea review; mechanism CORRECTED 07-14 by empirical
-// test, not docs): the SOLE suppressor is ANTHROPIC_API_KEY. Verified on
+// LOAD-BEARING CAVEAT: the SOLE suppressor is ANTHROPIC_API_KEY. Verified on
 // claude CLI 2.1.208 -- `ANTHROPIC_API_KEY=x claude mcp list` prints
 // "connectors are disabled ..."; `ANTHROPIC_BASE_URL=... claude mcp list`
 // with NO key still lists them. base_url/proxy alone does NOT suppress. So
@@ -2084,10 +2056,10 @@ function clearMcpLoginChild(name) {
   if (mcpLoginTimers[name]) { clearTimeout(mcpLoginTimers[name]); mcpLoginTimers[name] = null }
 }
 
-// Parser for `claude mcp list` (Fix: real output has a health-check preamble
+// Parser for `claude mcp list`: real output has a health-check preamble
 // line and local servers marked "⏸ Pending approval", not just the doc's two
-// states -- verified on a live machine 07-14). Line-based match naturally
-// skips the preamble; we keep ONLY `claude.ai <name>` rows (the connectors),
+// states. Line-based match naturally skips the preamble; we keep ONLY
+// `claude.ai <name>` rows (the connectors),
 // dropping local servers (agent-channel/memory/calendar) and plugin:* rows.
 function parseMcpConnectorList(text) {
   const out = []
@@ -2187,11 +2159,10 @@ const loginTimers = { chatgpt: null, ollama: null }
 // child still cancellable. This flag is set/checked SYNCHRONOUSLY at entry.
 const loginStarting = { chatgpt: false, ollama: false }
 
-// External-binary resolution (hardened per Codex security review finding
-// #2 + re-review finding #3, 2026-07-07). FIXED absolute locations ONLY --
-// NO PATH walk at all: a poisoned launch PATH must never pick the binary
-// (Codex: "logging does not mitigate execution"), and Finder-launched apps
-// get a minimal PATH anyway, so the walk was mostly useless for exactly
+// External-binary resolution (hardened per security review). FIXED
+// absolute locations ONLY -- NO PATH walk at all: a poisoned launch PATH
+// must never pick the binary ("logging does not mitigate execution"), and
+// Finder-launched apps get a minimal PATH anyway, so the walk was mostly useless for exactly
 // the double-click users this app targets. Order:
 //   1. DATA_HOME/bin -- the app-managed dependency dir (the dependency-
 //      bootstrap step downloads CLIs here; same trust domain as the app's
@@ -2340,8 +2311,8 @@ async function startProviderLoginLocked(provider, { force }) {
       } else if (code === 0) {
         setLoginStatus(provider, 'failed', 'unknown', 'login finished but no credential was written -- try again')
       } else {
-        // Coarse client-facing message only; the raw exit code + stderr
-        // tail go to the server log below (Codex finding #5).
+        // Coarse client-facing message only; raw stderr stays log-only
+        // (see the stderr rule above).
         setLoginStatus(provider, 'failed', 'exit_nonzero', 'login process exited with an error -- see the app log')
       }
     }
@@ -2449,9 +2420,8 @@ function startMcpConnectorLogin(name, binPath) {
       if (m) {
         capturedUrl = m[0]
         // The captured string cleared urlRegex, so it is a pinned
-        // https://claude.ai authorize endpoint -- a verified URL, not raw
-        // child output (Codex finding #5 exception: only a regex-cleared
-        // claude.ai URL rides the wire; raw stderr stays log-only below).
+        // https://claude.ai authorize endpoint -- verified, not raw child
+        // output (raw stderr stays log-only, per the stderr rule above).
         setMcpStatus(name, 'url_ready', null, capturedUrl)
       }
     })
@@ -2910,9 +2880,9 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     }
     const info = await slackApi(effBot, 'conversations.info', { channel: String(channelId) })
     if (!info.ok || !info.body.channel) {
-      // Slack's own error code rides along VERBATIM (0.0.19): the first
-      // live test hit this branch and the swallowed code made the failure
-      // undiagnosable from the screen. Never eat the upstream error.
+      // Slack's own error code rides along VERBATIM: the first live test hit
+      // this branch and the swallowed code made the failure undiagnosable
+      // from the screen. Never eat the upstream error.
       sendJson(res, 400, { error: `picked channel is not reachable by this token (slack: ${info.error || 'no_channel_in_response'})` })
       return
     }
@@ -2958,11 +2928,12 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     return
   }
 
-  // ── chatgpt proxy live receipt (IA v0.0.9, "셸은 현실" principle) ─────────
-  // Surfaces what the proxy's own /health reports RIGHT NOW -- the product
-  // form of the 07-14 live catch (dropdown gpt-5.6-sol vs engine gpt-5.5,
-  // visible only by log-digging). Delegates to main.cjs (it owns the proxy
-  // port/lifecycle); running:false when not wired or nothing answers.
+  // ── chatgpt proxy live receipt ("셸은 현실" principle) ────────────────────
+  // Surfaces what the proxy's own /health reports RIGHT NOW rather than a
+  // config-inferred guess (see main.cjs's ensureCodexProxy for why that gap
+  // is live, not theoretical -- history: docs/HISTORY.md). Delegates to
+  // main.cjs (it owns the proxy port/lifecycle); running:false when not
+  // wired or nothing answers.
   if (pathname === '/api/proxy/health' && req.method === 'GET') {
     if (!agentControls || typeof agentControls.proxyHealth !== 'function') {
       sendJson(res, 200, { running: false })
@@ -3034,7 +3005,7 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     return
   }
 
-  // ── sudo askpass lane (0.1.0 prep, P4 spec Mino-acked 07-16 11:48) ───────
+  // ── sudo askpass lane ─────────────────────────────────────────────────
   // Containment contract: the password lives ONLY as a safeStorage blob
   // (Keychain-backed, same vault mechanism as the Discord bot token) and is
   // decrypted exclusively inside GET /api/sudo/password below. It is never
@@ -3130,12 +3101,12 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     return
   }
 
-  // GET /api/context-status — context-occupancy gauge (v0.0.22, Mino 07-16
-  // "답장 하나에 4분" 진단 후속). Read side of hooks/context-gauge.mjs's
-  // DATA_HOME/context-status.json snapshot (written atomically on every
-  // Stop + SessionStart). Attaches the model→cap table here, NOT in the
-  // hook, so cap knowledge updates ship with the app instead of being
-  // frozen into old snapshots. Read-only GET, no secrets in the payload.
+  // GET /api/context-status — context-occupancy gauge. Read side of
+  // hooks/context-gauge.mjs's DATA_HOME/context-status.json snapshot
+  // (written atomically on every Stop + SessionStart). Attaches the
+  // model→cap table here, NOT in the hook, so cap knowledge updates ship
+  // with the app instead of being frozen into old snapshots. Read-only GET,
+  // no secrets in the payload.
   if (pathname === '/api/context-status' && req.method === 'GET') {
     let snap = null
     try {
@@ -3275,10 +3246,10 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
   //
   // Feeds the UI's revert offer. Source of truth is the strike ledger written
   // by hooks/stop-reply-guard.mjs (see its header for why this is a post-swap
-  // convicter and not a pre-swap probe: a probe passed the known-mute model in
-  // 7 of 7 live conditions, so it could only ever have manufactured false
-  // acquittals). A strike = the guard told the agent to send and it still
-  // didn't, after a retry.
+  // convicter and not a pre-swap probe: a probe against the known-mute model
+  // could only ever have manufactured false acquittals -- history:
+  // docs/HISTORY.md). A strike = the guard told the agent to send and it
+  // still didn't, after a retry.
   //
   // Read-only and fail-open: a missing/corrupt ledger reports "no strikes"
   // rather than 500ing the settings page.
@@ -3408,8 +3379,7 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     //             cost me"), and it is NOT what the cap is enforced against.
     //   cap    -- a PER-NIGHT ceiling, enforced over [cycleStart, now]. It has to
     //             be per-night: a 23:00-05:00 window measured per calendar day
-    //             got a fresh budget at midnight and could spend the cap twice
-    //             (external red team, 2026-07-13).
+    //             got a fresh budget at midnight and could spend the cap twice.
     //
     // ok === false means the meter cannot see the transcripts. That is reported
     // as blindness, never as zero: "nothing was spent" and "I cannot tell you
@@ -3572,10 +3542,9 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
       return
     }
     if (!MANAGED_INSTALL_SUPPORTED) {
-      // Windows v1 = detection-only (Mino LOCKED 07-13 18:35). Open the
-      // official install page -- a FIXED constant, same shape as the
-      // fda/open route's pinned pane URL, no request data near it -- and
-      // tell the wizard this is a manual flow.
+      // Windows v1 = detection-only. Open the official install page -- a
+      // FIXED constant, same shape as the fda/open route's pinned pane URL,
+      // no request data near it -- and tell the wizard this is a manual flow.
       const installUrl = MANUAL_INSTALL_PAGES[dep]
       if (installUrl) {
         try { getElectron().shell.openExternal(installUrl) } catch (err) {
@@ -4007,6 +3976,8 @@ function createOnboardingServer(onOnboardingComplete, agentControls) {
 //     The CLI does not know gpt ids, so its believed window (and therefore
 //     the autocompact trigger point) may be SMALLER than this; the gauge's
 //     occupancy number is exact either way, only pct is best-effort there.
+// Re-verify these pins on every codex-as-api upgrade (see docs/HISTORY.md
+// for the upgrade checklist) -- a version bump can silently move the table.
 // Unknown model → cap null, UI shows occupancy without a percentage.
 function contextCapForModel(model) {
   if (typeof model !== 'string' || !model) return { cap: null, capSource: null }
@@ -4027,85 +3998,77 @@ module.exports = {
   readAgentConfig,
   readDiscordToken,
   readHomeChannelId,
-  // Exported for main.cjs's RUN_SH_PATH resolution (agent-lifecycle fix,
-  // 2026-07-03) -- same asar/asarUnpack path-mapping problem this file
-  // already solved for CHANNEL_SCRIPT_PATH/MEMORY_SERVER_SCRIPT_PATH above,
-  // reused as-is rather than re-implemented in main.cjs.
+  // Exported for main.cjs's RUN_SH_PATH resolution -- same asar/asarUnpack
+  // path-mapping problem this file already solved for
+  // CHANNEL_SCRIPT_PATH/MEMORY_SERVER_SCRIPT_PATH above, reused as-is
+  // rather than re-implemented in main.cjs.
   toUnpackedPath,
-  // Exported for Critical A (agent-lifecycle model-divergent review,
-  // 2026-07-03): spawnRealAgentChild() needs to read the validated BYOK
-  // provider key back out of safeStorage at spawn time to inject
-  // ANTHROPIC_API_KEY into the claude child's own env (a fresh Mac that
-  // never ran `claude login` otherwise has no credentials and the CLI
-  // hangs at its own auth prompt forever). Never written to any file --
-  // decrypted in-memory only, same as this function's existing callers
-  // here (storeProviderKeyVerified's round-trip check, readDiscordToken).
+  // Exported for main.cjs's spawnRealAgentChild(): needs to read the
+  // validated BYOK provider key back out of safeStorage at spawn time to
+  // inject ANTHROPIC_API_KEY into the claude child's own env. Never written
+  // to any file -- decrypted in-memory only, same as this function's
+  // existing callers here (storeProviderKeyVerified's round-trip check,
+  // readDiscordToken).
   readProviderKey,
-  // Exported for main.cjs's pre-spawn gate and scripts/test-harness-refresh.mjs
-  // (nogabi issue #6): a failed boot harness refresh must stop the spawn, not
-  // just print a line. Kept here rather than in main.cjs because this file owns
-  // both DATA_HOME and the render itself.
+  // Exported for main.cjs's pre-spawn gate and
+  // scripts/test-harness-refresh.mjs (pure, no Electron dependency): a
+  // failed boot harness refresh must stop the spawn, not just print a line.
+  // Kept here rather than in main.cjs because this file owns both
+  // DATA_HOME and the render itself.
   readHarnessFailure,
   HARNESS_FAILURE_PATH,
   refreshHarnessIfOnboarded,
-  // Exported for scripts/test-credential-store.mjs (2026-07-25): the whole
-  // store/verify path had never executed outside a packaged build, because
-  // dev-serve-ui.mjs runs in plain node. getElectron() requires 'electron'
-  // lazily precisely so this file stays testable outside an Electron main
-  // process, so the harness injects a safeStorage stub and drives the real
-  // code -- including the two refusal branches (encryption unavailable,
+  // Exported for scripts/test-credential-store.mjs (pure, no Electron
+  // dependency): getElectron() requires 'electron' lazily precisely so
+  // this file stays testable outside an Electron main process, so the
+  // harness injects a safeStorage stub and drives the real code --
+  // including the two refusal branches (encryption unavailable,
   // round-trip mismatch) that must never leave a key in plaintext.
   storeProviderKeyVerified,
-  // Exported for scripts/test-custom-provider-validate.mjs (external red
-  // team 2026-07-25): the 'custom' branch returns before any network call,
-  // so a plain-node harness can pin the ok:false-on-invalid-URL contract
-  // without Electron or a live proxy. Same "pure enough to test directly"
-  // precedent as isMarkerFresh/readLivenessMarker below.
+  // Exported for scripts/test-custom-provider-validate.mjs (pure, no
+  // Electron dependency): the 'custom' branch returns before any network
+  // call, so a plain-node harness can pin the ok:false-on-invalid-URL
+  // contract without Electron or a live proxy.
   validateProviderKey,
-  // Exported for Fix D verification (agent-lifecycle model-divergent
-  // review, 2026-07-03): pure functions, no Electron dependency (see this
-  // file's own getElectron() comment -- "stays requireable/testable
-  // outside a running Electron main process"), so a plain-node test
-  // harness can exercise the pid-liveness gate directly without spinning
-  // up Electron.
+  // Exported for testability (pure functions, no Electron dependency --
+  // see this file's own getElectron() comment): a plain-node test harness
+  // can exercise the pid-liveness gate directly without spinning up
+  // Electron.
   isMarkerFresh,
   readLivenessMarker,
   computeAgentStatus,
-  // Exported for scripts/test-session-feed.mjs -- pure function, no db, so
-  // the net-change collapse (Mino live catch 2026-07-14, duplicate feed
-  // lines) is attackable without spinning up Electron or a memory db.
+  // Exported for scripts/test-session-feed.mjs (pure function, no db): the
+  // net-change collapse is attackable without spinning up Electron or a
+  // memory db.
   collapseSessionEvents,
-  // Exported for scripts/test-discord-reconnect.mjs -- fetchImpl-injectable,
-  // so every branch (3-check failures, truncation, channel filtering) runs
+  // Exported for scripts/test-discord-reconnect.mjs (fetchImpl-injectable):
+  // every branch (3-check failures, truncation, channel filtering) runs
   // against fixtures, never the live Discord API.
   enumerateDiscordTargets,
-  // Exported for scripts/test-mcp-connector.mjs -- pure functions, no spawn:
+  // Exported for scripts/test-mcp-connector.mjs (pure functions, no spawn):
   // the list parser (against real captured output), the mandatory-query URL
   // regex, and the lane-capability gate.
   parseMcpConnectorList,
   MCP_CONNECTOR_SPEC,
   connectorLaneWarning,
   isPidAlive,
-  // Exported for testability/tuning visibility (Step 5 onboarding-wiring
-  // fix, 2026-07-03, PIECE 2 + PIECE 3) -- same rationale as the Fix D
-  // exports above: plain values/consts, no Electron dependency, safe for a
-  // test harness (or a future settings-page capability check) to read
-  // directly.
+  // Exported for testability/tuning visibility (plain values/consts, no
+  // Electron dependency): safe for a test harness (or a future
+  // settings-page capability check) to read directly.
   TIMEOUT_MS,
   ROUTER_WIRED,
-  // Login shell-out (2026-07-07): same testability rationale as the two
-  // above -- plain const, no Electron dependency. resolveBin exported for
-  // the test harness and any future in-repo consumer (main.cjs's proxy
-  // went in-process and no longer resolves a binary);
-  // killAllLoginChildren is main.cjs's quit/fatal cleanup hook (Codex
-  // finding #3).
+  // Login shell-out: same testability rationale as the two above -- plain
+  // const, no Electron dependency. resolveBin exported for the test
+  // harness and any future in-repo consumer (main.cjs's proxy went
+  // in-process and no longer resolves a binary); killAllLoginChildren is
+  // main.cjs's quit/fatal cleanup hook.
   LOGIN_TIMEOUT_MS,
   resolveBin,
   killAllLoginChildren,
-  // Multichannel (v0.0.18): backend resolution + per-backend credential
-  // readers for main.cjs's spawn-time env injection (same seam as
-  // readDiscordToken above), plus fetchImpl-injectable enumerators for
-  // scripts/test-channel-connect.mjs.
+  // Multichannel: backend resolution + per-backend credential readers for
+  // main.cjs's spawn-time env injection (same seam as readDiscordToken
+  // above), plus fetchImpl-injectable enumerators for
+  // scripts/test-channel-connect.mjs (pure, no Electron dependency).
   activeChannelBackend,
   readSlackBotToken,
   readSlackAppToken,
