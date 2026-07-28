@@ -35,9 +35,9 @@ function check(name, cond, detail) {
   else { fail++; console.log(`  FAIL ${name}${detail ? ` -- ${detail}` : ''}`) }
 }
 
-function runHook(mem, transcriptPath) {
+function runHook(mem, transcriptPath, { event = 'Stop', sessionId } = {}) {
   return spawnSync(process.execPath, [HOOK], {
-    input: JSON.stringify({ transcript_path: transcriptPath, hook_event_name: 'Stop' }),
+    input: JSON.stringify({ transcript_path: transcriptPath, hook_event_name: event, session_id: sessionId }),
     env: { ...process.env, AGENT_DATA_HOME: mem },
     timeout: 15000,
   })
@@ -85,17 +85,38 @@ console.log('tail truncation:')
   check('usage found past the truncated first record', snap.contextTokens === 10 && snap.model === 'claude-sonnet-5', JSON.stringify({ t: snap.contextTokens, m: snap.model }))
 }
 
-// ── 3. no-clobber: usage-free transcript keeps the previous snapshot ───────
+// ── 3. no-clobber + ghost marking: usage-free transcript keeps the previous
+// snapshot's NUMBERS but stamps it carriedOver (2026-07-28 live catch: an
+// unmarked 133K leftover from the prior session read as "133K at boot").
 console.log('no-clobber on fresh session:')
 {
-  const before = fs.readFileSync(statusPath, 'utf8')
+  const before = JSON.parse(fs.readFileSync(statusPath, 'utf8'))
   const t = path.join(mem, 't3.jsonl')
   fs.writeFileSync(t, JSON.stringify({ type: 'user', message: { content: 'fresh boot, no turns yet' } }) + '\n')
-  const r = runHook(mem, t)
+  const r = runHook(mem, t, { event: 'SessionStart', sessionId: 'new-session-b' })
   check('hook exits 0 on usage-free transcript', r.status === 0, `status=${r.status}`)
-  check('previous snapshot preserved', fs.readFileSync(statusPath, 'utf8') === before)
+  const after = JSON.parse(fs.readFileSync(statusPath, 'utf8'))
+  check('previous numbers preserved (never blanked)',
+    after.contextTokens === before.contextTokens && after.ts === before.ts && after.model === before.model)
+  check('...but stamped carriedOver with a mark time', after.carriedOver === true && typeof after.carriedAt === 'string')
+  const markedText = fs.readFileSync(statusPath, 'utf8')
   const r2 = runHook(mem, path.join(mem, 'nonexistent.jsonl'))
-  check('missing transcript: exit 0, snapshot preserved', r2.status === 0 && fs.readFileSync(statusPath, 'utf8') === before)
+  check('missing transcript: exit 0, snapshot untouched', r2.status === 0 && fs.readFileSync(statusPath, 'utf8') === markedText)
+  const r3 = runHook(mem, t, { event: 'SessionStart', sessionId: 'new-session-c' })
+  check('re-marking is idempotent (carriedAt not rewritten every boot)',
+    r3.status === 0 && fs.readFileSync(statusPath, 'utf8') === markedText)
+}
+
+// ── 3b. a real turn clears the ghost: fresh usage overwrites marker ────────
+console.log('ghost cleared by first real turn:')
+{
+  const t = path.join(mem, 't3b.jsonl')
+  fs.writeFileSync(t, assistantLine('gpt-5.6-luna', { input_tokens: 500, cache_read_input_tokens: 30000, cache_creation_input_tokens: 2000, output_tokens: 100 }) + '\n')
+  const r = runHook(mem, t, { event: 'Stop', sessionId: 'new-session-b' })
+  const snap = JSON.parse(fs.readFileSync(statusPath, 'utf8'))
+  check('first turn overwrites: carriedOver gone', r.status === 0 && snap.carriedOver === undefined)
+  check('snapshot carries the session id', snap.sessionId === 'new-session-b')
+  check('numbers are the new session\'s', snap.contextTokens === 32600)
 }
 
 // ── 4. cap table: receipts-backed values only ───────────────────────────────

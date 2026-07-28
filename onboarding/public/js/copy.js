@@ -522,6 +522,7 @@ window.COPY = {
     // -- honest about the gap, so no "안전" wording, just numbers.
     contextGauge: (pct, used, cap) => `Context ${pct}% (${used}/${cap})`,
     contextGaugeNoCap: (used) => `Context ${used} tokens`,
+    contextGaugePrev: (used) => `Context ${used} (prev session)`,
     muteRevertConfirm: (m) => `Switch back to ${m}? The agent will restart.`,
     // Shell reality additions (IA v0.0.9): autonomy visibility badge (the
     // one setting that spends money while nobody watches deserves a spot in

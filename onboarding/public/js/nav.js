@@ -224,7 +224,14 @@
       return
     }
     const used = fmtTokens(contextStatus.contextTokens)
-    if (contextStatus.cap) {
+    if (contextStatus.carriedOver) {
+      // Previous session's leftover, kept so the gauge is not blank before
+      // the new session's first turn. Say so, and never warn on it -- a
+      // ghost at 80% is history, not an emergency (2026-07-28 live catch:
+      // an unmarked 133K leftover read as "133K at boot").
+      el.textContent = NAV.contextGaugePrev(used)
+      el.classList.remove('gauge-warn')
+    } else if (contextStatus.cap) {
       el.textContent = NAV.contextGauge(contextStatus.pct, used, fmtTokens(contextStatus.cap))
       // 80%+: autocompact territory -- the exact thrash the gauge exists to
       // make visible before it costs minutes per turn.
