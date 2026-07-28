@@ -183,6 +183,11 @@ export function resolveConfig(env = process.env, scriptDir = SCRIPT_DIR) {
     // the two live stalls it exists for ran 312 and 429 minutes.
     stallTimeoutSec: merged.STALL_TIMEOUT !== undefined ? Math.max(0, Number(merged.STALL_TIMEOUT) || 0) : 900,
     systemPromptFile: fs.existsSync(path.join(mem, 'system_prompt.md')) ? path.join(mem, 'system_prompt.md') : null,
+    // Context-bleed fix (2026-07-28): same guarded shape as
+    // systemPromptFile -- see run.sh's MCP_CONFIG_FILE comment for the
+    // full why (global ~/.claude.json MCP schemas riding into every
+    // session; 133K-at-boot live catch). No file -> no strict flag.
+    mcpConfigFile: fs.existsSync(path.join(mem, '.mcp.json')) ? path.join(mem, '.mcp.json') : null,
     // Claude Code tuning knobs (run.sh:60-63) -- resolved once, exported to
     // the child on every respawn.
     childEnvExtra: {
@@ -197,9 +202,12 @@ export function resolveConfig(env = process.env, scriptDir = SCRIPT_DIR) {
 // Child argv, mirroring the expect spawn line ORDER exactly (run.sh:319):
 // --model M --name N [extra_args] --dangerously-skip-permissions
 // --dangerously-load-development-channels server:agent-channel
+// where extra_args = [--append-system-prompt-file F] [--strict-mcp-config
+// --mcp-config C], both existence-guarded, in that order on both sites.
 export function buildChildArgs(cfg) {
   const args = ['--model', cfg.model, '--name', cfg.agentName]
   if (cfg.systemPromptFile) args.push('--append-system-prompt-file', cfg.systemPromptFile)
+  if (cfg.mcpConfigFile) args.push('--strict-mcp-config', '--mcp-config', cfg.mcpConfigFile)
   args.push('--dangerously-skip-permissions', '--dangerously-load-development-channels', 'server:agent-channel')
   return args
 }
