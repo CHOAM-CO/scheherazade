@@ -306,6 +306,21 @@ run_loop() {
     export SYSTEM_PROMPT_FILE="$MEM/system_prompt.md"
   fi
 
+  # Context-bleed fix (2026-07-28, Mino live catch: 133K context AT BOOT on
+  # his install; product's own share measured at ~40K). Without
+  # --strict-mcp-config the spawned claude ALSO loads every MCP server from
+  # the user's global ~/.claude.json -- schemas the agent never asked for,
+  # paid on every request. Strict + an explicit --mcp-config keeps exactly
+  # what $MEM/.mcp.json declares: the app's own servers, plus anything the
+  # USER deliberately added to that file (it is seeded once and then
+  # theirs). Guarded like SYSTEM_PROMPT_FILE: no file -> no strict flag, so
+  # a broken seed degrades to today's behavior instead of an agent with no
+  # channel at all. (User-level CLAUDE.md/plugins still ride in -- that is
+  # the CLAUDE_CONFIG_DIR isolation question, a separate auth-design call.)
+  if [ -f "$MEM/.mcp.json" ]; then
+    export MCP_CONFIG_FILE="$MEM/.mcp.json"
+  fi
+
   EXPECT_SCRIPT="$(mktemp "${TMPDIR:-/tmp}/agent-portable-expect.XXXXXX")"
   trap 'rm -f "$EXPECT_SCRIPT"' EXIT
   cat > "$EXPECT_SCRIPT" <<'EXPECT_EOF'
@@ -315,6 +330,9 @@ run_loop() {
     set extra_args {}
     if {[info exists env(SYSTEM_PROMPT_FILE)]} {
       lappend extra_args --append-system-prompt-file $env(SYSTEM_PROMPT_FILE)
+    }
+    if {[info exists env(MCP_CONFIG_FILE)]} {
+      lappend extra_args --strict-mcp-config --mcp-config $env(MCP_CONFIG_FILE)
     }
     spawn -noecho $env(CLAUDE_BIN) --model $env(MODEL) --name $env(AGENT_NAME) {*}$extra_args --dangerously-skip-permissions --dangerously-load-development-channels server:agent-channel
     set timeout 25

@@ -246,7 +246,7 @@ console.log('\n-- main.cjs seam: SUPERVISOR_LANE wiring stays welded')
 // ── 7. child argv mirrors the expect spawn line ─────────────────────────────
 console.log('\n-- child argv (run.sh:319 order)')
 {
-  const base = { model: 'm1', agentName: 'a1', systemPromptFile: null }
+  const base = { model: 'm1', agentName: 'a1', systemPromptFile: null, mcpConfigFile: null }
   ok('without system prompt: --model m --name a --dangerously-skip-permissions --dangerously-load-development-channels server:agent-channel',
     buildChildArgs(base).join(' ') === '--model m1 --name a1 --dangerously-skip-permissions --dangerously-load-development-channels server:agent-channel',
     buildChildArgs(base).join(' '))
@@ -254,8 +254,23 @@ console.log('\n-- child argv (run.sh:319 order)')
   ok('system prompt rides BEFORE the dangerously flags (extra_args position)',
     buildChildArgs(withPrompt).join(' ') === '--model m1 --name a1 --append-system-prompt-file /mem/system_prompt.md --dangerously-skip-permissions --dangerously-load-development-channels server:agent-channel',
     buildChildArgs(withPrompt).join(' '))
+  // Context-bleed fix (2026-07-28): strict MCP rides only when MEM/.mcp.json
+  // exists, after the system prompt, before the dangerously flags -- and its
+  // ABSENCE keeps today's argv byte-identical (the two pins above are that
+  // guarantee: a broken seed degrades to open-config behavior, never to an
+  // agent with no channel).
+  const withMcp = { ...withPrompt, mcpConfigFile: '/mem/.mcp.json' }
+  ok('strict mcp-config rides after prompt, before the dangerously flags',
+    buildChildArgs(withMcp).join(' ') === '--model m1 --name a1 --append-system-prompt-file /mem/system_prompt.md --strict-mcp-config --mcp-config /mem/.mcp.json --dangerously-skip-permissions --dangerously-load-development-channels server:agent-channel',
+    buildChildArgs(withMcp).join(' '))
   ok("pkill discriminator '--name <agent>' is a contiguous substring of the argv",
-    buildChildArgs(withPrompt).join(' ').includes('--name a1'))
+    buildChildArgs(withMcp).join(' ').includes('--name a1'))
+  // run.sh must carry the SAME pair in its expect extra_args branch -- the
+  // mirror is the contract, so break loudly when one side moves alone.
+  const runSh = fs.readFileSync(path.join(ROOT, 'run.sh'), 'utf8')
+  ok('run.sh expect line mirrors the strict pair (MCP_CONFIG_FILE branch)',
+    runSh.includes('lappend extra_args --strict-mcp-config --mcp-config $env(MCP_CONFIG_FILE)') &&
+    runSh.includes('export MCP_CONFIG_FILE="$MEM/.mcp.json"'))
 }
 
 // ── 8. runLoop ladder attacks: REAL loop, fake child + fake clock ───────────
