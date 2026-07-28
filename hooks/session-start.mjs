@@ -48,8 +48,10 @@ if (fs.existsSync(dreamsDir)) {
   dreamCount = fs.readdirSync(dreamsDir).filter((f) => f.endsWith('.md') && fs.statSync(path.join(dreamsDir, f)).isFile()).length
 }
 
-// skills/ listing (design doc R1 consumption pair -- stop-skill-extraction-
-// nudge.mjs is the write side, this is the read side). Purely additive: no
+// skills/ listing (design doc R1 -- the read side. The write-side nudge
+// hook was cut in the 2026-07-28 boot-context diet; writing a skill file
+// is now purely the agent's own call, and this listing keeps whatever it
+// writes from becoming a dead drawer). Purely additive: no
 // dir is created here, and a missing/empty dir produces no lines at all.
 // Trigger line lives in YAML frontmatter (between the first two ---
 // delimiter lines), key "trigger:" -- scoped to the frontmatter block so a
