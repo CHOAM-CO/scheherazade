@@ -57,9 +57,11 @@ async function fakeFetch(id) {
 }
 
 // 1. valid explicit id -> honored, no note
+// ({target, note} is the unified resolver contract shared by all three
+// backends via channel-runtime.mjs -- target is the Discord channel object.)
 {
   const r = await resolveOutboundChannel('777', { fetchFn: fakeFetch, lastId: 'home1', homeId: null })
-  check('valid explicit id honored', r.ch.id === '777', `got ${r.ch?.id}`)
+  check('valid explicit id honored', r.target.id === '777', `got ${r.target?.id}`)
   check('valid explicit id has no note', r.note === null)
 }
 
@@ -83,16 +85,16 @@ async function fakeFetch(id) {
 // 3. omitted id -> current conversation channel, no note
 {
   const r = await resolveOutboundChannel(undefined, { fetchFn: fakeFetch, lastId: '777', homeId: 'home1' })
-  check('omitted id goes to lastInbound', r.ch.id === '777', `got ${r.ch?.id}`)
+  check('omitted id goes to lastInbound', r.target.id === '777', `got ${r.target?.id}`)
   check('omitted id has no note', r.note === null)
 }
 
 // 4. fallback order: lastInbound wins over HOME; HOME used when no lastInbound
 {
   const r1 = await resolveOutboundChannel(undefined, { fetchFn: fakeFetch, lastId: '777', homeId: 'home1' })
-  check('lastInbound beats HOME', r1.ch.id === '777')
+  check('lastInbound beats HOME', r1.target.id === '777')
   const r2 = await resolveOutboundChannel(undefined, { fetchFn: fakeFetch, lastId: null, homeId: 'home1' })
-  check('HOME used when no lastInbound', r2.ch.id === 'home1', `got ${r2.ch?.id}`)
+  check('HOME used when no lastInbound', r2.target.id === 'home1', `got ${r2.target?.id}`)
   let r3threw = false
   try { await resolveOutboundChannel('bogus', { fetchFn: fakeFetch, lastId: null, homeId: 'home1' }) } catch { r3threw = true }
   check('unknown explicit id does not fall through to HOME either', r3threw)

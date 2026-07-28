@@ -27,60 +27,29 @@ import path from 'node:path'
 import os from 'node:os'
 import https from 'node:https'
 import { fileURLToPath } from 'node:url'
-import { createRequire } from 'node:module'
+import {
+  installStdoutHygiene, resolveDataHome, localISO, localNow,
+  createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer,
+} from './channel-runtime.mjs'
 
-const require = createRequire(import.meta.url)
-const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url))
-
-// ── stdout hygiene ─────────────────────────────────────────────────────────
-// MCP stdio transport reserves stdout exclusively for JSON-RPC. Any stray
-// console output there corrupts the stream, so every console method is
-// rerouted to stderr before anything else runs. (Verbatim mirror of
-// channel.mjs -- this rule has nothing to do with Discord vs Telegram.)
-function safeJson(v) { try { return JSON.stringify(v) } catch { return String(v) } }
-for (const [method, prefix] of [['log', ''], ['info', ''], ['debug', ''], ['warn', '[WARN] '], ['error', '[ERR] ']]) {
-  console[method] = (...args) => {
-    process.stderr.write(`${prefix}${args.map((a) => (typeof a === 'string' ? a : safeJson(a))).join(' ')}\n`)
-  }
-}
-const log = (...args) => console.log(...args)
+// ── stdout hygiene (channel-runtime) ───────────────────────────────────────
+// Installed before anything else runs -- MCP stdout is JSON-RPC only.
+const log = installStdoutHygiene()
 
 // ── config ───────────────────────────────────────────────────────────────
 const AGENT_NAME = process.env.AGENT_NAME || 'agent'
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
 const HOME_CHANNEL_ID = process.env.HOME_CHANNEL_ID // Telegram chat id (string)
 
-// DATA_HOME resolution -- identical formula to channel.mjs (same env var,
-// same AGENT_NAME-keyed fallback), because main.cjs/run.sh poll the SAME
-// marker files (.agent-live, .agent-failed.json, .boot-event.json, ...)
-// regardless of which channel backend is running. Drifting this here would
-// make the two backends invisible to each other's supervisor.
-const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', AGENT_NAME)
-
-// ── liveness + failure markers (mirrors channel.mjs exactly -- same paths,
-// same JSON shape, same atomic-write convention. main.cjs's poller reads
-// these files without caring which backend wrote them.) ────────────────────
-const LIVENESS_MARKER_PATH = path.join(DATA_HOME, '.agent-live')
-const LIVENESS_HEARTBEAT_MS = 60_000
-const FAILURE_MARKER_PATH = path.join(DATA_HOME, '.agent-failed.json')
-
-async function atomicWriteJson(filePath, payload) {
-  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
-  await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2) + '\n')
-  await fs.rename(tmpPath, filePath)
-}
-
-async function writeLivenessMarker() {
-  const payload = { status: 'live', lastHeartbeat: new Date().toISOString(), pid: process.pid }
-  await atomicWriteJson(LIVENESS_MARKER_PATH, payload)
-}
-
-// `code` defaults to 'unknown' so a call site can never silently emit a
-// marker with no cause at all (same contract as channel.mjs).
-async function writeFailureMarker(reason, code = 'unknown') {
-  const payload = { status: 'failed', reason, code, since: new Date().toISOString(), pid: process.pid }
-  await atomicWriteJson(FAILURE_MARKER_PATH, payload)
-}
+// ── DATA_HOME + markers (channel-runtime) ──────────────────────────────────
+// Same marker files as every backend on purpose -- main.cjs/run.sh poll ONE
+// contract (.agent-live, .agent-failed.json, .boot-event.json, ...)
+// regardless of which channel backend is running.
+const DATA_HOME = resolveDataHome(AGENT_NAME)
+const markers = createMarkerStore({ dataHome: DATA_HOME })
+const { LIVENESS_MARKER_PATH, FAILURE_MARKER_PATH, LIVENESS_HEARTBEAT_MS } = markers
+const writeLivenessMarker = () => markers.writeLiveness()
+const writeFailureMarker = (reason, code = 'unknown') => markers.writeFailure(reason, code)
 
 if (!TELEGRAM_BOT_TOKEN) {
   const reason = 'TELEGRAM_BOT_TOKEN not set. Check .env (or the .mcp.json env block).'
@@ -102,20 +71,7 @@ if (!HOME_CHANNEL_ID) {
   process.exit(1)
 }
 
-// ── Local-time timestamps (verbatim mirror of channel.mjs) ─────────────────
-function localISO(ms = Date.now()) {
-  const d = new Date(ms)
-  const offMin = -d.getTimezoneOffset()
-  const sign = offMin >= 0 ? '+' : '-'
-  const abs = Math.abs(offMin)
-  const hh = String(Math.trunc(abs / 60)).padStart(2, '0')
-  const mm = String(abs % 60).padStart(2, '0')
-  return new Date(ms + offMin * 60_000).toISOString().replace('Z', `${sign}${hh}:${mm}`)
-}
-function localWeekday(ms = Date.now()) {
-  return new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(new Date(ms))
-}
-const localNow = () => `${localISO()} (${localWeekday()})`
+// Local-time timestamps (localISO/localNow) come from channel-runtime.mjs.
 
 // ── image attachments -> the OS temp dir (download mechanics are protocol-
 // agnostic, so this half is a verbatim mirror of channel.mjs) ──────────────
@@ -257,58 +213,26 @@ async function fetchTelegramChat(chatId, opts = {}) {
   return { id: String(result.id) }
 }
 
-// ── Current-conversation channel tracking + resolveOutboundChannel ─────────
-// Verbatim port of channel.mjs's own fix (2026-07-15 GLM confabulation
-// hardening): channelId is OPTIONAL on reply/send_file -- omitted -> current
-// conversation chat; unknown/invalid -> delivered to the current chat WITH a
-// loud correction note. The logic is entirely protocol-agnostic (it only
-// ever touches `fetchFn`/ids), so this function is identical to channel.mjs's
-// except the default fetchFn now calls Telegram's getChat instead of
-// Discord's channels.fetch().
+// ── Current-conversation chat tracking + outbound resolution ───────────────
+// channelId is OPTIONAL on reply/send_file -- omitted -> current conversation
+// chat. Resolution (channel-runtime's createOutboundResolver) returns
+// {target, note} where target is a Telegram chat object ({id}); ladder,
+// fail-closed semantics, and opts test seams live in channel-runtime.mjs.
 let lastInboundChannelId = null
 
-const LAST_CHANNEL_PATH = path.join(DATA_HOME, '.last-channel')
-let persistedLastChannelId = null
-function persistLastChannel(channelId) {
-  if (!channelId || channelId === persistedLastChannelId) return
-  persistedLastChannelId = channelId
-  fs.writeFile(LAST_CHANNEL_PATH, channelId).catch((err) => log(`last-channel persist failed: ${err.message}`))
-}
+const lastChannelStore = createLastChannelStore({ dataHome: DATA_HOME, log })
 
 let lastActivityMs = Date.now()
 
 const GUIDANCE =
   'Do not invent chat ids -- omit channelId to target the current conversation, then call the tool again.'
 
-async function resolveOutboundChannel(requestedId, opts = {}) {
-  const fetchFn = opts.fetchFn || fetchTelegramChat
-  const lastId = 'lastId' in opts ? opts.lastId : lastInboundChannelId
-  const homeId = 'homeId' in opts ? opts.homeId : HOME_CHANNEL_ID
-  const fallbackId = lastId || homeId || null
-  if (requestedId) {
-    try {
-      return { ch: await fetchFn(requestedId), note: null }
-    } catch (err) {
-      // FAIL CLOSED on an explicit destination (nogabi issue #7). Until now an
-      // unreachable explicit id was rerouted to the current conversation with a
-      // loud note. That was added 2026-07-15 because the previous throw left the
-      // human seeing NOTHING when a weak model confabulated an id -- a real
-      // observed failure, not a hypothetical. But the two failure modes are not
-      // symmetric: a message delivered to a channel the caller never asked for is
-      // unrecoverable and does not read as an error, while a message not yet sent
-      // is recoverable and is reported. The 2026-07-15 problem was VISIBILITY, and
-      // visibility is restored by the tool returning isError with this text rather
-      // than by delivering the payload somewhere else.
-      const e = new Error(
-        `channelId ${requestedId} could not be resolved (${err.message}). Nothing was sent. ${GUIDANCE}`
-      )
-      e.code = 'OUTBOUND_TARGET_INVALID'
-      throw e
-    }
-  }
-  if (!fallbackId) throw new Error('no channelId given and no current conversation channel known yet')
-  return { ch: await fetchFn(fallbackId), note: null }
-}
+const resolveOutboundChannel = createOutboundResolver({
+  fetchTarget: fetchTelegramChat,
+  getLastInboundId: () => lastInboundChannelId,
+  homeId: HOME_CHANNEL_ID,
+  guidance: GUIDANCE,
+})
 
 // ── Local history ledger (read_channel_history backing store) ──────────────
 // Telegram's Bot API has no history endpoint -- getUpdates only ever hands
@@ -454,13 +378,13 @@ function chunkText(text, size = 4000) {
 async function handleReplyCall({ channelId, text }, opts = {}) {
   const sendFn = opts.sendFn || ((chatId, chunk) => telegramApi('sendMessage', { chat_id: chatId, text: chunk }, opts))
   const historyAppendFn = opts.historyAppendFn || appendHistoryEntry
-  const { ch, note } = await resolveOutboundChannel(channelId, opts)
+  const { target, note } = await resolveOutboundChannel(channelId, opts)
   const chunks = chunkText(text)
   for (const chunk of chunks) {
-    const result = await sendFn(ch.id, chunk)
+    const result = await sendFn(target.id, chunk)
     await historyAppendFn({
       id: String(result.message_id),
-      channelId: String(ch.id),
+      channelId: String(target.id),
       direction: 'out',
       author: AGENT_NAME,
       authorId: 'bot',
@@ -470,7 +394,7 @@ async function handleReplyCall({ channelId, text }, opts = {}) {
     })
   }
   lastActivityMs = Date.now() // delivered reply = live conversation
-  return { ch, note, chunkCount: chunks.length }
+  return { target, note, chunkCount: chunks.length }
 }
 
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
@@ -480,17 +404,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
   if (name === 'reply') {
     const { channelId, text } = ReplyArgs.parse(args || {})
-    const { ch, note, chunkCount } = await handleReplyCall({ channelId, text })
+    const { target, note, chunkCount } = await handleReplyCall({ channelId, text })
     // delivered_channel= line: machine-readable delivery receipt for
     // hooks/stop-reply-guard.mjs, same fixed format channel.mjs stamps (that
     // guard greps this exact token regardless of which channel backend
-    // produced it). NOTE for whoever wires this into .mcp.json: the guard's
-    // regex is `delivered_channel=(\d+)` -- digits only. That's fine for the
-    // normal single-user setup (a private Telegram chat id is a positive
-    // integer), but a Telegram GROUP chat id is negative and would not match.
-    // Flagged, not fixed here -- hooks/ is shared infra, out of scope for
-    // this port.
-    return { content: [{ type: 'text', text: `sent to ${ch.id} (${chunkCount} message${chunkCount > 1 ? 's' : ''})${note ? `\n${note}` : ''}\ndelivered_channel=${ch.id}` }] }
+    // produced it). The guard's regex accepts a leading minus sign, so a
+    // negative Telegram GROUP chat id matches too.
+    return { content: [{ type: 'text', text: `sent to ${target.id} (${chunkCount} message${chunkCount > 1 ? 's' : ''})${note ? `\n${note}` : ''}\ndelivered_channel=${target.id}` }] }
   }
 
   if (name === 'send_file_to_discord') {
@@ -509,13 +429,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     if (stat.size > MAX_UPLOAD) {
       return { content: [{ type: 'text', text: `file too large for Telegram upload: ${(stat.size / 1024 / 1024).toFixed(1)}MB (limit 50MB)` }], isError: true }
     }
-    const { ch, note } = await resolveOutboundChannel(parsed.channelId)
+    const { target, note } = await resolveOutboundChannel(parsed.channelId)
     const fileBuffer = await fs.readFile(filePath)
     const filename = path.basename(filePath)
-    const result = await telegramSendDocument(ch.id, filename, fileBuffer, parsed.comment)
+    const result = await telegramSendDocument(target.id, filename, fileBuffer, parsed.comment)
     await appendHistoryEntry({
       id: String(result.message_id),
-      channelId: String(ch.id),
+      channelId: String(target.id),
       direction: 'out',
       author: AGENT_NAME,
       authorId: 'bot',
@@ -524,7 +444,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       attachments: [filename],
     })
     lastActivityMs = Date.now()
-    return { content: [{ type: 'text', text: `file sent to ${ch.id}: ${filename}${note ? `\n${note}` : ''}\ndelivered_channel=${ch.id}` }] }
+    return { content: [{ type: 'text', text: `file sent to ${target.id}: ${filename}${note ? `\n${note}` : ''}\ndelivered_channel=${target.id}` }] }
   }
 
   if (name === 'read_channel_history') {
@@ -604,7 +524,7 @@ async function handleUpdate(update, opts = {}) {
   if (!shouldProcessMessage(message, HOME_CHANNEL_ID)) return
 
   lastInboundChannelId = String(message.chat.id)
-  persistLastChannel(lastInboundChannelId)
+  lastChannelStore.persist(lastInboundChannelId)
   lastActivityMs = Date.now()
 
   const localPaths = []
@@ -678,98 +598,21 @@ async function startPolling(opts = {}) {
   }
 }
 
-// ── Boot ping (mirrors channel.mjs's announceBoot() -- same marker files,
-// same cadence/boot-announce.cjs decision module, same two-part shape: a
-// direct system line, then a [SYSTEM] turn asking for a greeting in the
-// agent's own voice). Only the "fetch/send a channel" mechanics are
-// Telegram-specific; the wording and the marker protocol are unchanged. ────
-const BOOT_EVENT_PATH = path.join(DATA_HOME, '.boot-event.json')
-const BOOT_ANNOUNCE_TS_PATH = path.join(DATA_HOME, '.boot-announce-ts.json')
-
-async function readAgentConfigFile() {
-  const out = {}
-  let text
-  try {
-    text = await fs.readFile(path.join(DATA_HOME, '.agent-config'), 'utf8')
-  } catch {
-    return out
-  }
-  for (const line of text.split('\n')) {
-    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*"?([^"]*)"?\s*$/)
-    if (m) out[m[1]] = m[2]
-  }
-  return out
-}
-
-async function announceBoot() {
-  let ev = null
-  try {
-    ev = JSON.parse(await fs.readFile(BOOT_EVENT_PATH, 'utf8'))
-  } catch {
-    return // no marker: manual `node channel-telegram.mjs` dev run, or supervisor never wrote one
-  }
-  await fs.unlink(BOOT_EVENT_PATH).catch(() => {})
-
-  const bootTick = require(path.join(MODULE_DIR, 'cadence', 'boot-announce.cjs'))
-  const config = await readAgentConfigFile()
-  let lastAnnounceMs = 0
-  try {
-    lastAnnounceMs = JSON.parse(await fs.readFile(BOOT_ANNOUNCE_TS_PATH, 'utf8')).lastAnnounceMs || 0
-  } catch {} // never announced (or unreadable): fail toward announcing once, not toward silence
-
-  const plan = bootTick.planBootAnnounce({ now: Date.now(), event: ev, lastAnnounceMs, config })
-  if (plan.skip) {
-    log(`boot announce skipped (${plan.reason})`)
-    return
-  }
-
-  // HOME first, then the persisted last conversation chat (a DM-only install
-  // with no home chat configured would otherwise have nowhere for the boot
-  // ping to go -- same fallback channel.mjs's own v0.0.17 fix added).
-  let announceChatId = null
-  try {
-    announceChatId = (await fetchTelegramChat(HOME_CHANNEL_ID)).id
-  } catch (homeErr) {
-    let lastId = null
-    try {
-      lastId = (await fs.readFile(LAST_CHANNEL_PATH, 'utf8')).trim()
-    } catch {}
-    if (lastId && lastId !== HOME_CHANNEL_ID) {
-      try {
-        announceChatId = (await fetchTelegramChat(lastId)).id
-        log(`boot announce: home chat unreachable (${homeErr.message}), using persisted last chat ${lastId}`)
-      } catch {}
-    }
-    if (!announceChatId) {
-      log(`boot announce: no reachable chat (home: ${homeErr.message}; persisted last: ${lastId || 'none'}) -- aborting unit, next restart retries`)
-      return
-    }
-  }
-  try {
-    await telegramApi('sendMessage', { chat_id: announceChatId, text: `🔁 [system] 에이전트 세션 ${plan.label} — ${localNow()}` })
-  } catch (err) {
-    log(`boot announce direct send failed -- aborting this announce unit, next restart retries: ${err.message}`)
-    return
-  }
-  await atomicWriteJson(BOOT_ANNOUNCE_TS_PATH, { lastAnnounceMs: plan.nextLastAnnounceMs }).catch((err) =>
-    log(`boot-announce ts write failed (worst case one extra ping next restart): ${err.message}`)
-  )
-  try {
-    await mcp.notification({
-      method: 'notifications/claude/channel',
-      params: {
-        content:
-          `[SYSTEM] 방금 세션이 ${plan.iteration > 1 ? '재시작됐다 (오늘 이 감독 아래 ' + plan.iteration + '번째)' : '시작됐다'}. ` +
-          '방금 그 채널에 네 목소리로 짧게 부팅 인사를 남겨라 -- 살아있다는 신호가 목적이니 한두 문장이면 된다. ' +
-          '체크포인트에 이어받을 일이 있으면 뭘 이어가는지 한 줄 붙여. ' +
-          '그리고 이 세션 내내 지킬 것: 작업 블록에 들어가기 전에 "뭘 시작한다 + 어느 정도 걸릴 것 같다"를 먼저 한 줄로 알리고 시작해라.',
-        meta: { sender: 'SYSTEM', channelId: announceChatId, authorId: '', timestamp: localNow() },
-      },
-    })
-  } catch (err) {
-    log(`boot greeting inject failed (direct line already sent): ${err.message}`)
-  }
-}
+// ── Boot ping (channel-runtime) ─────────────────────────────────────────────
+// Same announce unit, marker protocol, throttle, and home->persisted-last
+// fallback as every backend (createBootAnnouncer, channel-runtime.mjs) --
+// only the Telegram IO is wired here.
+const announceBoot = createBootAnnouncer({
+  dataHome: DATA_HOME,
+  homeId: HOME_CHANNEL_ID,
+  lastChannelStore,
+  fetchTarget: fetchTelegramChat,
+  idOf: (chat) => chat.id,
+  sendText: (chat, text) => telegramApi('sendMessage', { chat_id: chat.id, text }),
+  notify: (params) => mcp.notification({ method: 'notifications/claude/channel', params }),
+  log,
+  noun: 'chat',
+})
 
 // ── boot ─────────────────────────────────────────────────────────────────
 // Does NOT itself call process.exit() -- boot() does, after checking the

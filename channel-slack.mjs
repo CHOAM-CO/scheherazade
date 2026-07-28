@@ -28,25 +28,14 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { createRequire } from 'node:module'
+import {
+  installStdoutHygiene, resolveDataHome, localISO, localNow,
+  createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer,
+} from './channel-runtime.mjs'
 
-// autonomy/cadence *.cjs are CommonJS on purpose (see channel.mjs's own
-// comment on this same line) -- one implementation, two callers (this file
-// and onboarding/http-server.cjs), no second copy of the math.
-const require = createRequire(import.meta.url)
-const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url))
-
-// ── stdout hygiene ─────────────────────────────────────────────────────────
-// Identical to channel.mjs: MCP stdio transport reserves stdout exclusively
-// for JSON-RPC (hard constraint #7). Every console method is rerouted to
-// stderr before anything else runs, verbatim mechanism.
-function safeJson(v) { try { return JSON.stringify(v) } catch { return String(v) } }
-for (const [method, prefix] of [['log', ''], ['info', ''], ['debug', ''], ['warn', '[WARN] '], ['error', '[ERR] ']]) {
-  console[method] = (...args) => {
-    process.stderr.write(`${prefix}${args.map((a) => (typeof a === 'string' ? a : safeJson(a))).join(' ')}\n`)
-  }
-}
-const log = (...args) => console.log(...args)
+// ── stdout hygiene (channel-runtime) ───────────────────────────────────────
+// Installed before anything else runs -- MCP stdout is JSON-RPC only.
+const log = installStdoutHygiene()
 
 // ── config (hard constraint #3) ─────────────────────────────────────────────
 // channel.mjs has ONE token (DISCORD_BOT_TOKEN); Slack Socket Mode needs TWO
@@ -58,42 +47,24 @@ const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN
 const SLACK_APP_TOKEN = process.env.SLACK_APP_TOKEN
 const HOME_CHANNEL_ID = process.env.HOME_CHANNEL_ID
 
-// ── DATA_HOME (identical resolution to channel.mjs) ─────────────────────────
-// Same formula, same env var, keyed by AGENT_NAME -- see channel.mjs's own
-// long comment on this line for why (run.sh's MEM= resolution has to agree).
-const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', AGENT_NAME)
+// ── DATA_HOME + markers (channel-runtime) ──────────────────────────────────
+// Same marker files as every backend on purpose -- backends are not meant to
+// run concurrently for the same AGENT_NAME/DATA_HOME (Discord OR Slack is
+// wired via .mcp.json, not both), so the supervisor polls one contract
+// regardless of which transport is live.
+const DATA_HOME = resolveDataHome(AGENT_NAME)
+const markers = createMarkerStore({ dataHome: DATA_HOME })
+const { LIVENESS_MARKER_PATH, FAILURE_MARKER_PATH, LIVENESS_HEARTBEAT_MS } = markers
+const writeLivenessMarker = () => markers.writeLiveness()
 
-// ── liveness + failure markers (same paths/shape as channel.mjs) ───────────
-// Hard constraint #5: marker path/JSON form identical to channel.mjs. Same
-// filenames on purpose -- these two channel backends are not meant to run
-// concurrently for the same AGENT_NAME/DATA_HOME (Discord OR Slack is wired
-// via .mcp.json, not both), so sharing the marker files is the same contract
-// main.cjs's poller already reads, regardless of which transport is live.
-const LIVENESS_MARKER_PATH = path.join(DATA_HOME, '.agent-live')
-const LIVENESS_HEARTBEAT_MS = 60_000
-const FAILURE_MARKER_PATH = path.join(DATA_HOME, '.agent-failed.json')
-
-async function atomicWriteJson(filePath, payload) {
-  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
-  await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2) + '\n')
-  await fs.rename(tmpPath, filePath)
-}
-
-async function writeLivenessMarker() {
-  const payload = { status: 'live', lastHeartbeat: new Date().toISOString(), pid: process.pid }
-  await atomicWriteJson(LIVENESS_MARKER_PATH, payload)
-}
-
-// `extra` (Slack-specific addition, hard constraint #5): channel.mjs has one
-// token so 'discord_token_bad' never needs to say WHICH token. Slack has two
-// (bot xoxb / app xapp) that fail through completely different code paths
+// `ext` (Slack-specific extension): channel.mjs has one token so
+// 'discord_token_bad' never needs to say WHICH token. Slack has two (bot
+// xoxb / app xapp) that fail through completely different code paths
 // (auth.test vs Socket Mode's apps.connections.open), so the marker needs a
-// discriminator. Base shape (status/reason/code/since/pid) is unchanged --
-// `extra` only ever adds a `token: 'bot' | 'app'` field on top of it.
-async function writeFailureMarker(reason, code = 'unknown', extra = {}) {
-  const payload = { status: 'failed', reason, code, since: new Date().toISOString(), pid: process.pid, ...extra }
-  await atomicWriteJson(FAILURE_MARKER_PATH, payload)
-}
+// discriminator. Per the marker store's extension rule it rides under
+// `ext: { token: 'bot' | 'app' }` -- the base shape never grows new
+// top-level fields.
+const writeFailureMarker = (reason, code = 'unknown', ext = undefined) => markers.writeFailure(reason, code, ext)
 
 if (!SLACK_BOT_TOKEN) {
   const reason = 'SLACK_BOT_TOKEN not set. Check .env (or the .mcp.json env block).'
@@ -122,21 +93,7 @@ if (!HOME_CHANNEL_ID) {
   process.exit(1)
 }
 
-// ── Local-time timestamps (verbatim from channel.mjs — generic, not
-// Discord-specific) ─────────────────────────────────────────────────────────
-function localISO(ms = Date.now()) {
-  const d = new Date(ms)
-  const offMin = -d.getTimezoneOffset()
-  const sign = offMin >= 0 ? '+' : '-'
-  const abs = Math.abs(offMin)
-  const hh = String(Math.trunc(abs / 60)).padStart(2, '0')
-  const mm = String(abs % 60).padStart(2, '0')
-  return new Date(ms + offMin * 60_000).toISOString().replace('Z', `${sign}${hh}:${mm}`)
-}
-function localWeekday(ms = Date.now()) {
-  return new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(new Date(ms))
-}
-const localNow = () => `${localISO()} (${localWeekday()})`
+// Local-time timestamps (localISO/localNow) come from channel-runtime.mjs.
 
 // ── Slack ts <-> ISO date (Slack analog of channel.mjs's toSnowflake) ──────
 // Discord's before/after take a snowflake (encodes a timestamp); Slack's
@@ -167,56 +124,34 @@ async function fetchSlackChannel(channelId, opts = {}) {
   return resp.channel
 }
 
-// ── Current-conversation channel tracking (same mechanism as channel.mjs's
-// 2026-07-15 GLM confabulation fix) ─────────────────────────────────────────
+// ── Current-conversation channel tracking (channel.mjs parity) ─────────────
 let lastInboundChannelId = null
 
-// ── Persisted last-conversation channel (same mechanism as channel.mjs
-// v0.0.17) ───────────────────────────────────────────────────────────────
-const LAST_CHANNEL_PATH = path.join(DATA_HOME, '.last-channel')
-let persistedLastChannelId = null
-function persistLastChannel(channelId) {
-  if (!channelId || channelId === persistedLastChannelId) return
-  persistedLastChannelId = channelId
-  fs.writeFile(LAST_CHANNEL_PATH, channelId).catch((err) => log(`last-channel persist failed: ${err.message}`))
-}
+// ── Persisted last-conversation channel (channel-runtime) ──────────────────
+const lastChannelStore = createLastChannelStore({ dataHome: DATA_HOME, log })
 
-// ── Conversation activity clock (same mechanism as channel.mjs v0.0.16) ────
+// ── Conversation activity clock (channel.mjs parity) ───────────────────────
 let lastActivityMs = Date.now()
 
-// Same contract as channel.mjs's resolveOutboundChannel: an explicit
-// requestedId is honored if reachable and FAILS CLOSED if not (nogabi #7 --
-// an explicit destination the caller supplied is never silently swapped);
-// an omitted id resolves to the current conversation channel. opts are the same test seam shape (fetchFn/
-// lastId/homeId) as channel.mjs's own scripts/test-outbound-channel.mjs.
+// Outbound target resolution (channel-runtime): resolve() returns
+// {target, note} where target is the Slack channel ID STRING -- the handle
+// every Web API call takes. fetchSlackChannelId verifies reachability via
+// conversations.info and hands back the id. Ladder, fail-closed semantics,
+// and opts test seams (fetchFn/lastId/homeId) live in createOutboundResolver.
 const GUIDANCE =
   'Do not invent channel ids -- omit channelId to target the current conversation, then call the tool again.'
 
-async function resolveOutboundChannel(requestedId, opts = {}) {
-  const fetchFn = opts.fetchFn || fetchSlackChannel
-  const lastId = 'lastId' in opts ? opts.lastId : lastInboundChannelId
-  const homeId = 'homeId' in opts ? opts.homeId : HOME_CHANNEL_ID
-  const fallbackId = lastId || homeId || null
-  if (requestedId) {
-    try {
-      const ch = await fetchFn(requestedId)
-      return { channelId: ch.id || requestedId, note: null }
-    } catch (err) {
-      // FAIL CLOSED on an explicit destination (nogabi issue #7). See the same
-      // block in channel.mjs for why the 2026-07-15 reroute is being reversed:
-      // its problem was visibility, and visibility comes back through the tool's
-      // isError result, not through delivering the payload to another channel.
-      const e = new Error(
-        `channelId ${requestedId} could not be resolved (${err.message}). Nothing was sent. ${GUIDANCE}`
-      )
-      e.code = 'OUTBOUND_TARGET_INVALID'
-      throw e
-    }
-  }
-  if (!fallbackId) throw new Error('no channelId given and no current conversation channel known yet')
-  const ch = await fetchFn(fallbackId)
-  return { channelId: ch.id || fallbackId, note: null }
+async function fetchSlackChannelId(channelId) {
+  const ch = await fetchSlackChannel(channelId)
+  return ch.id || channelId
 }
+
+const resolveOutboundChannel = createOutboundResolver({
+  fetchTarget: fetchSlackChannelId,
+  getLastInboundId: () => lastInboundChannelId,
+  homeId: HOME_CHANNEL_ID,
+  guidance: GUIDANCE,
+})
 
 // ── User display-name resolution (hard constraint #8) ───────────────────────
 // Discord gets a display name for free off the gateway message object
@@ -326,7 +261,7 @@ function chunkText(text, size = REPLY_CHUNK_SIZE) {
 // tool args and get live module state + the real WebClient.
 async function sendReply({ channelId, text }, opts = {}) {
   const post = opts.postMessage || ((args) => slackWeb.chat.postMessage(args))
-  const { channelId: targetId, note } = await resolveOutboundChannel(channelId, opts)
+  const { target: targetId, note } = await resolveOutboundChannel(channelId, opts)
   const chunks = chunkText(text)
   for (const chunk of chunks) await post({ channel: targetId, text: chunk })
   lastActivityMs = Date.now() // delivered reply = live conversation (mirrors channel.mjs)
@@ -344,7 +279,7 @@ async function sendFile({ channelId, filePath, comment }, opts = {}) {
   } catch {
     return { isError: true, text: `file not found: ${resolvedPath}` }
   }
-  const { channelId: targetId, note } = await resolveOutboundChannel(channelId, opts)
+  const { target: targetId, note } = await resolveOutboundChannel(channelId, opts)
   const result = await upload({ channel_id: targetId, file: resolvedPath, filename: path.basename(resolvedPath), initial_comment: comment || '' })
   const urls = (result?.files || []).map((f) => f.permalink || f.url_private).filter(Boolean)
   return { isError: false, text: `file sent to ${targetId}: ${path.basename(resolvedPath)}${urls.length ? `\nURL: ${urls.join('\n')}` : ''}${note ? `\n${note}` : ''}\ndelivered_channel=${targetId}` }
@@ -436,7 +371,7 @@ async function handleInboundMessage(event, opts = {}) {
   if (event.channel !== HOME_CHANNEL_ID) return { skipped: true, reason: 'not_home_channel' }
 
   lastInboundChannelId = event.channel
-  persistLastChannel(event.channel)
+  lastChannelStore.persist(event.channel)
   lastActivityMs = Date.now()
 
   const sender = await resolveSender(event.user, opts)
@@ -513,101 +448,22 @@ socketModeClient.on('reconnecting', () => {
   livenessGate.onReconnecting()
 })
 
-// ── Boot ping (same mechanism as channel.mjs v0.0.16 / cadence/boot-announce
-// .cjs) ─────────────────────────────────────────────────────────────────
-// Reuses the exact same pure rule module and the exact same marker files
-// (BOOT_EVENT_PATH consumed on read, BOOT_ANNOUNCE_TS_PATH as the persistent
-// throttle) -- only the IO (channel fetch + send) is Slack instead of
-// Discord.
-const BOOT_EVENT_PATH = path.join(DATA_HOME, '.boot-event.json')
-const BOOT_ANNOUNCE_TS_PATH = path.join(DATA_HOME, '.boot-announce-ts.json')
-
-async function readAgentConfigFile() {
-  const out = {}
-  let text
-  try {
-    text = await fs.readFile(path.join(DATA_HOME, '.agent-config'), 'utf8')
-  } catch {
-    return out
-  }
-  for (const line of text.split('\n')) {
-    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*"?([^"]*)"?\s*$/)
-    if (m) out[m[1]] = m[2]
-  }
-  return out
-}
-
-async function announceBoot() {
-  let ev = null
-  try {
-    ev = JSON.parse(await fs.readFile(BOOT_EVENT_PATH, 'utf8'))
-  } catch {
-    return // no marker: manual `node channel-slack.mjs` dev run, or supervisor didn't write one
-  }
-  await fs.unlink(BOOT_EVENT_PATH).catch(() => {})
-
-  const bootTick = require(path.join(MODULE_DIR, 'cadence', 'boot-announce.cjs'))
-  const config = await readAgentConfigFile()
-  let lastAnnounceMs = 0
-  try {
-    lastAnnounceMs = JSON.parse(await fs.readFile(BOOT_ANNOUNCE_TS_PATH, 'utf8')).lastAnnounceMs || 0
-  } catch {}
-
-  const plan = bootTick.planBootAnnounce({ now: Date.now(), event: ev, lastAnnounceMs, config })
-  if (plan.skip) {
-    log(`boot announce skipped (${plan.reason})`)
-    return
-  }
-
-  // HOME first, then the persisted last conversation channel -- same
-  // fallback order as channel.mjs v0.0.17 (a DM-only/home-deleted install
-  // would otherwise have nowhere for the boot ping to land).
-  let announceChannelId = null
-  try {
-    await fetchSlackChannel(HOME_CHANNEL_ID)
-    announceChannelId = HOME_CHANNEL_ID
-  } catch (homeErr) {
-    let lastId = null
-    try {
-      lastId = (await fs.readFile(LAST_CHANNEL_PATH, 'utf8')).trim()
-    } catch {}
-    if (lastId && lastId !== HOME_CHANNEL_ID) {
-      try {
-        await fetchSlackChannel(lastId)
-        announceChannelId = lastId
-        log(`boot announce: home channel unreachable (${homeErr.message}), using persisted last channel ${lastId}`)
-      } catch {}
-    }
-    if (!announceChannelId) {
-      log(`boot announce: no reachable channel (home: ${homeErr.message}; persisted last: ${lastId || 'none'}) -- aborting unit, next restart retries`)
-      return
-    }
-  }
-  try {
-    await slackWeb.chat.postMessage({ channel: announceChannelId, text: `🔁 [system] 에이전트 세션 ${plan.label} — ${localNow()}` })
-  } catch (err) {
-    log(`boot announce direct send failed -- aborting this announce unit, next restart retries: ${err.message}`)
-    return
-  }
-  await atomicWriteJson(BOOT_ANNOUNCE_TS_PATH, { lastAnnounceMs: plan.nextLastAnnounceMs }).catch((err) =>
-    log(`boot-announce ts write failed (worst case one extra ping next restart): ${err.message}`)
-  )
-  try {
-    await mcp.notification({
-      method: 'notifications/claude/channel',
-      params: {
-        content:
-          `[SYSTEM] 방금 세션이 ${plan.iteration > 1 ? '재시작됐다 (오늘 이 감독 아래 ' + plan.iteration + '번째)' : '시작됐다'}. ` +
-          '방금 그 채널에 네 목소리로 짧게 부팅 인사를 남겨라 -- 살아있다는 신호가 목적이니 한두 문장이면 된다. ' +
-          '체크포인트에 이어받을 일이 있으면 뭘 이어가는지 한 줄 붙여. ' +
-          '그리고 이 세션 내내 지킬 것: 작업 블록에 들어가기 전에 "뭘 시작한다 + 어느 정도 걸릴 것 같다"를 먼저 한 줄로 알리고 시작해라.',
-        meta: { sender: 'SYSTEM', channelId: announceChannelId, authorId: '', timestamp: localNow() },
-      },
-    })
-  } catch (err) {
-    log(`boot greeting inject failed (direct line already sent): ${err.message}`)
-  }
-}
+// ── Boot ping (channel-runtime) ─────────────────────────────────────────────
+// Same announce unit, marker protocol, throttle, and fallback ladder as every
+// backend (createBootAnnouncer, channel-runtime.mjs) -- only the Slack IO is
+// wired here. The announce target is the channel ID string, verified
+// reachable via conversations.info before the direct send.
+const announceBoot = createBootAnnouncer({
+  dataHome: DATA_HOME,
+  homeId: HOME_CHANNEL_ID,
+  lastChannelStore,
+  fetchTarget: fetchSlackChannelId,
+  idOf: (channelId) => channelId,
+  sendText: (channelId, text) => slackWeb.chat.postMessage({ channel: channelId, text }),
+  notify: (params) => mcp.notification({ method: 'notifications/claude/channel', params }),
+  log,
+  noun: 'channel',
+})
 
 // ── Token validation (hard constraint #5: distinguish bot vs app token) ────
 // Split into two functions so a test can attack each independently with an
