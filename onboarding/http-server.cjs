@@ -3155,6 +3155,10 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
       cap,
       capSource,
       pct: cap ? Math.min(100, Math.round((snap.contextTokens / cap) * 100)) : null,
+      // Ghost-snapshot marker (2026-07-28): true when this number belongs
+      // to a PREVIOUS session, kept only so the gauge is not blank before
+      // the new session's first turn. The UI must say so.
+      carriedOver: snap.carriedOver === true,
     })
     return
   }

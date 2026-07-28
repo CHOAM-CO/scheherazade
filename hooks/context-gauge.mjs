@@ -50,6 +50,7 @@ async function main() {
   try { hookInput = JSON.parse(rawInput || '{}') } catch { process.exit(0) }
 
   const transcriptPath = hookInput.transcript_path
+  const sessionId = typeof hookInput.session_id === 'string' ? hookInput.session_id : null
   if (!transcriptPath || !fs.existsSync(transcriptPath)) process.exit(0)
 
   const { lines, fileBytes } = tailLines(transcriptPath)
@@ -72,8 +73,27 @@ async function main() {
     break
   }
   // A fresh session (SessionStart before any turn) legitimately has no
-  // usage yet -- keep the previous snapshot rather than blanking the gauge.
-  if (!usage) process.exit(0)
+  // usage yet -- keep the previous snapshot rather than blanking the gauge,
+  // but MARK it as carried over from an earlier session. Live incident
+  // (Mino, 2026-07-28): a previous session ended near 133K, the agent was
+  // rebooted on a new build, and the gauge's unmarked leftover read as
+  // "133K at boot" -- a 20K arithmetic gap against the real session ledger
+  // that cost a three-hypothesis diagnosis to close. An instrument may
+  // show history, but never history dressed as the present.
+  if (!usage) {
+    try {
+      const prev = JSON.parse(fs.readFileSync(STATUS_PATH, 'utf8'))
+      const sameSession = sessionId && prev.sessionId && prev.sessionId === sessionId
+      if (!prev.carriedOver && !sameSession) {
+        prev.carriedOver = true
+        prev.carriedAt = new Date().toISOString()
+        const tmpMark = `${STATUS_PATH}.tmp`
+        fs.writeFileSync(tmpMark, JSON.stringify(prev, null, 2))
+        fs.renameSync(tmpMark, STATUS_PATH)
+      }
+    } catch { /* no previous snapshot, or unreadable -- nothing to mark */ }
+    process.exit(0)
+  }
 
   const contextTokens =
     (usage.input_tokens || 0) +
@@ -84,6 +104,7 @@ async function main() {
   const snapshot = {
     ts: new Date().toISOString(),
     model,
+    sessionId,
     contextTokens,
     usage: {
       input_tokens: usage.input_tokens || 0,
