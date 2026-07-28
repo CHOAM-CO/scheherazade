@@ -406,6 +406,11 @@ window.COPY = {
           action: () => 'Switch the model to Claude in Settings, then quit and reopen the app.',
           buttons: ['openSettings', 'openLogs'],
         },
+        harness_stale: {
+          cause: () => "The agent's instruction files couldn't be updated for this version.",
+          action: () => 'Quit the app and reopen it. Reopening retries the update, and the agent starts again once it succeeds.',
+          buttons: ['openLogs'],
+        },
         // action text: same fix as crash_loop above, same reason (no real
         // settings repair UI to send the user to).
         key_error: {
