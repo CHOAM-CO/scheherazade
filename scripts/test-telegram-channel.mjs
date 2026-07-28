@@ -159,7 +159,7 @@ console.log('\n(b) reply chunking boundary')
   const sent = []
   const logged = []
   let nextMsgId = 9000
-  const { ch, note, chunkCount } = await handleReplyCall(
+  const { target, note, chunkCount } = await handleReplyCall(
     { channelId: 'chat-b', text: 'x'.repeat(4001) },
     {
       fetchFn: async (id) => ({ id }),
@@ -167,7 +167,7 @@ console.log('\n(b) reply chunking boundary')
       historyAppendFn: async (rec) => { logged.push(rec) },
     }
   )
-  check('handleReplyCall resolves the requested channel', ch.id === 'chat-b')
+  check('handleReplyCall resolves the requested channel', target.id === 'chat-b')
   check('handleReplyCall reports no reroute note for a valid explicit id', note === null)
   check('handleReplyCall reports chunkCount === 2 for a 4001-char reply', chunkCount === 2)
   check('handleReplyCall calls sendFn once per chunk, in order, on the resolved chat', sent.length === 2 && sent.every((s) => s.chatId === 'chat-b'))
@@ -217,12 +217,14 @@ console.log('\n(c) history ledger round trip')
 }
 
 // ── resolveOutboundChannel: same contract as channel.mjs's own test file ───
+// ({target, note} is the unified resolver contract shared via
+// channel-runtime.mjs -- the Telegram target is a chat object.)
 console.log('\nresolveOutboundChannel (protocol-agnostic contract, telegram fetchFn)')
 {
   const KNOWN = { chatA: { id: 'chatA' }, chatHome: { id: 'chatHome' } }
   const fake = async (id) => { if (KNOWN[id]) return KNOWN[id]; throw new Error(`chat ${id} not found`) }
   const r1 = await resolveOutboundChannel('chatA', { fetchFn: fake, lastId: 'chatHome', homeId: null })
-  check('valid explicit chat id honored, no note', r1.ch.id === 'chatA' && r1.note === null)
+  check('valid explicit chat id honored, no note', r1.target.id === 'chatA' && r1.note === null)
   // Fails closed since 2026-07-25 (nogabi #7): an explicit chat id the caller
   // supplied is never swapped for another one. Parity with channel.mjs.
   let e2 = null
@@ -237,7 +239,7 @@ console.log('\nresolveOutboundChannel (protocol-agnostic contract, telegram fetc
     !!e2 && e2.message.includes('bogus-chat') && /nothing was sent/i.test(e2.message))
   check('the fallback chat was never fetched', !tried.includes('chatHome'), `fetched: ${tried.join(',')}`)
   const r3 = await resolveOutboundChannel(undefined, { fetchFn: fake, lastId: null, homeId: 'chatHome' })
-  check('omitted id falls back to HOME when no last-inbound chat known', r3.ch.id === 'chatHome')
+  check('omitted id falls back to HOME when no last-inbound chat known', r3.target.id === 'chatHome')
 }
 
 // ── (d-1) token rejected by the API (in-process, injected requestFn) ───────

@@ -131,9 +131,11 @@ console.log('\n(c) reply chunking boundary (4000-char budget)')
   // the delivery receipt line the stop-reply-guard greps for.
   const posted = []
   const text = 'x'.repeat(8001) // 3 chunks: 4000 + 4000 + 1
+  // fetchFn returns the channel id STRING -- the Slack resolver's target is
+  // the id itself (unified {target, note} contract, channel-runtime.mjs).
   const result = await sendReply({ channelId: undefined, text }, {
     postMessage: async (args) => { posted.push(args); return { ok: true, ts: '1700000000.000300' } },
-    fetchFn: async (id) => ({ id }),
+    fetchFn: async (id) => id,
     lastId: null,
     homeId: HOME_ID,
   })
@@ -156,7 +158,10 @@ function readMarker() {
   const marker = readMarker()
   check('failure marker has channel.mjs base shape (status/reason/code/since/pid)', marker.status === 'failed' && typeof marker.reason === 'string' && typeof marker.since === 'string' && typeof marker.pid === 'number')
   check('failure marker code is slack_token_bad', marker.code === 'slack_token_bad', marker.code)
-  check('failure marker detail distinguishes the BOT token as the culprit', marker.token === 'bot', marker.token)
+  // Backend extensions ride under ext:{...}, never as top-level fields --
+  // the marker base schema is shared by all backends (channel-runtime.mjs).
+  check('failure marker ext distinguishes the BOT token as the culprit', marker.ext?.token === 'bot', JSON.stringify(marker.ext))
+  check('the extension did not leak into the base schema (no top-level token)', !('token' in marker))
 }
 {
   const r = await validateAppToken({ socketModeClient: { start: async () => { throw new Error('invalid_auth (app-level token)') } } })
@@ -164,7 +169,7 @@ function readMarker() {
   check('bad app token result is tagged token:"app"', r.token === 'app')
   const marker = readMarker()
   check('failure marker code is slack_token_bad (app path too)', marker.code === 'slack_token_bad', marker.code)
-  check('failure marker detail distinguishes the APP token as the culprit', marker.token === 'app', marker.token)
+  check('failure marker ext distinguishes the APP token as the culprit', marker.ext?.token === 'app', JSON.stringify(marker.ext))
 }
 {
   const r = await validateBotToken({ webClient: { auth: { test: async () => ({ ok: true }) } } })
@@ -213,13 +218,15 @@ console.log('\n(bonus) toSlackTs (after/before -> Slack ts)')
 }
 
 // ── resolveOutboundChannel (channel.mjs parity) ─────────────────────────────
+// {target, note} is the unified resolver contract (channel-runtime.mjs);
+// the Slack target is the channel id string, so the fake fetch returns ids.
 console.log('\n(bonus) resolveOutboundChannel (anti-confabulation parity with channel.mjs)')
 {
-  const KNOWN = { c777: { id: 'c777' }, home1: { id: 'home1' } }
-  const fakeFetch = async (id) => { if (KNOWN[id]) return KNOWN[id]; throw new Error(`channel ${id} not found`) }
+  const KNOWN = new Set(['c777', 'home1'])
+  const fakeFetch = async (id) => { if (KNOWN.has(id)) return id; throw new Error(`channel ${id} not found`) }
 
   const r1 = await resolveOutboundChannel('c777', { fetchFn: fakeFetch, lastId: 'home1', homeId: null })
-  check('valid explicit id honored, no note', r1.channelId === 'c777' && r1.note === null)
+  check('valid explicit id honored, no note', r1.target === 'c777' && r1.note === null)
 
   // Fails closed since 2026-07-25 (nogabi #7): an explicit destination the
   // caller supplied is never swapped for another one. Parity with channel.mjs.
@@ -236,7 +243,7 @@ console.log('\n(bonus) resolveOutboundChannel (anti-confabulation parity with ch
   check('the fallback was never fetched', !tried.includes('c777'), `fetched: ${tried.join(',')}`)
 
   const r3 = await resolveOutboundChannel(undefined, { fetchFn: fakeFetch, lastId: 'c777', homeId: 'home1' })
-  check('omitted id goes to lastInbound over HOME', r3.channelId === 'c777' && r3.note === null)
+  check('omitted id goes to lastInbound over HOME', r3.target === 'c777' && r3.note === null)
 
   let threw = false
   try { await resolveOutboundChannel('bogus', { fetchFn: fakeFetch, lastId: null, homeId: null }) } catch { threw = true }
@@ -247,7 +254,7 @@ console.log('\n(bonus) resolveOutboundChannel (anti-confabulation parity with ch
 console.log('\n(bonus) sendFile + readHistory smoke (name/shape only, not exhaustive)')
 {
   const missing = await sendFile({ channelId: HOME_ID, filePath: path.join(tmpDir, 'does-not-exist.png') }, {
-    fetchFn: async (id) => ({ id }),
+    fetchFn: async (id) => id,
   })
   check('missing local file reports isError without ever calling Slack', missing.isError === true && missing.text.includes('file not found'))
 
@@ -256,7 +263,7 @@ console.log('\n(bonus) sendFile + readHistory smoke (name/shape only, not exhaus
   let uploadArgs = null
   const ok = await sendFile({ channelId: undefined, filePath: realFile, comment: 'a file' }, {
     uploadFile: async (args) => { uploadArgs = args; return { files: [{ permalink: 'https://slack.example/f/1' }] } },
-    fetchFn: async (id) => ({ id }),
+    fetchFn: async (id) => id,
     lastId: HOME_ID,
     homeId: HOME_ID,
   })
@@ -281,7 +288,11 @@ console.log('\n(bonus) source pins')
   check('no discord.js import statement leaked in (mentions in comparison comments are fine)', !src.includes("from 'discord.js'"))
   check('env vars match hard constraint #3', src.includes('SLACK_BOT_TOKEN') && src.includes('SLACK_APP_TOKEN') && src.includes('HOME_CHANNEL_ID') && src.includes('AGENT_NAME'))
   check('dotenv loaded the same way as channel.mjs', src.includes("import 'dotenv/config'"))
-  check('stdout hygiene block reroutes console to stderr', src.includes('process.stderr.write') && src.includes("console[method]"))
+  // The reroute itself lives in channel-runtime.mjs; the backend must install
+  // it before anything else runs.
+  check('stdout hygiene installed from channel-runtime', src.includes('installStdoutHygiene()'))
+  const runtimeSrc = fs.readFileSync(path.join(ROOT, 'channel-runtime.mjs'), 'utf8')
+  check('channel-runtime reroutes console to stderr', runtimeSrc.includes('process.stderr.write') && runtimeSrc.includes('console[method]'))
   check('failure marker reason code is the literal slack_token_bad', src.includes("'slack_token_bad'"))
   check('chat.postMessage used for outbound sends', src.includes('chat.postMessage'))
   check('files.uploadV2 used for file sends', src.includes('files.uploadV2'))

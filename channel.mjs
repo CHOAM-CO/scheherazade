@@ -21,6 +21,10 @@ import https from 'node:https'
 import http from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
+import {
+  installStdoutHygiene, resolveDataHome, atomicWriteJson, localISO, localNow,
+  readAgentConfig, createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer,
+} from './channel-runtime.mjs'
 
 // autonomy/*.cjs are CommonJS on purpose: onboarding/http-server.cjs has to
 // read the same meter to show the user their own numbers, and it cannot import
@@ -33,93 +37,33 @@ const require = createRequire(import.meta.url)
 // a crash that only happens on someone else's machine.
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url))
 
-// ── stdout hygiene ─────────────────────────────────────────────────────────
-// MCP stdio transport reserves stdout exclusively for JSON-RPC. Any stray
-// console output there corrupts the stream, so every console method is
-// rerouted to stderr before anything else runs.
-function safeJson(v) { try { return JSON.stringify(v) } catch { return String(v) } }
-for (const [method, prefix] of [['log', ''], ['info', ''], ['debug', ''], ['warn', '[WARN] '], ['error', '[ERR] ']]) {
-  console[method] = (...args) => {
-    process.stderr.write(`${prefix}${args.map((a) => (typeof a === 'string' ? a : safeJson(a))).join(' ')}\n`)
-  }
-}
-const log = (...args) => console.log(...args)
+// ── stdout hygiene (channel-runtime) ───────────────────────────────────────
+// Installed before anything else runs -- MCP stdout is JSON-RPC only.
+const log = installStdoutHygiene()
 
 // ── config ───────────────────────────────────────────────────────────────
 const AGENT_NAME = process.env.AGENT_NAME || 'agent'
 const DISCORD_TOKEN = process.env.DISCORD_BOT_TOKEN
 const HOME_CHANNEL_ID = process.env.HOME_CHANNEL_ID
 
-// ── DATA_HOME ────────────────────────────────────────────────────────────
-// Resolved EXPLICITLY here rather than trusting process.cwd() -- a future
-// change to how this process gets spawned (different cwd, a manual
-// `node channel.mjs` from elsewhere) must never silently write the marker
-// to the wrong place (http-server.cjs's GET /api/agent/status computes
-// DATA_HOME independently and would never see it -- permanent false
-// "connecting").
-//
-// Fallback (AGENT_DATA_HOME unset) matches run.sh's OWN MEM resolution
-// EXACTLY -- `MEM="${AGENT_DATA_HOME:-$HOME/Documents/$AGENT_NAME}"`, same
-// env var, same formula, keyed by AGENT_NAME (not a fixed literal). The
-// packaged Electron path always sets AGENT_DATA_HOME explicitly (main.cjs's
-// spawnRealAgentChild()) to the exact fixed path http-server.cjs's own
-// DATA_HOME constant computes, so the two can't drift THERE regardless of
-// the fallback here. (history: docs/HISTORY.md)
-const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', AGENT_NAME)
+// DATA_HOME + marker files come from channel-runtime.mjs (see its header for
+// the run.sh MEM formula lock). Markers are set up here, before the
+// DISCORD_TOKEN/HOME_CHANNEL_ID guards below, so a missing-token FATAL exit
+// can itself write a failure marker instead of just dying into run.sh's
+// restart loop with nothing but a stderr line. main.cjs's pollFailureMarker()
+// surfaces the failure marker as setAgentStatus('failed', code, reason);
+// run.sh's write_failure() shares the same file, so main.cjs polls one file
+// regardless of which layer detected the problem first. (history: docs/HISTORY.md)
+const DATA_HOME = resolveDataHome(AGENT_NAME)
+const markers = createMarkerStore({ dataHome: DATA_HOME })
+const { LIVENESS_MARKER_PATH, FAILURE_MARKER_PATH, LIVENESS_HEARTBEAT_MS } = markers
+const writeLivenessMarker = () => markers.writeLiveness()
 
-// ── liveness + failure markers ──────────────────────────────────────────
-// Declared here, before the DISCORD_TOKEN/HOME_CHANNEL_ID guards below, so a
-// missing-token FATAL exit can itself write a failure marker instead of
-// just dying into run.sh's restart loop with nothing but a stderr line --
-// see Critical B.
-const LIVENESS_MARKER_PATH = path.join(DATA_HOME, '.agent-live')
-const LIVENESS_HEARTBEAT_MS = 60_000 // http-server.cjs's LIVENESS_FRESH_MS (150s) tolerates one missed beat
-const FAILURE_MARKER_PATH = path.join(DATA_HOME, '.agent-failed.json')
-
-// Atomic write (temp file + rename): matches run.sh's own write_failure() --
-// that function's own comment explicitly calls out atomic-write as
-// necessary "so main.cjs's poller never reads a half-written file". This
-// one shares the exact same consumer (pollFailureMarker()) and file, and a
-// plain writeFile() here left a real, if self-healing, window where a 3s
-// poll tick landing mid-write would hit a JSON.parse error on a truncated
-// read. fs.rename is atomic on the same filesystem, which a temp file in
-// the same directory always is.
-async function atomicWriteJson(filePath, payload) {
-  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
-  await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2) + '\n')
-  await fs.rename(tmpPath, filePath)
-}
-
-async function writeLivenessMarker() {
-  const payload = { status: 'live', lastHeartbeat: new Date().toISOString(), pid: process.pid }
-  await atomicWriteJson(LIVENESS_MARKER_PATH, payload)
-}
-
-// Critical B: a bad/revoked Discord token or a missing-token boot used to
-// just exit this process into run.sh's own restart loop with no on-disk
-// signal beyond stderr -- main.cjs's agent-status.cjs never saw it, so the
-// onboarding UI stayed on "connecting" forever. This marker is the distinct
-// failure
-// signal main.cjs's failure-marker poller (see main.cjs's
-// pollFailureMarker()) surfaces as setAgentStatus('failed', code, reason)
-// within a bounded time. Shares its DATA_HOME/.agent-failed.json path +
-// JSON shape with run.sh's own restart-ladder failure write (see run.sh's
-// run_loop() / write_failure()) so main.cjs only needs to poll one file
-// regardless of which layer -- the bash restart loop, or this process's
-// own login failure -- detected the problem first.
-//
-// `code`: the stable machine-readable cause main.cjs's pollFailureMarker()
-// relays into setAgentStatus(). Every current call site below passes
-// 'discord_token_bad' EXCEPT the missing-HOME_CHANNEL_ID guard, which is a
-// distinct config gap (not the bot token itself, and there's no dedicated
-// code for it in the enum) -- it passes 'unknown' rather than mislabeling
-// it as a token problem. Defaults to 'unknown' if a future call site
-// forgets to pass one, so this never silently emits a marker with no code
-// field at all.
-async function writeFailureMarker(reason, code = 'unknown') {
-  const payload = { status: 'failed', reason, code, since: new Date().toISOString(), pid: process.pid }
-  await atomicWriteJson(FAILURE_MARKER_PATH, payload)
-}
+// Every current call site passes 'discord_token_bad' EXCEPT the
+// missing-HOME_CHANNEL_ID guard -- a distinct config gap with no dedicated
+// code in the enum, so it takes the 'unknown' default rather than
+// mislabeling itself as a token problem.
+const writeFailureMarker = (reason, code = 'unknown') => markers.writeFailure(reason, code)
 
 if (!DISCORD_TOKEN) {
   const reason = 'DISCORD_BOT_TOKEN not set. Check .env (or the .mcp.json env block).'
@@ -141,23 +85,7 @@ if (!HOME_CHANNEL_ID) {
   process.exit(1)
 }
 
-// ── Local-time timestamps ───────────────────────────────────────────────────
-// new Date().toISOString() is UTC; the model reads this as "now", so it needs
-// an explicit local-time offset, computed from the system timezone so the
-// app is correct wherever the user runs it.
-function localISO(ms = Date.now()) {
-  const d = new Date(ms)
-  const offMin = -d.getTimezoneOffset()
-  const sign = offMin >= 0 ? '+' : '-'
-  const abs = Math.abs(offMin)
-  const hh = String(Math.trunc(abs / 60)).padStart(2, '0')
-  const mm = String(abs % 60).padStart(2, '0')
-  return new Date(ms + offMin * 60_000).toISOString().replace('Z', `${sign}${hh}:${mm}`)
-}
-function localWeekday(ms = Date.now()) {
-  return new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(new Date(ms))
-}
-const localNow = () => `${localISO()} (${localWeekday()})`
+// Local-time timestamps (localISO/localNow) come from channel-runtime.mjs.
 
 // ── safe mentions — block @everyone/@here on every send ────────────────────
 const SAFE_MENTIONS = { parse: ['users', 'roles'] }
@@ -250,20 +178,10 @@ async function fetchTextChannel(channelId) {
 // 구조로 옮기는 픽스.
 let lastInboundChannelId = null
 
-// ── Persisted last-conversation channel (v0.0.17) ───────────────────────────
-// lastInboundChannelId dies with the process, but the boot announce runs
-// BEFORE any inbound message of the new session -- and Mino's real setup
-// (07-16 14:06) has NO home channel at all (deleted it, DM-only). Without a
-// cross-restart memory of where the conversation lives, the boot ping of a
-// DM-only install has nowhere to go, structurally. Write-on-change only;
-// read once at announce time.
-const LAST_CHANNEL_PATH = path.join(DATA_HOME, '.last-channel')
-let persistedLastChannelId = null
-function persistLastChannel(channelId) {
-  if (!channelId || channelId === persistedLastChannelId) return
-  persistedLastChannelId = channelId
-  fs.writeFile(LAST_CHANNEL_PATH, channelId).catch((err) => log(`last-channel persist failed: ${err.message}`))
-}
+// ── Persisted last-conversation channel (channel-runtime) ──────────────────
+// Cross-restart memory of where the conversation lives -- the boot announce
+// of a DM-only/home-deleted install has nowhere else to go.
+const lastChannelStore = createLastChannelStore({ dataHome: DATA_HOME, log })
 
 // ── Conversation activity clock (v0.0.16 note-cadence input) ────────────────
 // Last moment the conversation was demonstrably alive: an inbound Discord
@@ -272,34 +190,19 @@ function persistLastChannel(channelId) {
 // Consumed by the note-cadence watcher (active 30min vs idle 3h decision).
 let lastActivityMs = Date.now()
 
-// opts are test seams (scripts/test-outbound-channel.mjs) -- production call
-// sites pass only requestedId and get live module state + real fetch.
+// Outbound target resolution (channel-runtime): resolve() returns
+// {target, note} where target is a Discord channel object. The ladder,
+// fail-closed semantics, and opts test seams (scripts/test-outbound-channel
+// .mjs) live in createOutboundResolver -- see channel-runtime.mjs.
 const GUIDANCE =
   'Do not invent channel ids -- omit channelId to target the current conversation, then call the tool again.'
 
-async function resolveOutboundChannel(requestedId, opts = {}) {
-  const fetchFn = opts.fetchFn || fetchTextChannel
-  const lastId = 'lastId' in opts ? opts.lastId : lastInboundChannelId
-  const homeId = 'homeId' in opts ? opts.homeId : HOME_CHANNEL_ID
-  const fallbackId = lastId || homeId || null
-  if (requestedId) {
-    try {
-      return { ch: await fetchFn(requestedId), note: null }
-    } catch (err) {
-      // FAIL CLOSED on an explicit destination (nogabi issue #7): an
-      // unreachable explicit id throws (isError) rather than being silently
-      // rerouted -- delivering to a channel nobody asked for is unrecoverable,
-      // while a message that never sent is recoverable and reported.
-      const e = new Error(
-        `channelId ${requestedId} could not be resolved (${err.message}). Nothing was sent. ${GUIDANCE}`
-      )
-      e.code = 'OUTBOUND_TARGET_INVALID'
-      throw e
-    }
-  }
-  if (!fallbackId) throw new Error('no channelId given and no current conversation channel known yet')
-  return { ch: await fetchFn(fallbackId), note: null }
-}
+const resolveOutboundChannel = createOutboundResolver({
+  fetchTarget: fetchTextChannel,
+  getLastInboundId: () => lastInboundChannelId,
+  homeId: HOME_CHANNEL_ID,
+  guidance: GUIDANCE,
+})
 
 // ── MCP server ───────────────────────────────────────────────────────────
 const DEFAULT_INSTRUCTIONS = `You are ${AGENT_NAME}.
@@ -373,19 +276,19 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
   if (name === 'reply') {
     const { channelId, text } = ReplyArgs.parse(args || {})
-    const { ch, note } = await resolveOutboundChannel(channelId)
+    const { target, note } = await resolveOutboundChannel(channelId)
     const chunks = []
     for (let i = 0; i < text.length; i += 1900) chunks.push(text.slice(i, i + 1900))
-    for (const chunk of chunks) await ch.send({ content: chunk, allowedMentions: SAFE_MENTIONS })
+    for (const chunk of chunks) await target.send({ content: chunk, allowedMentions: SAFE_MENTIONS })
     lastActivityMs = Date.now() // delivered reply = live conversation (note-cadence input)
-    clearThinking(ch.id).catch((err) => log('thinking reaction clear failed:', err.message))
+    clearThinking(target.id).catch((err) => log('thinking reaction clear failed:', err.message))
     // delivered_channel= line: machine-readable delivery receipt for
     // stop-reply-guard. The guard used to match on the tool_use ARGS
     // channelId, but since v0.0.11 the server can deliver on a wrong/omitted
     // id via fallback -- args say where the model AIMED, this line says
     // where the message actually LANDED. Fixed format; the guard greps
     // exactly this token, the human-facing text stays above it.
-    return { content: [{ type: 'text', text: `sent to ${ch.id} (${chunks.length} message${chunks.length > 1 ? 's' : ''})${note ? `\n${note}` : ''}\ndelivered_channel=${ch.id}` }] }
+    return { content: [{ type: 'text', text: `sent to ${target.id} (${chunks.length} message${chunks.length > 1 ? 's' : ''})${note ? `\n${note}` : ''}\ndelivered_channel=${target.id}` }] }
   }
 
   if (name === 'send_file_to_discord') {
@@ -403,16 +306,16 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     if (stat.size > MAX_UPLOAD) {
       return { content: [{ type: 'text', text: `file too large for Discord upload: ${(stat.size / 1024 / 1024).toFixed(1)}MB (limit 10MB)` }], isError: true }
     }
-    const { ch, note } = await resolveOutboundChannel(parsed.channelId)
-    const msg = await ch.send({
+    const { target, note } = await resolveOutboundChannel(parsed.channelId)
+    const msg = await target.send({
       content: parsed.comment || '',
       files: [{ attachment: filePath, name: path.basename(filePath) }],
       allowedMentions: SAFE_MENTIONS,
     })
-    clearThinking(ch.id).catch((err) => log('thinking reaction clear failed:', err.message))
+    clearThinking(target.id).catch((err) => log('thinking reaction clear failed:', err.message))
     const urls = [...msg.attachments.values()].map((a) => a.url)
     // Same delivery receipt as reply above -- see that comment.
-    return { content: [{ type: 'text', text: `file sent to ${ch.id}: ${path.basename(filePath)}${urls.length ? `\nCDN URL: ${urls.join('\n')}` : ''}${note ? `\n${note}` : ''}\ndelivered_channel=${ch.id}` }] }
+    return { content: [{ type: 'text', text: `file sent to ${target.id}: ${path.basename(filePath)}${urls.length ? `\nCDN URL: ${urls.join('\n')}` : ''}${note ? `\n${note}` : ''}\ndelivered_channel=${target.id}` }] }
   }
 
   if (name === 'read_channel_history') {
@@ -562,23 +465,10 @@ const AUTONOMY_STATE_PATH = path.join(DATA_HOME, '.autonomy-state.json')
 const AUTONOMY_POLL_MS = 60 * 1000
 let autonomyInFlight = false
 
-async function readAgentConfigFile() {
-  // Read on every poll, never cached: the settings page can flip consent or
-  // the cap at any moment, and a cached "yes" would keep spending after the
-  // user said stop. Config is the shell-style KEY="value" file run.sh sources.
-  const out = {}
-  let text
-  try {
-    text = await fs.readFile(path.join(DATA_HOME, '.agent-config'), 'utf8')
-  } catch {
-    return out
-  }
-  for (const line of text.split('\n')) {
-    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*"?([^"]*)"?\s*$/)
-    if (m) out[m[1]] = m[2]
-  }
-  return out
-}
+// Config is read via channel-runtime's readAgentConfig on every poll, never
+// cached: the settings page can flip consent or the cap at any moment, and a
+// cached "yes" would keep spending after the user said stop.
+const readAgentConfigFile = () => readAgentConfig(DATA_HOME)
 
 async function readAutonomyState() {
   try {
@@ -592,9 +482,7 @@ async function writeAutonomyState(state) {
   // tmp+rename: the state file is read by the settings page while we write it,
   // and a torn read here would look like "no cycle ran tonight" -- which would
   // silently cancel the user's brief. Same convention as .agent-failed.json.
-  const tmp = `${AUTONOMY_STATE_PATH}.tmp`
-  await fs.writeFile(tmp, JSON.stringify(state, null, 2))
-  await fs.rename(tmp, AUTONOMY_STATE_PATH)
+  await atomicWriteJson(AUTONOMY_STATE_PATH, state)
 }
 
 function startAutonomyWatcher() {
@@ -664,114 +552,24 @@ function startAutonomyWatcher() {
   }, AUTONOMY_POLL_MS).unref()
 }
 
-// ── Boot ping (v0.0.16, Mino 07-16 11:48 feedback #1) ───────────────────────
-// Detection is the HARNESS's job, deterministically -- a model asked to
-// announce its own boot forgets sometimes, and outside the window silence is
-// indistinguishable from death. Two-part shape:
-//   1. a direct system line to the home channel (this file's first and only
-//      non-model-mediated Discord send -- deliberate: liveness must not
-//      depend on the model choosing to speak), then
-//   2. a [SYSTEM] turn injected into the session asking for a greeting in
-//      the agent's own voice. No "답장하지 마" -- stop-reply-guard then
-//      ENFORCES that the greeting actually lands in Discord.
-// The marker is written by the supervisor (run.sh / supervisor.mjs, both
-// lanes) immediately before each leaf spawn. Only leaves that live long
-// enough to reach ClientReady ping at all, so a quick-death crash loop never
-// spams the channel (those die before Discord login; the bounce budget and
-// failure marker cover that class).
-const BOOT_EVENT_PATH = path.join(DATA_HOME, '.boot-event.json')
-// Persistent throttle: the consume-on-read marker prevents double-announce
-// within ONE leaf's life, but has no memory ACROSS restarts -- a crash loop
-// that reaches Discord login each time (backoff caps at 120s; Discord login
-// here is independent of provider auth, so a bad provider key IS such a
-// loop) would ping every restart. This file remembers "announced recently"
-// across restarts; the decision rule lives in cadence/boot-announce.cjs
-// (pure, tested).
-const BOOT_ANNOUNCE_TS_PATH = path.join(DATA_HOME, '.boot-announce-ts.json')
-
-async function announceBoot() {
-  let ev = null
-  try {
-    ev = JSON.parse(await fs.readFile(BOOT_EVENT_PATH, 'utf8'))
-  } catch {
-    return // no marker: manual `node channel.mjs` dev run or pre-0.0.16 supervisor
-  }
-  // Consume first -- a marker that crashes this function twice must not
-  // double-announce on some future path; ClientReady is `once` today, this
-  // is belt-and-suspenders for that assumption.
-  await fs.unlink(BOOT_EVENT_PATH).catch(() => {})
-
-  const bootTick = require(path.join(MODULE_DIR, 'cadence', 'boot-announce.cjs'))
-  const config = await readAgentConfigFile()
-  let lastAnnounceMs = 0
-  try {
-    lastAnnounceMs = JSON.parse(await fs.readFile(BOOT_ANNOUNCE_TS_PATH, 'utf8')).lastAnnounceMs || 0
-  } catch {} // never announced (or unreadable file: fail toward announcing once, not toward silence)
-
-  const plan = bootTick.planBootAnnounce({ now: Date.now(), event: ev, lastAnnounceMs, config })
-  if (plan.skip) {
-    log(`boot announce skipped (${plan.reason})`)
-    return
-  }
-
-  // The announce is one UNIT: direct line -> ts advance -> greeting inject.
-  // ts advances only after the direct send actually LANDS: spam requires
-  // successful sends, so advance-on-delivered still caps the crash loop, and
-  // a Discord outage at boot doesn't burn the slot into 15min of false
-  // silence. If the direct send fails, the whole unit aborts (no inject
-  // either) and the next restart retries it. BOTH paths sit behind the
-  // throttle -- deliberate superset of "gate the direct send": the inject
-  // has no "답장하지 마", so stop-reply-guard FORCES it into Discord; an
-  // unthrottled inject would be the same spam in the agent's voice instead
-  // of the system's.
-  // HOME first, then persisted last channel -- see the persisted-last-channel note above.
-  let announceCh = null
-  try {
-    announceCh = await fetchTextChannel(HOME_CHANNEL_ID)
-  } catch (homeErr) {
-    let lastId = null
-    try {
-      lastId = (await fs.readFile(LAST_CHANNEL_PATH, 'utf8')).trim()
-    } catch {}
-    if (lastId && lastId !== HOME_CHANNEL_ID) {
-      try {
-        announceCh = await fetchTextChannel(lastId)
-        log(`boot announce: home channel unreachable (${homeErr.message}), using persisted last channel ${lastId}`)
-      } catch {}
-    }
-    if (!announceCh) {
-      log(`boot announce: no reachable channel (home: ${homeErr.message}; persisted last: ${lastId || 'none'}) -- aborting unit, next restart retries`)
-      return
-    }
-  }
-  try {
-    await announceCh.send({ content: `🔁 [system] 에이전트 세션 ${plan.label} — ${localNow()}`, allowedMentions: SAFE_MENTIONS })
-  } catch (err) {
-    log(`boot announce direct send failed -- aborting this announce unit, next restart retries: ${err.message}`)
-    return
-  }
-  await atomicWriteJson(BOOT_ANNOUNCE_TS_PATH, { lastAnnounceMs: plan.nextLastAnnounceMs }).catch((err) =>
-    log(`boot-announce ts write failed (worst case one extra ping next restart): ${err.message}`)
-  )
-  try {
-    await mcp.notification({
-      method: 'notifications/claude/channel',
-      params: {
-        content:
-          `[SYSTEM] 방금 세션이 ${plan.iteration > 1 ? '재시작됐다 (오늘 이 감독 아래 ' + plan.iteration + '번째)' : '시작됐다'}. ` +
-          '방금 그 채널에 네 목소리로 짧게 부팅 인사를 남겨라 -- 살아있다는 신호가 목적이니 한두 문장이면 된다. ' +
-          '체크포인트에 이어받을 일이 있으면 뭘 이어가는지 한 줄 붙여. ' +
-          '그리고 이 세션 내내 지킬 것: 작업 블록에 들어가기 전에 "뭘 시작한다 + 어느 정도 걸릴 것 같다"를 먼저 한 줄로 알리고 시작해라.',
-        // channelId = the channel the direct line actually LANDED on, not a
-        // hardcoded HOME: with home deleted, pointing the model at a dead
-        // channel would make its guard-enforced greeting reply fail too.
-        meta: { sender: 'SYSTEM', channelId: announceCh.id, authorId: '', timestamp: localNow() },
-      },
-    })
-  } catch (err) {
-    log(`boot greeting inject failed (direct line already sent): ${err.message}`)
-  }
-}
+// ── Boot ping (channel-runtime) ─────────────────────────────────────────────
+// The two-part announce unit, marker protocol, throttle, and home->persisted-
+// last-channel fallback all live in createBootAnnouncer (channel-runtime.mjs).
+// The .boot-event.json marker is written by the supervisor (run.sh /
+// supervisor.mjs, both lanes) immediately before each leaf spawn; only leaves
+// that live long enough to reach ClientReady ping at all, so a quick-death
+// crash loop never spams the channel. Only the Discord IO is wired here.
+const announceBoot = createBootAnnouncer({
+  dataHome: DATA_HOME,
+  homeId: HOME_CHANNEL_ID,
+  lastChannelStore,
+  fetchTarget: fetchTextChannel,
+  idOf: (ch) => ch.id,
+  sendText: (ch, text) => ch.send({ content: text, allowedMentions: SAFE_MENTIONS }),
+  notify: (params) => mcp.notification({ method: 'notifications/claude/channel', params }),
+  log,
+  noun: 'channel',
+})
 
 // ── Session-note cadence (v0.0.16, Mino 07-16 12:25) ────────────────────────
 // The MAGI fleet's periodic session-note reminder never crossed over in the
@@ -873,7 +671,7 @@ discord.on(Events.MessageCreate, async (message) => {
     // that last spoke to us IS the conversation, so outbound calls no longer
     // need the model to carry (and possibly confabulate) the id.
     lastInboundChannelId = message.channelId
-    persistLastChannel(message.channelId) // cross-restart memory for the boot announce
+    lastChannelStore.persist(message.channelId) // cross-restart memory for the boot announce
     lastActivityMs = Date.now() // inbound message = live conversation (note-cadence input)
 
     addThinking(message)
