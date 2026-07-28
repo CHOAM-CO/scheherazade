@@ -5,8 +5,8 @@
 ```
 boot -> SessionStart hook -> agent reads (session note, checkpoint,
 persona, dreams) -> work, writing to today's session note as it goes ->
-checkpoint.md updated on real state changes -> Stop hook (felt-check,
-checkpoint-nudge) advise before the session actually ends -> next boot:
+checkpoint.md updated on real state changes -> Stop hook
+(checkpoint-nudge) advises before the session actually ends -> next boot:
 if prior-date notes exist, journal compression runs before anything else
 ```
 
@@ -41,7 +41,7 @@ needs before it can pick up work.
 
 ## Hook System
 
-Thirteen hook commands across four lifecycle stages, wired in
+Eleven hook commands across four lifecycle stages, wired in
 `.claude/settings.local.json` (shipped as
 `onboarding/templates/claude-settings.local.json`). **Three of them can
 block.** This section used to say "three hooks, all advisory"; that was true
@@ -77,12 +77,14 @@ blocker by accident.
 | `post-bash-permission-translator.mjs` | `PostToolUse` | `Bash` | turn a raw permission denial into an actionable message |
 | `pre-reply-corrections-context.mjs` | `PreToolUse` | `mcp__agent-channel__reply` | surface prior corrections relevant to the reply being sent |
 | `pre-reply-time-adverb-guard.mjs` | `PreToolUse` | `mcp__agent-channel__reply` | flag unverified time expressions ("yesterday", "an hour ago") |
-| `felt-check.mjs` | `Stop` | all | warn when the Felt section is missing or under 50 characters of real content |
 | `checkpoint-nudge.mjs` | `Stop` | all | warn when `checkpoint.md` is 30+ minutes stale, throttled to once per 30 min |
-| `stop-skill-extraction-nudge.mjs` | `Stop` | all | nudge toward extracting a reusable skill after qualifying work |
 
 `context-gauge.mjs` is registered at both `SessionStart` and `Stop`, so the
-thirteen commands cover twelve distinct hook files.
+eleven commands cover ten distinct hook files. (Two former Stop hooks,
+felt-check and stop-skill-extraction-nudge, were cut in the 2026-07-28
+boot-context diet -- advisory nags whose disciplines live on in CLAUDE.md
+§2; existing installs converge via the removal migration in
+onboarding/http-server.cjs.)
 
 One deliberate correction from the originating spec: hooks read
 `AGENT_NAME`/`MEM` from the environment (set by `run.sh`) but fall back to

@@ -76,15 +76,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node {AGENT_DIR}/hooks/felt-check.mjs"
-          },
-          {
-            "type": "command",
             "command": "node {AGENT_DIR}/hooks/checkpoint-nudge.mjs"
-          },
-          {
-            "type": "command",
-            "command": "node {AGENT_DIR}/hooks/stop-skill-extraction-nudge.mjs"
           },
           {
             "type": "command",

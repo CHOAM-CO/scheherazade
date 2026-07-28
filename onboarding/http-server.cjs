@@ -608,6 +608,25 @@ function ensureSettingsLocalAdditions() {
     }
   }
 
+  // Boot-context diet (2026-07-28): felt-check + stop-skill-extraction-nudge
+  // were cut from the Stop lane (advisory nags; the Felt discipline itself
+  // stays in CLAUDE.md §2) and their files DELETED from the bundle. Like the
+  // BASH_HOOK_PORT rewrite above, this touches only commands matching the
+  // exact seeded shape pointing at files that no longer exist — so removal
+  // never fights a user's intent: a hand-re-added command in this shape is
+  // dead anyway (the file is gone), and anything not matching the shape is
+  // left alone. Runs AFTER the bash rewrite on purpose: a pre-port
+  // `bash .../felt-check.sh` first becomes `node .../felt-check.mjs`, then
+  // falls to this filter — one boot converges either starting point.
+  const DIET_REMOVED_HOOKS = /^node .*[\\/]hooks[\\/](felt-check|stop-skill-extraction-nudge)\.mjs$/
+  for (const groups of Object.values(settings.hooks)) {
+    if (!Array.isArray(groups)) continue
+    for (const group of groups) {
+      if (!group || !Array.isArray(group.hooks)) continue
+      group.hooks = group.hooks.filter((h) => !(typeof h.command === 'string' && DIET_REMOVED_HOOKS.test(h.command)))
+    }
+  }
+
   const afterText = JSON.stringify(settings, null, 2)
   if (afterText !== beforeText) {
     fs.writeFileSync(SETTINGS_LOCAL_PATH, afterText + '\n')
@@ -1616,6 +1635,15 @@ function renderHarnessFiles({ displayName, tone, primaryTask }) {
 
   renderHarness('CLAUDE.md', 'CLAUDE.md')
   renderHarness('ONTOLOGY_GUIDE.md', 'ONTOLOGY_GUIDE.md')
+  // Trigger-load procedure files (boot-context diet, 2026-07-28): the
+  // journal-compression / persona-reflux / madoromi procedure bodies moved
+  // out of CLAUDE.md into files the agent Reads at the moment of use, so
+  // they stop costing every boot. Same harness semantics as CLAUDE.md
+  // (always re-rendered, never the agent's own history).
+  fs.mkdirSync(path.join(DATA_HOME, 'procedures'), { recursive: true })
+  for (const proc of ['journal-compression.md', 'persona-reflux.md', 'madoromi.md']) {
+    renderHarness(path.join('procedures', proc), path.join('procedures', proc))
+  }
   // Attach-topology bootstrap (0.1.0 prep): harness-rendered so RUN_SH/MEM
   // paths always match the installed app version. Executed only ever by the
   // USER in their terminal -- the app renders the file, never runs it (TCC

@@ -145,6 +145,12 @@ render() {
 
 render "$SCRIPT_DIR/CLAUDE.md" "$MEM/CLAUDE.md"
 render "$SCRIPT_DIR/ONTOLOGY_GUIDE.md" "$MEM/ONTOLOGY_GUIDE.md"
+# Trigger-load procedure files (boot-context diet, 2026-07-28) -- must stay
+# in lockstep with renderHarnessFiles() in onboarding/http-server.cjs.
+mkdir -p "$MEM/procedures"
+for proc in journal-compression.md persona-reflux.md madoromi.md; do
+  render "$SCRIPT_DIR/procedures/$proc" "$MEM/procedures/$proc"
+done
 
 # Custom system prompt (feature: agent personality rides ABOVE the Claude
 # Code default prompt via --append-system-prompt-file in run.sh -- same

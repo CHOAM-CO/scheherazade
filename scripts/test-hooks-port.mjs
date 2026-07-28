@@ -48,8 +48,8 @@ console.log('\n-- wiring: the .sh originals are gone and nothing still points at
   for (const f of dead) ok(`${f} deleted`, !fs.existsSync(path.join(ROOT, f)))
   const template = fs.readFileSync(path.join(ROOT, 'onboarding', 'templates', 'claude-settings.local.json'), 'utf8')
   ok('settings template has NO bash hook commands', !template.includes('bash {AGENT_DIR}'))
-  ok('settings template wires the 3 ported hooks via node',
-    ['session-start.mjs', 'felt-check.mjs', 'checkpoint-nudge.mjs'].every((f) => template.includes(`node {AGENT_DIR}/hooks/${f}`)))
+  ok('settings template wires the surviving ported hooks via node',
+    ['session-start.mjs', 'checkpoint-nudge.mjs'].every((f) => template.includes(`node {AGENT_DIR}/hooks/${f}`)))
   const claudeMd = fs.readFileSync(path.join(ROOT, 'CLAUDE.md'), 'utf8')
   ok('CLAUDE.md invokes the cycle scripts as node .mjs (no stale .sh instructions)',
     !/scripts\/(journal-compress|persona-reflux|madoromi-solo)\.sh/.test(claudeMd) &&
@@ -184,29 +184,32 @@ console.log('\n-- session-start.mjs')
   ok('no oversized files -> no oversize line', !ctx.includes('OVERSIZED'))
 }
 
-// ── felt-check ──────────────────────────────────────────────────────────────
-console.log('\n-- felt-check.mjs')
+// ── boot-context diet (2026-07-28): the two cut Stop hooks stay cut ─────────
+console.log('\n-- diet: felt-check + stop-skill-extraction-nudge are gone and unwired')
 {
-  const mem = tmp()
-  const notes = path.join(mem, 'session_notes')
-  fs.mkdirSync(notes, { recursive: true })
-  const noteFile = path.join(notes, `${TODAY}.md`)
-
-  let r = runPorted('hooks/felt-check.mjs', mem)
-  ok('missing note -> silent exit 0', r.code === 0 && r.stdout.trim() === '')
-
-  fs.writeFileSync(noteFile, '# note\n\n## Handoff\n')
-  r = runPorted('hooks/felt-check.mjs', mem)
-  ok('no Felt heading -> nudges for the section', r.stdout.includes('No ## 🔥 Felt'))
-
-  fs.writeFileSync(noteFile, '# note\n\n## 🔥 Felt\nshort\n\n## Handoff\nlots of handoff text that must not count toward the felt length at all\n')
-  r = runPorted('hooks/felt-check.mjs', mem)
-  ok('thin Felt (next-section text does NOT count) -> thin nudge', r.stdout.includes('thin'))
-
-  fs.writeFileSync(noteFile, `# note\n\n## 🔥 Felt\n${'실제 장면이 여기 들어간다 '.repeat(5)}\n\n## Handoff\n`)
-  r = runPorted('hooks/felt-check.mjs', mem)
-  ok('substantive Felt -> silent', r.stdout.trim() === '', r.stdout)
-  fs.rmSync(mem, { recursive: true, force: true })
+  for (const f of ['hooks/felt-check.mjs', 'hooks/stop-skill-extraction-nudge.mjs']) {
+    ok(`${f} deleted`, !fs.existsSync(path.join(ROOT, f)))
+  }
+  const template = fs.readFileSync(path.join(ROOT, 'onboarding', 'templates', 'claude-settings.local.json'), 'utf8')
+  ok('settings template no longer wires the cut hooks',
+    !template.includes('felt-check.mjs') && !template.includes('stop-skill-extraction-nudge.mjs'))
+  // The removal migration for EXISTING installs -- extracted from
+  // http-server.cjs SOURCE and executed here, same discipline as the
+  // BASH_HOOK_PORT block above: test the actual rule, not a copy of it.
+  const httpSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'http-server.cjs'), 'utf8')
+  const m = httpSrc.match(/const DIET_REMOVED_HOOKS = \/(.+)\/\n/)
+  ok('http-server carries the cut-hook removal migration', Boolean(m))
+  if (m) {
+    const rx = new RegExp(m[1])
+    ok('removal matches the exact seeded shape for both cut hooks',
+      rx.test('node /Applications/S.app/Contents/Resources/app.asar.unpacked/hooks/felt-check.mjs') &&
+      rx.test('node /some/repo/hooks/stop-skill-extraction-nudge.mjs'))
+    ok('removal leaves hand-edited variants and survivors alone',
+      !rx.test('node /x/hooks/felt-check.mjs --flag') && !rx.test('node /x/hooks/checkpoint-nudge.mjs') &&
+      !rx.test('node /x/myhooks/my-felt-check.mjs'))
+    ok('removal runs AFTER the bash-hook port rewrite (one-boot convergence)',
+      httpSrc.indexOf('BASH_HOOK_PORT') < httpSrc.indexOf('DIET_REMOVED_HOOKS'))
+  }
 }
 
 // ── checkpoint-nudge ────────────────────────────────────────────────────────
