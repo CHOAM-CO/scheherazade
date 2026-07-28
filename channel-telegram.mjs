@@ -277,6 +277,9 @@ function persistLastChannel(channelId) {
 
 let lastActivityMs = Date.now()
 
+const GUIDANCE =
+  'Do not invent chat ids -- omit channelId to target the current conversation, then call the tool again.'
+
 async function resolveOutboundChannel(requestedId, opts = {}) {
   const fetchFn = opts.fetchFn || fetchTelegramChat
   const lastId = 'lastId' in opts ? opts.lastId : lastInboundChannelId
@@ -286,12 +289,21 @@ async function resolveOutboundChannel(requestedId, opts = {}) {
     try {
       return { ch: await fetchFn(requestedId), note: null }
     } catch (err) {
-      if (!fallbackId || fallbackId === requestedId) throw err
-      const ch = await fetchFn(fallbackId)
-      return {
-        ch,
-        note: `NOTE: channelId ${requestedId} does not exist (${err.message}); delivered to the current conversation channel ${fallbackId} instead. Do not invent channel ids -- omit channelId to target the current conversation.`,
-      }
+      // FAIL CLOSED on an explicit destination (nogabi issue #7). Until now an
+      // unreachable explicit id was rerouted to the current conversation with a
+      // loud note. That was added 2026-07-15 because the previous throw left the
+      // human seeing NOTHING when a weak model confabulated an id -- a real
+      // observed failure, not a hypothetical. But the two failure modes are not
+      // symmetric: a message delivered to a channel the caller never asked for is
+      // unrecoverable and does not read as an error, while a message not yet sent
+      // is recoverable and is reported. The 2026-07-15 problem was VISIBILITY, and
+      // visibility is restored by the tool returning isError with this text rather
+      // than by delivering the payload somewhere else.
+      const e = new Error(
+        `channelId ${requestedId} could not be resolved (${err.message}). Nothing was sent. ${GUIDANCE}`
+      )
+      e.code = 'OUTBOUND_TARGET_INVALID'
+      throw e
     }
   }
   if (!fallbackId) throw new Error('no channelId given and no current conversation channel known yet')
@@ -359,7 +371,7 @@ async function readHistoryEntries({ channelId, limit = 50, after, before }) {
 const DEFAULT_INSTRUCTIONS = `You are ${AGENT_NAME}.
 Telegram messages arrive as: <channel source="${AGENT_NAME}" sender="..." channelId="..." authorId="..." timestamp="...">content</channel>
 channelId is the Telegram chat id -- in the normal single-user setup, a private DM with this bot.
-Reply with the "reply" tool. channelId is optional -- omit it and the message goes to the current conversation chat. Never invent a channelId; only pass one when replying to a DIFFERENT chat than the one that messaged you.
+Reply with the "reply" tool. channelId is optional -- omit it and the message goes to the current conversation chat. Never invent a channelId; only pass one when replying to a DIFFERENT chat than the one that messaged you. A channelId you DO pass is honored exactly or the call fails: an unresolvable one sends nothing anywhere, it is never quietly redirected.
 Image attachments (Telegram photos, or documents sent as images) are downloaded locally; the notification includes the local file path(s) -- open with the Read tool.
 Use "send_file_to_discord" (filePath, comment?, channelId?) to upload a local file via Telegram's sendDocument -- "reply" is text-only. (Tool name kept as-is from the Discord original on purpose -- this is the Telegram backend; do not rename, permission allowlists and hooks match this exact name.)
 Use "read_channel_history" (channelId, limit, after?, before?) to look back through the chat. This reads a LOCAL ledger, not a Telegram API call -- Telegram's Bot API has no history endpoint. It only covers messages sent/received while this bot was running; there is no record of anything from before. after/before each accept a Telegram message_id or an ISO date.`

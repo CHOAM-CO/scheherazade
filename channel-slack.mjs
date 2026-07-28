@@ -184,11 +184,14 @@ function persistLastChannel(channelId) {
 // ── Conversation activity clock (same mechanism as channel.mjs v0.0.16) ────
 let lastActivityMs = Date.now()
 
-// Same contract as channel.mjs's resolveOutboundChannel: requestedId wins if
-// reachable; an unknown/confabulated id reroutes to the current conversation
-// channel WITH a loud note instead of throwing into silence; omitted id goes
-// straight to the fallback. opts are the same test seam shape (fetchFn/
+// Same contract as channel.mjs's resolveOutboundChannel: an explicit
+// requestedId is honored if reachable and FAILS CLOSED if not (nogabi #7 --
+// an explicit destination the caller supplied is never silently swapped);
+// an omitted id resolves to the current conversation channel. opts are the same test seam shape (fetchFn/
 // lastId/homeId) as channel.mjs's own scripts/test-outbound-channel.mjs.
+const GUIDANCE =
+  'Do not invent channel ids -- omit channelId to target the current conversation, then call the tool again.'
+
 async function resolveOutboundChannel(requestedId, opts = {}) {
   const fetchFn = opts.fetchFn || fetchSlackChannel
   const lastId = 'lastId' in opts ? opts.lastId : lastInboundChannelId
@@ -199,12 +202,15 @@ async function resolveOutboundChannel(requestedId, opts = {}) {
       const ch = await fetchFn(requestedId)
       return { channelId: ch.id || requestedId, note: null }
     } catch (err) {
-      if (!fallbackId || fallbackId === requestedId) throw err
-      const ch = await fetchFn(fallbackId)
-      return {
-        channelId: ch.id || fallbackId,
-        note: `NOTE: channelId ${requestedId} does not exist (${err.message}); delivered to the current conversation channel ${fallbackId} instead. Do not invent channel ids -- omit channelId to target the current conversation.`,
-      }
+      // FAIL CLOSED on an explicit destination (nogabi issue #7). See the same
+      // block in channel.mjs for why the 2026-07-15 reroute is being reversed:
+      // its problem was visibility, and visibility comes back through the tool's
+      // isError result, not through delivering the payload to another channel.
+      const e = new Error(
+        `channelId ${requestedId} could not be resolved (${err.message}). Nothing was sent. ${GUIDANCE}`
+      )
+      e.code = 'OUTBOUND_TARGET_INVALID'
+      throw e
     }
   }
   if (!fallbackId) throw new Error('no channelId given and no current conversation channel known yet')
@@ -241,7 +247,7 @@ async function resolveSenderName(userId, opts = {}) {
 // describe Slack reality.
 const DEFAULT_INSTRUCTIONS = `You are ${AGENT_NAME}.
 Slack messages arrive as: <channel source="${AGENT_NAME}" sender="..." channelId="..." authorId="..." timestamp="...">content</channel>
-Reply with the "reply" tool. channelId is optional -- omit it and the message goes to the current conversation channel. Never invent a channelId; only pass one when replying to a DIFFERENT channel than the one that messaged you.
+Reply with the "reply" tool. channelId is optional -- omit it and the message goes to the current conversation channel. Never invent a channelId; only pass one when replying to a DIFFERENT channel than the one that messaged you. A channelId you DO pass is honored exactly or the call fails: an unresolvable one sends nothing anywhere, it is never quietly redirected.
 Use "send_file_to_discord" (filePath, comment?, channelId?) to upload a local file (image, document, etc.) to Slack -- "reply" is text-only.
 Use "read_channel_history" (channelId, limit, after?, before?) to look back through the Slack channel. after/before each accept a Slack message ts or an ISO date.`
 const INSTRUCTIONS = process.env.CHANNEL_INSTRUCTIONS || DEFAULT_INSTRUCTIONS
