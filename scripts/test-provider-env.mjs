@@ -22,7 +22,7 @@
 // convention.
 
 import { spawnSync } from 'node:child_process'
-import { buildProviderEnv, PROVIDERS_REQUIRING_STORED_CREDENTIAL, CHATGPT_PROXY_DEFAULT_PORT, CHATGPT_PLACEHOLDER_KEY, OLLAMA_BASE_URL } from '../provider-env.cjs'
+import { buildProviderEnv, providerNeedsIsolatedConfigDir, parseCustomProviderJson, PROVIDERS_REQUIRING_STORED_CREDENTIAL, CHATGPT_PROXY_DEFAULT_PORT, CHATGPT_PLACEHOLDER_KEY, OLLAMA_BASE_URL } from '../provider-env.cjs'
 
 let pass = 0
 let fail = 0
@@ -263,6 +263,106 @@ assert(PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes('claude'), 'PROVIDERS_REQU
 assert(PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes('claude-subscription'), 'PROVIDERS_REQUIRING_STORED_CREDENTIAL includes "claude-subscription"')
 assert(!PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes('chatgpt'), 'PROVIDERS_REQUIRING_STORED_CREDENTIAL excludes "chatgpt" (no user secret)')
 assert(!PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes('ollama'), 'PROVIDERS_REQUIRING_STORED_CREDENTIAL excludes "ollama" (no user secret)')
+
+// ─────────────────────────────────────────────────────────────────────────
+// 8. config-dir isolation column (2026-07-29)
+//
+// Nothing sets CLAUDE_CONFIG_DIR for the spawned child today, so these
+// assertions look inert. They are not. The claude CLI namespaces its
+// credential store BY config dir -- keychain service `Claude Code-credentials`
+// when the var is unset, `Claude Code-credentials-<sha256(dir)[0..8]>` when it
+// is set (read out of the CLI binary and confirmed live 2026-07-29: a spawn
+// with a fresh CLAUDE_CONFIG_DIR reports "Not logged in · Please run /login"
+// while the machine's real session stays untouched). `claude-cli` is the mode
+// that works by REUSING the login the user already has, so it can only ever
+// see that login from the un-namespaced slot. If a later change introduces
+// isolation for one provider and applies it globally -- the natural way to
+// write it -- `claude-cli` breaks, and it breaks SILENTLY at spawn time on a
+// user's machine, not here. That is the regression these lines exist to fail
+// on, loudly, in CI-less local `node scripts/test-*.mjs`.
+for (const provider of ['claude', 'claude-cli', 'claude-subscription', 'chatgpt', 'ollama', 'custom']) {
+  assert(providerNeedsIsolatedConfigDir(provider) === false, `${provider}: no config-dir isolation today`)
+}
+assert(providerNeedsIsolatedConfigDir('claude-cli') === false,
+  'claude-cli: isolation is FALSE as a requirement, not a default -- isolating it would hide the very login this mode exists to reuse')
+assert(providerNeedsIsolatedConfigDir('some-made-up-provider') === null,
+  'unrecognized provider: isolation reads null ("no opinion"), distinguishable from a deliberate false')
+
+// ─────────────────────────────────────────────────────────────────────────
+// 9. parseCustomProviderJson -- pasted provider definition (2026-07-29)
+//
+// The refusal cases matter more than the accept cases here. A paste that
+// declares five providers or a wire dialect this app cannot speak has ONE
+// dangerous failure mode: accepting it, configuring a narrower thing than
+// the paste says, and reporting success. The user then debugs a model they
+// never chose. Every assertion below that checks for an `error` is pinning
+// "refuse out loud" against the pressure to be accommodating.
+// ─────────────────────────────────────────────────────────────────────────
+
+// -- accepts: the nested shape other tools hand out
+{
+  const r = parseCustomProviderJson(JSON.stringify({
+    providers: { 'my-provider': { name: 'Mine', baseUrl: 'http://127.0.0.1:8080', apiKey: 'sk-x', models: [{ id: 'my-model', name: 'My Model' }] } },
+  }))
+  assert(!r.error, 'nested paste: parses without error')
+  assert(r.baseUrl === 'http://127.0.0.1:8080', 'nested paste: baseUrl carried through resolveCustomBaseUrl')
+  assert(r.model === 'my-model', 'nested paste: model id taken from models[0].id')
+  assert(r.apiKey === 'sk-x', 'nested paste: apiKey carried through')
+}
+
+// -- accepts: the flat shorthand, key omitted (custom mode's key is optional)
+{
+  const r = parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://localhost:11434', model: 'llama3' }))
+  assert(!r.error, 'flat paste: parses without error')
+  assert(r.model === 'llama3' && r.apiKey === '', 'flat paste: model read, absent key becomes empty string (never undefined-vs-missing ambiguity)')
+}
+
+// -- accepts: an explicitly-declared dialect we DO speak
+assert(!parseCustomProviderJson(JSON.stringify({ api: 'anthropic-messages', baseUrl: 'http://127.0.0.1:1', model: 'm' })).error,
+  'api: "anthropic-messages" is accepted (it is what the spawned CLI emits)')
+
+// -- refuses: more than one provider / more than one model
+{
+  const many = parseCustomProviderJson(JSON.stringify({
+    providers: { a: { baseUrl: 'http://127.0.0.1:1', models: [{ id: 'x' }] }, b: { baseUrl: 'http://127.0.0.1:2', models: [{ id: 'y' }] } },
+  }))
+  assert(!!many.error, 'two providers in one paste: refused, not silently first-wins')
+  assert(many.error.includes('a') && many.error.includes('b'), 'two providers: the error names them, so the user knows what to trim')
+  const manyModels = parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', models: [{ id: 'x' }, { id: 'y' }] }))
+  assert(!!manyModels.error && manyModels.error.includes('y'), 'two models in one paste: refused, and the error names them')
+}
+
+// -- refuses: a wire dialect this app has no translation layer for.
+// Scheherazade delegates inference to the bundled Claude Code CLI, which
+// emits Anthropic Messages and nothing else. Accepting `openai-completions`
+// here would be the app promising a proxy's compatibility as if it were its
+// own capability. (Aside can carry 9 dialects because it owns its request
+// builders; we do not own ours -- teardown 2026-07-29, §6.2.)
+{
+  const wrong = parseCustomProviderJson(JSON.stringify({ api: 'openai-completions', baseUrl: 'http://127.0.0.1:1', model: 'm' }))
+  assert(!!wrong.error, 'unsupported api dialect: refused rather than ignored')
+  assert(wrong.error.includes('openai-completions') && wrong.error.includes('anthropic-messages'),
+    'unsupported api dialect: the error names both what was asked and what we can do')
+}
+
+// -- refuses: malformed input, each with its own reason (never one vague message)
+assert(!!parseCustomProviderJson('').error, 'empty string: refused')
+assert(!!parseCustomProviderJson('not json at all').error, 'non-JSON: refused')
+assert(!!parseCustomProviderJson('[1,2]').error, 'JSON array: refused (expected an object)')
+assert(!!parseCustomProviderJson(JSON.stringify({ providers: {} })).error, 'empty providers map: refused')
+assert(!!parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1' })).error, 'no model anywhere: refused')
+assert(!!parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', models: [{ name: 'no id here' }] })).error, 'model entry without an id: refused')
+assert(!!parseCustomProviderJson(JSON.stringify({ model: 'm' })).error, 'no baseUrl: refused by resolveCustomBaseUrl')
+assert(!!parseCustomProviderJson(JSON.stringify({ baseUrl: 'ftp://nope', model: 'm' })).error, 'non-http baseUrl: refused by the SAME validator the typed form uses')
+
+// -- the paste path must not become a way around the typed form's validator:
+// whatever comes out still has to survive resolveCustomBaseUrl (asserted
+// above) and, at the route, MODEL_ID_PATTERN. This asserts the parser hands
+// back the RAW model id rather than pre-blessing it.
+{
+  const r = parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', model: '  spaced-model  ' }))
+  assert(r.model === 'spaced-model', 'model id is trimmed but otherwise unmodified -- the route still gates it on MODEL_ID_PATTERN')
+}
 
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

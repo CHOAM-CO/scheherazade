@@ -806,6 +806,51 @@
     $('set-custom-key-input').value = ''
     $('set-custom-key-input').placeholder = cfg.hasCustomApiKey ? C.customKeyStoredPlaceholder : C.customKeyEmptyPlaceholder
 
+    // Pasted definition (2026-07-29). Resolves server-side and fills the three
+    // fields above; it never saves. The status line stays visible after a
+    // successful fill (unlike the save path's transient toast) because the
+    // user's next action is to look UP at fields that just changed under them.
+    $('set-custom-json-status').classList.add('hidden') // stale "filled in" must not survive a re-render (this runs again after every save)
+    $('set-custom-json-summary').textContent = C.customJsonSummary
+    $('set-custom-json-note').textContent = C.customJsonNote
+    $('set-custom-json-input').placeholder = C.customJsonPlaceholder
+    $('set-custom-json-load').textContent = C.customJsonLoad
+    $('set-custom-json-load').onclick = async () => {
+      const statusEl = $('set-custom-json-status')
+      statusEl.classList.add('hidden')
+      const json = $('set-custom-json-input').value
+      if (!json.trim()) {
+        statusEl.textContent = C.customJsonEmpty
+        statusEl.classList.remove('hidden')
+        return
+      }
+      const btn = $('set-custom-json-load')
+      btn.disabled = true
+      try {
+        const parsed = await api('/api/agent/custom-provider/preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ json }),
+        })
+        $('set-custom-url-input').value = parsed.baseUrl
+        $('set-custom-model-input').value = parsed.model
+        // Only overwrite the key field when the paste actually carried one --
+        // blank must keep meaning "leave the stored key alone" (same write-only
+        // convention as the placeholder text set above).
+        if (parsed.apiKey) $('set-custom-key-input').value = parsed.apiKey
+        statusEl.textContent = parsed.apiKey ? C.customJsonLoadedWithKey : C.customJsonLoaded
+        statusEl.classList.remove('hidden')
+      } catch (err) {
+        // The server's refusals are the useful message here (">1 provider",
+        // unsupported api dialect, bad base URL) -- show them verbatim rather
+        // than flattening every failure into one generic line.
+        statusEl.textContent = GEN(err.message)
+        statusEl.classList.remove('hidden')
+      } finally {
+        btn.disabled = false
+      }
+    }
+
     $('set-custom-save').onclick = async () => {
       const statusEl = $('set-custom-status')
       statusEl.classList.add('hidden')

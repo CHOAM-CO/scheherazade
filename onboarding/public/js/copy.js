@@ -648,6 +648,19 @@ window.COPY = {
     customSwitchConfirm: (m) => `Switch to the custom proxy (model: ${m}) and restart the agent. Continue?`,
     customSave: 'Save',
     customSaved: 'Saved. Restarting the agent.',
+    // Pasted definition (2026-07-29). Folded shut by default -- it is a
+    // shortcut for people arriving with a blob from another tool, not the
+    // path we teach. The copy says "fills in the fields above" rather than
+    // "adds a provider" because that is literally all it does: this app runs
+    // one provider at a time, so a paste declaring several is refused with
+    // its own message from the server rather than quietly narrowed.
+    customJsonSummary: 'Paste a provider definition instead',
+    customJsonNote: 'Have a provider definition in JSON from another tool? Paste it here and it will fill in the fields above. Nothing is saved until you press Save. One provider and one model per paste.',
+    customJsonPlaceholder: '{ "providers": { "my-provider": { "baseUrl": "http://localhost:18080", "models": [{ "id": "my-model" }] } } }',
+    customJsonLoad: 'Fill in the fields',
+    customJsonEmpty: 'Paste a provider definition first',
+    customJsonLoaded: 'Filled in — check the fields above, then press Save.',
+    customJsonLoadedWithKey: 'Filled in, including an API key — check the fields above, then press Save.',
 
     // AUTHORED -- autonomous cycle (v0.0.6).
     //

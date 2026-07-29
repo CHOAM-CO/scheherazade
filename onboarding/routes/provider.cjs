@@ -16,7 +16,7 @@ function createRoutes(staticCtx) {
   const {
     readJsonBody, sendJson, PROVIDERS, PROVIDERS_REQUIRING_STORED_CREDENTIAL,
     rejectIfRouterNotWired, validateProviderKey, storeProviderKeyVerified, resolveCustomBaseUrl,
-    MODEL_ID_PATTERN, readAgentConfig, writeAgentConfig, clearMuteStrikes,
+    parseCustomProviderJson, MODEL_ID_PATTERN, readAgentConfig, writeAgentConfig, clearMuteStrikes,
   } = staticCtx
   return [
     {
@@ -95,6 +95,48 @@ function createRoutes(staticCtx) {
     // settings-page-only precedent as claude-subscription/chatgpt/ollama
     // before their own wizard UI shipped -- see the ROUTER_WIRED comment
     // above) -- this route is the only way to configure or switch to it.
+    // Preview for the pasted-definition path below. Writes NOTHING: no
+    // credential store, no .agent-config, no restart. It exists because
+    // switching provider restarts the agent brain, and a paste is opaque --
+    // the user should see which base URL and which model id a blob resolves
+    // to BEFORE that happens, and get the same named-model confirm dialog the
+    // typed form gives them.
+    //
+    // It DOES return an apiKey found inside the paste, which is a deliberate
+    // exception to the settings page's write-only key field (that field never
+    // pre-fills from STORAGE, and this is not storage). The key being echoed
+    // is the one the caller sent in this very request, from a textarea that is
+    // holding it in cleartext on the same page, over the loopback server --
+    // anything able to read this response could already read the request, so
+    // this widens nothing. The alternative (boolean only) would drop the key
+    // on the floor and make the user paste it a second time, or force a second
+    // write path on the save route. Do NOT extend this to keys read back out
+    // of safeStorage; those never leave the server.
+    //
+    // Ordered BEFORE the save route only for readability; the dispatcher
+    // matches on exact pathname, so neither shadows the other.
+    {
+      method: 'POST',
+      match: (pathname) => pathname === '/api/agent/custom-provider/preview',
+      handler: async (req, res) => {
+        if (rejectIfRouterNotWired(res, 'custom')) return
+        const { json } = await readJsonBody(req)
+        const pasted = parseCustomProviderJson(json)
+        if (pasted.error) {
+          sendJson(res, 400, { error: pasted.error })
+          return
+        }
+        // The model id is gated here too, not just on save, so the preview
+        // can never show a green "this resolves to X" for something the save
+        // route would then reject.
+        if (!pasted.model || pasted.model.length > 200 || !MODEL_ID_PATTERN.test(pasted.model)) {
+          sendJson(res, 400, { error: 'invalid model id' })
+          return
+        }
+        sendJson(res, 200, { baseUrl: pasted.baseUrl, model: pasted.model, apiKey: pasted.apiKey })
+        return
+      },
+    },
     {
       method: 'POST',
       match: (pathname) => pathname === '/api/agent/custom-provider',
@@ -109,6 +151,12 @@ function createRoutes(staticCtx) {
         // implicitly a 'custom' choice even though it takes no `provider` field
         // on the wire, so the documented kill-switch must reach it too.
         if (rejectIfRouterNotWired(res, 'custom')) return
+        // Still the ONLY route that writes a custom provider config. The
+        // pasted-definition path (preview route above) deliberately does not
+        // get its own write branch: it resolves a blob into these same three
+        // fields client-side-visibly and the user saves through here, so
+        // there is exactly one place CUSTOM_BASE_URL/MODEL/key are set and
+        // exactly one confirm dialog in front of it.
         const { baseUrl, apiKey, model } = await readJsonBody(req)
         // Single source of truth shared with provider-env.cjs's buildProviderEnv()
         // 'custom' branch (spawn-time) -- see resolveCustomBaseUrl's own header

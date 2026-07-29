@@ -41,7 +41,7 @@ const { pathToFileURL } = require('node:url')
 // liveness pings below, so neither can drift out of sync with
 // provider-env.cjs's buildProviderEnv(). Zero Electron dependency, safe to
 // require from here. (history: docs/HISTORY.md)
-const { PROVIDERS_REQUIRING_STORED_CREDENTIAL, resolveChatgptProxyPort, resolveCustomBaseUrl, OLLAMA_BASE_URL } = require('../provider-env.cjs')
+const { PROVIDERS_REQUIRING_STORED_CREDENTIAL, resolveChatgptProxyPort, resolveCustomBaseUrl, parseCustomProviderJson, OLLAMA_BASE_URL } = require('../provider-env.cjs')
 // Login shell-out (2026-07-07): spawn/execFile for `codex login` /
 // `ollama signin` children -- the ONLY non-claude binary spawn sites in
 // this codebase (verified by repo-wide grep at design time; the chatgpt
@@ -2155,7 +2155,7 @@ const staticCtx = {
   ROUTER_WIRED, PROVIDERS, PROVIDERS_REQUIRING_STORED_CREDENTIAL,
   rejectIfRouterNotWired, computeAvailableProviders, hasStoredCustomApiKey,
   validateProviderKey, storeProviderKeyVerified, readProviderKey,
-  resolveCustomBaseUrl, MODEL_ID_PATTERN, clearMuteStrikes, readMuteStrikes,
+  resolveCustomBaseUrl, parseCustomProviderJson, MODEL_ID_PATTERN, clearMuteStrikes, readMuteStrikes,
   MUTE_STRIKE_THRESHOLD, EFFORT_LEVELS,
   // channels
   readHomeChannelId, writeEnv, validateDiscordToken, storeDiscordTokenVerified,

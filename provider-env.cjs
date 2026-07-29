@@ -170,6 +170,105 @@ function resolveCustomBaseUrl(rawUrl) {
 }
 
 /**
+ * parseCustomProviderJson(text) -> { baseUrl, apiKey, model } | { error }
+ *
+ * Accepts a pasted provider definition and reduces it to the three fields
+ * the 'custom' provider actually runs on. Two shapes are understood:
+ *
+ *   flat      { baseUrl, apiKey?, model }         (or `models: [...]`)
+ *   nested    { providers: { "<id>": { baseUrl, apiKey?, api?,
+ *                                      models: [{ id }, ...] } } }
+ *
+ * The nested shape is the one other tools in this space hand out, so a user
+ * who already has one should not have to retype it into three boxes.
+ *
+ * WHAT THIS DELIBERATELY REFUSES, rather than accepting and quietly doing
+ * less than the paste says:
+ *
+ *  - MORE THAN ONE PROVIDER, or more than one model. This app runs exactly
+ *    one PROVIDER/MODEL pair at a time (see .agent-config). Taking the first
+ *    entry of a five-provider paste would look like it worked and then run
+ *    something the user did not pick. The error names the count so the fix
+ *    is obvious.
+ *  - AN `api` DIALECT WE CANNOT SPEAK. The spawned Claude Code CLI emits
+ *    Anthropic Messages requests at ANTHROPIC_BASE_URL and nothing else;
+ *    this app has no request translation layer. A proxy declaring
+ *    `api: "openai-completions"` may well still work (codex-as-api and
+ *    friends accept Anthropic-shaped bodies at an OpenAI-ish endpoint), but
+ *    that is the PROXY's compatibility, not ours to promise -- so anything
+ *    other than an explicit anthropic-messages (or no declaration at all)
+ *    is refused with the reason spelled out. Silently ignoring the field
+ *    would be the app claiming a capability it does not have.
+ *
+ * Returns plain-string `error` (same convention as resolveCustomBaseUrl
+ * above), so the HTTP caller can wrap it as a 400 body verbatim.
+ */
+const CUSTOM_JSON_SUPPORTED_API = 'anthropic-messages'
+
+function parseCustomProviderJson(text) {
+  if (typeof text !== 'string' || !text.trim()) {
+    return { error: 'paste a provider definition (JSON) first' }
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch (err) {
+    return { error: `that is not valid JSON: ${err.message}` }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { error: 'expected a JSON object describing one provider' }
+  }
+
+  let entry = parsed
+  if (parsed.providers !== undefined) {
+    if (!parsed.providers || typeof parsed.providers !== 'object' || Array.isArray(parsed.providers)) {
+      return { error: '"providers" must be an object keyed by provider id' }
+    }
+    const ids = Object.keys(parsed.providers)
+    if (ids.length === 0) return { error: '"providers" is empty -- nothing to configure' }
+    if (ids.length > 1) {
+      return { error: `this app runs one provider at a time, but the paste declares ${ids.length} (${ids.join(', ')}) -- keep the one you want and remove the rest` }
+    }
+    entry = parsed.providers[ids[0]]
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      return { error: `provider "${ids[0]}" is not an object` }
+    }
+  }
+
+  if (entry.api !== undefined && String(entry.api).trim() !== CUSTOM_JSON_SUPPORTED_API) {
+    return {
+      error: `this app speaks ${CUSTOM_JSON_SUPPORTED_API} only (the bundled Claude Code CLI emits nothing else and there is no translation layer here), but the paste declares api "${entry.api}" -- remove the field if your endpoint accepts Anthropic-shaped requests anyway`,
+    }
+  }
+
+  // models[] wins when present (it is the nested shape's own field); a flat
+  // `model` string is the shorthand.
+  let model = ''
+  if (entry.models !== undefined) {
+    if (!Array.isArray(entry.models) || entry.models.length === 0) {
+      return { error: '"models" must be a non-empty array' }
+    }
+    if (entry.models.length > 1) {
+      const names = entry.models.map((m) => (m && typeof m === 'object' ? m.id : m)).join(', ')
+      return { error: `this app runs one model at a time, but the paste declares ${entry.models.length} (${names}) -- keep the one you want and remove the rest` }
+    }
+    const only = entry.models[0]
+    model = typeof only === 'string' ? only : (only && typeof only === 'object' && typeof only.id === 'string' ? only.id : '')
+    if (!model) return { error: 'the model entry has no usable "id"' }
+  } else if (typeof entry.model === 'string') {
+    model = entry.model
+  }
+  model = model.trim()
+  if (!model) return { error: 'no model id in the paste' }
+
+  const urlResult = resolveCustomBaseUrl(entry.baseUrl)
+  if (urlResult.error) return { error: urlResult.error }
+
+  const apiKey = typeof entry.apiKey === 'string' ? entry.apiKey.trim() : ''
+  return { baseUrl: urlResult.url, apiKey, model }
+}
+
+/**
  * buildProviderEnv(provider, config, deps) -> { env } | { error }
  *
  * Pure (given deps.readProviderKey is pure/deterministic for a given
@@ -207,63 +306,89 @@ function resolveCustomBaseUrl(rawUrl) {
  *                           unreachable via the wizard, this is the
  *                           hand-edited-config-file backstop).
  */
-function buildProviderEnv(provider, config, deps) {
-  const { readProviderKey } = deps
-
-  if (provider === 'claude') {
+// ── the provider table (2026-07-29) ─────────────────────────────────────
+// Each mode below used to be an `if (provider === '...')` branch inside
+// buildProviderEnv. They are now ROWS, because every branch had already
+// converged on the same three moves: (1) satisfy a credential requirement,
+// (2) satisfy zero or more config preconditions, (3) return one small env
+// map. Only step 3 was ever provider-specific. Adding a provider is now a
+// row, not a branch.
+//
+// Row fields:
+//   id           PROVIDERS value (onboarding/http-server.cjs's allow-list).
+//   credential   'none'      -- read nothing (local proxy/daemon, or the
+//                              deliberately-read-nothing claude-cli mode);
+//                'required'  -- readProviderKey(keyName) must return a value,
+//                              absent -> not_ready;
+//                'optional'  -- read it, fall back to a placeholder.
+//   keyName      argument to deps.readProviderKey (credential !== 'none').
+//   notReady     reason string when a 'required' credential is missing.
+//                Kept per-row and verbatim: these strings are user-visible
+//                and two of them are test-pinned.
+//   pre(config)  optional precondition -> { values } | { error: { kind, reason } }.
+//   env(ctx)     the ONLY provider-specific part. ctx = { key, values, config }.
+//                Every row lists all three of ANTHROPIC_API_KEY /
+//                ANTHROPIC_BASE_URL / CLAUDE_CODE_OAUTH_TOKEN, setting
+//                `undefined` for the ones it does not use -- that explicit
+//                clearing is load-bearing, not hygiene (see this file's
+//                header on cross-provider leakage through `...process.env`).
+//   isolate      whether the spawned child should get its own
+//                CLAUDE_CONFIG_DIR (and therefore its own credential slot;
+//                the claude CLI namespaces its keychain SERVICE by config
+//                dir -- `Claude Code-credentials` when unset, and
+//                `Claude Code-credentials-<sha256(dir)[0..8]>` when set,
+//                verified 2026-07-29 against the CLI binary AND live: a
+//                fresh CLAUDE_CONFIG_DIR reports "Not logged in" while the
+//                user's real login is untouched).
+//                FALSE for every row today, and that is a REQUIREMENT, not a
+//                default: claude-cli works precisely BY seeing the user's own
+//                un-namespaced credential slot, so isolating it would break
+//                it outright. The column exists because the planned
+//                subscription-login lane needs the opposite value, and that
+//                disagreement should be visible in the table rather than
+//                buried in a spawn-time conditional.
+const PROVIDER_ROWS = [
+  {
     // BYOK -- PRESERVED EXACTLY as main.cjs's original (pre-4-provider)
-    // 'claude' branch behaved, plus the new explicit-clear hardening
-    // described in this file's header comment.
-    let providerKey
-    try {
-      providerKey = readProviderKey('claude')
-    } catch (err) {
-      return { error: { kind: 'key_error', reason: `readProviderKey(claude) failed: ${err.message}` } }
-    }
-    if (!providerKey) {
-      return { error: { kind: 'not_ready', reason: 'onboarding says PROVIDER=claude but no validated key is on file yet' } }
-    }
-    return {
-      env: {
-        ANTHROPIC_API_KEY: providerKey,
-        ANTHROPIC_BASE_URL: undefined, // clear any stale base_url from a prior chatgpt/ollama session
-        CLAUDE_CODE_OAUTH_TOKEN: undefined, // clear any stale subscription token
-      },
-    }
-  }
-
-  if (provider === 'claude-subscription') {
-    // NEW mode: Claude Code CLI's own `claude setup-token` 1-year OAuth
-    // token, captured at onboarding (paste field, see http-server.cjs) and
-    // stored via the SAME safeStorage plumbing as a BYOK key (keyed under
-    // the pseudo-provider name 'claude-subscription' in CREDENTIALS_DIR).
-    let token
-    try {
-      token = readProviderKey('claude-subscription')
-    } catch (err) {
-      return { error: { kind: 'key_error', reason: `readProviderKey(claude-subscription) failed: ${err.message}` } }
-    }
-    if (!token) {
-      return { error: { kind: 'not_ready', reason: 'onboarding says PROVIDER=claude-subscription but no OAuth token is on file yet' } }
-    }
-    return {
-      env: {
-        CLAUDE_CODE_OAUTH_TOKEN: token,
-        ANTHROPIC_API_KEY: undefined, // do NOT inject an API key alongside the OAuth token (LOCKED design, mode 1)
-        ANTHROPIC_BASE_URL: undefined, // clear any stale base_url from a prior chatgpt/ollama session
-      },
-    }
-  }
-
-  if (provider === 'claude-cli') {
-    // NEW mode (2026-07-13): reuse the Claude Code CLI login the user ALREADY
-    // has on this machine, IN PLACE. This is the true zero-auth path -- the
-    // user pastes nothing, we store nothing, we copy nothing.
+    // 'claude' branch behaved, plus the explicit-clear hardening described
+    // in this file's header comment.
+    id: 'claude',
+    credential: 'required',
+    keyName: 'claude',
+    notReady: 'onboarding says PROVIDER=claude but no validated key is on file yet',
+    isolate: false,
+    env: ({ key }) => ({
+      ANTHROPIC_API_KEY: key,
+      ANTHROPIC_BASE_URL: undefined, // clear any stale base_url from a prior chatgpt/ollama session
+      CLAUDE_CODE_OAUTH_TOKEN: undefined, // clear any stale subscription token
+    }),
+  },
+  {
+    // Claude Code CLI's own `claude setup-token` long-lived OAuth token,
+    // captured at onboarding (paste field, see http-server.cjs) and stored
+    // via the SAME safeStorage plumbing as a BYOK key (keyed under the
+    // pseudo-provider name 'claude-subscription' in CREDENTIALS_DIR).
+    id: 'claude-subscription',
+    credential: 'required',
+    keyName: 'claude-subscription',
+    notReady: 'onboarding says PROVIDER=claude-subscription but no OAuth token is on file yet',
+    isolate: false,
+    env: ({ key }) => ({
+      CLAUDE_CODE_OAUTH_TOKEN: key,
+      ANTHROPIC_API_KEY: undefined, // do NOT inject an API key alongside the OAuth token (LOCKED design, mode 1)
+      ANTHROPIC_BASE_URL: undefined, // clear any stale base_url from a prior chatgpt/ollama session
+    }),
+  },
+  {
+    // Reuse the Claude Code CLI login the user ALREADY has on this machine,
+    // IN PLACE (2026-07-13). The true zero-auth path -- the user pastes
+    // nothing, we store nothing, we copy nothing.
     //
     // The mechanism is to inject NOTHING. With no ANTHROPIC_API_KEY, no
     // CLAUDE_CODE_OAUTH_TOKEN and no ANTHROPIC_BASE_URL, the CLI falls back to
-    // its own interactively-authenticated OAuth session (~/.claude/.credentials.json).
-    // This isn't a guess: it is exactly how the entire MAGI fleet runs today --
+    // its own interactively-authenticated OAuth session (~/.claude/.credentials.json,
+    // or the macOS keychain item that supersedes it). This isn't a guess: it is
+    // exactly how the entire MAGI fleet runs today --
     // `ps eww <agent-pid> | grep -cE '^ANTHROPIC_API_KEY=|^ANTHROPIC_BASE_URL=|^CLAUDE_CODE_OAUTH_TOKEN='`
     // returns 0 for a live, working agent (verified 2026-07-13 on pid 71610).
     //
@@ -273,128 +398,174 @@ function buildProviderEnv(provider, config, deps) {
     // ANTHROPIC_API_KEY survived here, the CLI would prefer it over the OAuth
     // session and this mode would silently become BYOK-on-someone-else's-key
     // (the exact leak sirin's run-agent.sh comment describes, quoted in this
-    // file's header).
+    // file's header). `isolate: false` is the second half of the same
+    // mechanism -- see the field's own note above.
     //
     // COST DISCLOSURE IS MANDATORY IN THE UI (locked with Mino): this spends
     // the user's OWN Claude subscription quota. "We found your login and will
     // use it" must never be presented as if it were free.
     //
     // No credential is read, so there is nothing to fail on -- readProviderKey
-    // is never called and this branch cannot return 'not_ready'. If the login
+    // is never called and this row cannot return 'not_ready'. If the login
     // is absent or expired, the CLI itself says so at spawn, loudly, in its own
     // voice. We deliberately do NOT pre-validate by reading the credential
     // file: detection is existence-only (http-server.cjs), because reading a
     // user's OAuth token to check it is exactly the thing this mode promises
     // not to do.
-    return {
-      env: {
-        ANTHROPIC_API_KEY: undefined,
-        ANTHROPIC_BASE_URL: undefined,
-        CLAUDE_CODE_OAUTH_TOKEN: undefined,
-      },
-    }
-  }
-
-  if (provider === 'chatgpt') {
-    // NEW mode: local codex-as-api proxy. No user secret required -- see
-    // this file's header comment for why an explicit placeholder key is
-    // still injected (diverging from skia's bare run-agent.sh shape).
-    const portResult = resolveChatgptProxyPort(config.CHATGPT_PROXY_PORT)
-    if (portResult.error) {
-      return { error: { kind: 'provider_not_wired', reason: portResult.error } }
-    }
-    const port = portResult.port
-    return {
-      env: {
-        ANTHROPIC_BASE_URL: `http://localhost:${port}`,
-        ANTHROPIC_API_KEY: CHATGPT_PLACEHOLDER_KEY,
-        CLAUDE_CODE_OAUTH_TOKEN: undefined, // force api-key auth precedence -- see sirin ground-truth comment
-      },
-    }
-  }
-
-  if (provider === 'ollama') {
-    // NEW mode: local Ollama daemon. No user secret required, but a real
-    // local model tag IS required -- unlike codex-as-api (which, per
-    // run-agent.sh's sirin comment, "force-ignores body.model"), Ollama's
-    // OpenAI-compatible surface needs an actual model name it can resolve.
-    // Falling back to config.MODEL's generic default ('claude-opus-4-6')
-    // would silently send an Anthropic model id to an Ollama daemon that
-    // has no such model -- fail loud instead.
-    const model = config.MODEL && String(config.MODEL).trim() ? String(config.MODEL).trim() : ''
-    if (!model) {
-      return { error: { kind: 'not_ready', reason: 'onboarding says PROVIDER=ollama but no MODEL (ollama model tag) is on file yet' } }
-    }
-    return {
-      env: {
-        ANTHROPIC_BASE_URL: OLLAMA_BASE_URL,
-        ANTHROPIC_API_KEY: 'ollama', // exact match, run-agent.sh:204 (skia-ollama), proven-live
-        MODEL: model,
-        SKIP_MODEL_GUARD: '1', // matches run-agent.sh:205's shape; NOTE run.sh has no such guard today -- see task report gaps
-        CLAUDE_CODE_OAUTH_TOKEN: undefined, // force api-key auth precedence -- see sirin ground-truth comment
-      },
-    }
-  }
-
-  if (provider === 'custom') {
-    // NEW mode (generic OpenAI-compatible proxy, 2026-07-25): unlike
-    // chatgpt/ollama above (an app-managed local proxy/daemon -- codex-as-
-    // api in-process, or the bundled Ollama.app; see main.cjs's
-    // ensureCodexProxy()/ensureOllamaDaemon()), this mode points at
-    // WHATEVER OpenAI-compatible endpoint the user configures -- a
-    // self-hosted proxy, a local model-router bridge, a manually-run
-    // codex-as-api, Ollama's own OpenAI-compatible surface run standalone,
-    // etc. This module does not know or care which; main.cjs has no
-    // ensureXProxy()-style gate for it (nothing here for it to launch or
-    // vouch for -- see this task's own report).
+    id: 'claude-cli',
+    credential: 'none',
+    isolate: false,
+    env: () => ({
+      ANTHROPIC_API_KEY: undefined,
+      ANTHROPIC_BASE_URL: undefined,
+      CLAUDE_CODE_OAUTH_TOKEN: undefined,
+    }),
+  },
+  {
+    // Local codex-as-api proxy. No user secret required -- see this file's
+    // header comment for why an explicit placeholder key is still injected
+    // (diverging from skia's bare run-agent.sh shape).
+    id: 'chatgpt',
+    credential: 'none',
+    isolate: false,
+    pre: (config) => {
+      const portResult = resolveChatgptProxyPort(config.CHATGPT_PROXY_PORT)
+      if (portResult.error) return { error: { kind: 'provider_not_wired', reason: portResult.error } }
+      return { values: { port: portResult.port } }
+    },
+    env: ({ values }) => ({
+      ANTHROPIC_BASE_URL: `http://localhost:${values.port}`,
+      ANTHROPIC_API_KEY: CHATGPT_PLACEHOLDER_KEY,
+      CLAUDE_CODE_OAUTH_TOKEN: undefined, // force api-key auth precedence -- see sirin ground-truth comment
+    }),
+  },
+  {
+    // Local Ollama daemon. No user secret required, but a real local model
+    // tag IS required -- unlike codex-as-api (which, per run-agent.sh's
+    // sirin comment, "force-ignores body.model"), Ollama's OpenAI-compatible
+    // surface needs an actual model name it can resolve. Falling back to
+    // config.MODEL's generic default ('claude-opus-4-6') would silently send
+    // an Anthropic model id to an Ollama daemon that has no such model --
+    // fail loud instead.
+    id: 'ollama',
+    credential: 'none',
+    isolate: false,
+    pre: (config) => {
+      const model = requiredModel(config)
+      if (!model) {
+        return { error: { kind: 'not_ready', reason: 'onboarding says PROVIDER=ollama but no MODEL (ollama model tag) is on file yet' } }
+      }
+      return { values: { model } }
+    },
+    env: ({ values }) => ({
+      ANTHROPIC_BASE_URL: OLLAMA_BASE_URL,
+      ANTHROPIC_API_KEY: 'ollama', // exact match, run-agent.sh:204 (skia-ollama), proven-live
+      MODEL: values.model,
+      SKIP_MODEL_GUARD: '1', // matches run-agent.sh:205's shape; NOTE run.sh has no such guard today -- see task report gaps
+      CLAUDE_CODE_OAUTH_TOKEN: undefined, // force api-key auth precedence -- see sirin ground-truth comment
+    }),
+  },
+  {
+    // Generic OpenAI-compatible proxy (2026-07-25): unlike chatgpt/ollama
+    // above (an app-managed local proxy/daemon -- codex-as-api in-process, or
+    // the bundled Ollama.app; see main.cjs's ensureCodexProxy()/
+    // ensureOllamaDaemon()), this mode points at WHATEVER OpenAI-compatible
+    // endpoint the user configures -- a self-hosted proxy, a local
+    // model-router bridge, a manually-run codex-as-api, Ollama's own
+    // OpenAI-compatible surface run standalone, etc. This module does not
+    // know or care which; main.cjs has no ensureXProxy()-style gate for it
+    // (nothing here for it to launch or vouch for).
     //
     // Both CUSTOM_BASE_URL and MODEL are required, fail loud if missing --
-    // same reasoning as 'ollama' above: a generic OpenAI-compatible proxy
-    // needs a real base URL AND a real model id it can resolve; silently
-    // falling back to config.MODEL's generic Anthropic default would send
-    // an id the proxy almost certainly does not recognize.
-    const urlResult = resolveCustomBaseUrl(config.CUSTOM_BASE_URL)
-    if (urlResult.error) {
-      return { error: { kind: 'not_ready', reason: `onboarding says PROVIDER=custom but ${urlResult.error}` } }
-    }
-    const model = config.MODEL && String(config.MODEL).trim() ? String(config.MODEL).trim() : ''
-    if (!model) {
-      return { error: { kind: 'not_ready', reason: 'onboarding says PROVIDER=custom but no MODEL (custom proxy model id) is on file yet' } }
-    }
+    // same reasoning as 'ollama' above.
+    //
     // API key is OPTIONAL, unlike 'claude'/'claude-subscription' above --
-    // plenty of local/self-hosted proxies (see the settings-page presets:
-    // a local ClinePass/Grok bridge, Ollama's OpenAI-compatible surface,
+    // plenty of local/self-hosted proxies (see the settings-page presets: a
+    // local ClinePass/Grok bridge, Ollama's OpenAI-compatible surface,
     // codex-as-api) accept any bearer value or none at all. Stored the SAME
-    // way the 'claude' BYOK key above is (safeStorage-backed, via
-    // deps.readProviderKey -- see http-server.cjs's storeProviderKeyVerified/
-    // readProviderKey), never as a plaintext .agent-config field the way
-    // CUSTOM_BASE_URL is just above: unlike the base URL, this MAY be a
-    // real secret for whatever proxy the user points this at, so it gets
-    // the exact on-disk treatment every other credential in this codebase
-    // gets.
-    let apiKey
-    try {
-      apiKey = readProviderKey('custom')
-    } catch (err) {
-      return { error: { kind: 'key_error', reason: `readProviderKey(custom) failed: ${err.message}` } }
-    }
+    // way the 'claude' BYOK key is (safeStorage-backed), never as a plaintext
+    // .agent-config field the way CUSTOM_BASE_URL is: unlike the base URL,
+    // this MAY be a real secret for whatever proxy the user points this at,
+    // so it gets the exact on-disk treatment every other credential here gets.
+    id: 'custom',
+    credential: 'optional',
+    keyName: 'custom',
+    isolate: false,
+    pre: (config) => {
+      const urlResult = resolveCustomBaseUrl(config.CUSTOM_BASE_URL)
+      if (urlResult.error) {
+        return { error: { kind: 'not_ready', reason: `onboarding says PROVIDER=custom but ${urlResult.error}` } }
+      }
+      const model = requiredModel(config)
+      if (!model) {
+        return { error: { kind: 'not_ready', reason: 'onboarding says PROVIDER=custom but no MODEL (custom proxy model id) is on file yet' } }
+      }
+      return { values: { url: urlResult.url, model } }
+    },
+    env: ({ key, values }) => ({
+      ANTHROPIC_BASE_URL: values.url,
+      ANTHROPIC_API_KEY: key || CUSTOM_PLACEHOLDER_KEY,
+      MODEL: values.model,
+      SKIP_MODEL_GUARD: '1', // same reasoning as 'ollama' above -- not an Anthropic model id
+      CLAUDE_CODE_OAUTH_TOKEN: undefined, // force api-key auth precedence -- see sirin ground-truth comment
+    }),
+  },
+]
+
+// Shared by the ollama/custom rows: a MODEL that is missing or whitespace-only
+// is "not configured", never a silent fallback to config.MODEL's Anthropic
+// default. Returns '' for the not-configured case so callers read as a plain
+// truthiness check.
+function requiredModel(config) {
+  return config.MODEL && String(config.MODEL).trim() ? String(config.MODEL).trim() : ''
+}
+
+const PROVIDER_ROWS_BY_ID = new Map(PROVIDER_ROWS.map((row) => [row.id, row]))
+
+// The order the `provider_not_wired` message lists, preserved verbatim from
+// the pre-table if-chain's message (claude, claude-cli, claude-subscription,
+// chatgpt, ollama, custom) rather than derived from PROVIDER_ROWS order --
+// this string is user-visible and one test pins its shape.
+const PROVIDER_IDS_FOR_MESSAGE = ['claude', 'claude-cli', 'claude-subscription', 'chatgpt', 'ollama', 'custom']
+
+function buildProviderEnv(provider, config, deps) {
+  const { readProviderKey } = deps
+
+  const row = PROVIDER_ROWS_BY_ID.get(provider)
+  if (!row) {
     return {
-      env: {
-        ANTHROPIC_BASE_URL: urlResult.url,
-        ANTHROPIC_API_KEY: apiKey || CUSTOM_PLACEHOLDER_KEY,
-        MODEL: model,
-        SKIP_MODEL_GUARD: '1', // same reasoning as 'ollama' above -- not an Anthropic model id
-        CLAUDE_CODE_OAUTH_TOKEN: undefined, // force api-key auth precedence -- see sirin ground-truth comment
+      error: {
+        kind: 'provider_not_wired',
+        reason: `provider "${provider}" is not a recognized mode -- expected one of: ${PROVIDER_IDS_FOR_MESSAGE.join(', ')}`,
       },
     }
   }
 
-  return {
-    error: {
-      kind: 'provider_not_wired',
-      reason: `provider "${provider}" is not a recognized mode -- expected one of: claude, claude-cli, claude-subscription, chatgpt, ollama, custom`,
-    },
+  // Preconditions BEFORE the credential read, and the order is observable:
+  // 'custom' is the only row with both, and its if-chain checked
+  // CUSTOM_BASE_URL and MODEL first, so a custom config with a bad URL AND a
+  // throwing Keychain reported not_ready (the URL), never key_error. Every
+  // other row has one or the other, so this order reproduces all six.
+  let values = {}
+  if (row.pre) {
+    const result = row.pre(config)
+    if (result.error) return { error: result.error }
+    values = result.values || {}
   }
+
+  let key
+  if (row.credential !== 'none') {
+    try {
+      key = readProviderKey(row.keyName)
+    } catch (err) {
+      return { error: { kind: 'key_error', reason: `readProviderKey(${row.keyName}) failed: ${err.message}` } }
+    }
+    if (!key && row.credential === 'required') {
+      return { error: { kind: 'not_ready', reason: row.notReady } }
+    }
+  }
+
+  return { env: row.env({ key, values, config }) }
 }
 
 // Which PROVIDERS values require a stored credential before onboarding can
@@ -407,10 +578,35 @@ function buildProviderEnv(provider, config, deps) {
 // 'custom' branch), so it is never added here either.
 const PROVIDERS_REQUIRING_STORED_CREDENTIAL = ['claude', 'claude-subscription']
 
+/**
+ * providerNeedsIsolatedConfigDir(provider) -> boolean | null
+ *
+ * Reads the table's `isolate` column. null for an unrecognized provider, so
+ * a caller can tell "no opinion" from "deliberately false".
+ *
+ * WHY THIS IS READABLE FROM OUTSIDE, given no caller sets CLAUDE_CONFIG_DIR
+ * today: the answer is FALSE for every row, and for `claude-cli` that false
+ * is the mode's entire mechanism, not a default. The claude CLI namespaces
+ * its credential store by config dir -- keychain service `Claude Code-credentials`
+ * with no CLAUDE_CONFIG_DIR set, `Claude Code-credentials-<sha256(dir)[0..8]>`
+ * with one (read out of the CLI binary and confirmed live on 2026-07-29: a
+ * spawn with a fresh CLAUDE_CONFIG_DIR reports "Not logged in · Please run
+ * /login" while the user's real session is untouched). So the day someone
+ * adds config-dir isolation for one provider, doing it globally would
+ * silently break `claude-cli` -- the mode whose whole promise is "we reuse
+ * the login you already have". scripts/test-provider-env.mjs pins that.
+ */
+function providerNeedsIsolatedConfigDir(provider) {
+  const row = PROVIDER_ROWS_BY_ID.get(provider)
+  return row ? row.isolate : null
+}
+
 module.exports = {
   buildProviderEnv,
   resolveChatgptProxyPort,
   resolveCustomBaseUrl,
+  parseCustomProviderJson,
+  providerNeedsIsolatedConfigDir,
   PROVIDERS_REQUIRING_STORED_CREDENTIAL,
   CHATGPT_PROXY_DEFAULT_PORT,
   CHATGPT_PLACEHOLDER_KEY,

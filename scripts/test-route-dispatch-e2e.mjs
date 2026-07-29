@@ -91,6 +91,27 @@ try {
   // Unknown provider = the 400 fires BEFORE any validation/storage path.
   await hit('G2 POST /api/byok/validate (garbage provider)', '/api/byok/validate', 400,
     { method: 'POST', headers: auth, body: JSON.stringify({ provider: 'garbage-provider', key: 'x' }) })
+  // custom-provider/preview (2026-07-29): the group's one genuinely
+  // side-effect-free POST -- it resolves a pasted provider definition and
+  // writes nothing (no credential store, no .agent-config, no restart), so
+  // unlike its sibling save route it is safe to fire here for real.
+  const pv = await hit('G2 POST /api/agent/custom-provider/preview (valid paste)', '/api/agent/custom-provider/preview', 200,
+    { method: 'POST', headers: auth, body: JSON.stringify({ json: JSON.stringify({ providers: { mine: { baseUrl: 'http://127.0.0.1:18080', apiKey: 'sk-preview', models: [{ id: 'some-model' }] } } }) }) })
+  const pvBody = await pv.json()
+  chk('G2 preview resolves the paste to baseUrl+model', pvBody.baseUrl === 'http://127.0.0.1:18080' && pvBody.model === 'some-model', JSON.stringify(pvBody))
+  chk('G2 preview returns the key the SAME request sent (fills the write-only field; never a stored key)', pvBody.apiKey === 'sk-preview', JSON.stringify(pvBody))
+  // The route must not have touched config -- proving "preview writes
+  // nothing" rather than asserting it in a comment. PROVIDER is whatever the
+  // fixture had before; the paste above never becomes live.
+  const afterPreview = await (await hit('G2 GET /api/config (after preview)', '/api/config', 200)).json()
+  chk('G2 preview left PROVIDER alone (no write)', afterPreview.PROVIDER !== 'custom', `PROVIDER=${afterPreview.PROVIDER}`)
+  chk('G2 preview left CUSTOM_BASE_URL alone (no write)', !afterPreview.CUSTOM_BASE_URL, `CUSTOM_BASE_URL=${afterPreview.CUSTOM_BASE_URL}`)
+  // A paste this app cannot honestly run comes back 400 with a reason, never
+  // narrowed-and-accepted (see parseCustomProviderJson's header).
+  await hit('G2 POST .../preview (two providers in one paste)', '/api/agent/custom-provider/preview', 400,
+    { method: 'POST', headers: auth, body: JSON.stringify({ json: JSON.stringify({ providers: { a: { baseUrl: 'http://127.0.0.1:1', models: [{ id: 'x' }] }, b: { baseUrl: 'http://127.0.0.1:2', models: [{ id: 'y' }] } } }) }) })
+  await hit('G2 POST .../preview (dialect we cannot speak)', '/api/agent/custom-provider/preview', 400,
+    { method: 'POST', headers: auth, body: JSON.stringify({ json: JSON.stringify({ api: 'openai-completions', baseUrl: 'http://127.0.0.1:1', model: 'm' }) }) })
 
   // ── G3 channels ───────────────────────────────────────────────────────────
   const ch = await hit('G3 GET /api/channels/status', '/api/channels/status', 200)
