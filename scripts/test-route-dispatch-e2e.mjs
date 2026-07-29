@@ -91,6 +91,64 @@ try {
   // Unknown provider = the 400 fires BEFORE any validation/storage path.
   await hit('G2 POST /api/byok/validate (garbage provider)', '/api/byok/validate', 400,
     { method: 'POST', headers: auth, body: JSON.stringify({ provider: 'garbage-provider', key: 'x' }) })
+  // custom-provider/preview (2026-07-29): the group's one genuinely
+  // side-effect-free POST -- it resolves a pasted provider definition and
+  // writes nothing (no credential store, no .agent-config, no restart), so
+  // unlike its sibling save route it is safe to fire here for real.
+  const pv = await hit('G2 POST /api/agent/custom-provider/preview (valid paste)', '/api/agent/custom-provider/preview', 200,
+    { method: 'POST', headers: auth, body: JSON.stringify({ json: JSON.stringify({ providers: { mine: { baseUrl: 'http://127.0.0.1:18080', apiKey: 'sk-preview', models: [{ id: 'some-model' }] } } }) }) })
+  const pvBody = await pv.json()
+  chk('G2 preview resolves the paste to baseUrl+model', pvBody.baseUrl === 'http://127.0.0.1:18080' && pvBody.model === 'some-model', JSON.stringify(pvBody))
+  chk('G2 preview returns the key the SAME request sent (fills the write-only field; never a stored key)', pvBody.apiKey === 'sk-preview', JSON.stringify(pvBody))
+  // The route must not have touched config -- proving "preview writes
+  // nothing" rather than asserting it in a comment. PROVIDER is whatever the
+  // fixture had before; the paste above never becomes live.
+  const afterPreview = await (await hit('G2 GET /api/config (after preview)', '/api/config', 200)).json()
+  chk('G2 preview left PROVIDER alone (no write)', afterPreview.PROVIDER !== 'custom', `PROVIDER=${afterPreview.PROVIDER}`)
+  chk('G2 preview left CUSTOM_BASE_URL alone (no write)', !afterPreview.CUSTOM_BASE_URL, `CUSTOM_BASE_URL=${afterPreview.CUSTOM_BASE_URL}`)
+  // A paste this app cannot honestly run comes back 400 with a reason, never
+  // narrowed-and-accepted (see parseCustomProviderJson's header).
+  await hit('G2 POST .../preview (two providers in one paste)', '/api/agent/custom-provider/preview', 400,
+    { method: 'POST', headers: auth, body: JSON.stringify({ json: JSON.stringify({ providers: { a: { baseUrl: 'http://127.0.0.1:1', models: [{ id: 'x' }] }, b: { baseUrl: 'http://127.0.0.1:2', models: [{ id: 'y' }] } } }) }) })
+  await hit('G2 POST .../preview (dialect we cannot speak)', '/api/agent/custom-provider/preview', 400,
+    { method: 'POST', headers: auth, body: JSON.stringify({ json: JSON.stringify({ api: 'openai-completions', baseUrl: 'http://127.0.0.1:1', model: 'm' }) }) })
+  // The route's OWN model-id gate, which the parser deliberately does not
+  // apply (it returns the raw id so both call sites gate identically). Without
+  // this case that branch is unexercised -- the parser accepts the id, so only
+  // a live request proves the route rejects it.
+  await hit('G2 POST .../preview (model id the pattern rejects)', '/api/agent/custom-provider/preview', 400,
+    { method: 'POST', headers: auth, body: JSON.stringify({ json: JSON.stringify({ baseUrl: 'http://127.0.0.1:1', model: 'bad model/../id!' }) }) })
+  // Response-size bound, asserted on the WIRE. readJsonBody accepts 1MB and
+  // refusal text quotes user input, and the settings page drops these bodies
+  // into a one-line status element. Deleting the route's own .slice() used to
+  // leave every suite green, so the cap that actually holds the response had
+  // no test at all. Named model ids are what get echoed back, so 20 of them
+  // at 60KB each is the shape that maximizes it.
+  {
+    // Sized to stay UNDER readJsonBody's 1MB cap on the outer request: past
+    // it the server destroys the socket (correctly), which tests the body
+    // limit rather than the response bound this case is about.
+    const huge = JSON.stringify({ baseUrl: 'http://127.0.0.1:1', models: Array.from({ length: 12 }, (_, i) => ({ id: `${'M'.repeat(50_000)}-${i}` })) })
+    const r = await hit('G2 POST .../preview (a paste built to maximize the error body)', '/api/agent/custom-provider/preview', 400,
+      { method: 'POST', headers: auth, body: JSON.stringify({ json: huge }) })
+    const body = await r.text()
+    chk('G2 preview bounds its 400 body regardless of input size', body.length < 800, `body was ${body.length} bytes for a ${huge.length}-byte paste`)
+  }
+  // /api/byok/validate IS reachable here (it is hit above), so its bound gets
+  // a real case. An earlier version of this comment claimed both routes were
+  // unreachable -- false, and in the very file that calls one of them.
+  {
+    const r = await hit('G2 POST /api/byok/validate (900KB base URL)', '/api/byok/validate', 200,
+      { method: 'POST', headers: auth, body: JSON.stringify({ provider: 'custom', key: 'k', baseUrl: `http://x.example/${'A'.repeat(900_000)}` }) })
+    const body = await r.text()
+    chk('G2 byok/validate bounds its body for a 900KB base URL', body.length < 300, `body was ${body.length} bytes`)
+  }
+  // NOT tested here: POST /api/agent/custom-provider. Its `agentControls not
+  // wired` 500 fires before any URL validation in this harness, so a case
+  // written against it would go green on a 500 body and prove nothing. Their
+  // fix is in resolveCustomBaseUrl itself (a length gate BEFORE anything
+  // quotes the value), which is where every one of those routes gets its
+  // error string; scripts/test-provider-env.mjs asserts it at that source.
 
   // ── G3 channels ───────────────────────────────────────────────────────────
   const ch = await hit('G3 GET /api/channels/status', '/api/channels/status', 200)

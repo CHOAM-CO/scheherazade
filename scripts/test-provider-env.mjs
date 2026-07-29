@@ -22,7 +22,7 @@
 // convention.
 
 import { spawnSync } from 'node:child_process'
-import { buildProviderEnv, PROVIDERS_REQUIRING_STORED_CREDENTIAL, CHATGPT_PROXY_DEFAULT_PORT, CHATGPT_PLACEHOLDER_KEY, OLLAMA_BASE_URL } from '../provider-env.cjs'
+import { buildProviderEnv, parseCustomProviderJson, PROVIDERS_REQUIRING_STORED_CREDENTIAL, CHATGPT_PROXY_DEFAULT_PORT, CHATGPT_PLACEHOLDER_KEY, OLLAMA_BASE_URL } from '../provider-env.cjs'
 
 let pass = 0
 let fail = 0
@@ -263,6 +263,275 @@ assert(PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes('claude'), 'PROVIDERS_REQU
 assert(PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes('claude-subscription'), 'PROVIDERS_REQUIRING_STORED_CREDENTIAL includes "claude-subscription"')
 assert(!PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes('chatgpt'), 'PROVIDERS_REQUIRING_STORED_CREDENTIAL excludes "chatgpt" (no user secret)')
 assert(!PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes('ollama'), 'PROVIDERS_REQUIRING_STORED_CREDENTIAL excludes "ollama" (no user secret)')
+
+// ─────────────────────────────────────────────────────────────────────────
+// 8. EVERY row actively clears CLAUDE_CONFIG_DIR (2026-07-29)
+//
+// Cleared, not merely unset -- `'X' in env && env.X === undefined` is the
+// distinction, and it is the same one section 1b makes for the auth vars.
+// main.cjs spawns with {...process.env, ...rowEnv}, so a CLAUDE_CONFIG_DIR
+// exported in the launching environment reaches the child unless a row
+// clears it.
+//
+// Why it matters, and why it is ALL rows rather than just claude-cli:
+//   - claude-cli's availability probe is hardcoded to
+//     ~/.claude/.credentials.json via os.homedir() (http-server.cjs) and does
+//     NOT follow CLAUDE_CONFIG_DIR, so an inherited one makes detection and
+//     spawn read different dirs in the one mode whose promise is "we reuse
+//     the login you already have".
+//   - onboarding/harness-render.cjs seeds first-run gates into
+//     ~/.claude.json for EVERY mode. An inherited CLAUDE_CONFIG_DIR
+//     relocates that file and defeats the seeding, dropping the headless
+//     spawn onto an interactive first-run prompt.
+// Two earlier rounds got this wrong in opposite directions -- first a data
+// column nothing read, then a clear on one row while five others kept the
+// same exposure. Same variable, same divergence: all or nothing.
+{
+  const cases = [
+    ['claude', { readProviderKey: fakeReadProviderKey({ claude: 'k' }) }, {}],
+    ['claude-subscription', { readProviderKey: fakeReadProviderKey({ 'claude-subscription': 't' }) }, {}],
+    ['claude-cli', { readProviderKey: () => null }, {}],
+    ['chatgpt', { readProviderKey: () => null }, {}],
+    ['ollama', { readProviderKey: () => null }, { MODEL: 'm' }],
+    ['custom', { readProviderKey: () => null }, { CUSTOM_BASE_URL: 'http://127.0.0.1:1', MODEL: 'm' }],
+  ]
+  for (const [provider, deps, config] of cases) {
+    const result = buildProviderEnv(provider, config, deps)
+    assert(result.env && 'CLAUDE_CONFIG_DIR' in result.env && result.env.CLAUDE_CONFIG_DIR === undefined,
+      `${provider}: CLAUDE_CONFIG_DIR actively cleared (present-as-undefined), so an inherited one cannot reach the child`)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 9. parseCustomProviderJson -- pasted provider definition (2026-07-29)
+//
+// The refusal cases matter more than the accept cases here. A paste that
+// declares five providers or a wire dialect this app cannot speak has ONE
+// dangerous failure mode: accepting it, configuring a narrower thing than
+// the paste says, and reporting success. The user then debugs a model they
+// never chose. Every assertion below that checks for an `error` is pinning
+// "refuse out loud" against the pressure to be accommodating.
+// ─────────────────────────────────────────────────────────────────────────
+
+// -- accepts: the nested shape other tools hand out
+{
+  const r = parseCustomProviderJson(JSON.stringify({
+    providers: { 'my-provider': { name: 'Mine', baseUrl: 'http://127.0.0.1:8080', apiKey: 'sk-x', models: [{ id: 'my-model', name: 'My Model' }] } },
+  }))
+  assert(!r.error, 'nested paste: parses without error')
+  assert(r.baseUrl === 'http://127.0.0.1:8080', 'nested paste: baseUrl carried through resolveCustomBaseUrl')
+  assert(r.model === 'my-model', 'nested paste: model id taken from models[0].id')
+  assert(r.apiKey === 'sk-x', 'nested paste: apiKey carried through')
+}
+
+// -- accepts: the flat shorthand, key omitted (custom mode's key is optional)
+{
+  const r = parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://localhost:11434', model: 'llama3' }))
+  assert(!r.error, 'flat paste: parses without error')
+  assert(r.model === 'llama3' && r.apiKey === '', 'flat paste: model read, absent key becomes empty string (never undefined-vs-missing ambiguity)')
+}
+
+// -- accepts: an explicitly-declared dialect we DO speak
+assert(!parseCustomProviderJson(JSON.stringify({ api: 'anthropic-messages', baseUrl: 'http://127.0.0.1:1', model: 'm' })).error,
+  'api: "anthropic-messages" is accepted (it is what the spawned CLI emits)')
+
+// -- refuses: more than one provider / more than one model
+//
+// The ids here are deliberately MULTI-CHARACTER and unlike any English word.
+// A previous version used 'a'/'b'/'x'/'y' and asserted `error.includes('y')`
+// -- which passed on the letter in "keep the one **y**ou want", i.e. it would
+// still have passed with every model name stripped out of the message. Single
+// letters cannot distinguish "the error names them" from "the error contains
+// prose". (Red-team catch, 2026-07-29.)
+{
+  const many = parseCustomProviderJson(JSON.stringify({
+    providers: { 'prov-zeta': { baseUrl: 'http://127.0.0.1:1', models: [{ id: 'mdl-zeta' }] }, 'prov-kappa': { baseUrl: 'http://127.0.0.1:2', models: [{ id: 'mdl-kappa' }] } },
+  }))
+  assert(!!many.error, 'two providers in one paste: refused, not silently first-wins')
+  assert(many.error.includes('prov-zeta') && many.error.includes('prov-kappa'), 'two providers: the error names them, so the user knows what to trim')
+  const manyModels = parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', models: [{ id: 'mdl-zeta' }, { id: 'mdl-kappa' }] }))
+  assert(!!manyModels.error, 'two models in one paste: refused')
+  assert(manyModels.error.includes('mdl-zeta') && manyModels.error.includes('mdl-kappa'), 'two models: the error names them')
+}
+
+// -- refuses: the dialect declaration wherever it appears. Checking only the
+// unwrapped provider entry was a real hole -- a file declaring its dialect at
+// the TOP level (the natural place for a global one) walked straight through
+// the gate this function advertises. (Red-team catch, 2026-07-29.)
+{
+  const top = parseCustomProviderJson(JSON.stringify({
+    api: 'openai-completions',
+    providers: { p: { baseUrl: 'http://127.0.0.1:1', models: [{ id: 'mm' }] } },
+  }))
+  assert(!!top.error && top.error.includes('openai-completions'), 'unsupported api at the TOP level (beside "providers"): refused')
+  const onModel = parseCustomProviderJson(JSON.stringify({
+    baseUrl: 'http://127.0.0.1:1', models: [{ id: 'mm', api: 'openai-responses' }],
+  }))
+  assert(!!onModel.error && onModel.error.includes('openai-responses'), 'unsupported api on the MODEL row: refused')
+  const arr = parseCustomProviderJson(JSON.stringify({ api: ['anthropic-messages'], baseUrl: 'http://127.0.0.1:1', model: 'm' }))
+  assert(!!arr.error, 'api as a one-element array: refused, not String()-coerced into a match')
+  assert(!parseCustomProviderJson(JSON.stringify({ api: null, baseUrl: 'http://127.0.0.1:1', model: 'm' })).error,
+    'api: null reads as "not specified" (JSON emitters write explicit nulls), not as a dialect named "null"')
+}
+
+// -- top-level fields beside `providers` are DEFAULTS, and only an actual
+// disagreement is refused. An earlier version refused on mere presence, which
+// rejected `{"apiKey":"sk","providers":{...}}` -- one key, one endpoint map,
+// nothing ambiguous about it. Refusing a paste that says exactly one thing is
+// its own kind of wrong.
+{
+  const globalKey = parseCustomProviderJson(JSON.stringify({
+    apiKey: 'sk-global', providers: { proxy: { baseUrl: 'http://localhost:8080', models: [{ id: 'm' }] } },
+  }))
+  assert(!globalKey.error, 'a top-level apiKey with a per-provider endpoint: accepted, not refused as ambiguous')
+  assert(globalKey.apiKey === 'sk-global', 'a top-level apiKey is USED when the entry declares none')
+  const agree = parseCustomProviderJson(JSON.stringify({
+    baseUrl: 'http://127.0.0.1:1', providers: { p: { baseUrl: 'http://127.0.0.1:1', model: 'm' } },
+  }))
+  assert(!agree.error, 'top-level and entry agreeing on baseUrl: accepted')
+  const both = parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://FLAT.example', providers: { p: { baseUrl: 'http://127.0.0.1:1', model: 'm' } } }))
+  assert(!!both.error && both.error.includes('baseUrl'), 'top-level baseUrl DISAGREEING with the entry: refused (it used to be dropped silently)')
+  const bothModels = parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', model: 'typed-one', models: [{ id: 'listed-one' }] }))
+  assert(!!bothModels.error, 'both "model" and "models", disagreeing: refused')
+  assert(!parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', model: 'same', models: [{ id: 'same' }] })).error,
+    'both "model" and "models" AGREEING: accepted (a tool emitting both is not a contradiction)')
+}
+
+// -- refuses: a wrongly-typed apiKey, instead of coercing it to blank.
+// This is the highest-consequence coercion in the file: blank means "keep the
+// stored key" at the save route, so dropping a mistyped key silently ships the
+// PREVIOUS provider's key to whatever new endpoint the paste just set.
+{
+  for (const bad of [12345, { value: 'k' }, ['k'], true]) {
+    const r = parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', model: 'm', apiKey: bad }))
+    assert(!!r.error, `apiKey as ${Array.isArray(bad) ? 'array' : typeof bad}: refused, never silently blanked`)
+  }
+  const absent = parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', model: 'm', apiKey: null }))
+  assert(!absent.error && absent.apiKey === '', 'apiKey: null reads as absent (optional field), not as a type error')
+}
+
+// -- a provider entry that nests its OWN providers map used to be accepted
+// with the inner one dropped whole -- dialect, endpoint and all. That is the
+// same silent narrowing the >1-provider refusal exists for.
+assert(!!parseCustomProviderJson(JSON.stringify({
+  providers: { p: { baseUrl: 'http://127.0.0.1:1', model: 'm', providers: { q: { api: 'openai-completions', baseUrl: 'http://elsewhere:9', model: 'other' } } } },
+})).error, 'a provider containing its own "providers": refused, not silently flattened to the outer one')
+
+// -- `model` gets the same TYPE refusal as `api` and `apiKey`. It used to be
+// read as `typeof x === 'string' ? x : ''`, so a wrongly-typed one was dropped
+// and `models` silently won -- three sibling fields, and only this one let a
+// bad type through.
+for (const bad of [['a'], 123, { id: 'a' }]) {
+  assert(!!parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', model: bad, models: ['b'] })).error,
+    `model as ${Array.isArray(bad) ? 'array' : typeof bad}: refused, never dropped in favour of models[]`)
+}
+
+// -- refusal messages stay bounded, for EVERY user-controlled scalar and not
+// just the list joins. readJsonBody accepts 1 MB; capping only the joins moved
+// the worst case by zero, because a single ~900 KB model id / api string /
+// provider id was interpolated raw and produced a ~900 KB 400 body -- larger
+// than the case the cap was added for. Each entry below is one such site.
+{
+  const big = 'A'.repeat(900_000)
+  const sites = [
+    ['api', { api: big, baseUrl: 'http://127.0.0.1:1', model: 'm' }],
+    ['model', { model: big, models: ['x'], baseUrl: 'http://127.0.0.1:1' }],
+    ['model id on a row', { models: [{ id: big, api: 'openai-completions' }], baseUrl: 'http://127.0.0.1:1' }],
+    ['provider id', { providers: { [big]: 5 } }],
+    ['baseUrl', { baseUrl: `ftp://${big}`, model: 'm' }],
+  ]
+  for (const [label, obj] of sites) {
+    const r = parseCustomProviderJson(JSON.stringify(obj))
+    assert(!!r.error, `${label}: a 900KB value is refused`)
+    assert(r.error.length < 1000, `${label}: refusal stays bounded (${r.error.length} chars, not ~900KB)`)
+  }
+  const many = Array.from({ length: 400 }, (_, i) => ({ id: `model-number-${i}`.repeat(20) }))
+  const r = parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', models: many }))
+  assert(!!r.error, '400 models: refused')
+  assert(r.error.length < 2000, `many models: refusal stays small (was ${r.error.length} chars)`)
+  assert(r.error.includes('390 more'), 'refusal message says how many names it did not list')
+}
+
+// -- null inside a provider entry is ABSENT, not a competing value. The
+// merge compared with JSON.stringify, which made `"apiKey": null` disagree
+// with a top-level key -- re-creating the false-refusal class the merge was
+// written to remove, and contradicting this same function's documented
+// null-as-absent handling everywhere else.
+{
+  const r = parseCustomProviderJson(JSON.stringify({
+    apiKey: 'sk-global',
+    providers: { p: { baseUrl: 'http://127.0.0.1:1', model: 'm', apiKey: null } },
+  }))
+  assert(!r.error, 'explicit null inside the entry: reads as absent, not as a disagreement')
+  assert(r.apiKey === 'sk-global', 'explicit null inside the entry: the top-level value is used')
+}
+
+// -- two byte-identical model lists written in different KEY ORDER are not a
+// disagreement. JSON.stringify said they were.
+assert(!parseCustomProviderJson(JSON.stringify({
+  models: [{ id: 'm', api: 'anthropic-messages' }],
+  providers: { p: { baseUrl: 'http://127.0.0.1:1', models: [{ api: 'anthropic-messages', id: 'm' }] } },
+})).error, 'same models written in a different field order: accepted, not refused as disagreeing')
+
+// -- a model ROW carrying its own endpoint or key. This function already
+// walks these rows (it reads api and id), so dropping these two silently is
+// narrowing at a level it demonstrably reads.
+for (const k of ['baseUrl', 'apiKey']) {
+  const r = parseCustomProviderJson(JSON.stringify({
+    providers: { p: { baseUrl: 'http://entry:1', apiKey: 'sk-entry', models: [{ id: 'm', [k]: k === 'baseUrl' ? 'http://row:2' : 'sk-row' }] } },
+  }))
+  assert(!!r.error && r.error.includes(k), `a model row carrying its own "${k}": refused, not dropped whole`)
+}
+
+// -- an absurdly long base URL is refused BEFORE anything quotes it. The
+// error paths interpolate the URL, and these errors reach a one-line status
+// element; a ~950KB baseUrl produced a ~950KB 400 body from two OTHER routes
+// that the preview route's own response cap never touched.
+{
+  const r = parseCustomProviderJson(JSON.stringify({ baseUrl: `http://x.example/${'A'.repeat(950_000)}`, model: 'm' }))
+  assert(!!r.error && r.error.includes('too long'), 'a 950KB base URL: refused on length')
+  assert(r.error.length < 200, `length refusal does not quote the URL back (${r.error.length} chars)`)
+}
+
+// -- error messages name the right problem. Both of these used to report a
+// DIFFERENT refusal than the one that actually applies, which sends the user
+// to fix the wrong thing.
+assert(parseCustomProviderJson(JSON.stringify({ providers: 'x', baseUrl: 'y' })).error.includes('object keyed by provider id'),
+  'a non-object "providers" reports the type error, not an ambiguity error')
+assert(parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', model: 'm', models: [] })).error.includes('non-empty array'),
+  'an empty "models" beside a "model" reports the empty-array error, not an ambiguity error')
+
+// -- refuses: a wire dialect this app has no translation layer for.
+// Scheherazade delegates inference to the bundled Claude Code CLI, which
+// emits Anthropic Messages and nothing else. Accepting `openai-completions`
+// here would be the app promising a proxy's compatibility as if it were its
+// own capability. (Aside can carry 9 dialects because it owns its request
+// builders; we do not own ours -- teardown 2026-07-29, §6.2.)
+{
+  const wrong = parseCustomProviderJson(JSON.stringify({ api: 'openai-completions', baseUrl: 'http://127.0.0.1:1', model: 'm' }))
+  assert(!!wrong.error, 'unsupported api dialect: refused rather than ignored')
+  assert(wrong.error.includes('openai-completions') && wrong.error.includes('anthropic-messages'),
+    'unsupported api dialect: the error names both what was asked and what we can do')
+}
+
+// -- refuses: malformed input, each with its own reason (never one vague message)
+assert(!!parseCustomProviderJson('').error, 'empty string: refused')
+assert(!!parseCustomProviderJson('not json at all').error, 'non-JSON: refused')
+assert(!!parseCustomProviderJson('[1,2]').error, 'JSON array: refused (expected an object)')
+assert(!!parseCustomProviderJson(JSON.stringify({ providers: {} })).error, 'empty providers map: refused')
+assert(!!parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1' })).error, 'no model anywhere: refused')
+assert(!!parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', models: [{ name: 'no id here' }] })).error, 'model entry without an id: refused')
+assert(!!parseCustomProviderJson(JSON.stringify({ model: 'm' })).error, 'no baseUrl: refused by resolveCustomBaseUrl')
+assert(!!parseCustomProviderJson(JSON.stringify({ baseUrl: 'ftp://nope', model: 'm' })).error, 'non-http baseUrl: refused by the SAME validator the typed form uses')
+
+// -- the paste path must not become a way around the typed form's validator:
+// whatever comes out still has to survive resolveCustomBaseUrl (asserted
+// above) and, at the route, MODEL_ID_PATTERN. This asserts the parser hands
+// back the RAW model id rather than pre-blessing it.
+{
+  const r = parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', model: '  spaced-model  ' }))
+  assert(r.model === 'spaced-model', 'model id is trimmed but otherwise unmodified -- the route still gates it on MODEL_ID_PATTERN')
+}
 
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

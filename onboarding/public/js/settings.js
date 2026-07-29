@@ -756,6 +756,45 @@
   // above: every category on this page is shown regardless of the current
   // provider, not gated on it -- switching TO custom and editing an
   // already-custom install's fields are the same form.
+  // Comparison for the save-time credential warning below. ORIGIN, not host:
+  // an earlier version dropped the scheme, so moving a saved credential from
+  // https://api.vendor.com to http://api.vendor.com read as "same host" and
+  // said nothing -- a silent TLS downgrade that puts the key on the wire in
+  // cleartext. Same host, different port is also a different service and
+  // counts. A path change does not. Anything unparseable is treated as
+  // DIFFERENT (warn rather than stay quiet); the server validates the URL for
+  // real, this only decides whether to say something.
+  const originOf = (u) => { try { return new URL(u).origin } catch { return '' } }
+  const sameOrigin = (a, b) => { const x = originOf(a); return Boolean(x) && x === originOf(b) }
+
+  // Decides whether saving is about to send an API key somewhere it was not
+  // paired with. Pulled out as a PURE function on purpose: this predicate got
+  // it wrong twice (once warning on the wrong comparison, once phrasing the
+  // wrong key), and both times nothing could catch it because browser JS has
+  // no test harness here. scripts/test-custom-key-host.mjs extracts this
+  // function by name from this file's source and executes it -- so renaming it
+  // breaks that test loudly, which is the intended trade.
+  //
+  // Returns { warn, stored, priorUrl }. `stored` selects the copy: a stored
+  // key and a pasted key are different objects and the dialog must not call
+  // one the other.
+  function credentialCrossesHosts({ nextUrl, typedKey, keyFromPaste, pastedKeyBaseUrl, storedUrl, hasStoredKey }) {
+    const typed = String(typedKey || '').trim()
+    const reusingStoredKey = !typed && Boolean(hasStoredKey)
+    const carryingPastedKey = Boolean(typed) && Boolean(keyFromPaste)
+    if (!reusingStoredKey && !carryingPastedKey) return { warn: false, stored: false, priorUrl: '' }
+    // A pasted key's reference host is the URL that arrived WITH it; a stored
+    // key's is the URL it was stored under. One comparison cannot serve both.
+    const priorUrl = carryingPastedKey ? String(pastedKeyBaseUrl || '') : String(storedUrl || '')
+    // No reference recorded is UNKNOWN, not safe -- a key stored through
+    // /api/byok/validate leaves no CUSTOM_BASE_URL behind, and a stored key
+    // with no known host would otherwise travel anywhere in silence. A pasted
+    // key with no baseUrl cannot happen (the paste is refused without one),
+    // so that branch stays quiet rather than crying wolf.
+    const warn = priorUrl ? !sameOrigin(priorUrl, nextUrl) : reusingStoredKey
+    return { warn, stored: reusingStoredKey, priorUrl }
+  }
+
   const CUSTOM_PRESETS = [
     { label: C.customPresetClinePass, url: 'http://localhost:18084' },
     { label: C.customPresetGrok, url: 'http://localhost:8766' },
@@ -805,6 +844,73 @@
     // successful save below.
     $('set-custom-key-input').value = ''
     $('set-custom-key-input').placeholder = cfg.hasCustomApiKey ? C.customKeyStoredPlaceholder : C.customKeyEmptyPlaceholder
+    // Whether the value sitting in the key field came from a PASTE rather than
+    // from the user's own typing -- the save-time host warning below turns on
+    // it. Declared per render, so it resets with the form; cleared as soon as
+    // the user edits the field, because from that point the value is theirs
+    // and they chose it against the URL they can see.
+    let keyFromPaste = false
+    // The baseUrl that arrived in the SAME paste as the key. This is the host
+    // the pasted key was paired with, and the only correct thing to compare a
+    // later URL change against.
+    let pastedKeyBaseUrl = ''
+    $('set-custom-key-input').oninput = () => { keyFromPaste = false; pastedKeyBaseUrl = '' }
+
+    // Pasted definition (2026-07-29). Resolves server-side and fills the three
+    // fields above; it never saves. The status line stays visible after a
+    // successful fill (unlike the save path's transient toast) because the
+    // user's next action is to look UP at fields that just changed under them.
+    $('set-custom-json-status').classList.add('hidden') // stale "filled in" must not survive a re-render (this runs again after every save)
+    $('set-custom-json-summary').textContent = C.customJsonSummary
+    $('set-custom-json-note').textContent = C.customJsonNote
+    $('set-custom-json-input').placeholder = C.customJsonPlaceholder
+    $('set-custom-json-load').textContent = C.customJsonLoad
+    $('set-custom-json-load').onclick = async () => {
+      const statusEl = $('set-custom-json-status')
+      statusEl.classList.add('hidden')
+      const json = $('set-custom-json-input').value
+      if (!json.trim()) {
+        statusEl.textContent = C.customJsonEmpty
+        statusEl.classList.remove('hidden')
+        return
+      }
+      const btn = $('set-custom-json-load')
+      btn.disabled = true
+      try {
+        const parsed = await api('/api/agent/custom-provider/preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ json }),
+        })
+        $('set-custom-url-input').value = parsed.baseUrl
+        $('set-custom-model-input').value = parsed.model
+        // ALWAYS assign, never `if (parsed.apiKey)`. A conditional here leaks
+        // across fills: paste A carries a key, paste B (a different endpoint)
+        // does not, and the key field -- type="password", so the user cannot
+        // see it -- still holds A's key, which then gets saved and sent to B's
+        // host. Every fill leaves the field showing exactly what the CURRENT
+        // paste says. (Red-team catch, 2026-07-29.)
+        $('set-custom-key-input').value = parsed.apiKey || ''
+        keyFromPaste = Boolean(parsed.apiKey)
+        pastedKeyBaseUrl = parsed.apiKey ? parsed.baseUrl : ''
+        // Blank field means "keep the stored key" at the save route, so when
+        // the paste has no key AND one is on file, say so -- otherwise the
+        // user switches endpoint believing no key is involved while the
+        // previous provider's key keeps being sent.
+        statusEl.textContent = parsed.apiKey
+          ? C.customJsonLoadedWithKey
+          : (cfg.hasCustomApiKey ? C.customJsonLoadedKeptKey : C.customJsonLoaded)
+        statusEl.classList.remove('hidden')
+      } catch (err) {
+        // The server's refusals are the useful message here (">1 provider",
+        // unsupported api dialect, bad base URL) -- show them verbatim rather
+        // than flattening every failure into one generic line.
+        statusEl.textContent = GEN(err.message)
+        statusEl.classList.remove('hidden')
+      } finally {
+        btn.disabled = false
+      }
+    }
 
     $('set-custom-save').onclick = async () => {
       const statusEl = $('set-custom-status')
@@ -817,7 +923,60 @@
         statusEl.classList.remove('hidden')
         return
       }
-      const ok = await window.confirmDialog(C.customSwitchConfirm(model), C.switchOk, C.cancel)
+      // A key is about to be sent to a host it was not entered for.
+      //
+      // Two ways to get here, and the confirm dialog is the only place that
+      // catches BOTH, which is why the check lives at save rather than at the
+      // point any single field changes:
+      //   1. A pasted definition filled the key field for endpoint A, then the
+      //      preset dropdown or the URL box changed the host to B. Nothing
+      //      clears the key on those paths (see presetSel.onchange above), and
+      //      the field is type="password" so a populated one is invisible.
+      //   2. The field is BLANK and a key is on file. Blank means "keep the
+      //      stored key" at the save route -- the documented convention -- so
+      //      changing only the URL silently re-points the stored credential at
+      //      a new host. That path predates the paste box entirely.
+      // Both end with a credential at a host the user never paired it with.
+      // We do not block it (pointing one key at two proxies is legitimate);
+      // we refuse to let it happen without saying the host out loud.
+      // NOT warned about: a key the user typed into the field during this
+      // visit. They entered it while looking at the URL box, so it is the
+      // host they meant. Warning there would fire on the single most common
+      // flow -- "switching proxies, here is its key" -- and a warning that
+      // cries wolf on the normal case gets clicked through on the abnormal
+      // one, which costs more than it saves. Hence keyFromPaste, cleared the
+      // moment the user touches the field themselves.
+      // TWO cases, TWO reference hosts. Collapsing them onto one comparison
+      // (the stored CUSTOM_BASE_URL) was wrong in both directions:
+      //   - it MISSED the leak it was written for. Saved localhost:8766, paste
+      //     vendor-A's url+key, then pick the Grok preset -> url returns to
+      //     localhost:8766, stored-vs-final says "same host", no warning, and
+      //     vendor A's key is saved against localhost:8766.
+      //   - it FIRED on the normal case. Paste a definition whose baseUrl and
+      //     apiKey travel together, change nothing, and it warned -- about a
+      //     key that was paired with that exact host inside the same blob.
+      // A pasted key's reference is the URL that arrived WITH it; a stored
+      // key's reference is the URL it was stored under.
+      const verdict = credentialCrossesHosts({
+        nextUrl: baseUrl,
+        typedKey: apiKey,
+        keyFromPaste,
+        pastedKeyBaseUrl,
+        storedUrl: cfg.CUSTOM_BASE_URL || '',
+        hasStoredKey: Boolean(cfg.hasCustomApiKey),
+      })
+      // Three outcomes, three strings -- see copy.js. `priorOrigin` is empty
+      // when the reference URL is missing OR unparseable, and both mean the
+      // same thing to the user: we cannot name the host it came from, so we
+      // must not print one.
+      const nextOrigin = originOf(baseUrl) || baseUrl
+      const priorOrigin = originOf(verdict.priorUrl)
+      let confirmText
+      if (!verdict.warn) confirmText = C.customSwitchConfirm(model)
+      else if (!verdict.stored) confirmText = C.customSwitchConfirmPastedKeyToNewHost(model, nextOrigin, priorOrigin || verdict.priorUrl)
+      else if (priorOrigin) confirmText = C.customSwitchConfirmKeyToNewHost(model, nextOrigin, priorOrigin)
+      else confirmText = C.customSwitchConfirmKeyNoPriorHost(model, nextOrigin)
+      const ok = await window.confirmDialog(confirmText, C.switchOk, C.cancel)
       if (!ok) return
       const btn = $('set-custom-save')
       btn.disabled = true

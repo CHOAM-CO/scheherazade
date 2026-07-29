@@ -646,8 +646,53 @@ window.COPY = {
     customModelPlaceholder: 'Enter a model name the proxy recognizes',
     customMissingFields: 'Enter both Base URL and model ID',
     customSwitchConfirm: (m) => `Switch to the custom proxy (model: ${m}) and restart the agent. Continue?`,
+    // Names BOTH hosts and states them as facts, rather than asserting which
+    // host the key "belongs" to -- the app does not know that. It knows the
+    // proxy was saved as one host and is about to become another while a key
+    // rides along. The key field is a password field, so a populated one and
+    // an empty one look identical, and an empty one means the stored key is
+    // reused; the host is the part the user cannot otherwise see. Never shows
+    // the key itself -- the warning is about where it goes.
+    // THREE strings, because there are three different true things to say and
+    // the last two revisions each shipped a false one.
+    //
+    // `stored`: CUSTOM_BASE_URL is the last URL SAVED, not where the key was
+    // stored -- the save route rewrites it on a blank-key save while leaving
+    // the key store untouched, so the two diverge. A previous revision said
+    // "The saved API key was stored for X", which asserts provenance the data
+    // does not carry. This says only what is true: the proxy is currently
+    // saved as X, it is becoming Y, and the stored key goes along.
+    //
+    // `storedNoHost`: a key stored through /api/byok/validate leaves no
+    // CUSTOM_BASE_URL behind, so there is no prior host to name. The previous
+    // revision interpolated the empty string and rendered "was stored for ,
+    // and this points...". Say the truth instead: we do not know.
+    //
+    // `pasted`: the ONE case where provenance is actually known, because the
+    // baseUrl and the apiKey arrived in the same blob.
+    customSwitchConfirmKeyToNewHost: (m, host, priorHost) => `Switch to the custom proxy (model: ${m}) and restart the agent.\n\nThe proxy is currently saved as ${priorHost}, and this changes it to ${host}. The stored API key will be sent there. Continue?`,
+    customSwitchConfirmKeyNoPriorHost: (m, host) => `Switch to the custom proxy (model: ${m}) and restart the agent.\n\nA stored API key will be sent to ${host}. There is no record of which host that key was saved for. Continue?`,
+    customSwitchConfirmPastedKeyToNewHost: (m, host, priorHost) => `Switch to the custom proxy (model: ${m}) and restart the agent.\n\nThe pasted API key arrived with ${priorHost}, but the proxy is now set to ${host}. That key will be sent there. Continue?`,
     customSave: 'Save',
     customSaved: 'Saved. Restarting the agent.',
+    // Pasted definition (2026-07-29). Folded shut by default -- it is a
+    // shortcut for people arriving with a blob from another tool, not the
+    // path we teach. The copy says "fills in the fields above" rather than
+    // "adds a provider" because that is literally all it does: this app runs
+    // one provider at a time, so a paste declaring several is refused with
+    // its own message from the server rather than quietly narrowed.
+    customJsonSummary: 'Paste a provider definition instead',
+    customJsonNote: 'Have a provider definition in JSON from another tool? Paste it here and it will fill in the fields above. Nothing is saved until you press Save. One provider and one model per paste.',
+    customJsonPlaceholder: '{ "providers": { "my-provider": { "baseUrl": "http://localhost:18080", "models": [{ "id": "my-model" }] } } }',
+    customJsonLoad: 'Fill in the fields',
+    customJsonEmpty: 'Paste a provider definition first',
+    customJsonLoaded: 'Filled in — check the fields above, then press Save.',
+    customJsonLoadedWithKey: 'Filled in, including an API key — check the fields above, then press Save.',
+    // Said out loud because the consequence is invisible: the key field is a
+    // password field, so "blank" and "a key you cannot see" look identical,
+    // and blank means the stored key keeps being used -- against whatever
+    // endpoint the paste just set.
+    customJsonLoadedKeptKey: 'Filled in. The paste had no API key, so the key already stored will be used with this endpoint — type a new one in the API key field above if that is not what you want.',
 
     // AUTHORED -- autonomous cycle (v0.0.6).
     //

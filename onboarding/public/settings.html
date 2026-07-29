@@ -149,6 +149,23 @@
             <span class="field-hint hidden" id="set-custom-status"></span>
             <button id="set-custom-save"></button>
           </div>
+          <!-- Pasted definition (2026-07-29). Sits BELOW the three fields on
+               purpose: the fields are the primary, understandable path, and
+               this is the shortcut for someone who already holds a provider
+               blob from another tool. It never saves directly -- it resolves
+               the paste server-side (POST .../custom-provider/preview, which
+               writes nothing) and fills the fields above, so the user reviews
+               a real base URL and model id before the normal save + confirm
+               restarts the agent. -->
+          <details id="set-custom-json">
+            <summary id="set-custom-json-summary"></summary>
+            <p class="subtitle" id="set-custom-json-note"></p>
+            <textarea id="set-custom-json-input" rows="6" spellcheck="false" autocomplete="off"></textarea>
+            <div class="step-actions">
+              <span class="field-hint hidden" id="set-custom-json-status"></span>
+              <button id="set-custom-json-load"></button>
+            </div>
+          </details>
         </div>
 
         <!-- Attach topology (0.1.0 prep, design-0016). The one setting that
