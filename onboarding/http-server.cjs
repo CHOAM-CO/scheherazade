@@ -2116,6 +2116,7 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
 const ROUTE_TO_FILE = {
   '/': 'index.html',
   '/index.html': 'index.html',
+  '/chat': 'chat.html',
   '/channels': 'channels.html',
   '/logs': 'logs.html',
   '/memory': 'memory.html',

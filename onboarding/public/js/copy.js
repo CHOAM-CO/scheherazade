@@ -555,7 +555,7 @@ window.COPY = {
     // channels FIRST (multichannel v0.0.18, Mino 07-16: "맨 앞에 채널 섹션") --
     // tab order is meaning here: the messenger the agent lives through
     // outranks what it remembers and how it runs.
-    tabs: { channels: 'Channels', memory: 'Memory', connectors: 'Connectors', settings: 'Settings', logs: 'Logs' },
+    tabs: { chat: 'Chat', channels: 'Channels', memory: 'Memory', connectors: 'Connectors', settings: 'Settings', logs: 'Logs' },
     label: 'AGENT',
     states: { live: 'Running', connecting: 'Starting…', stopped: 'Stopped', failed: 'Failed', idle: 'Not started' },
     start: 'Start',
@@ -586,6 +586,25 @@ window.COPY = {
     // the always-visible bar) -- same eng-placeholder register as the rest
     // of this section, pending the copy-track localization pass.
     autonomyBadge: (start, end) => `autonomy ${start}-${end}`,
+  },
+
+  // AUTHORED -- in-app chat page (in-app chat slice 4, Mino go 07-30
+  // 00:28, docs/in-app-chat-plan.md). Same no-false-promise register as
+  // logs: statusUnreachable says restarts "usually" clear on their own (a
+  // stale port file is exactly that), never "will".
+  chat: {
+    title: 'Chat',
+    subtitle: 'Talk to your agent right here. Connected messengers carry the same agent when you want it on your phone.',
+    placeholder: 'Message the agent…',
+    send: 'Send',
+    statusChecking: 'Checking the chat channel…',
+    statusUp: (agent) => (agent ? `${agent} is listening.` : 'Connected.'),
+    statusNotRunning: "The agent isn't running — start it from the bar above.",
+    statusUnreachable: "The agent isn't answering. If it's restarting, this usually clears on its own.",
+    wrongBackend: (b) => `The agent currently talks through ${b}, so in-app chat is off. To chat here instead, switch the channel to in-app on the Channels page.`,
+    gapMarker: '— some earlier messages fell out of the buffer —',
+    empty: 'No messages yet. Say hi.',
+    sendFailed: "Couldn't send. Your message is still in the box — try again.",
   },
 
   // AUTHORED (v0.0.20) -- session log viewer (Mino 07-16: 개발 중 앱이

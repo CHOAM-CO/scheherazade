@@ -105,7 +105,13 @@
   // connectors.title) rather than inventing new ones. Active tab is derived
   // from the URL, never hand-set, so it can't drift from reality.
   const TABS = [
-    // channels first (multichannel v0.0.18, Mino 07-16 "맨 앞에 채널 섹션").
+    // chat first (in-app chat slice 4, 2026-07-30). NAMED DEVIATION from
+    // Mino 07-16 "맨 앞에 채널 섹션": that order was set when messengers
+    // were the only way to talk to the agent; this tab IS the talking.
+    // Flagged in the slice-4 report -- if Mino wants channels back first,
+    // this one line is the revert.
+    { id: 'chat', href: '/chat', label: NAV.tabs.chat },
+    // channels next (multichannel v0.0.18, Mino 07-16 "맨 앞에 채널 섹션").
     // '/' still lands on /memory -- tab ORDER changed, the home page didn't;
     // changing the landing is a separate product call, not a ride-along.
     { id: 'channels', href: '/channels', label: NAV.tabs.channels },
@@ -119,6 +125,7 @@
 
   function activeTabId() {
     const path = window.location.pathname
+    if (path.startsWith('/chat')) return 'chat'
     if (path.startsWith('/channels')) return 'channels'
     if (path.startsWith('/connectors')) return 'connectors'
     if (path.startsWith('/settings')) return 'settings'

@@ -29,6 +29,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import http from 'node:http'
 import fs from 'node:fs/promises'
+import { unlinkSync } from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
@@ -266,8 +267,23 @@ async function boot() {
     server.listen(0, '127.0.0.1', resolve)
   })
   const { port } = server.address()
-  await writePortFile(DATA_HOME, { port, token, pid: process.pid, startedAt: localNow() })
+  const portFilePath = await writePortFile(DATA_HOME, { port, token, pid: process.pid, startedAt: localNow() })
   log(`in-app chat listening on 127.0.0.1:${port}`)
+
+  // Parent-death guard (found live, 2026-07-30: a killed parent left this
+  // process orphaned and the chat page said "listening" while notifications
+  // went into a dead pipe). stdin EOF is the one signal every parent sends
+  // by dying -- the MCP transport reads stdin but does NOT exit on its end,
+  // so without this an orphan keeps /health green, keeps 202-ing messages,
+  // and silently drops them: the exact deliver-then-lose failure this
+  // backend exists to remove. Delete the port file first so the proxy reads
+  // an honest not_running instead of probing a corpse.
+  const shutdown = () => {
+    try { unlinkSync(portFilePath) } catch { /* already gone */ }
+    process.exit(0)
+  }
+  process.stdin.on('end', shutdown)
+  process.stdin.on('close', shutdown)
 
   markers.writeLiveness()
   setInterval(() => markers.writeLiveness(), markers.LIVENESS_HEARTBEAT_MS).unref()

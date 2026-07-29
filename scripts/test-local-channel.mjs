@@ -150,5 +150,44 @@ console.log('\n8. an oversized body is refused rather than buffered')
   assert(r.code === 413, 'over the cap -> 413')
 }
 
+console.log('\n9. orphan guard: parent death (stdin EOF) takes the process AND the port file down')
+// The one section that boots the real file as a child instead of importing
+// it -- the guard lives in boot(), which the isMainModule guard keeps out of
+// every import-based section above. Found live 2026-07-30: a killed parent
+// left the channel orphaned, /health stayed green, and the chat page said
+// "listening" while notifications went into a dead pipe. stdin EOF is the
+// signal every dying parent sends; the port file must go FIRST so the proxy
+// reads an honest not_running instead of probing a corpse.
+{
+  const { spawn } = await import('node:child_process')
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const { fileURLToPath } = await import('node:url')
+  const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-localchan-orphan-'))
+  const portFile = path.join(tmp, 'local-channel.json')
+
+  const child = spawn(process.execPath, [path.join(ROOT, 'channel-local.mjs')], {
+    env: { ...process.env, AGENT_NAME: 'orphan-test', AGENT_DATA_HOME: tmp },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+  // MCP handshake so boot() completes (the transport awaits nothing, but a
+  // real parent always sends this; keeping it makes the fixture honest).
+  child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 't', version: '0' } } }) + '\n')
+
+  const deadline = Date.now() + 10_000
+  while (!fs.existsSync(portFile) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100))
+  assert(fs.existsSync(portFile), 'child boots and writes the port file')
+
+  const exited = new Promise((resolve) => child.on('exit', (code) => resolve(code)))
+  child.stdin.end() // parent death, as the child sees it
+  const code = await Promise.race([exited, new Promise((r) => setTimeout(() => r('TIMEOUT'), 5_000))])
+  assert(code === 0, `stdin EOF exits the process cleanly (got ${code})`)
+  assert(!fs.existsSync(portFile), 'the port file is deleted on the way out')
+  if (code === 'TIMEOUT') child.kill('SIGKILL')
+  fs.rmSync(tmp, { recursive: true, force: true })
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)
