@@ -151,12 +151,15 @@ function requireClosure(entrypoints) {
 // ships, not that THESE files do). Seeding them here runs the same
 // per-file checks the require graph gets: exists in tree, ships via
 // build.files, and is a real member of the shipped asar.
-// EXPECTED RED until the first build after the #9 split: the
-// mounted-DMG membership check for memory/service.mjs fails against a DMG
-// built before the file existed (same class as channel-runtime.mjs after
-// #8) -- it goes green at the next release build, and its failure line
-// names the missing file explicitly so it cannot be confused with a real
-// dead require.
+// EXPECTED RED until the first build after the #9 split, as a CLASS: any
+// file born after the currently-mounted DMG was built fails its
+// mounted-DMG membership row here (channel-runtime.mjs after #8;
+// memory/service.mjs after #9 PR-1; the nine onboarding/routes/*.cjs
+// files after #9 PR-2 -- 11 rows total against the v0.0.28 DMG). All go
+// green at the next release build. Each failure line names its file
+// explicitly; before diagnosing one as a real dead require, check whether
+// the file simply postdates the mounted DMG (git log --follow <file> vs
+// the DMG's version).
 const DYNAMIC_TARGETS = ['memory/server.mjs', 'memory/service.mjs']
 const rootModules = requireClosure([...RUNTIME_ENTRYPOINTS, ...DYNAMIC_TARGETS])
 // requireClosure records only REFERENCED modules, never its seeds -- add the
