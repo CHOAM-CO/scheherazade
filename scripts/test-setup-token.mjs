@@ -8,10 +8,13 @@
 // next word) are invisible against a hand-simplified fixture.
 //
 // No real credential appears in this file and none is needed -- the parser is
-// pure. Note that there is NO downstream validity check to fall back on:
-// validateProviderKey('claude-subscription', ...) returns {ok:true} for any
-// non-empty string, so this parser is the only thing standing between a
-// mis-read pty and a stored credential. These tests are load-bearing.
+// pure. These tests are load-bearing: the downstream validity check
+// (validateProviderKey('claude-subscription'), real since 2026-07-29, see
+// scripts/test-claude-subscription-validate.mjs) is FAIL-OPEN by design and
+// rejects only an explicit 401 authentication_error, so it is a second net
+// and not a substitute for this one. For the whole of this parser's first
+// life that call was a hardcoded {ok:true} and four separate comments cited
+// it as proof anyway -- do not thin these tests on the strength of it.
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 const {

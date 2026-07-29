@@ -157,14 +157,17 @@ function createSetupTokenSession(deps) {
       // Cancel is supposed to prevent.
       if (myRun !== runId) return
       if (!result || !result.ok) {
-        // NOT REACHABLE for this provider today, and the comment that used to
-        // sit here claimed otherwise -- that this was "the designed landing
-        // spot for a mis-capture". validateProviderKey('claude-subscription')
-        // is a hardcoded {ok:true} (see setup-token.cjs's header), so nothing
-        // rejects. The branch stays because it is the correct behaviour the
-        // moment that validation becomes real, and because a future provider
-        // reusing this session would need it -- but the mis-capture guarantee
-        // lives in the parser's wrap check, not here.
+        // REACHABLE as of 2026-07-29, and by exactly one input: Anthropic
+        // answering 401 authentication_error to the captured token. Everything
+        // else validateProviderKey can see -- network down, 5xx, 429, a scope
+        // error -- deliberately returns ok:true, because a setup-token is
+        // print-once and landing here throws it away for good.
+        //
+        // Read the history before trusting this branch further than that. It
+        // was dead for its whole first life while a comment here called it
+        // "the designed landing spot for a mis-capture"; the validation it
+        // named was a hardcoded {ok:true}. The parser's wrap check is still
+        // where the mis-capture guarantee actually lives (setup-token.cjs).
         setState('failed', 'token_rejected')
         clearChild()
         return

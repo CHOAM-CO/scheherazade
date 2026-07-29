@@ -882,6 +882,16 @@ async function checkLocalLiveness(url, label) {
 // addition 2026-07-25) -- the settings page's own POST /api/agent/custom-
 // provider is the primary way this gets configured; this route is a
 // secondary, defense-in-depth path (see 'custom' branch below).
+// Sent alongside `Authorization: Bearer` for a setup-token OAuth credential.
+// Both entries and their ORDER are copied from what the real `claude` CLI puts
+// on the wire (captured 2026-07-29 against a local server; see the
+// claude-subscription branch below). The CLI's full list carries eight more
+// feature betas -- interleaved-thinking, context-management and friends --
+// deliberately left out: they are about what a conversation may DO, not about
+// who is asking, and a validation ping should not inherit a feature list that
+// drifts every release. These two are the identity pair.
+const CLAUDE_OAUTH_BETA_HEADER = 'claude-code-20250219,oauth-2025-04-20'
+
 async function validateProviderKey(provider, key, opts = {}) {
   // chatgpt/ollama: NO user secret needed at all -- skip the generic
   // empty-key guard below entirely for these two (an empty/untouched "key"
@@ -969,20 +979,97 @@ async function validateProviderKey(provider, key, opts = {}) {
       return { ok: false, reason: (body && body.error && body.error.message) || `HTTP ${res.status}` }
     }
     if (provider === 'claude-subscription') {
-      // NEW mode (4-provider-mode wiring, 2026-07-04): the pasted value here
-      // is a `claude setup-token` 1-year OAuth token, not an x-api-key --
-      // it is NOT a valid credential for a plain x-api-key REST ping against
-      // /v1/messages the way the 'claude' (BYOK) branch above validates, and
-      // the LOCKED design explicitly says not to build an interactive-pty
-      // `setup-token` driver just to exercise it live. So this is a
-      // LOCAL-ONLY check (non-empty) -- the actual proof this credential
-      // works is the storeProviderKeyVerified() round-trip the caller does
-      // right after this returns {ok:true} (below, /api/byok/validate), plus
-      // whatever happens the first time the real agent spawns with it.
-      // Already covered by the empty-key guard at the top of this function;
-      // this branch exists so 'claude-subscription' doesn't fall through to
-      // the "알 수 없는 제공사" (unknown provider) case below.
-      return { ok: true }
+      // The value here is a `claude setup-token` 1-year OAuth token, NOT an
+      // x-api-key, so the 'claude' BYOK branch above cannot be reused: these
+      // are two different evaluators on the server side, not two spellings of
+      // one header. Verified live 2026-07-29 by sending one deliberately bogus
+      // string both ways -- as `Authorization: Bearer` it comes back
+      // {"type":"authentication_error","message":"OAuth access token is
+      // invalid."}, as `x-api-key` it comes back "invalid x-api-key".
+      //
+      // The request below is COPIED OFF THE WIRE from the client that is known
+      // to work, which is a stronger source than the docs and disagreed with
+      // them. Method: point the real CLI at a local capture server
+      // (ANTHROPIC_BASE_URL=http://127.0.0.1:PORT, isolated CLAUDE_CONFIG_DIR,
+      // a junk CLAUDE_CODE_OAUTH_TOKEN) and read what it actually sends. It
+      // sends `POST /v1/messages?beta=true` with `x-app: cli` and an
+      // anthropic-beta list LED BY `claude-code-20250219`, then oauth-2025-04-20.
+      //
+      // MEASURED WITH A REAL TOKEN 2026-07-29, and the measurement is kept here
+      // because it corrects this comment's own earlier draft. A live 1-year
+      // setup-token was minted and both shapes were sent:
+      //   this wire-copied shape                       -> 200
+      //   the docs-only shape (no ?beta=true, no x-app,
+      //     anthropic-beta: oauth-2025-04-20 alone)    -> 200 ALSO
+      // So none of the three extras is load-bearing, and the draft that said
+      // the docs-only version "would have rejected every valid token" was
+      // describing a risk that measured zero. It is kept as the wire shape
+      // anyway -- matching the client that is known to work is still the right
+      // default when the alternative is inferring from prose -- but the reason
+      // is now conservatism, not a bug that was caught.
+      // Keep this in sync with the CLI if that capture is ever redone.
+      //
+      // WHY /v1/messages AND NOT THE FREE GET: /v1/models was measured with the
+      // same live token and also answers 200, so cost is no longer the
+      // deciding factor -- it would work. /v1/messages is kept because it
+      // exercises the capability the credential is actually stored FOR. A
+      // token that authenticates but cannot infer passes /v1/models and fails
+      // the first real spawn, which is precisely the silent-failure shape this
+      // whole branch exists to end. max_tokens:1 makes the difference one
+      // token of output, which is not worth a weaker check.
+      // (Superseded follow-up, left visible on purpose: this comment used to
+      // promise "if /v1/models also accepts a valid one, move to it and drop
+      // the inference entirely". It does accept one. Not moving, for the
+      // reason above -- a promise reversed by its own evidence, not forgotten.)
+      //
+      // FAIL-OPEN, DELIBERATELY, AND THE ASYMMETRY IS THE WHOLE DESIGN. This
+      // rejects ONLY on an explicit 401 authentication_error. A network
+      // failure, a 5xx, a 429, a permission/scope error, an unrecognised body
+      // -- all return ok:true. The reason is specific to this provider and
+      // does not generalise from the BYOK branch: a setup-token is PRINT-ONCE
+      // (`claude setup-token` persists nothing anywhere, verified 2026-07-29),
+      // so a false rejection does not cost the user a retry the way a
+      // re-pasteable API key does -- it destroys the credential and forces the
+      // entire interactive OAuth flow again. Accepting a bad token instead
+      // surfaces at first agent spawn with the upstream's own error. Between
+      // those two, stranding someone who did everything right is worse.
+      // Own try/catch, not the function-level one below: that handler ends in
+      // `{ ok: false, reason: err.message }`, which for THIS provider is the
+      // exact false-rejection the paragraph above is written to prevent -- a
+      // dropped wifi frame would burn a print-once credential.
+      let res
+      try {
+        res = await fetch('https://api.anthropic.com/v1/messages?beta=true', {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${key}`,
+            'anthropic-version': '2023-06-01',
+            'anthropic-beta': CLAUDE_OAUTH_BETA_HEADER,
+            'x-app': 'cli',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'claude-haiku-4-5',
+            max_tokens: 1,
+            messages: [{ role: 'user', content: 'hi' }],
+          }),
+        })
+      } catch {
+        return {
+          ok: true,
+          verified: false,
+          detail: '네트워크 문제로 토큰을 확인하지 못했습니다. 설정은 계속 진행됩니다.',
+        }
+      }
+      if (res.ok) return { ok: true }
+      if (res.status === 401) {
+        const body = await res.json().catch(() => null)
+        if (body && body.error && body.error.type === 'authentication_error') {
+          return { ok: false, reason: '토큰이 유효하지 않습니다. setup-token을 다시 실행해 주세요.' }
+        }
+      }
+      // Everything else: we could not tell. Say so rather than blocking.
+      return { ok: true, verified: false, detail: `토큰을 확인하지 못했습니다 (HTTP ${res.status}). 설정은 계속 진행됩니다.` }
     }
     return { ok: false, reason: `알 수 없는 제공사: ${provider}` }
   } catch (err) {
