@@ -583,6 +583,12 @@ const CHANNEL_SCRIPT_PATHS = {
   discord: toUnpackedPath(path.join(REPO_ROOT, 'channel.mjs')),
   slack: toUnpackedPath(path.join(REPO_ROOT, 'channel-slack.mjs')),
   telegram: toUnpackedPath(path.join(REPO_ROOT, 'channel-telegram.mjs')),
+  // 'local' is the in-app chat window (channel-local.mjs). Unlike the other
+  // three its "platform" is a loopback HTTP listener, so it needs no account,
+  // no bot application and no token -- which is the entire point: it is the
+  // backend a brand-new user can reach the agent through before deciding
+  // whether they want a messenger at all.
+  local: toUnpackedPath(path.join(REPO_ROOT, 'channel-local.mjs')),
 }
 const CHANNEL_BACKENDS = Object.keys(CHANNEL_SCRIPT_PATHS)
 function activeChannelBackend() {
@@ -2436,6 +2442,12 @@ module.exports = {
   // above), plus fetchImpl-injectable enumerators for
   // scripts/test-channel-connect.mjs (pure, no Electron dependency).
   activeChannelBackend,
+  // Exported so scripts/test-packaging.mjs can DERIVE the list of channel
+  // backend scripts it must verify, instead of keeping its own copy. It kept
+  // a hardcoded array of three until 2026-07-30 and a fourth backend shipped
+  // unchecked by the very test that exists to catch an unpackaged channel
+  // script. One list, one place to add a backend.
+  CHANNEL_SCRIPT_PATHS,
   readSlackBotToken,
   readSlackAppToken,
   readTelegramToken,

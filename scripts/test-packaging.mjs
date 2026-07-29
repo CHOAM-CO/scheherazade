@@ -63,7 +63,16 @@ function dirsReferencedBy(file) {
   })
 }
 
-const CHANNEL_SCRIPTS = ['channel.mjs', 'channel-slack.mjs', 'channel-telegram.mjs']
+// DERIVED, not listed. This was a hardcoded array of three until 2026-07-30,
+// which meant adding a fourth backend (channel-local.mjs) produced a script
+// that shipped unchecked: not verified for dmg membership, not verified as
+// unpacked, not dependency-closed -- by the very test whose reason for
+// existing is that a channel script which is missing or asar-trapped dies at
+// spawn. The list now comes from the same object the runtime picks a backend
+// out of, so the next backend is covered by adding it there and nowhere else.
+const CHANNEL_SCRIPTS = Object.values(
+  require('../onboarding/http-server.cjs').CHANNEL_SCRIPT_PATHS,
+).map((p) => path.basename(p))
 const RUNTIME_ENTRYPOINTS = [...CHANNEL_SCRIPTS, 'onboarding/http-server.cjs', 'main.cjs']
 const referenced = new Set()
 for (const f of RUNTIME_ENTRYPOINTS) {
