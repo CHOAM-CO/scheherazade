@@ -159,7 +159,9 @@ console.log('wiring:')
   const httpSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'http-server.cjs'), 'utf8')
   check('http-server carries the gauge additive migration', httpSrc.includes("const GAUGE_HOOK = 'context-gauge.mjs'"))
   check('migration covers BOTH event groups', /hasGaugeIn\(settings\.hooks\.Stop\)/.test(httpSrc) && /hasGaugeIn\(settings\.hooks\.SessionStart\)/.test(httpSrc))
-  check('/api/context-status route exists', httpSrc.includes("pathname === '/api/context-status'"))
+  // Route bodies moved to onboarding/routes/agent-lifecycle.cjs (issue #9 PR-2).
+  const lifecycleSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'routes', 'agent-lifecycle.cjs'), 'utf8')
+  check('/api/context-status route exists', lifecycleSrc.includes("pathname === '/api/context-status'"))
 }
 
 fs.rmSync(mem, { recursive: true, force: true })

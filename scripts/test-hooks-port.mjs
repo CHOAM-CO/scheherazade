@@ -86,11 +86,15 @@ console.log('\n-- detection-only deps: the win gate exists and mac keeps managed
   ok('manual install pages are FIXED constants for both deps',
     typeof b.MANUAL_INSTALL_PAGES.codex === 'string' && b.MANUAL_INSTALL_PAGES.codex.startsWith('https://github.com/openai/codex') &&
     typeof b.MANUAL_INSTALL_PAGES.ollama === 'string' && b.MANUAL_INSTALL_PAGES.ollama.startsWith('https://ollama.com'))
-  const httpSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'http-server.cjs'), 'utf8')
-  const gateIdx = httpSrc.indexOf('if (!MANAGED_INSTALL_SUPPORTED)')
-  const startIdx = httpSrc.indexOf('startBootstrap(dep).catch')
+  // Bootstrap route BODIES moved to onboarding/routes/onboarding-meta.cjs
+  // (issue #9 PR-2) -- same assertions, new home. The BASH_HOOK_PORT /
+  // DIET_REMOVED_HOOKS migration pins elsewhere in this file stay on
+  // http-server.cjs (ensureSettingsLocalAdditions did not move).
+  const routeSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'routes', 'onboarding-meta.cjs'), 'utf8')
+  const gateIdx = routeSrc.indexOf('if (!MANAGED_INSTALL_SUPPORTED)')
+  const startIdx = routeSrc.indexOf('startBootstrap(dep).catch')
   ok('POST bootstrap route gates BEFORE ever reaching startBootstrap', gateIdx !== -1 && startIdx !== -1 && gateIdx < startIdx)
-  ok('status route tells the wizard which mode to render (managed flag)', httpSrc.includes('managed: MANAGED_INSTALL_SUPPORTED'))
+  ok('status route tells the wizard which mode to render (managed flag)', routeSrc.includes('managed: MANAGED_INSTALL_SUPPORTED'))
   const wizardSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'public', 'js', 'wizard.js'), 'utf8')
   ok('wizard renders manual UI when managed === false', wizardSrc.includes('dep.managed === false') && wizardSrc.includes('function buildManualInstallUI'))
   const copySrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'public', 'js', 'copy.js'), 'utf8')

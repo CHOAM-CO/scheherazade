@@ -112,17 +112,22 @@ console.log('mcp connector intercept (parser + url regex + lane gate)\n')
 
 // ── 4. source pins: routes + env scrub + injected bin + cleanup ────────────
 {
+  // Route BODIES moved to onboarding/routes/mcp-connectors.cjs (issue #9
+  // PR-2); the login-driver internals (startMcpConnectorLogin, env scrub,
+  // killAllLoginChildren) stay in http-server.cjs. Same assertions, split
+  // across the two homes.
   const src = fs.readFileSync(path.join(ROOT, 'onboarding', 'http-server.cjs'), 'utf8')
-  check('GET /api/mcp-connectors route exists', src.includes("'/api/mcp-connectors'"))
-  check('POST /api/mcp-connector/login route exists', src.includes("'/api/mcp-connector/login'"))
-  check('GET /api/mcp-connector/status route exists', src.includes("'/api/mcp-connector/status'"))
-  check('login route reports the lane warning to the UI', src.includes('laneWarning'))
+  const routeSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'routes', 'mcp-connectors.cjs'), 'utf8')
+  check('GET /api/mcp-connectors route exists', routeSrc.includes("'/api/mcp-connectors'"))
+  check('POST /api/mcp-connector/login route exists', routeSrc.includes("'/api/mcp-connector/login'"))
+  check('GET /api/mcp-connector/status route exists', routeSrc.includes("'/api/mcp-connector/status'"))
+  check('login route reports the lane warning to the UI', routeSrc.includes('laneWarning'))
   check('CHILD env scrubs ANTHROPIC_API_KEY (connectors are suppressed by it)',
     /delete childEnv\.ANTHROPIC_API_KEY/.test(src))
   check('parent env is never mutated (only childEnv is deleted from)',
     !src.includes('delete process.env.ANTHROPIC_API_KEY'))
   check('bin comes from the injected resolver, not http-server resolveBin',
-    src.includes('agentControls.resolveClaudeBin()') && !src.includes("resolveBin('claude')"))
+    routeSrc.includes('agentControls.resolveClaudeBin()') && !routeSrc.includes("resolveBin('claude')") && !src.includes("resolveBin('claude')"))
   check('mcp auth children ride the app-quit cleanup (killAllLoginChildren sweeps them)',
     src.slice(src.indexOf('function killAllLoginChildren')).includes('mcpLoginChildren'))
 
