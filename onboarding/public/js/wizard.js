@@ -558,11 +558,178 @@
       wireValidateNext()
       if (claudeSubMode === 'primary') {
         const primary = claudeTab.primary
+        const A = primary.inApp
+        const statusEl = $('s1-status')
         const panel = document.createElement('div')
+
+        // ── in-app capture (default path) ───────────────────────────────
+        // The app runs `claude setup-token` itself and reads the token out
+        // of that child, so the 1-year credential never reaches the
+        // clipboard. The manual Terminal steps below are preserved verbatim
+        // and reachable in one click -- this adds a default, it does not
+        // remove a path. If the spawn fails on some machine, the flow the
+        // user had yesterday is still right there.
+        //
+        // Polling reuses loginPollTimer on purpose: renderClaudeArea calls
+        // stopLoginPoll() on every tab/submode change, so switching away
+        // cancels this poll through machinery that already exists rather
+        // than a second timer nobody remembers to clear.
+        const inAppPanel = document.createElement('div')
+        const leadEl = document.createElement('p')
+        leadEl.textContent = A.lead
+        inAppPanel.appendChild(leadEl)
+
+        const btnRow = document.createElement('div')
+        btnRow.className = 'step-actions'
+        const loginBtn = document.createElement('button')
+        loginBtn.type = 'button'
+        loginBtn.textContent = A.button
+        const cancelBtn = document.createElement('button')
+        cancelBtn.type = 'button'
+        cancelBtn.className = 'secondary hidden'
+        cancelBtn.textContent = A.cancel
+        btnRow.appendChild(loginBtn)
+        btnRow.appendChild(cancelBtn)
+        inAppPanel.appendChild(btnRow)
+
+        // Fallback code box. Hidden unless the CLI actually asks -- it races
+        // a localhost callback against its own paste prompt, and on most
+        // machines the redirect wins and this never appears. Showing it up
+        // front would present an optional step as a required one.
+        const codeField = document.createElement('div')
+        codeField.className = 'field hidden'
+        const codeHint = document.createElement('div')
+        codeHint.className = 'field-hint'
+        codeHint.textContent = A.codePrompt
+        const codeInner = document.createElement('div')
+        codeInner.className = 'step-actions'
+        const codeInput = document.createElement('input')
+        codeInput.type = 'text'
+        codeInput.autocomplete = 'off'
+        const codeBtn = document.createElement('button')
+        codeBtn.type = 'button'
+        codeBtn.className = 'secondary'
+        codeBtn.textContent = A.codeButton
+        codeInner.appendChild(codeInput)
+        codeInner.appendChild(codeBtn)
+        codeField.appendChild(codeHint)
+        codeField.appendChild(codeInner)
+        inAppPanel.appendChild(codeField)
+        panel.appendChild(inAppPanel)
+
+        function applySetupStatus(s) {
+          const st = s && s.state
+          if (st === 'running' || st === 'awaiting_code') {
+            statusEl.className = 'status-line pending'
+            statusEl.textContent = A.waiting
+            loginBtn.disabled = true
+            cancelBtn.classList.remove('hidden')
+            // awaiting_code means the fallback is AVAILABLE, not required.
+            if (st === 'awaiting_code') codeField.classList.remove('hidden')
+          } else if (st === 'validating') {
+            statusEl.className = 'status-line pending'
+            statusEl.textContent = A.validating
+            loginBtn.disabled = true
+          } else if (st === 'connected') {
+            stopLoginPoll()
+            statusEl.className = 'status-line success'
+            statusEl.textContent = A.success
+            loginBtn.disabled = false
+            cancelBtn.classList.add('hidden')
+            codeField.classList.add('hidden')
+            // The server already validated AND stored the credential, so
+            // Next must NOT re-run the key-validate handler -- there is no
+            // key in the form to send. Advance directly.
+            nextBtn.disabled = false
+            nextBtn.onclick = () => { state.provider = 'claude-subscription'; showStep('2') }
+          } else if (st === 'failed' || st === 'cancelled') {
+            stopLoginPoll()
+            statusEl.className = 'status-line failure'
+            statusEl.textContent = A.failure(s.reason)
+            loginBtn.disabled = false
+            cancelBtn.classList.add('hidden')
+            codeField.classList.add('hidden')
+          }
+        }
+
+        // ONE definition of the poll, used by both the button and the resume
+        // path below. Written twice, the resume copy is the one that silently
+        // drifts -- and it is the copy nobody exercises by hand.
+        function startSetupPoll() {
+          stopLoginPoll()
+          loginPollTimer = setInterval(async () => {
+            try { applySetupStatus(await api('/api/setup-token/status')) } catch (err) { /* transient: keep polling */ }
+          }, 2000)
+        }
+
+        loginBtn.onclick = async () => {
+          loginBtn.disabled = true
+          statusEl.className = 'status-line pending'
+          statusEl.textContent = A.starting
+          try {
+            applySetupStatus(await api('/api/setup-token/start', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+            }))
+          } catch (err) {
+            statusEl.className = 'status-line failure'
+            statusEl.textContent = C.genericError(err.message)
+            loginBtn.disabled = false
+            return
+          }
+          startSetupPoll()
+        }
+
+        cancelBtn.onclick = async () => {
+          try { applySetupStatus(await api('/api/setup-token/cancel', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+          })) } catch (err) { stopLoginPoll() }
+        }
+
+        codeBtn.onclick = async () => {
+          const code = codeInput.value.trim()
+          if (!code) return
+          codeBtn.disabled = true
+          try {
+            const s = await api('/api/setup-token/code', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }),
+            })
+            if (s.ok === false && s.reason === 'invalid_code') {
+              statusEl.className = 'status-line failure'
+              statusEl.textContent = A.codeInvalid
+            } else {
+              codeInput.value = ''
+              applySetupStatus(s)
+            }
+          } catch (err) {
+            statusEl.className = 'status-line failure'
+            statusEl.textContent = C.genericError(err.message)
+          } finally {
+            codeBtn.disabled = false
+          }
+        }
+
+        // ── manual Terminal path (preserved, one click away) ─────────────
+        const manualToggle = document.createElement('button')
+        manualToggle.type = 'button'
+        manualToggle.className = 'link'
+        manualToggle.textContent = A.manualToggle
+        panel.appendChild(manualToggle)
+
+        const manualPanel = document.createElement('div')
+        manualPanel.className = 'hidden'
+        manualToggle.onclick = () => {
+          const opening = manualPanel.classList.contains('hidden')
+          manualPanel.classList.toggle('hidden')
+          // The manual path submits the pasted token through the normal
+          // key-validate handler, so the key field and that handler come
+          // back only while this panel is open.
+          keyFieldWrap.classList.toggle('hidden', !opening)
+          if (opening) { wireValidateNext(); nextBtn.disabled = false }
+        }
 
         const precondEl = document.createElement('p')
         precondEl.textContent = primary.precondition
-        panel.appendChild(precondEl)
+        manualPanel.appendChild(precondEl)
 
         const stepsEl = document.createElement('ol')
         primary.steps.forEach((stepText) => {
@@ -570,7 +737,7 @@
           li.textContent = stepText
           stepsEl.appendChild(li)
         })
-        panel.appendChild(stepsEl)
+        manualPanel.appendChild(stepsEl)
 
         // Command-copy widget. AUTHORED button label (see COPY_BUTTON_LABEL's
         // own header comment) -- copy.js's redesign added `copyCommand` (the
@@ -598,13 +765,14 @@
         cmdInner.appendChild(cmdText)
         cmdInner.appendChild(copyBtn)
         cmdRow.appendChild(cmdInner)
-        panel.appendChild(cmdRow)
+        manualPanel.appendChild(cmdRow)
 
         const subtextEl = document.createElement('p')
         subtextEl.className = 'field-hint'
         subtextEl.textContent = primary.subtext
-        panel.appendChild(subtextEl)
+        manualPanel.appendChild(subtextEl)
 
+        panel.appendChild(manualPanel)
         extraEl.appendChild(panel)
 
         const toggleBtn = document.createElement('button')
@@ -620,9 +788,38 @@
         hintEl.textContent = ''
         keyInput.placeholder = 'Paste the token'
         // ACCEPTANCE TEST CONTRACT: primary (setup-token) sub-mode submits
-        // provider:'claude-subscription' -- never 'claude'.
+        // provider:'claude-subscription' -- never 'claude'. Both paths in
+        // this sub-mode honour it: the manual paste goes through
+        // validateNextHandler with state.provider set here, and the in-app
+        // capture stores under the same id server-side (PROVIDER_ID in
+        // setup-token-session.cjs).
         nextBtn.textContent = primary.button
         state.provider = 'claude-subscription'
+        // In-app capture is the default, so the key field starts hidden and
+        // Next starts gated -- there is nothing to submit until either the
+        // capture connects or the user opens the manual panel. The reset at
+        // the top of renderClaudeArea un-hides the field for every tab, so
+        // this must come AFTER it.
+        keyFieldWrap.classList.add('hidden')
+        nextBtn.disabled = true
+        // Surface where we already stand, same as the login tabs: a flow left
+        // running (or already connected) renders immediately without
+        // spawning anything. Failure to reach it degrades to the buttons
+        // above, which is exactly the pre-existing manual onboarding.
+        api('/api/setup-token/status').then((s) => {
+          if (!s || s.state === 'idle') return
+          applySetupStatus(s)
+          // A flow still IN FLIGHT needs its poll restarted, not just its
+          // status line repainted. The session is a module-scope singleton on
+          // the server and outlives this page, but the interval driving it
+          // died with the previous render -- a reload, or navigating away and
+          // back, mid-login. Without this the user sits on "waiting for the
+          // browser login to finish" forever while the child has already
+          // completed and stored the credential. Found by walking my own
+          // orderings, not by a test; the pin for it is in
+          // test-setup-token-copy.mjs.
+          if (s.state === 'running' || s.state === 'awaiting_code' || s.state === 'validating') startSetupPoll()
+        }).catch(() => {})
       } else {
         // claude, fallback (BYOK sk-ant) sub-mode
         const introEl = document.createElement('p')

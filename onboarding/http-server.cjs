@@ -60,6 +60,10 @@ const autonomyCycle = require(path.join(__dirname, '..', 'autonomy', 'cycle.cjs'
 const { LOGIN_PROVIDERS, setLoginStatus, getLoginStatus } = require('./login-status.cjs')
 const logBuffer = require('./log-buffer.cjs') // /api/logs read side; main.cjs owns the write side + sink init
 const attachTopology = require('../attach-topology.cjs') // /api/topology read side (0.1.0 prep); no Electron deps, safe here
+// In-app `claude setup-token` capture. Pure-JS state machine; node-pty is
+// required lazily inside it, so importing this here cannot fail the server
+// boot on a box where the native module did not build.
+const { createSetupTokenSession, killSetupTokenChildOnShutdown } = require('../setup-token-session.cjs')
 
 // sudo askpass per-boot token (0.1.0 prep): generated in createOnboardingServer's
 // listen callback, checked by GET /api/sudo/password. Module-level on purpose --
@@ -1517,6 +1521,42 @@ function clearMcpLoginChild(name) {
   if (mcpLoginTimers[name]) { clearTimeout(mcpLoginTimers[name]); mcpLoginTimers[name] = null }
 }
 
+// ── in-app `claude setup-token` capture (claude-subscription lane) ─────────
+// Single session for the whole server: one user, one app, and two concurrent
+// `setup-token` children would race each other for the same localhost
+// callback port the CLI opens.
+//
+// Built LAZILY rather than at module scope because it needs
+// resolveClaudeBin, which lives on agentControls -- a per-call value from
+// main.cjs, never staticCtx (see the staticCtx comment near the bottom of
+// this file). The controls object is stable in practice, but the resolver
+// closes over `lastAgentControls` so the binary is resolved fresh at spawn
+// time rather than pinned to whichever request happened to construct the
+// session first.
+//
+// The session owns the credential end to end -- capture, validate, store --
+// and its status() is the only thing route handlers may return. See
+// setup-token-session.cjs's header for why that boundary is drawn in the
+// module rather than at each call site.
+let setupTokenSession = null
+let lastAgentControls = null
+function getSetupTokenSession(agentControls) {
+  if (agentControls) lastAgentControls = agentControls
+  if (!setupTokenSession) {
+    setupTokenSession = createSetupTokenSession({
+      resolveClaudeBin: () => (
+        lastAgentControls && typeof lastAgentControls.resolveClaudeBin === 'function'
+          ? lastAgentControls.resolveClaudeBin()
+          : null
+      ),
+      validateProviderKey,
+      storeProviderKeyVerified,
+      log,
+    })
+  }
+  return setupTokenSession
+}
+
 // Parser for `claude mcp list`: real output has a health-check preamble
 // line and local servers marked "⏸ Pending approval", not just the doc's two
 // states. Line-based match naturally skips the preamble; we keep ONLY
@@ -1826,6 +1866,14 @@ function killAllLoginChildren(signal = 'SIGTERM') {
     }
     mcpLoginChildren[name] = null
   }
+  // The in-app `claude setup-token` pty is the SAME class again -- a
+  // long-lived-credential OAuth login child, and this one additionally holds
+  // a localhost /callback listener open. It is not detached, but this
+  // function exists precisely because the project does not rely on implicit
+  // cleanup for its siblings, and an orphan here could finish an exchange and
+  // print a 1-year token into a pty whose owner is gone. Rides the same
+  // before-quit/fatal wiring in main.cjs rather than adding a second export.
+  killSetupTokenChildOnShutdown()
 }
 
 // List the account's claude.ai connectors. Read-only, no token needed. Runs
@@ -2173,6 +2221,8 @@ const staticCtx = {
   // mcp connectors
   connectorLaneWarning, listMcpConnectors, setMcpStatus, getMcpStatus,
   startMcpConnectorLogin, MCP_CONNECTOR_SPEC,
+  // in-app setup-token capture (claude-subscription)
+  getSetupTokenSession,
   // agent status / model table
   computeAgentStatus, contextCapForModel,
   // autonomy
@@ -2197,6 +2247,7 @@ const API_ROUTES = [
   ...require('./routes/permissions.cjs').createRoutes(staticCtx), // G7
   ...require('./routes/memory.cjs').createRoutes(staticCtx), // G8
   ...require('./routes/settings.cjs').createRoutes(staticCtx), // G9
+  ...require('./routes/setup-token.cjs').createRoutes(staticCtx), // G10
 ]
 
 module.exports = {

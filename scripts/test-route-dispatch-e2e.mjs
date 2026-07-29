@@ -205,6 +205,49 @@ try {
   const rnBody = await rn.json()
   chk('G9 rename echoes the merged config (DISPLAY_NAME landed in the fixture)', rnBody.ok === true && rnBody.config.DISPLAY_NAME === 'e2e-디스패치', JSON.stringify(rnBody).slice(0, 200))
 
+  // ── G10 setup-token (in-app `claude setup-token` capture) ────────────────
+  // POST /api/setup-token/start is SKIPPED for the same reason G4's login
+  // POST is: it spawns a real claude CLI child. The other three routes have
+  // no side effects before a session exists, and between them they still
+  // exercise the thing this file was written to catch -- the
+  // getSetupTokenSession staticCtx binding, which is runtime-only and would
+  // surface as a 500 on first hit.
+  const st = await hit('G10 GET /api/setup-token/status', '/api/setup-token/status', 200)
+  const stBody = await st.json()
+  chk('G10 status is idle before anything starts',
+    stBody.state === 'idle' && stBody.provider === 'claude-subscription', JSON.stringify(stBody))
+  chk('G10 status carries no credential-shaped field',
+    !('token' in stBody) && !('raw' in stBody) && !('output' in stBody), JSON.stringify(stBody))
+
+  // The manual-code route with no session running: 400 by name, and -- the
+  // assertion that matters -- the rejected value is NOT echoed back. This is
+  // the unbounded-echo class that has bitten this server repeatedly, checked
+  // here on the wire rather than trusted from the handler's source.
+  const marker = 'ZZUNIQUECODEMARKERZZ'
+  const badCode = await hit('G10 POST /api/setup-token/code (no session)', '/api/setup-token/code', 400,
+    { method: 'POST', headers: auth, body: JSON.stringify({ code: marker }) })
+  const badBody = await badCode.text()
+  chk('G10 code rejection names a fixed reason', JSON.parse(badBody).reason === 'not_running', badBody.slice(0, 200))
+  chk('G10 code rejection does NOT echo the submitted code', !badBody.includes(marker), badBody.slice(0, 200))
+  chk('G10 code rejection stays small (no buffer/prose smuggled in)', badBody.length < 300, `len=${badBody.length}`)
+
+  // Cancel with nothing running is a no-op, not an error -- a user who backs
+  // out of a flow that already ended must not see a failure.
+  const cx = await hit('G10 POST /api/setup-token/cancel (nothing running)', '/api/setup-token/cancel', 200,
+    { method: 'POST', headers: auth, body: '{}' })
+  const cxBody = await cx.json()
+  chk('G10 cancel is a clean no-op when idle', cxBody.ok === true, JSON.stringify(cxBody).slice(0, 200))
+
+  // Mutating routes must be behind the per-launch token like every other POST
+  // in this server -- an unauthenticated caller must not be able to spawn a
+  // CLI child or drive a pty.
+  const noTok = await fetch(`${base}/api/setup-token/start`, { method: 'POST' })
+  chk('G10 start without the onboard token is refused', noTok.status === 403, noTok.status)
+  const noTokCode = await fetch(`${base}/api/setup-token/code`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: 'abcd1234' }),
+  })
+  chk('G10 code without the onboard token is refused', noTokCode.status === 403, noTokCode.status)
+
   // ── dispatch-contract edges (the old chain's exact fall-through) ──────────
   // 'chatgpt' IS in LOGIN_PROVIDERS (login-status.cjs), so the allowlist
   // passes and PUT hits none of the GET/POST/DELETE branches -- the old

@@ -41,6 +41,8 @@
       "channel-telegram.mjs",
       "channel-runtime.mjs",
       "provider-env.cjs",
+      "setup-token.cjs",
+      "setup-token-session.cjs",
       "tcc-probe.cjs",
       "run.sh",
       "supervisor.mjs",
