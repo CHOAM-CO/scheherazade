@@ -19,9 +19,10 @@
 //      arbitrary user text (Korean, spaces, shell metacharacters) is not
 //      safe there. (That's setup.sh's own CLI-launcher deployment path --
 //      separate from this file's DATA_HOME, see below.)
-//   2. memory/server.mjs used to resolve its DB path from AGENT_NAME at
-//      *module import time* -- see DATA_HOME below for why neither this
-//      file nor memory/server.mjs does that anymore.
+//   2. the memory data layer (memory/service.mjs) used to resolve its DB
+//      path from AGENT_NAME at *module import time* (back when it lived
+//      inside memory/server.mjs) -- see DATA_HOME below for why neither
+//      this file nor the memory layer does that anymore.
 // See writeAgentConfig() below for where DISPLAY_NAME (persona-facing) is
 // stored alongside AGENT_NAME (internal identifier).
 
@@ -90,8 +91,8 @@ const AGENT_NAME = 'scheherazade'
 // *value* inside .agent-config -- it NEVER moves, renames, or otherwise
 // touches DATA_HOME. v1 has no live users, so no migration path is needed.
 //
-// memory/server.mjs's DB_PATH resolves from this exact same fixed
-// directory now (not AGENT_NAME) -- see its own top-of-file comment. Its
+// memory/service.mjs's DB_PATH resolves from this exact same fixed
+// directory now (not AGENT_NAME) -- see its DATA_HOME comment. Its
 // SCHEHERAZADE_MEMORY_DB env override (used by memory/smoke.mjs) still
 // works unchanged.
 //
@@ -1101,7 +1102,7 @@ function readProviderKey(provider) {
 }
 
 // Store then immediately read back and compare -- same "read-back-verify"
-// discipline memory/server.mjs uses on every write (its SILENT FIELD-DROP
+// discipline memory/service.mjs uses on every write (its SILENT FIELD-DROP
 // guard). A safeStorage round-trip failure must be loud, not discovered
 // later when the live agent tries to use a corrupted credential.
 function storeProviderKeyVerified(provider, key) {
@@ -1542,31 +1543,36 @@ function channelBackendReadiness() {
   }
 }
 
-// ── memory tool bridge (bypasses MCP stdio, direct dynamic import) ───────
-let _memoryModulePromise = null
-let _db = null
+// ── memory service bridge (data layer, memory/service.mjs) ───────────────
+// Issue #9 PR-1: this used to dynamic-import memory/server.mjs — the MCP
+// stdio ENTRYPOINT — for its exports, AND run ad hoc SQL against its cached
+// db handle for operations that module never exported (imported_pointers
+// upsert/clear, journal-day delete, active-day scan). The data layer now
+// lives in memory/service.mjs (the MCP server is a thin adapter over the
+// same functions); every memory-touching route below calls its exported
+// (args)-only API, the service owns its own singleton connection, and this
+// file holds zero SQL and zero imports of memory/server.mjs.
+// Still a dynamic import — this file is CJS, the service is ESM — same
+// mechanism as before, just pointed at a peer data module, never at the
+// MCP entrypoint.
+let _memoryServicePromise = null
 
-async function getMemory() {
-  if (!_memoryModulePromise) {
-    // memory/server.mjs resolves AGENT_NAME/DB_PATH from process.env at
-    // module top-level, once, on first import -- must be set before the
-    // dynamic import fires.
+function getMemoryService() {
+  if (!_memoryServicePromise) {
+    // service.mjs resolves DB_PATH from process.env at module top-level,
+    // once, on first import -- must be set before the dynamic import fires.
     if (!process.env.AGENT_NAME) process.env.AGENT_NAME = AGENT_NAME
-    const url = pathToFileURL(path.join(REPO_ROOT, 'memory', 'server.mjs')).href
-    _memoryModulePromise = import(url)
+    const url = pathToFileURL(path.join(REPO_ROOT, 'memory', 'service.mjs')).href
+    _memoryServicePromise = import(url)
   }
-  const mod = await _memoryModulePromise
-  if (!_db) {
-    _db = mod.initDb()
-  }
-  return { mod, db: _db }
+  return _memoryServicePromise
 }
 
 const CATEGORY_TABLES = ['user_facts', 'open_threads', 'corrections', 'preferences']
 const ALL_MEMORY_TABLES = [...CATEGORY_TABLES, 'memory_events']
 
 async function writePersonaPreferences({ tone, primaryTask, proactiveEnabled, proactiveWindowStart, proactiveWindowEnd }) {
-  const { mod, db } = await getMemory()
+  const service = await getMemoryService()
   const session = `onboarding-${new Date().toISOString().slice(0, 10)}`
   const rows = [
     ['tone', tone],
@@ -1578,7 +1584,7 @@ async function writePersonaPreferences({ tone, primaryTask, proactiveEnabled, pr
   }
   for (const [key, value] of rows) {
     if (value === undefined || value === null || value === '') continue
-    mod.memoryWrite(db, { table: 'preferences', data: { key, value, source_session: session } })
+    service.write({ table: 'preferences', data: { key, value, source_session: session } })
   }
 }
 
@@ -1851,8 +1857,8 @@ function collapseSessionEvents(todays) {
 // leave null). Same date-derivation-over-session-string principle this
 // fleet already landed on elsewhere (boot-handoff date-only note filter).
 async function getSessionEvents() {
-  const { mod, db } = await getMemory()
-  const { rows } = mod.memoryQuery(db, { table: 'memory_events' })
+  const service = await getMemoryService()
+  const { rows } = service.query({ table: 'memory_events' })
   if (rows.length === 0) return { date: null, events: [] }
   const sorted = [...rows].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
   const latestDate = sorted[0].at.slice(0, 10)
@@ -1863,7 +1869,7 @@ async function getSessionEvents() {
     let preview = null
     if (ev.event !== 'delete' && CATEGORY_TABLES.includes(ev.table_name)) {
       try {
-        const { rows: rowMatch } = mod.memoryQuery(db, { table: ev.table_name, filter: { id: ev.row_id } })
+        const { rows: rowMatch } = service.query({ table: ev.table_name, filter: { id: ev.row_id } })
         if (rowMatch.length === 1) preview = rowMatch[0]
       } catch (_err) {
         // Row may have since been deleted/edited out from under this event
@@ -3675,40 +3681,23 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
   // be rendered as, or mistaken for, one of the agent's own memory categories.
   if (pathname === '/api/memory/import' && req.method === 'POST') {
     const { scanPointers } = require('../memory/pointer-scan.cjs')
-    const { db } = await getMemory()
+    const service = await getMemoryService()
     const { pointers, coverage } = scanPointers({})
-    const now = new Date().toISOString()
-    // Upsert on path: a re-scan refreshes what's there rather than piling up
-    // duplicate rows for the same file (UNIQUE(path) in the DDL backs this).
-    const stmt = db.prepare(`
-      INSERT INTO imported_pointers (source_tool, path, kind, topic, size_bytes, mtime, indexed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(path) DO UPDATE SET
-        source_tool = excluded.source_tool,
-        kind        = excluded.kind,
-        topic       = excluded.topic,
-        size_bytes  = excluded.size_bytes,
-        mtime       = excluded.mtime,
-        indexed_at  = excluded.indexed_at
-    `)
-    let written = 0
-    for (const p of pointers) {
-      try {
-        stmt.run(p.source_tool, p.path, p.kind, p.topic, p.size_bytes, p.mtime, now)
-        written++
-      } catch (err) {
-        // One bad row must not abort the whole scan (seedAgentDefinitions'
-        // per-entry try/catch shape). Loud in the log, invisible to the user.
-        console.error(`[scheherazade/onboarding] pointer upsert failed for ${p.path}:`, err.message)
-      }
+    // Upsert-on-path semantics live in service.importPointers now (re-scan
+    // refreshes in place, UNIQUE(path) backs it). One bad row must not abort
+    // the whole scan -- failures come back to us, and we log them loud here,
+    // invisible to the user, same as before the move.
+    const { written, failures } = service.importPointers(pointers)
+    for (const f of failures) {
+      console.error(`[scheherazade/onboarding] pointer upsert failed for ${f.path}:`, f.error)
     }
     sendJson(res, 200, { ok: true, written, coverage })
     return
   }
   if (pathname === '/api/memory/pointers' && req.method === 'GET') {
     const { scanPointers: _s, defaultSources } = require('../memory/pointer-scan.cjs')
-    const { mod, db } = await getMemory()
-    const { rows } = mod.memoryQuery(db, { table: 'imported_pointers' })
+    const service = await getMemoryService()
+    const { rows } = service.query({ table: 'imported_pointers' })
     // Coverage notes are static per tool; the counts are live from the table.
     // Deliberately does NOT re-scan -- reading the page must never touch the
     // user's files. Opt-in means opt-in.
@@ -3721,8 +3710,8 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     return
   }
   if (pathname === '/api/memory/pointers' && req.method === 'DELETE') {
-    const { db } = await getMemory()
-    db.prepare('DELETE FROM imported_pointers').run()
+    const service = await getMemoryService()
+    service.clearPointers()
     sendJson(res, 200, { ok: true })
     return
   }
@@ -3741,19 +3730,15 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
   // not write." The user is owed the difference, because only one of those is a
   // bug. (Same rule as the pointer index's found:0 rows.)
   if (pathname === '/api/journal' && req.method === 'GET') {
-    const { mod, db } = await getMemory()
-    const { rows } = mod.journalRead(db, { limit: 120 })
+    const service = await getMemoryService()
+    const { rows } = service.journalRead({ limit: 120 })
     const written = new Set(rows.map((r) => r.date))
 
-    // Days with activity, from the audit log. substr(1,10) of an ISO timestamp
-    // is the UTC date -- close enough to spot a gap, and deliberately NOT used
-    // to key an entry (journal days are LOCAL days; see localToday).
+    // Days with activity, from the audit log (service.listActiveJournalDays;
+    // its UTC-vs-local caveat is documented there).
     let activeDays = []
     try {
-      activeDays = db
-        .prepare("SELECT DISTINCT substr(at, 1, 10) AS d FROM memory_events ORDER BY d DESC LIMIT 120")
-        .all()
-        .map((r) => r.d)
+      activeDays = service.listActiveJournalDays(120)
     } catch { activeDays = [] }
     const gaps = activeDays.filter((d) => !written.has(d))
 
@@ -3762,11 +3747,11 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
   }
   const journalDayMatch = pathname.match(/^\/api\/journal\/(\d{4}-\d{2}-\d{2})$/)
   if (journalDayMatch && req.method === 'DELETE') {
-    const { db } = await getMemory()
-    const info = db.prepare('DELETE FROM journal_entries WHERE date = ?').run(journalDayMatch[1])
-    // Same secure-erase contract as memoryDelete: the bytes go, not just the row.
-    try { db.exec("PRAGMA wal_checkpoint(TRUNCATE)") } catch { /* best effort */ }
-    sendJson(res, 200, { ok: true, deleted: Number(info.changes || 0) })
+    const service = await getMemoryService()
+    // Same secure-erase contract as memoryDelete: the bytes go, not just the
+    // row (wal_checkpoint lives inside deleteJournalDay).
+    const { deleted } = service.deleteJournalDay(journalDayMatch[1])
+    sendJson(res, 200, { ok: true, deleted })
     return
   }
 
@@ -3777,8 +3762,8 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
       sendJson(res, 400, { error: `not a category table: ${table}` })
       return
     }
-    const { mod, db } = await getMemory()
-    const { rows } = mod.memoryQuery(db, { table })
+    const service = await getMemoryService()
+    const { rows } = service.query({ table })
     sendJson(res, 200, { table, rows })
     return
   }
@@ -3791,8 +3776,8 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
       sendJson(res, 400, { error: `not a deletable table: ${table}` })
       return
     }
-    const { mod, db } = await getMemory()
-    mod.memoryDelete(db, { table, id }) // throws loud on 0-row match -- caught below -> 404/500
+    const service = await getMemoryService()
+    service.remove({ table, id }) // throws loud on 0-row match -- caught below -> 404/500
     sendJson(res, 200, { ok: true })
     return
   }
