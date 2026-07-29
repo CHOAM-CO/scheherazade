@@ -141,6 +141,57 @@ window.COPY = {
           copyCommand: 'claude setup-token',
           subtext: "No API key needed. Your subscription applies as-is, and the token is stored only in this Mac's keychain.",
           button: 'Verify connection',
+          // In-app capture: the app runs `claude setup-token` itself and
+          // reads the token out of that process, so the credential never
+          // reaches the clipboard. The steps/copyCommand above stay as the
+          // manual fallback for machines where the spawn or the loopback
+          // redirect does not work -- this replaces nothing, it just becomes
+          // the default path.
+          //
+          // HONESTY CONSTRAINTS, same principle as the Ollama note below:
+          // a browser DOES open, so do not imply otherwise; and the code box
+          // may or may not be needed, because the CLI races a localhost
+          // callback against its own paste prompt (verified in the 2.1.220
+          // binary: waitForAuthorizationCode resolves from whichever lands
+          // first). Copy must not promise one-click and must not present the
+          // code box as a required step.
+          inApp: {
+            button: 'Log in with Claude',
+            lead: 'A browser window opens for you to log in. When it finishes, the app picks the token up on its own -- you should not have to copy anything.',
+            starting: 'Starting the login…',
+            waiting: 'Waiting for the browser login to finish…',
+            // Shown only if the localhost hand-back does not land.
+            codePrompt: "If the browser showed you a code instead of returning here, paste it below.",
+            codeButton: 'Submit code',
+            codeInvalid: "That doesn't look like an authorization code. Copy the whole value from the browser.",
+            validating: 'Checking the token…',
+            success: 'Connected. Your Claude subscription is set up.',
+            cancel: 'Cancel',
+            manualToggle: 'Do it manually in Terminal instead',
+            // Reason codes come from setup-token-session.cjs and are a fixed
+            // enum -- never child output, so they are safe to switch on. The
+            // default exists because a new reason must degrade to something
+            // truthful rather than to an empty status line.
+            failure: (reason) => ({
+              cli_missing: 'The claude command was not found on this Mac. Install it, then try again.',
+              spawn_failed: 'The login could not be started. Try the manual steps below.',
+              timeout: 'The login was not finished in time. Try again.',
+              // Capture-failure family. These five differ only in how the
+              // read went wrong, and the user's remedy is identical for all
+              // of them, so they deliberately SHARE one sentence -- but they
+              // are mapped explicitly rather than left to the default. That
+              // keeps the default reserved for a reason nobody has written
+              // copy for yet, which is what the copy-coverage test watches.
+              no_token_in_output: 'The login ended without producing a token. Try again, or use the manual steps below.',
+              no_output: 'The login ended without producing a token. Try again, or use the manual steps below.',
+              token_too_short: 'The login ended without producing a token. Try again, or use the manual steps below.',
+              token_too_long: 'The login ended without producing a token. Try again, or use the manual steps below.',
+              token_malformed: 'The login ended without producing a token. Try again, or use the manual steps below.',
+              token_rejected: 'The token was captured but Anthropic rejected it. Try again.',
+              store_failed: 'The token could not be saved to the keychain. Try again.',
+              user_cancelled: 'Login cancelled.',
+            }[reason] || 'The login did not complete. Try again, or use the manual steps below.'),
+          },
         },
       },
       {
