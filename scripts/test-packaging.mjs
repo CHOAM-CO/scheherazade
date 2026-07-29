@@ -141,7 +141,27 @@ function requireClosure(entrypoints) {
   return modules
 }
 
-const rootModules = requireClosure(RUNTIME_ENTRYPOINTS)
+// Dynamic-import / spawn targets the literal-require scanner CANNOT see
+// (issue #9 PR-1 red-team catch): onboarding/http-server.cjs reaches
+// memory/service.mjs via a computed pathToFileURL() import, and
+// memory/server.mjs is spawned by the claude CLI per .mcp.json -- neither
+// ever appears as a literal relative require/from specifier, so without
+// this seed list the memory system's two essential files ride on nothing
+// but the coarse memory/** glob (which proves SOMETHING under memory/
+// ships, not that THESE files do). Seeding them here runs the same
+// per-file checks the require graph gets: exists in tree, ships via
+// build.files, and is a real member of the shipped asar.
+// EXPECTED RED until the first build after the #9 split: the
+// mounted-DMG membership check for memory/service.mjs fails against a DMG
+// built before the file existed (same class as channel-runtime.mjs after
+// #8) -- it goes green at the next release build, and its failure line
+// names the missing file explicitly so it cannot be confused with a real
+// dead require.
+const DYNAMIC_TARGETS = ['memory/server.mjs', 'memory/service.mjs']
+const rootModules = requireClosure([...RUNTIME_ENTRYPOINTS, ...DYNAMIC_TARGETS])
+// requireClosure records only REFERENCED modules, never its seeds -- add the
+// seeds explicitly so they get the per-file checks themselves.
+for (const t of DYNAMIC_TARGETS) rootModules.add(t)
 
 console.log(`\n-- relative modules required by entrypoints: ${[...rootModules].sort().join(', ') || '(none)'}`)
 for (const m of [...rootModules].sort()) {
