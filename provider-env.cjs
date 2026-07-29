@@ -213,86 +213,90 @@ function parseCustomProviderJson(text) {
   try {
     parsed = JSON.parse(text)
   } catch (err) {
-    return { error: `that is not valid JSON: ${err.message}` }
+    return { error: `that is not valid JSON: ${snip(err.message)}` }
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return { error: 'expected a JSON object describing one provider' }
   }
 
-  // The dialect check runs at EVERY level a paste can declare it -- top
-  // level, provider entry, and each model row -- not just on the unwrapped
-  // entry. Checking only after the unwrap was a real hole: a file that says
-  // `{"api": "openai-completions", "providers": {...}}`, which is the natural
-  // place to put a global dialect, sailed through the very gate this function
-  // advertises. (Red-team catch, 2026-07-29.)
-  const CONTENT_KEYS = ['baseUrl', 'apiKey', 'model', 'models']
+  // ── the dialect declaration, wherever it appears ────────────────────────
+  // Checked at the top level, on the unwrapped provider entry, and on every
+  // model row. Checking only the unwrapped entry was a real hole: a file
+  // saying `{"api": "openai-completions", "providers": {...}}` -- the natural
+  // place for a GLOBAL dialect -- sailed straight through the gate this
+  // function advertises. Not exhaustive and not claimed to be: an `api` buried
+  // under some wrapper key this parser does not read (`{"options":{"api":…}}`)
+  // is still ignored. Chasing arbitrary nesting costs more than it buys.
   const dialectError = (value, where) => {
     if (value === undefined || value === null) return null
     if (typeof value !== 'string') {
       return `"api"${where} must be a string, but the paste has ${describeType(value)}`
     }
     if (value.trim() !== CUSTOM_JSON_SUPPORTED_API) {
-      return `this app speaks ${CUSTOM_JSON_SUPPORTED_API} only (the bundled Claude Code CLI emits nothing else and there is no translation layer here), but the paste declares api "${value}"${where} -- remove the field if your endpoint accepts Anthropic-shaped requests anyway`
+      return `this app speaks ${CUSTOM_JSON_SUPPORTED_API} only (the bundled Claude Code CLI emits nothing else and there is no translation layer here), but the paste declares api "${snip(value)}"${where} -- remove the field if your endpoint accepts Anthropic-shaped requests anyway`
     }
     return null
   }
 
+  // ── unwrap `providers`, merging top-level fields as defaults ────────────
+  // A top-level field is a DEFAULT the entry may override, not a conflict:
+  // `{"apiKey":"sk-1","providers":{"p":{"baseUrl":…}}}` is an ordinary shape
+  // (one key, one endpoint map) and refusing it outright -- which an earlier
+  // version did, on mere presence -- rejects a paste that says exactly one
+  // thing. Only an actual DISAGREEMENT is ambiguous, and only that is refused.
   let entry = parsed
   if (parsed.providers !== undefined) {
-    const topDialect = dialectError(parsed.api, ' (at the top level)')
-    if (topDialect) return { error: topDialect }
-    // Content fields alongside a `providers` map state the same thing twice,
-    // and the two can disagree: {"baseUrl":"A", "providers":{"p":{"baseUrl":"B"}}}
-    // used to take B and drop A without a word. Refuse instead of picking.
-    const strays = CONTENT_KEYS.filter((k) => parsed[k] !== undefined)
-    if (strays.length) {
-      return { error: `the paste has "providers" AND top-level ${strays.join(', ')} -- those can disagree, so keep whichever one describes the provider you want` }
-    }
     if (!parsed.providers || typeof parsed.providers !== 'object' || Array.isArray(parsed.providers)) {
       return { error: '"providers" must be an object keyed by provider id' }
     }
+    const topDialect = dialectError(parsed.api, ' (at the top level)')
+    if (topDialect) return { error: topDialect }
     const ids = Object.keys(parsed.providers)
     if (ids.length === 0) return { error: '"providers" is empty -- nothing to configure' }
     if (ids.length > 1) {
       return { error: `this app runs one provider at a time, but the paste declares ${ids.length} (${summarizeNames(ids)}) -- keep the one you want and remove the rest` }
     }
-    entry = parsed.providers[ids[0]]
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-      return { error: `provider "${ids[0]}" is not an object` }
+    const inner = parsed.providers[ids[0]]
+    if (!inner || typeof inner !== 'object' || Array.isArray(inner)) {
+      return { error: `provider "${snip(ids[0])}" is not an object` }
+    }
+    // A provider entry containing its own `providers` map is a second set of
+    // providers this function would otherwise drop whole -- dialect, endpoint
+    // and all. That is the same silent narrowing the >1-provider refusal
+    // exists to prevent, so it gets the same treatment.
+    if (inner.providers !== undefined) {
+      return { error: `provider "${snip(ids[0])}" contains its own "providers" -- flatten the paste so it describes exactly one provider` }
+    }
+    entry = {}
+    for (const k of ['baseUrl', 'apiKey', 'model', 'models', 'api']) {
+      const top = parsed[k]
+      const own = inner[k]
+      if (own !== undefined && top !== undefined && JSON.stringify(own) !== JSON.stringify(top)) {
+        return { error: `the paste sets "${k}" twice with different values (top level and inside "${snip(ids[0])}") -- keep the one that describes the provider you want` }
+      }
+      const chosen = own !== undefined ? own : top
+      if (chosen !== undefined) entry[k] = chosen
     }
   }
 
-  // `api: null` reads as "not specified", the same as omitting it -- JSON
-  // emitters produce explicit nulls for absent optional fields all the time.
-  // Anything else non-string is NOT quietly stringified:
-  // String(['anthropic-messages']) happens to equal the supported value,
-  // which would let a wrong-typed field pass by accident.
   const entryDialect = dialectError(entry.api, '')
   if (entryDialect) return { error: entryDialect }
   if (Array.isArray(entry.models)) {
     for (const m of entry.models) {
       if (!m || typeof m !== 'object') continue
-      const modelDialect = dialectError(m.api, ` (on model "${m.id}")`)
+      const modelDialect = dialectError(m.api, ` (on model "${snip(m.id)}")`)
       if (modelDialect) return { error: modelDialect }
     }
   }
 
-  // A paste carrying BOTH `model` and `models` is stating two things. Picking
-  // one silently is the same defect as accepting a five-provider paste and
-  // running the first entry -- the user would be told it worked while
-  // something they did not choose got configured. Agreeing values are fine
-  // (a tool emitting both is not a contradiction).
-  if (entry.models !== undefined && typeof entry.model === 'string' && entry.model.trim()) {
-    const fromList = Array.isArray(entry.models) && entry.models.length === 1
-      ? (typeof entry.models[0] === 'string' ? entry.models[0] : (entry.models[0] && typeof entry.models[0] === 'object' ? entry.models[0].id : undefined))
-      : undefined
-    if (typeof fromList !== 'string' || fromList.trim() !== entry.model.trim()) {
-      return { error: `the paste has both "model" (${entry.model}) and "models" -- keep one, so it is unambiguous which model runs` }
-    }
+  // ── the model id ────────────────────────────────────────────────────────
+  // `model` gets the same TYPE refusal as `api` and `apiKey`. It used to be
+  // read as `typeof entry.model === 'string' ? ... : ''`, so a wrongly-typed
+  // one was silently dropped and `models` quietly won -- three sibling fields,
+  // two of which refused a bad type and one of which did not.
+  if (entry.model !== undefined && entry.model !== null && typeof entry.model !== 'string') {
+    return { error: `"model" must be a string, but the paste has ${describeType(entry.model)} -- fix it or remove it` }
   }
-
-  // models[] wins when present (it is the nested shape's own field); a flat
-  // `model` string is the shorthand.
   let model = ''
   if (entry.models !== undefined) {
     if (!Array.isArray(entry.models) || entry.models.length === 0) {
@@ -305,6 +309,11 @@ function parseCustomProviderJson(text) {
     const only = entry.models[0]
     model = typeof only === 'string' ? only : (only && typeof only === 'object' && typeof only.id === 'string' ? only.id : '')
     if (!model) return { error: 'the model entry has no usable "id"' }
+    // Both fields present and disagreeing: the paste states two models. An
+    // agreeing duplicate is fine -- a tool emitting both is not a conflict.
+    if (typeof entry.model === 'string' && entry.model.trim() && entry.model.trim() !== model.trim()) {
+      return { error: `the paste has both "model" (${snip(entry.model)}) and "models" (${snip(model)}) -- keep one, so it is unambiguous which model runs` }
+    }
   } else if (typeof entry.model === 'string') {
     model = entry.model
   }
@@ -312,14 +321,13 @@ function parseCustomProviderJson(text) {
   if (!model) return { error: 'no model id in the paste' }
 
   const urlResult = resolveCustomBaseUrl(entry.baseUrl)
-  if (urlResult.error) return { error: urlResult.error }
+  if (urlResult.error) return { error: snip(urlResult.error, 400) }
 
   // A non-string apiKey is REFUSED, never coerced to "". Silently reducing it
   // to blank is the worst available outcome: blank means "keep whatever key is
   // already stored" at the save route, so a paste pointing at a new endpoint
   // would report success while the PREVIOUS provider's key kept being sent --
-  // to a different host. (Red-team catch, 2026-07-29.) Absent is fine; wrongly
-  // typed is not.
+  // to a different host. Absent is fine; wrongly typed is not.
   if (entry.apiKey !== undefined && entry.apiKey !== null && typeof entry.apiKey !== 'string') {
     return { error: `"apiKey" must be a string, but the paste has ${describeType(entry.apiKey)} -- fix it or remove it` }
   }
@@ -340,8 +348,20 @@ function describeType(value) {
 }
 
 function summarizeNames(names, limit = 10) {
-  const shown = names.slice(0, limit).map((n) => String(n).slice(0, 80))
+  const shown = names.slice(0, limit).map((n) => snip(n))
   return names.length > limit ? `${shown.join(', ')}, and ${names.length - limit} more` : shown.join(', ')
+}
+
+// EVERY user-controlled scalar that reaches a refusal message goes through
+// this, not just the list joins. Capping only the joins was a half-measure
+// that moved the worst case by zero: readJsonBody accepts 1 MB, and a single
+// 900 KB model id / api string / provider id interpolated raw produced a
+// ~900 KB 400 body -- bigger than the case the cap was added for. The route
+// bounds its response as well (onboarding/routes/provider.cjs), because
+// resolveCustomBaseUrl's errors come from outside this function.
+function snip(value, limit = 80) {
+  const s = String(value)
+  return s.length > limit ? `${s.slice(0, limit)}...(${s.length} chars)` : s
 }
 
 /**
@@ -661,6 +681,13 @@ const PROVIDERS_REQUIRING_STORED_CREDENTIAL = ['claude', 'claude-subscription']
 // onboarding status line. Throwing here fails at require() -- loud, on the
 // author's machine -- instead of at a user's first spawn.
 for (const row of PROVIDER_ROWS) {
+  if (row.credential === 'none') continue
+  // keyName is as load-bearing as notReady: buildProviderEnv calls
+  // readProviderKey(row.keyName) for every row that reads a credential at all,
+  // so a row missing it would look up the credential named `undefined`.
+  if (typeof row.keyName !== 'string' || !row.keyName) {
+    throw new Error(`provider-env: row "${row.id}" reads a credential but has no keyName`)
+  }
   if (row.credential === 'required' && (typeof row.notReady !== 'string' || !row.notReady)) {
     throw new Error(`provider-env: row "${row.id}" requires a credential but has no notReady reason`)
   }

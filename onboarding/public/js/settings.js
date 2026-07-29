@@ -756,6 +756,14 @@
   // above: every category on this page is shown regardless of the current
   // provider, not gated on it -- switching TO custom and editing an
   // already-custom install's fields are the same form.
+  // Host comparison for the save-time credential warning below. Deliberately
+  // compares host+port only: http->https on the same host is not a new party,
+  // and a path change is not either. Anything unparseable is treated as a
+  // DIFFERENT host (warn rather than stay quiet) -- the server validates the
+  // URL for real, this is only deciding whether to say something.
+  const hostOf = (u) => { try { return new URL(u).host } catch { return '' } }
+  const sameHost = (a, b) => { const x = hostOf(a); return Boolean(x) && x === hostOf(b) }
+
   const CUSTOM_PRESETS = [
     { label: C.customPresetClinePass, url: 'http://localhost:18084' },
     { label: C.customPresetGrok, url: 'http://localhost:8766' },
@@ -871,7 +879,28 @@
         statusEl.classList.remove('hidden')
         return
       }
-      const ok = await window.confirmDialog(C.customSwitchConfirm(model), C.switchOk, C.cancel)
+      // A key is about to be sent to a host it was not entered for.
+      //
+      // Two ways to get here, and the confirm dialog is the only place that
+      // catches BOTH, which is why the check lives at save rather than at the
+      // point any single field changes:
+      //   1. A pasted definition filled the key field for endpoint A, then the
+      //      preset dropdown or the URL box changed the host to B. Nothing
+      //      clears the key on those paths (see presetSel.onchange above), and
+      //      the field is type="password" so a populated one is invisible.
+      //   2. The field is BLANK and a key is on file. Blank means "keep the
+      //      stored key" at the save route -- the documented convention -- so
+      //      changing only the URL silently re-points the stored credential at
+      //      a new host. That path predates the paste box entirely.
+      // Both end with a credential at a host the user never paired it with.
+      // We do not block it (pointing one key at two proxies is legitimate);
+      // we refuse to let it happen without saying the host out loud.
+      const priorUrl = cfg.CUSTOM_BASE_URL || ''
+      const keyGoesAlong = Boolean(apiKey.trim()) || Boolean(cfg.hasCustomApiKey)
+      const confirmText = (keyGoesAlong && priorUrl && !sameHost(priorUrl, baseUrl))
+        ? C.customSwitchConfirmKeyToNewHost(model, hostOf(baseUrl))
+        : C.customSwitchConfirm(model)
+      const ok = await window.confirmDialog(confirmText, C.switchOk, C.cancel)
       if (!ok) return
       const btn = $('set-custom-save')
       btn.disabled = true

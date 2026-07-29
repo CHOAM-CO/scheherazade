@@ -123,7 +123,14 @@ function createRoutes(staticCtx) {
         const { json } = await readJsonBody(req)
         const pasted = parseCustomProviderJson(json)
         if (pasted.error) {
-          sendJson(res, 400, { error: pasted.error })
+          // Bound the response independently of whatever built the message.
+          // The request body may be up to 1 MB (readJsonBody), refusal text
+          // quotes user input, and the settings page drops this string into a
+          // ONE-LINE status element -- an unbounded echo wrecks the page. The
+          // parser caps its own interpolations; this also covers errors that
+          // come from elsewhere (resolveCustomBaseUrl), so the bound holds
+          // even when a future error path forgets.
+          sendJson(res, 400, { error: String(pasted.error).slice(0, 600) })
           return
         }
         // The model id is gated here too, not just on save, so the preview

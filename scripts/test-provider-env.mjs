@@ -296,13 +296,32 @@ assert(!PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes('ollama'), 'PROVIDERS_REQ
     assert(result.env && !('CLAUDE_CONFIG_DIR' in result.env), `${provider}: built env carries no CLAUDE_CONFIG_DIR`)
   }
 }
-// The one that is a REQUIREMENT rather than a default. When the subscription
-// lane adds isolation for some other provider, this line is what fails if it
-// is applied globally.
+// SCOPE, stated because the previous two versions of this comment overstated
+// it and a red team rejected both: these lines prove only that no ROW emits
+// CLAUDE_CONFIG_DIR. They cannot prove the spawned child never receives one.
+// main.cjs builds `{...process.env, ...providerEnvResult.env}`
+// (main.cjs:1032-1053), so a CLAUDE_CONFIG_DIR already in the parent's
+// environment reaches the child no matter what this module returns, and
+// nothing here would notice.
+//
+// That is left as inherit-by-default ON PURPOSE, not by oversight, and it is
+// a genuinely two-sided call rather than a bug to be patched:
+//   - a user who exports CLAUDE_CONFIG_DIR and logged in under it has their
+//     credentials in the namespaced slot, so INHERITING is what makes
+//     claude-cli find the login it promises to reuse;
+//   - a user who exports it but logged in without it is the opposite case,
+//     and inheriting shows "Not logged in".
+// Actively clearing it would fix the second user by breaking the first. The
+// shipped path (a .app launched from Finder) inherits no shell exports at
+// all, so this only bites CLI-launched development. Deciding it needs
+// evidence about which case real users are in -- it is an open question, and
+// writing a clear here to make an assertion look stronger would be choosing
+// blind. When the subscription lane needs its own config dir, THAT is when
+// this gets settled, with the wiring, per-provider.
 {
   const cli = buildProviderEnv('claude-cli', {}, { readProviderKey: () => null })
   assert(!('CLAUDE_CONFIG_DIR' in cli.env),
-    'claude-cli: NO config dir override, as a requirement -- isolating it would hide the very login this mode exists to reuse')
+    'claude-cli: this ROW emits no config-dir override (per-provider isolation added later must keep skipping this row; an inherited one is out of scope, see above)')
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -377,10 +396,23 @@ assert(!parseCustomProviderJson(JSON.stringify({ api: 'anthropic-messages', base
     'api: null reads as "not specified" (JSON emitters write explicit nulls), not as a dialect named "null"')
 }
 
-// -- refuses: two statements of the same thing that can disagree
+// -- top-level fields beside `providers` are DEFAULTS, and only an actual
+// disagreement is refused. An earlier version refused on mere presence, which
+// rejected `{"apiKey":"sk","providers":{...}}` -- one key, one endpoint map,
+// nothing ambiguous about it. Refusing a paste that says exactly one thing is
+// its own kind of wrong.
 {
+  const globalKey = parseCustomProviderJson(JSON.stringify({
+    apiKey: 'sk-global', providers: { proxy: { baseUrl: 'http://localhost:8080', models: [{ id: 'm' }] } },
+  }))
+  assert(!globalKey.error, 'a top-level apiKey with a per-provider endpoint: accepted, not refused as ambiguous')
+  assert(globalKey.apiKey === 'sk-global', 'a top-level apiKey is USED when the entry declares none')
+  const agree = parseCustomProviderJson(JSON.stringify({
+    baseUrl: 'http://127.0.0.1:1', providers: { p: { baseUrl: 'http://127.0.0.1:1', model: 'm' } },
+  }))
+  assert(!agree.error, 'top-level and entry agreeing on baseUrl: accepted')
   const both = parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://FLAT.example', providers: { p: { baseUrl: 'http://127.0.0.1:1', model: 'm' } } }))
-  assert(!!both.error && both.error.includes('baseUrl'), 'top-level baseUrl beside "providers": refused (it used to be dropped silently)')
+  assert(!!both.error && both.error.includes('baseUrl'), 'top-level baseUrl DISAGREEING with the entry: refused (it used to be dropped silently)')
   const bothModels = parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', model: 'typed-one', models: [{ id: 'listed-one' }] }))
   assert(!!bothModels.error, 'both "model" and "models", disagreeing: refused')
   assert(!parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', model: 'same', models: [{ id: 'same' }] })).error,
@@ -400,17 +432,55 @@ assert(!parseCustomProviderJson(JSON.stringify({ api: 'anthropic-messages', base
   assert(!absent.error && absent.apiKey === '', 'apiKey: null reads as absent (optional field), not as a type error')
 }
 
-// -- refusal messages stay bounded. readJsonBody accepts up to 1 MB; an
-// unbounded name join turned a ~989 KB paste into a ~509 KB error body that
-// wrecked the settings page's one-line status element. The cap must also SAY
-// how many it dropped -- a silent truncation reads as "that is all of them".
+// -- a provider entry that nests its OWN providers map used to be accepted
+// with the inner one dropped whole -- dialect, endpoint and all. That is the
+// same silent narrowing the >1-provider refusal exists for.
+assert(!!parseCustomProviderJson(JSON.stringify({
+  providers: { p: { baseUrl: 'http://127.0.0.1:1', model: 'm', providers: { q: { api: 'openai-completions', baseUrl: 'http://elsewhere:9', model: 'other' } } } },
+})).error, 'a provider containing its own "providers": refused, not silently flattened to the outer one')
+
+// -- `model` gets the same TYPE refusal as `api` and `apiKey`. It used to be
+// read as `typeof x === 'string' ? x : ''`, so a wrongly-typed one was dropped
+// and `models` silently won -- three sibling fields, and only this one let a
+// bad type through.
+for (const bad of [['a'], 123, { id: 'a' }]) {
+  assert(!!parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', model: bad, models: ['b'] })).error,
+    `model as ${Array.isArray(bad) ? 'array' : typeof bad}: refused, never dropped in favour of models[]`)
+}
+
+// -- refusal messages stay bounded, for EVERY user-controlled scalar and not
+// just the list joins. readJsonBody accepts 1 MB; capping only the joins moved
+// the worst case by zero, because a single ~900 KB model id / api string /
+// provider id was interpolated raw and produced a ~900 KB 400 body -- larger
+// than the case the cap was added for. Each entry below is one such site.
 {
+  const big = 'A'.repeat(900_000)
+  const sites = [
+    ['api', { api: big, baseUrl: 'http://127.0.0.1:1', model: 'm' }],
+    ['model', { model: big, models: ['x'], baseUrl: 'http://127.0.0.1:1' }],
+    ['model id on a row', { models: [{ id: big, api: 'openai-completions' }], baseUrl: 'http://127.0.0.1:1' }],
+    ['provider id', { providers: { [big]: 5 } }],
+    ['baseUrl', { baseUrl: `ftp://${big}`, model: 'm' }],
+  ]
+  for (const [label, obj] of sites) {
+    const r = parseCustomProviderJson(JSON.stringify(obj))
+    assert(!!r.error, `${label}: a 900KB value is refused`)
+    assert(r.error.length < 1000, `${label}: refusal stays bounded (${r.error.length} chars, not ~900KB)`)
+  }
   const many = Array.from({ length: 400 }, (_, i) => ({ id: `model-number-${i}`.repeat(20) }))
   const r = parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', models: many }))
   assert(!!r.error, '400 models: refused')
-  assert(r.error.length < 2000, `refusal message stays small (was ${r.error.length} chars)`)
+  assert(r.error.length < 2000, `many models: refusal stays small (was ${r.error.length} chars)`)
   assert(r.error.includes('390 more'), 'refusal message says how many names it did not list')
 }
+
+// -- error messages name the right problem. Both of these used to report a
+// DIFFERENT refusal than the one that actually applies, which sends the user
+// to fix the wrong thing.
+assert(parseCustomProviderJson(JSON.stringify({ providers: 'x', baseUrl: 'y' })).error.includes('object keyed by provider id'),
+  'a non-object "providers" reports the type error, not an ambiguity error')
+assert(parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', model: 'm', models: [] })).error.includes('non-empty array'),
+  'an empty "models" beside a "model" reports the empty-array error, not an ambiguity error')
 
 // -- refuses: a wire dialect this app has no translation layer for.
 // Scheherazade delegates inference to the bundled Claude Code CLI, which
