@@ -195,7 +195,12 @@ function createSetupTokenSession(deps) {
       // Extract at EXIT, on the complete buffer. Parsing mid-stream risks
       // catching a wrapped token between its halves; setup-token prints and
       // exits immediately, so waiting costs nothing and removes the race.
-      if (TERMINAL_STATES.has(state)) { clearChild(); return }
+      //
+      // 'validating' is checked alongside the terminal states because finish()
+      // is already in flight there and has emptied the buffer. A second exit
+      // event would re-enter it with '', fail as no_output, and overwrite a
+      // successful capture with a failure the user can see.
+      if (TERMINAL_STATES.has(state) || state === 'validating') { clearChild(); return }
       finish(buffer)
     })
 

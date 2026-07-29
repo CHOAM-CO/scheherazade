@@ -160,11 +160,33 @@ if (manualBlock) {
 // The poll must reuse loginPollTimer so the existing stopLoginPoll() cleanup
 // on tab/submode change cancels it. A second timer would keep polling after
 // the user navigated away.
-const pollBlock = wizardSrc.match(/loginBtn\.onclick = async \(\) => \{[\s\S]*?\n {8}\}/)
-assert(Boolean(pollBlock), 'located the in-app login handler')
-if (pollBlock) {
-  assert(/loginPollTimer = setInterval/.test(pollBlock[0]), 'the in-app poll uses the shared loginPollTimer')
-  assert(/stopLoginPoll\(\)/.test(pollBlock[0]), 'the in-app poll stops any previous poll before starting')
+const pollFn = wizardSrc.match(/function startSetupPoll\(\) \{[\s\S]*?\n {8}\}/)
+assert(Boolean(pollFn), 'the in-app poll is a single named function')
+if (pollFn) {
+  assert(/loginPollTimer = setInterval/.test(pollFn[0]), 'the in-app poll uses the shared loginPollTimer')
+  assert(/stopLoginPoll\(\)/.test(pollFn[0]), 'the in-app poll stops any previous poll before starting')
+}
+// Exactly one setInterval in this sub-mode: the button path and the resume
+// path must share it. Two copies means the resume one drifts, and it is the
+// copy nobody clicks through by hand.
+const inAppRegion = wizardSrc.slice(wizardSrc.indexOf('const A = primary.inApp'), wizardSrc.indexOf("} else {\n        // claude, fallback"))
+assert(inAppRegion.length > 500, 'located the in-app sub-mode region')
+assert((inAppRegion.match(/setInterval/g) || []).length === 1,
+  'the in-app sub-mode defines the poll interval exactly once')
+
+// RESUME: a flow already in flight when this renders (page reload, or leaving
+// and returning to the tab mid-login) must restart the poll, not merely
+// repaint the status line. The server session outlives the page; the interval
+// does not. Without this the user waits forever on a login that already
+// finished.
+const resumeBlock = wizardSrc.match(/api\('\/api\/setup-token\/status'\)\.then\(\(s\) => \{[\s\S]*?\}\)\.catch/)
+assert(Boolean(resumeBlock), 'located the resume-on-render probe')
+if (resumeBlock) {
+  assert(/startSetupPoll\(\)/.test(resumeBlock[0]), 'the resume path restarts the poll for an in-flight flow')
+  for (const st of ['running', 'awaiting_code', 'validating']) {
+    assert(resumeBlock[0].includes(`'${st}'`), `the resume path treats "${st}" as in-flight`)
+  }
+  assert(/state === 'idle'/.test(resumeBlock[0]), 'the resume path still short-circuits on idle')
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

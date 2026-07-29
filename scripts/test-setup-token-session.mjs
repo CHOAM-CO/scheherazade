@@ -217,6 +217,38 @@ function makeHarness(overrides = {}) {
   assert(h.session.status().state === 'connected', 'a fired timer does NOT clobber a completed flow')
 }
 
+// ── a second exit event must not re-enter finish() ─────────────────────────
+{
+  // finish() empties the buffer before awaiting. A second exit re-entering it
+  // would extract from '', fail as no_output, and overwrite a capture that
+  // actually succeeded -- the user sees a failure for a stored credential.
+  let resolveValidate
+  const h = makeHarness({
+    validateProviderKey: (p, k) => new Promise((r) => { resolveValidate = () => r({ ok: true }) }),
+  })
+  h.session.start()
+  h.emit(tokenOutput)
+  h.exit()
+  await tick()
+  assert(h.session.status().state === 'validating', 'first exit started the validate')
+  h.exit() // duplicate event, mid-validate
+  await tick()
+  assert(h.session.status().state === 'validating', 'a duplicate exit does not knock the flow out of validating')
+  resolveValidate()
+  await tick()
+  assert(h.session.status().state === 'connected', 'the flow still lands on connected')
+  assert(h.calls.store.length === 1, 'the credential is stored exactly once, not twice')
+}
+{
+  // ...and after a terminal state, further exits are inert.
+  const h = makeHarness()
+  h.session.start(); h.emit(tokenOutput); h.exit(); await tick()
+  assert(h.session.status().state === 'connected', 'connected')
+  h.exit(); h.exit(); await tick()
+  assert(h.session.status().state === 'connected', 'exits after a terminal state are ignored')
+  assert(h.calls.store.length === 1, 'no extra store from repeated exits')
+}
+
 // ── child env scrub ────────────────────────────────────────────────────────
 {
   process.env.ANTHROPIC_API_KEY = 'sk-ant-parent-should-not-be-inherited'

@@ -652,6 +652,16 @@
           }
         }
 
+        // ONE definition of the poll, used by both the button and the resume
+        // path below. Written twice, the resume copy is the one that silently
+        // drifts -- and it is the copy nobody exercises by hand.
+        function startSetupPoll() {
+          stopLoginPoll()
+          loginPollTimer = setInterval(async () => {
+            try { applySetupStatus(await api('/api/setup-token/status')) } catch (err) { /* transient: keep polling */ }
+          }, 2000)
+        }
+
         loginBtn.onclick = async () => {
           loginBtn.disabled = true
           statusEl.className = 'status-line pending'
@@ -666,10 +676,7 @@
             loginBtn.disabled = false
             return
           }
-          stopLoginPoll()
-          loginPollTimer = setInterval(async () => {
-            try { applySetupStatus(await api('/api/setup-token/status')) } catch (err) { /* transient: keep polling */ }
-          }, 2000)
+          startSetupPoll()
         }
 
         cancelBtn.onclick = async () => {
@@ -800,7 +807,18 @@
         // spawning anything. Failure to reach it degrades to the buttons
         // above, which is exactly the pre-existing manual onboarding.
         api('/api/setup-token/status').then((s) => {
-          if (s && s.state !== 'idle') applySetupStatus(s)
+          if (!s || s.state === 'idle') return
+          applySetupStatus(s)
+          // A flow still IN FLIGHT needs its poll restarted, not just its
+          // status line repainted. The session is a module-scope singleton on
+          // the server and outlives this page, but the interval driving it
+          // died with the previous render -- a reload, or navigating away and
+          // back, mid-login. Without this the user sits on "waiting for the
+          // browser login to finish" forever while the child has already
+          // completed and stored the credential. Found by walking my own
+          // orderings, not by a test; the pin for it is in
+          // test-setup-token-copy.mjs.
+          if (s.state === 'running' || s.state === 'awaiting_code' || s.state === 'validating') startSetupPoll()
         }).catch(() => {})
       } else {
         // claude, fallback (BYOK sk-ant) sub-mode
