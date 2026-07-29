@@ -18,8 +18,17 @@
 //     {"type":"authentication_error","message":"OAuth access token is invalid."}
 //   - the SAME string as x-api-key      → HTTP 401 "invalid x-api-key"
 // Two different server-side evaluators, which is why the 'claude' BYOK branch
-// cannot be reused here. NOT verified by that run: that a *valid* token
-// answers 200 on this endpoint — that needs a live credential. The branch is
+// cannot be reused here.
+//   - the same 401 authentication_error comes back for a body naming a model
+//     that does not exist, i.e. auth is evaluated BEFORE the model. So the
+//     hardcoded model id below cannot turn a valid token into a rejection the
+//     day that id is retired.
+//   - `claude auth status` is NOT a substitute for any of this: with a garbage
+//     token it still answers {"loggedIn":true,"authMethod":"oauth_token"}. It
+//     reports presence. The name is the whole trap.
+// NOT verified: that a *valid* token answers 200 — that needs a live
+// credential. What stands in for it is that the request is copied off the wire
+// from the CLI, which IS known to work with a real token. The branch is also
 // written so the unverified half cannot strand anyone: see the fail-open cases
 // below, which are the substance of the design, not defensive padding.
 //
@@ -73,18 +82,34 @@ console.log('\n1. a valid token (200) passes cleanly')
   assert(calls.length === 1, '200 => exactly one request issued')
 }
 
-console.log('\n2. the request shape is the one that was live-verified')
+console.log('\n2. the request matches what the real CLI puts on the wire')
 {
+  // Every assertion here is a transcription of a captured request, NOT a
+  // choice. The CLI was pointed at a local server (ANTHROPIC_BASE_URL,
+  // isolated config dir, junk token) and this is what came out:
+  //   POST /v1/messages?beta=true
+  //   authorization: Bearer <token>
+  //   anthropic-beta: claude-code-20250219,oauth-2025-04-20,<8 feature betas>
+  //   anthropic-version: 2023-06-01
+  //   x-app: cli
+  // The FIRST version of this file asserted `anthropic-beta ===
+  // 'oauth-2025-04-20'` and passed 38/38, because it pinned the shape I had
+  // written from the docs instead of the shape that works. Tests pinning the
+  // author's own guess are the failure mode this block exists to close: if
+  // any of ?beta=true / claude-code-20250219 / x-app is required for an OAuth
+  // credential, that version rejected every valid token.
   stubFetch(jsonResponse(200, {}))
   await validateProviderKey('claude-subscription', TOKEN)
   const { url, init } = calls[0]
   const headers = init.headers
   const headerNames = Object.keys(headers).map((h) => h.toLowerCase())
-  assert(String(url) === 'https://api.anthropic.com/v1/messages', 'targets /v1/messages')
+  assert(String(url) === 'https://api.anthropic.com/v1/messages?beta=true', 'targets /v1/messages?beta=true')
   assert(init.method === 'POST', 'POST')
   assert(headers.authorization === `Bearer ${TOKEN}`, 'sends Authorization: Bearer <token>')
   assert(!headerNames.includes('x-api-key'), 'never sends x-api-key (a different server evaluator)')
-  assert(headers['anthropic-beta'] === 'oauth-2025-04-20', 'sends anthropic-beta: oauth-2025-04-20')
+  assert(headers['anthropic-beta'] === 'claude-code-20250219,oauth-2025-04-20',
+    'anthropic-beta carries the identity pair, claude-code first (CLI order)')
+  assert(headers['x-app'] === 'cli', 'sends x-app: cli')
   assert(headers['anthropic-version'] === '2023-06-01', 'sends anthropic-version')
   // The token must not leak into the body of a request that gets logged
   // upstream; it belongs in exactly one place.

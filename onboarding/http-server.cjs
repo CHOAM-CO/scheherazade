@@ -882,10 +882,15 @@ async function checkLocalLiveness(url, label) {
 // addition 2026-07-25) -- the settings page's own POST /api/agent/custom-
 // provider is the primary way this gets configured; this route is a
 // secondary, defense-in-depth path (see 'custom' branch below).
-// Required alongside `Authorization: Bearer` for a setup-token OAuth
-// credential. Named here rather than inlined so the claude-subscription
-// branch below and any future OAuth caller cannot drift apart.
-const CLAUDE_OAUTH_BETA_HEADER = 'oauth-2025-04-20'
+// Sent alongside `Authorization: Bearer` for a setup-token OAuth credential.
+// Both entries and their ORDER are copied from what the real `claude` CLI puts
+// on the wire (captured 2026-07-29 against a local server; see the
+// claude-subscription branch below). The CLI's full list carries eight more
+// feature betas -- interleaved-thinking, context-management and friends --
+// deliberately left out: they are about what a conversation may DO, not about
+// who is asking, and a validation ping should not inherit a feature list that
+// drifts every release. These two are the identity pair.
+const CLAUDE_OAUTH_BETA_HEADER = 'claude-code-20250219,oauth-2025-04-20'
 
 async function validateProviderKey(provider, key, opts = {}) {
   // chatgpt/ollama: NO user secret needed at all -- skip the generic
@@ -982,15 +987,23 @@ async function validateProviderKey(provider, key, opts = {}) {
       // {"type":"authentication_error","message":"OAuth access token is
       // invalid."}, as `x-api-key` it comes back "invalid x-api-key".
       //
-      // The header shape is quoted, not guessed. Documentation compiled into
-      // the `claude` CLI binary itself (2.1.220) spells this exact request:
-      //   curl https://api.anthropic.com/v1/messages \
-      //     -H "Authorization: Bearer <token>" \
-      //     -H "anthropic-version: 2023-06-01" \
-      //     -H "anthropic-beta: oauth-2025-04-20" ...
-      // followed by "(OAuth tokens go on `Authorization: Bearer`, not
-      // `x-api-key:` -- converting a curl from an API key is a header change,
-      // not a key swap)".
+      // The request below is COPIED OFF THE WIRE from the client that is known
+      // to work, which is a stronger source than the docs and disagreed with
+      // them. Method: point the real CLI at a local capture server
+      // (ANTHROPIC_BASE_URL=http://127.0.0.1:PORT, isolated CLAUDE_CONFIG_DIR,
+      // a junk CLAUDE_CODE_OAUTH_TOKEN) and read what it actually sends. It
+      // sends `POST /v1/messages?beta=true` with `x-app: cli` and an
+      // anthropic-beta list LED BY `claude-code-20250219`, then oauth-2025-04-20.
+      //
+      // The CLI's own embedded documentation shows only `-H "anthropic-beta:
+      // oauth-2025-04-20"`, and a first cut of this function believed it. If
+      // any of the three extras turns out to be load-bearing for an OAuth
+      // credential, that version would have rejected every valid token --
+      // precisely the failure this whole branch is written to avoid, shipped
+      // by trusting a quote over an observation. Which of them are strictly
+      // required is NOT known and does not need to be: matching the working
+      // client costs nothing and removes the question.
+      // Keep this in sync with the CLI if that capture is ever redone.
       //
       // WHY /v1/messages AND NOT A FREE GET: /v1/models answers the identical
       // authentication_error for a bogus token and would cost nothing, but
@@ -1020,12 +1033,13 @@ async function validateProviderKey(provider, key, opts = {}) {
       // dropped wifi frame would burn a print-once credential.
       let res
       try {
-        res = await fetch('https://api.anthropic.com/v1/messages', {
+        res = await fetch('https://api.anthropic.com/v1/messages?beta=true', {
           method: 'POST',
           headers: {
             authorization: `Bearer ${key}`,
             'anthropic-version': '2023-06-01',
             'anthropic-beta': CLAUDE_OAUTH_BETA_HEADER,
+            'x-app': 'cli',
             'content-type': 'application/json',
           },
           body: JSON.stringify({
