@@ -1,5 +1,12 @@
 # In-app chat — plan
 
+> **STATUS: ALL FIVE SLICES SHIPPED 2026-07-30** — 1: `ea320fa` (channel) ·
+> 2: `ea320fa` (registration) · 3: `1cca773` (proxy) · 4: `f8a0f57` (page;
+> plus the orphan guard — stdin EOF exits and unlinks the port file, found
+> live) · 5: `a690386` (wizard completer + readiness entry + boot announce).
+> Browser-verified end to end via scripts/dev-chat-driver.mjs + dev-serve-ui.
+> Version bumped to 0.0.31 for the constraint-4 rebuild.
+
 **Why**: the app has 7 pages (Setup, Channels, Connectors, Logs, Memory,
 Settings, Waiting) and none of them is a place to talk to the agent. Every
 conversation goes through Discord/Slack/Telegram, so a new user must create a
