@@ -75,6 +75,13 @@ function createSetupTokenSession(deps) {
   // The credential lives here between capture and store, and nowhere else.
   // Never returned, never logged, cleared in finish().
   let buffer = ''
+  // Generation counter. A pty's onData/onExit closures capture THIS scope, so
+  // a child that was cancelled or timed out still holds live callbacks
+  // pointing at `buffer` -- late output from a dead run would otherwise land
+  // in the next run's buffer, and an in-flight validate would still store its
+  // token after the user pressed Cancel. Every callback and every post-await
+  // step checks its own generation and no-ops if it has been superseded.
+  let runId = 0
 
   function setState(next, why = null) {
     state = next
@@ -93,10 +100,19 @@ function createSetupTokenSession(deps) {
 
   function killChild() {
     if (!child) return
-    try { child.kill() } catch (err) { log(`setup-token: kill failed: ${err.message}`) }
+    try { child.kill() } catch (err) { log(`setup-token: kill failed: ${safeMessage(err && err.message)}`) }
   }
 
-  async function finish(rawOutput) {
+  // Anything derived from a caught error before it is logged. The catch below
+  // wraps a NETWORK call whose error text this module does not control, so
+  // "the message cannot contain the key" is not something it can assert --
+  // it enforces it instead. Bounded too: a log line is not an error channel.
+  const TOKEN_LIKE = /sk-ant-[A-Za-z0-9_-]+/g
+  function safeMessage(msg) {
+    return String(msg === undefined || msg === null ? '' : msg).replace(TOKEN_LIKE, '<redacted>').slice(0, 300)
+  }
+
+  async function finish(rawOutput, myRun) {
     // Disarm the timeout BEFORE the await below. Without this, a validate
     // call slower than the remaining timeout budget gets clobbered by its own
     // timer: the flow goes failed('timeout') and kills the child, and then
@@ -117,6 +133,12 @@ function createSetupTokenSession(deps) {
     setState('validating')
     try {
       const result = await validateProviderKey(PROVIDER_ID, extracted.token)
+      // Re-check the generation ACROSS the await. Cancel and timeout both
+      // supersede the run, and until this check existed a user who pressed
+      // Cancel during validation still had the credential written to the
+      // keychain and watched the UI flip to "connected" -- the one thing
+      // Cancel is supposed to prevent.
+      if (myRun !== runId) return
       if (!result || !result.ok) {
         // The token was captured but Anthropic rejected it. This is the
         // designed landing spot for a mis-capture -- honest and visible,
@@ -128,10 +150,15 @@ function createSetupTokenSession(deps) {
       storeProviderKeyVerified(PROVIDER_ID, extracted.token) // throws -> caught below
       setState('connected')
     } catch (err) {
-      // err.message can quote a provider id but never the key (see
-      // storeProviderKeyVerified). Still not surfaced: reason stays a fixed
-      // enum member and the detail goes to the log only.
-      log(`setup-token: store/validate threw: ${err.message}`)
+      if (myRun !== runId) return
+      // Scrubbed, not trusted. The previous version of this comment claimed
+      // err.message "can quote a provider id but never the key" -- true of
+      // storeProviderKeyVerified, which this module owns, and NOT something
+      // it can assert about validateProviderKey, which makes a network call
+      // whose error text comes from elsewhere. A justification that confident
+      // about a value it does not control is exactly the shape that has been
+      // wrong before, so the guarantee is now enforced by safeMessage().
+      log(`setup-token: store/validate threw: ${safeMessage(err && err.message)}`)
       setState('failed', 'store_failed')
     }
     clearChild()
@@ -146,6 +173,9 @@ function createSetupTokenSession(deps) {
     }
     buffer = ''
     startedAt = now()
+    // Claim a generation. This also supersedes any callbacks still held by a
+    // previous child that was cancelled or timed out but has not exited yet.
+    const myRun = ++runId
     setState('running')
 
     // Child-only env scrub. The parent's own credentials are never modified;
@@ -173,13 +203,15 @@ function createSetupTokenSession(deps) {
         env: childEnv,
       })
     } catch (err) {
-      log(`setup-token: spawn threw: ${err.message}`)
+      log(`setup-token: spawn threw: ${safeMessage(err && err.message)}`)
       setState('failed', 'spawn_failed')
       clearChild()
       return { ok: false, reason: 'spawn_failed' }
     }
 
     child.onData((chunk) => {
+      // Late output from a superseded run must not land in this buffer.
+      if (myRun !== runId) return
       buffer += chunk
       // Bound the buffer. A CLI stuck in a redraw loop must not grow this
       // without limit; keeping the TAIL is correct because the token is
@@ -200,13 +232,17 @@ function createSetupTokenSession(deps) {
       // is already in flight there and has emptied the buffer. A second exit
       // event would re-enter it with '', fail as no_output, and overwrite a
       // successful capture with a failure the user can see.
+      if (myRun !== runId) { return }
       if (TERMINAL_STATES.has(state) || state === 'validating') { clearChild(); return }
-      finish(buffer)
+      finish(buffer, myRun)
     })
 
     timer = setTimeout(() => {
-      if (TERMINAL_STATES.has(state)) return
+      if (myRun !== runId || TERMINAL_STATES.has(state)) return
       setState('failed', 'timeout')
+      // Supersede BEFORE killing: the kill produces an exit event, and this
+      // run must not be able to act on it.
+      runId++
       killChild()
       clearChild()
     }, timeoutMs)
@@ -232,7 +268,7 @@ function createSetupTokenSession(deps) {
       child.write(code)
       setTimeout(() => { try { child && child.write('\r') } catch { /* child gone */ } }, 250)
     } catch (err) {
-      log(`setup-token: code write failed: ${err.message}`)
+      log(`setup-token: code write failed: ${safeMessage(err && err.message)}`)
       return { ok: false, reason: 'write_failed' }
     }
     setState('running')
@@ -240,8 +276,14 @@ function createSetupTokenSession(deps) {
   }
 
   function cancel() {
+    // `child` is still set while finish() awaits validation, which is exactly
+    // the window this needs to cover -- cancelling there must stop the store,
+    // not just kill a process that has already exited.
     if (!child) return { ok: true, alreadyStopped: true }
     setState('cancelled', 'user_cancelled')
+    // Supersede FIRST. Everything still in flight for this generation -- the
+    // pending validate, the pty's exit event, late output -- is now inert.
+    runId++
     killChild()
     clearChild()
     return { ok: true }

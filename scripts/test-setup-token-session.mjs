@@ -33,13 +33,22 @@ const tokenOutput =
 function makeHarness(overrides = {}) {
   const calls = { spawn: [], validate: [], store: [], writes: [], kills: 0 }
   const logs = []
-  let dataCb = null
-  let exitCb = null
-  const fakeChild = {
-    onData: (cb) => { dataCb = cb },
-    onExit: (cb) => { exitCb = cb },
-    write: (s) => calls.writes.push(s),
-    kill: () => { calls.kills++ },
+  // Every spawn gets its OWN child with its OWN callbacks -- a single shared
+  // fake child cannot express a superseded generation at all, because the
+  // second spawn just overwrites the first one's handlers. A real pty leaves
+  // the old child's closures alive, which is the whole hazard.
+  const children = []
+  function newChild() {
+    const c = {
+      dataCb: null,
+      exitCb: null,
+      onData: (cb) => { c.dataCb = cb },
+      onExit: (cb) => { c.exitCb = cb },
+      write: (s) => calls.writes.push(s),
+      kill: () => { calls.kills++ },
+    }
+    children.push(c)
+    return c
   }
   const session = createSetupTokenSession({
     resolveClaudeBin: overrides.resolveClaudeBin || (() => '/fake/bin/claude'),
@@ -51,14 +60,19 @@ function makeHarness(overrides = {}) {
     }),
     log: (m) => logs.push(m),
     spawnPty: overrides.spawnPty || ((bin, args, opts) => {
-      calls.spawn.push({ bin, args, opts }); return fakeChild
+      calls.spawn.push({ bin, args, opts }); return newChild()
     }),
     timeoutMs: overrides.timeoutMs,
   })
+  const at = (i) => children[i]
   return {
-    session, calls, logs,
-    emit: (s) => dataCb && dataCb(s),
-    exit: () => exitCb && exitCb({ exitCode: 0 }),
+    session, calls, logs, children,
+    // Default: drive the most recent child.
+    emit: (s) => { const c = children[children.length - 1]; if (c && c.dataCb) c.dataCb(s) },
+    exit: () => { const c = children[children.length - 1]; if (c && c.exitCb) c.exitCb({ exitCode: 0 }) },
+    // Drive a SPECIFIC generation, including a superseded one.
+    emitAt: (i, s) => { const c = at(i); if (c && c.dataCb) c.dataCb(s) },
+    exitAt: (i) => { const c = at(i); if (c && c.exitCb) c.exitCb({ exitCode: 0 }) },
   }
 }
 
@@ -247,6 +261,91 @@ function makeHarness(overrides = {}) {
   h.exit(); h.exit(); await tick()
   assert(h.session.status().state === 'connected', 'exits after a terminal state are ignored')
   assert(h.calls.store.length === 1, 'no extra store from repeated exits')
+}
+
+// ── cancel during validation must actually cancel ──────────────────────────
+{
+  // The window that matters: the child has exited, the token is captured, and
+  // validation is in flight. `child` is still set, so cancel() runs -- and
+  // before the generation guard existed, the resolving validate went on to
+  // store the credential and flip the UI to connected. Cancel that stores the
+  // thing you cancelled is worse than a cancel button that does nothing.
+  let resolveValidate
+  const h = makeHarness({
+    validateProviderKey: (p, k) => new Promise((r) => { resolveValidate = () => r({ ok: true }) }),
+  })
+  h.session.start(); h.emit(tokenOutput); h.exit(); await tick()
+  assert(h.session.status().state === 'validating', 'validate in flight')
+  h.session.cancel()
+  assert(h.session.status().state === 'cancelled', 'cancel lands immediately')
+  resolveValidate()
+  await tick()
+  assert(h.calls.store.length === 0, 'a cancelled flow NEVER stores the credential')
+  assert(h.session.status().state === 'cancelled', 'a resolving validate does not resurrect a cancelled flow')
+}
+{
+  // Same window, timeout instead of the user.
+  let resolveValidate
+  const h = makeHarness({
+    timeoutMs: 20,
+    validateProviderKey: (p, k) => new Promise((r) => { resolveValidate = () => r({ ok: true }) }),
+  })
+  h.session.start(); h.emit(tokenOutput); h.exit(); await tick()
+  // finish() disarms the timer, so validation is deliberately NOT timed out --
+  // assert that, then confirm an explicit cancel still wins.
+  await new Promise((r) => setTimeout(r, 60))
+  assert(h.session.status().state === 'validating', 'the disarmed timer leaves a slow validate alone')
+  h.session.cancel()
+  resolveValidate()
+  await tick()
+  assert(h.calls.store.length === 0, 'cancel after the timer window still prevents the store')
+}
+
+// ── a superseded child must not pollute the next run ───────────────────────
+{
+  // Cancel leaves the old pty's onData closure alive. Without a generation
+  // check its late output lands in the NEXT run's buffer -- so a stale token
+  // fragment could be validated and stored under a flow the user thinks is
+  // fresh.
+  const h = makeHarness()
+  h.session.start()
+  h.emit('first run chatter\r\n')
+  h.session.cancel()
+  h.session.start() // generation 2 -- a genuinely distinct child
+  assert(h.children.length === 2, 'control: two separate children exist, so the scenario is real')
+  h.emitAt(0, tokenOutput) // late output from the SUPERSEDED generation
+  h.exitAt(1) // the live run ends having captured nothing
+  await tick()
+  assert(h.calls.store.length === 0, 'a superseded generation cannot store through the new run')
+  assert(h.session.status().state !== 'connected', 'stale output does not complete the new run')
+  // 'no_output' (not 'no_token_in_output') is the load-bearing value here: it
+  // means the live run's buffer was EMPTY, which is only true if the stale
+  // generation's emit was rejected outright rather than merely failing to
+  // parse. Had the guard been missing, the buffer would have held the stale
+  // token and this would read 'connected'.
+  assert(h.session.status().reason === 'no_output',
+    'the live run saw an empty buffer -- the stale write never landed in it')
+  // ...and the superseded child's own exit is inert too.
+  h.exitAt(0)
+  await tick()
+  assert(h.calls.store.length === 0, 'the superseded exit event stores nothing either')
+}
+
+// ── logged error text is scrubbed, not trusted ─────────────────────────────
+{
+  // validateProviderKey makes a network call whose error text this module does
+  // not author. If such an error ever quotes the credential, it must not reach
+  // the log verbatim.
+  const h = makeHarness({
+    validateProviderKey: async () => { throw new Error(`upstream rejected ${FAKE} at api.anthropic.com`) },
+  })
+  h.session.start(); h.emit(tokenOutput); h.exit(); await tick()
+  const allLogs = h.logs.join('\n')
+  assert(h.session.status().state === 'failed', 'a throwing validate fails the flow')
+  assert(!allLogs.includes(FAKE), 'a token quoted by a dependency error is NOT logged verbatim')
+  assert(!allLogs.includes(BODY.slice(0, 30)), 'not even a fragment of it is logged')
+  assert(/redacted/.test(allLogs), 'control: the message WAS logged, with the credential redacted')
+  assert(/api\.anthropic\.com/.test(allLogs), 'control: the non-secret part of the message survives (still debuggable)')
 }
 
 // ── child env scrub ────────────────────────────────────────────────────────
