@@ -22,7 +22,7 @@
 // convention.
 
 import { spawnSync } from 'node:child_process'
-import { buildProviderEnv, providerNeedsIsolatedConfigDir, parseCustomProviderJson, PROVIDERS_REQUIRING_STORED_CREDENTIAL, CHATGPT_PROXY_DEFAULT_PORT, CHATGPT_PLACEHOLDER_KEY, OLLAMA_BASE_URL } from '../provider-env.cjs'
+import { buildProviderEnv, parseCustomProviderJson, PROVIDERS_REQUIRING_STORED_CREDENTIAL, CHATGPT_PROXY_DEFAULT_PORT, CHATGPT_PLACEHOLDER_KEY, OLLAMA_BASE_URL } from '../provider-env.cjs'
 
 let pass = 0
 let fail = 0
@@ -265,28 +265,45 @@ assert(!PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes('chatgpt'), 'PROVIDERS_RE
 assert(!PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes('ollama'), 'PROVIDERS_REQUIRING_STORED_CREDENTIAL excludes "ollama" (no user secret)')
 
 // ─────────────────────────────────────────────────────────────────────────
-// 8. config-dir isolation column (2026-07-29)
+// 8. no provider gets a CLAUDE_CONFIG_DIR (2026-07-29)
 //
-// Nothing sets CLAUDE_CONFIG_DIR for the spawned child today, so these
-// assertions look inert. They are not. The claude CLI namespaces its
-// credential store BY config dir -- keychain service `Claude Code-credentials`
-// when the var is unset, `Claude Code-credentials-<sha256(dir)[0..8]>` when it
-// is set (read out of the CLI binary and confirmed live 2026-07-29: a spawn
-// with a fresh CLAUDE_CONFIG_DIR reports "Not logged in · Please run /login"
-// while the machine's real session stays untouched). `claude-cli` is the mode
-// that works by REUSING the login the user already has, so it can only ever
-// see that login from the un-namespaced slot. If a later change introduces
-// isolation for one provider and applies it globally -- the natural way to
-// write it -- `claude-cli` breaks, and it breaks SILENTLY at spawn time on a
-// user's machine, not here. That is the regression these lines exist to fail
-// on, loudly, in CI-less local `node scripts/test-*.mjs`.
-for (const provider of ['claude', 'claude-cli', 'claude-subscription', 'chatgpt', 'ollama', 'custom']) {
-  assert(providerNeedsIsolatedConfigDir(provider) === false, `${provider}: no config-dir isolation today`)
+// This asserts on the BUILT ENV, which is the only thing the spawn path
+// actually consumes. An earlier draft shipped an `isolate` data column plus an
+// exported accessor and pinned THOSE instead -- and a red team showed the
+// assertions could not fail for the regression they named: a global
+// CLAUDE_CONFIG_DIR would land in main.cjs's supervisorEnv, which never reads
+// the column, so `claude-cli` would break with all of it still green. The
+// column is gone; this is what replaced it.
+//
+// Why it matters: the claude CLI namespaces its credential store BY config
+// dir (keychain service `Claude Code-credentials` when unset,
+// `Claude Code-credentials-<sha256(dir)[0..8]>` when set -- read out of the
+// CLI binary and confirmed live 2026-07-29, where a spawn with a fresh
+// CLAUDE_CONFIG_DIR reports "Not logged in · Please run /login" while the
+// machine's real session stays untouched). `claude-cli` works precisely BY
+// seeing the user's own un-namespaced slot.
+{
+  const cases = [
+    ['claude', { readProviderKey: fakeReadProviderKey({ claude: 'k' }) }, {}],
+    ['claude-subscription', { readProviderKey: fakeReadProviderKey({ 'claude-subscription': 't' }) }, {}],
+    ['claude-cli', { readProviderKey: () => null }, {}],
+    ['chatgpt', { readProviderKey: () => null }, {}],
+    ['ollama', { readProviderKey: () => null }, { MODEL: 'm' }],
+    ['custom', { readProviderKey: () => null }, { CUSTOM_BASE_URL: 'http://127.0.0.1:1', MODEL: 'm' }],
+  ]
+  for (const [provider, deps, config] of cases) {
+    const result = buildProviderEnv(provider, config, deps)
+    assert(result.env && !('CLAUDE_CONFIG_DIR' in result.env), `${provider}: built env carries no CLAUDE_CONFIG_DIR`)
+  }
 }
-assert(providerNeedsIsolatedConfigDir('claude-cli') === false,
-  'claude-cli: isolation is FALSE as a requirement, not a default -- isolating it would hide the very login this mode exists to reuse')
-assert(providerNeedsIsolatedConfigDir('some-made-up-provider') === null,
-  'unrecognized provider: isolation reads null ("no opinion"), distinguishable from a deliberate false')
+// The one that is a REQUIREMENT rather than a default. When the subscription
+// lane adds isolation for some other provider, this line is what fails if it
+// is applied globally.
+{
+  const cli = buildProviderEnv('claude-cli', {}, { readProviderKey: () => null })
+  assert(!('CLAUDE_CONFIG_DIR' in cli.env),
+    'claude-cli: NO config dir override, as a requirement -- isolating it would hide the very login this mode exists to reuse')
+}
 
 // ─────────────────────────────────────────────────────────────────────────
 // 9. parseCustomProviderJson -- pasted provider definition (2026-07-29)
@@ -322,14 +339,77 @@ assert(!parseCustomProviderJson(JSON.stringify({ api: 'anthropic-messages', base
   'api: "anthropic-messages" is accepted (it is what the spawned CLI emits)')
 
 // -- refuses: more than one provider / more than one model
+//
+// The ids here are deliberately MULTI-CHARACTER and unlike any English word.
+// A previous version used 'a'/'b'/'x'/'y' and asserted `error.includes('y')`
+// -- which passed on the letter in "keep the one **y**ou want", i.e. it would
+// still have passed with every model name stripped out of the message. Single
+// letters cannot distinguish "the error names them" from "the error contains
+// prose". (Red-team catch, 2026-07-29.)
 {
   const many = parseCustomProviderJson(JSON.stringify({
-    providers: { a: { baseUrl: 'http://127.0.0.1:1', models: [{ id: 'x' }] }, b: { baseUrl: 'http://127.0.0.1:2', models: [{ id: 'y' }] } },
+    providers: { 'prov-zeta': { baseUrl: 'http://127.0.0.1:1', models: [{ id: 'mdl-zeta' }] }, 'prov-kappa': { baseUrl: 'http://127.0.0.1:2', models: [{ id: 'mdl-kappa' }] } },
   }))
   assert(!!many.error, 'two providers in one paste: refused, not silently first-wins')
-  assert(many.error.includes('a') && many.error.includes('b'), 'two providers: the error names them, so the user knows what to trim')
-  const manyModels = parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', models: [{ id: 'x' }, { id: 'y' }] }))
-  assert(!!manyModels.error && manyModels.error.includes('y'), 'two models in one paste: refused, and the error names them')
+  assert(many.error.includes('prov-zeta') && many.error.includes('prov-kappa'), 'two providers: the error names them, so the user knows what to trim')
+  const manyModels = parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', models: [{ id: 'mdl-zeta' }, { id: 'mdl-kappa' }] }))
+  assert(!!manyModels.error, 'two models in one paste: refused')
+  assert(manyModels.error.includes('mdl-zeta') && manyModels.error.includes('mdl-kappa'), 'two models: the error names them')
+}
+
+// -- refuses: the dialect declaration wherever it appears. Checking only the
+// unwrapped provider entry was a real hole -- a file declaring its dialect at
+// the TOP level (the natural place for a global one) walked straight through
+// the gate this function advertises. (Red-team catch, 2026-07-29.)
+{
+  const top = parseCustomProviderJson(JSON.stringify({
+    api: 'openai-completions',
+    providers: { p: { baseUrl: 'http://127.0.0.1:1', models: [{ id: 'mm' }] } },
+  }))
+  assert(!!top.error && top.error.includes('openai-completions'), 'unsupported api at the TOP level (beside "providers"): refused')
+  const onModel = parseCustomProviderJson(JSON.stringify({
+    baseUrl: 'http://127.0.0.1:1', models: [{ id: 'mm', api: 'openai-responses' }],
+  }))
+  assert(!!onModel.error && onModel.error.includes('openai-responses'), 'unsupported api on the MODEL row: refused')
+  const arr = parseCustomProviderJson(JSON.stringify({ api: ['anthropic-messages'], baseUrl: 'http://127.0.0.1:1', model: 'm' }))
+  assert(!!arr.error, 'api as a one-element array: refused, not String()-coerced into a match')
+  assert(!parseCustomProviderJson(JSON.stringify({ api: null, baseUrl: 'http://127.0.0.1:1', model: 'm' })).error,
+    'api: null reads as "not specified" (JSON emitters write explicit nulls), not as a dialect named "null"')
+}
+
+// -- refuses: two statements of the same thing that can disagree
+{
+  const both = parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://FLAT.example', providers: { p: { baseUrl: 'http://127.0.0.1:1', model: 'm' } } }))
+  assert(!!both.error && both.error.includes('baseUrl'), 'top-level baseUrl beside "providers": refused (it used to be dropped silently)')
+  const bothModels = parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', model: 'typed-one', models: [{ id: 'listed-one' }] }))
+  assert(!!bothModels.error, 'both "model" and "models", disagreeing: refused')
+  assert(!parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', model: 'same', models: [{ id: 'same' }] })).error,
+    'both "model" and "models" AGREEING: accepted (a tool emitting both is not a contradiction)')
+}
+
+// -- refuses: a wrongly-typed apiKey, instead of coercing it to blank.
+// This is the highest-consequence coercion in the file: blank means "keep the
+// stored key" at the save route, so dropping a mistyped key silently ships the
+// PREVIOUS provider's key to whatever new endpoint the paste just set.
+{
+  for (const bad of [12345, { value: 'k' }, ['k'], true]) {
+    const r = parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', model: 'm', apiKey: bad }))
+    assert(!!r.error, `apiKey as ${Array.isArray(bad) ? 'array' : typeof bad}: refused, never silently blanked`)
+  }
+  const absent = parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', model: 'm', apiKey: null }))
+  assert(!absent.error && absent.apiKey === '', 'apiKey: null reads as absent (optional field), not as a type error')
+}
+
+// -- refusal messages stay bounded. readJsonBody accepts up to 1 MB; an
+// unbounded name join turned a ~989 KB paste into a ~509 KB error body that
+// wrecked the settings page's one-line status element. The cap must also SAY
+// how many it dropped -- a silent truncation reads as "that is all of them".
+{
+  const many = Array.from({ length: 400 }, (_, i) => ({ id: `model-number-${i}`.repeat(20) }))
+  const r = parseCustomProviderJson(JSON.stringify({ baseUrl: 'http://127.0.0.1:1', models: many }))
+  assert(!!r.error, '400 models: refused')
+  assert(r.error.length < 2000, `refusal message stays small (was ${r.error.length} chars)`)
+  assert(r.error.includes('390 more'), 'refusal message says how many names it did not list')
 }
 
 // -- refuses: a wire dialect this app has no translation layer for.

@@ -834,11 +834,20 @@
         })
         $('set-custom-url-input').value = parsed.baseUrl
         $('set-custom-model-input').value = parsed.model
-        // Only overwrite the key field when the paste actually carried one --
-        // blank must keep meaning "leave the stored key alone" (same write-only
-        // convention as the placeholder text set above).
-        if (parsed.apiKey) $('set-custom-key-input').value = parsed.apiKey
-        statusEl.textContent = parsed.apiKey ? C.customJsonLoadedWithKey : C.customJsonLoaded
+        // ALWAYS assign, never `if (parsed.apiKey)`. A conditional here leaks
+        // across fills: paste A carries a key, paste B (a different endpoint)
+        // does not, and the key field -- type="password", so the user cannot
+        // see it -- still holds A's key, which then gets saved and sent to B's
+        // host. Every fill leaves the field showing exactly what the CURRENT
+        // paste says. (Red-team catch, 2026-07-29.)
+        $('set-custom-key-input').value = parsed.apiKey || ''
+        // Blank field means "keep the stored key" at the save route, so when
+        // the paste has no key AND one is on file, say so -- otherwise the
+        // user switches endpoint believing no key is involved while the
+        // previous provider's key keeps being sent.
+        statusEl.textContent = parsed.apiKey
+          ? C.customJsonLoadedWithKey
+          : (cfg.hasCustomApiKey ? C.customJsonLoadedKeptKey : C.customJsonLoaded)
         statusEl.classList.remove('hidden')
       } catch (err) {
         // The server's refusals are the useful message here (">1 provider",

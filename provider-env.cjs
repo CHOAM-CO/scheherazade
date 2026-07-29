@@ -219,15 +219,42 @@ function parseCustomProviderJson(text) {
     return { error: 'expected a JSON object describing one provider' }
   }
 
+  // The dialect check runs at EVERY level a paste can declare it -- top
+  // level, provider entry, and each model row -- not just on the unwrapped
+  // entry. Checking only after the unwrap was a real hole: a file that says
+  // `{"api": "openai-completions", "providers": {...}}`, which is the natural
+  // place to put a global dialect, sailed through the very gate this function
+  // advertises. (Red-team catch, 2026-07-29.)
+  const CONTENT_KEYS = ['baseUrl', 'apiKey', 'model', 'models']
+  const dialectError = (value, where) => {
+    if (value === undefined || value === null) return null
+    if (typeof value !== 'string') {
+      return `"api"${where} must be a string, but the paste has ${describeType(value)}`
+    }
+    if (value.trim() !== CUSTOM_JSON_SUPPORTED_API) {
+      return `this app speaks ${CUSTOM_JSON_SUPPORTED_API} only (the bundled Claude Code CLI emits nothing else and there is no translation layer here), but the paste declares api "${value}"${where} -- remove the field if your endpoint accepts Anthropic-shaped requests anyway`
+    }
+    return null
+  }
+
   let entry = parsed
   if (parsed.providers !== undefined) {
+    const topDialect = dialectError(parsed.api, ' (at the top level)')
+    if (topDialect) return { error: topDialect }
+    // Content fields alongside a `providers` map state the same thing twice,
+    // and the two can disagree: {"baseUrl":"A", "providers":{"p":{"baseUrl":"B"}}}
+    // used to take B and drop A without a word. Refuse instead of picking.
+    const strays = CONTENT_KEYS.filter((k) => parsed[k] !== undefined)
+    if (strays.length) {
+      return { error: `the paste has "providers" AND top-level ${strays.join(', ')} -- those can disagree, so keep whichever one describes the provider you want` }
+    }
     if (!parsed.providers || typeof parsed.providers !== 'object' || Array.isArray(parsed.providers)) {
       return { error: '"providers" must be an object keyed by provider id' }
     }
     const ids = Object.keys(parsed.providers)
     if (ids.length === 0) return { error: '"providers" is empty -- nothing to configure' }
     if (ids.length > 1) {
-      return { error: `this app runs one provider at a time, but the paste declares ${ids.length} (${ids.join(', ')}) -- keep the one you want and remove the rest` }
+      return { error: `this app runs one provider at a time, but the paste declares ${ids.length} (${summarizeNames(ids)}) -- keep the one you want and remove the rest` }
     }
     entry = parsed.providers[ids[0]]
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
@@ -235,9 +262,32 @@ function parseCustomProviderJson(text) {
     }
   }
 
-  if (entry.api !== undefined && String(entry.api).trim() !== CUSTOM_JSON_SUPPORTED_API) {
-    return {
-      error: `this app speaks ${CUSTOM_JSON_SUPPORTED_API} only (the bundled Claude Code CLI emits nothing else and there is no translation layer here), but the paste declares api "${entry.api}" -- remove the field if your endpoint accepts Anthropic-shaped requests anyway`,
+  // `api: null` reads as "not specified", the same as omitting it -- JSON
+  // emitters produce explicit nulls for absent optional fields all the time.
+  // Anything else non-string is NOT quietly stringified:
+  // String(['anthropic-messages']) happens to equal the supported value,
+  // which would let a wrong-typed field pass by accident.
+  const entryDialect = dialectError(entry.api, '')
+  if (entryDialect) return { error: entryDialect }
+  if (Array.isArray(entry.models)) {
+    for (const m of entry.models) {
+      if (!m || typeof m !== 'object') continue
+      const modelDialect = dialectError(m.api, ` (on model "${m.id}")`)
+      if (modelDialect) return { error: modelDialect }
+    }
+  }
+
+  // A paste carrying BOTH `model` and `models` is stating two things. Picking
+  // one silently is the same defect as accepting a five-provider paste and
+  // running the first entry -- the user would be told it worked while
+  // something they did not choose got configured. Agreeing values are fine
+  // (a tool emitting both is not a contradiction).
+  if (entry.models !== undefined && typeof entry.model === 'string' && entry.model.trim()) {
+    const fromList = Array.isArray(entry.models) && entry.models.length === 1
+      ? (typeof entry.models[0] === 'string' ? entry.models[0] : (entry.models[0] && typeof entry.models[0] === 'object' ? entry.models[0].id : undefined))
+      : undefined
+    if (typeof fromList !== 'string' || fromList.trim() !== entry.model.trim()) {
+      return { error: `the paste has both "model" (${entry.model}) and "models" -- keep one, so it is unambiguous which model runs` }
     }
   }
 
@@ -249,8 +299,8 @@ function parseCustomProviderJson(text) {
       return { error: '"models" must be a non-empty array' }
     }
     if (entry.models.length > 1) {
-      const names = entry.models.map((m) => (m && typeof m === 'object' ? m.id : m)).join(', ')
-      return { error: `this app runs one model at a time, but the paste declares ${entry.models.length} (${names}) -- keep the one you want and remove the rest` }
+      const names = entry.models.map((m) => (m && typeof m === 'object' ? m.id : m))
+      return { error: `this app runs one model at a time, but the paste declares ${entry.models.length} (${summarizeNames(names)}) -- keep the one you want and remove the rest` }
     }
     const only = entry.models[0]
     model = typeof only === 'string' ? only : (only && typeof only === 'object' && typeof only.id === 'string' ? only.id : '')
@@ -264,8 +314,34 @@ function parseCustomProviderJson(text) {
   const urlResult = resolveCustomBaseUrl(entry.baseUrl)
   if (urlResult.error) return { error: urlResult.error }
 
+  // A non-string apiKey is REFUSED, never coerced to "". Silently reducing it
+  // to blank is the worst available outcome: blank means "keep whatever key is
+  // already stored" at the save route, so a paste pointing at a new endpoint
+  // would report success while the PREVIOUS provider's key kept being sent --
+  // to a different host. (Red-team catch, 2026-07-29.) Absent is fine; wrongly
+  // typed is not.
+  if (entry.apiKey !== undefined && entry.apiKey !== null && typeof entry.apiKey !== 'string') {
+    return { error: `"apiKey" must be a string, but the paste has ${describeType(entry.apiKey)} -- fix it or remove it` }
+  }
   const apiKey = typeof entry.apiKey === 'string' ? entry.apiKey.trim() : ''
   return { baseUrl: urlResult.url, apiKey, model }
+}
+
+// Names go into user-visible refusal messages, which the settings page drops
+// straight into a one-line status element. readJsonBody accepts up to 1 MB, so
+// an unbounded join let a ~989 KB paste produce a ~509 KB error body that
+// destroyed the page layout (red-team measurement, 2026-07-29). Cap the list
+// and SAY how many were dropped -- a silent truncation would read as "those
+// are all of them".
+function describeType(value) {
+  if (Array.isArray(value)) return 'an array'
+  const t = typeof value
+  return /^[aeiou]/.test(t) ? `an ${t}` : `a ${t}`
+}
+
+function summarizeNames(names, limit = 10) {
+  const shown = names.slice(0, limit).map((n) => String(n).slice(0, 80))
+  return names.length > limit ? `${shown.join(', ')}, and ${names.length - limit} more` : shown.join(', ')
 }
 
 /**
@@ -332,21 +408,14 @@ function parseCustomProviderJson(text) {
 //                `undefined` for the ones it does not use -- that explicit
 //                clearing is load-bearing, not hygiene (see this file's
 //                header on cross-provider leakage through `...process.env`).
-//   isolate      whether the spawned child should get its own
-//                CLAUDE_CONFIG_DIR (and therefore its own credential slot;
-//                the claude CLI namespaces its keychain SERVICE by config
-//                dir -- `Claude Code-credentials` when unset, and
-//                `Claude Code-credentials-<sha256(dir)[0..8]>` when set,
-//                verified 2026-07-29 against the CLI binary AND live: a
-//                fresh CLAUDE_CONFIG_DIR reports "Not logged in" while the
-//                user's real login is untouched).
-//                FALSE for every row today, and that is a REQUIREMENT, not a
-//                default: claude-cli works precisely BY seeing the user's own
-//                un-namespaced credential slot, so isolating it would break
-//                it outright. The column exists because the planned
-//                subscription-login lane needs the opposite value, and that
-//                disagreement should be visible in the table rather than
-//                buried in a spawn-time conditional.
+//
+// NOT a column here, deliberately: config-dir isolation. An `isolate` field
+// plus an accessor shipped in the first draft of this table and was cut --
+// nothing in the spawn path read it, so the regression its tests claimed to
+// guard (a global CLAUDE_CONFIG_DIR breaking claude-cli's reuse of the user's
+// own login) would have shipped with every assertion still green. It lands
+// with the wiring that consumes it, and its test asserts on a built env. See
+// the claude-cli row for what that wiring will have to preserve.
 const PROVIDER_ROWS = [
   {
     // BYOK -- PRESERVED EXACTLY as main.cjs's original (pre-4-provider)
@@ -356,7 +425,6 @@ const PROVIDER_ROWS = [
     credential: 'required',
     keyName: 'claude',
     notReady: 'onboarding says PROVIDER=claude but no validated key is on file yet',
-    isolate: false,
     env: ({ key }) => ({
       ANTHROPIC_API_KEY: key,
       ANTHROPIC_BASE_URL: undefined, // clear any stale base_url from a prior chatgpt/ollama session
@@ -372,7 +440,6 @@ const PROVIDER_ROWS = [
     credential: 'required',
     keyName: 'claude-subscription',
     notReady: 'onboarding says PROVIDER=claude-subscription but no OAuth token is on file yet',
-    isolate: false,
     env: ({ key }) => ({
       CLAUDE_CODE_OAUTH_TOKEN: key,
       ANTHROPIC_API_KEY: undefined, // do NOT inject an API key alongside the OAuth token (LOCKED design, mode 1)
@@ -398,8 +465,20 @@ const PROVIDER_ROWS = [
     // ANTHROPIC_API_KEY survived here, the CLI would prefer it over the OAuth
     // session and this mode would silently become BYOK-on-someone-else's-key
     // (the exact leak sirin's run-agent.sh comment describes, quoted in this
-    // file's header). `isolate: false` is the second half of the same
-    // mechanism -- see the field's own note above.
+    // file's header).
+    //
+    // This mode ALSO depends on the spawned child NOT getting its own
+    // CLAUDE_CONFIG_DIR: the claude CLI namespaces its keychain service by
+    // config dir (`Claude Code-credentials` when unset,
+    // `Claude Code-credentials-<sha256(dir)[0..8]>` when set -- read out of
+    // the CLI binary and confirmed live 2026-07-29, where a fresh config dir
+    // reports "Not logged in" while the machine's real session stays
+    // untouched). This mode works precisely BY seeing the user's own
+    // un-namespaced slot. Nothing sets CLAUDE_CONFIG_DIR today; when the
+    // subscription-login lane makes something set it, it MUST be per-provider
+    // and this row must keep getting none -- and the test that proves it has
+    // to assert against a built env, not against a data column no spawn path
+    // reads.
     //
     // COST DISCLOSURE IS MANDATORY IN THE UI (locked with Mino): this spends
     // the user's OWN Claude subscription quota. "We found your login and will
@@ -414,7 +493,6 @@ const PROVIDER_ROWS = [
     // not to do.
     id: 'claude-cli',
     credential: 'none',
-    isolate: false,
     env: () => ({
       ANTHROPIC_API_KEY: undefined,
       ANTHROPIC_BASE_URL: undefined,
@@ -427,7 +505,6 @@ const PROVIDER_ROWS = [
     // (diverging from skia's bare run-agent.sh shape).
     id: 'chatgpt',
     credential: 'none',
-    isolate: false,
     pre: (config) => {
       const portResult = resolveChatgptProxyPort(config.CHATGPT_PROXY_PORT)
       if (portResult.error) return { error: { kind: 'provider_not_wired', reason: portResult.error } }
@@ -449,7 +526,6 @@ const PROVIDER_ROWS = [
     // fail loud instead.
     id: 'ollama',
     credential: 'none',
-    isolate: false,
     pre: (config) => {
       const model = requiredModel(config)
       if (!model) {
@@ -490,7 +566,6 @@ const PROVIDER_ROWS = [
     id: 'custom',
     credential: 'optional',
     keyName: 'custom',
-    isolate: false,
     pre: (config) => {
       const urlResult = resolveCustomBaseUrl(config.CUSTOM_BASE_URL)
       if (urlResult.error) {
@@ -578,27 +653,17 @@ function buildProviderEnv(provider, config, deps) {
 // 'custom' branch), so it is never added here either.
 const PROVIDERS_REQUIRING_STORED_CREDENTIAL = ['claude', 'claude-subscription']
 
-/**
- * providerNeedsIsolatedConfigDir(provider) -> boolean | null
- *
- * Reads the table's `isolate` column. null for an unrecognized provider, so
- * a caller can tell "no opinion" from "deliberately false".
- *
- * WHY THIS IS READABLE FROM OUTSIDE, given no caller sets CLAUDE_CONFIG_DIR
- * today: the answer is FALSE for every row, and for `claude-cli` that false
- * is the mode's entire mechanism, not a default. The claude CLI namespaces
- * its credential store by config dir -- keychain service `Claude Code-credentials`
- * with no CLAUDE_CONFIG_DIR set, `Claude Code-credentials-<sha256(dir)[0..8]>`
- * with one (read out of the CLI binary and confirmed live on 2026-07-29: a
- * spawn with a fresh CLAUDE_CONFIG_DIR reports "Not logged in · Please run
- * /login" while the user's real session is untouched). So the day someone
- * adds config-dir isolation for one provider, doing it globally would
- * silently break `claude-cli` -- the mode whose whole promise is "we reuse
- * the login you already have". scripts/test-provider-env.mjs pins that.
- */
-function providerNeedsIsolatedConfigDir(provider) {
-  const row = PROVIDER_ROWS_BY_ID.get(provider)
-  return row ? row.isolate : null
+// Table invariant, checked at module load rather than trusted: a row that
+// requires a credential MUST carry the user-visible reason shown when one is
+// missing. In the old if-chain the reason was part of the same `return`
+// statement and could not be forgotten; in a table it is a field, and a row
+// added without it would surface the literal string "undefined" in the
+// onboarding status line. Throwing here fails at require() -- loud, on the
+// author's machine -- instead of at a user's first spawn.
+for (const row of PROVIDER_ROWS) {
+  if (row.credential === 'required' && (typeof row.notReady !== 'string' || !row.notReady)) {
+    throw new Error(`provider-env: row "${row.id}" requires a credential but has no notReady reason`)
+  }
 }
 
 module.exports = {
@@ -606,7 +671,6 @@ module.exports = {
   resolveChatgptProxyPort,
   resolveCustomBaseUrl,
   parseCustomProviderJson,
-  providerNeedsIsolatedConfigDir,
   PROVIDERS_REQUIRING_STORED_CREDENTIAL,
   CHATGPT_PROXY_DEFAULT_PORT,
   CHATGPT_PLACEHOLDER_KEY,

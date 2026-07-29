@@ -661,6 +661,11 @@ window.COPY = {
     customJsonEmpty: 'Paste a provider definition first',
     customJsonLoaded: 'Filled in — check the fields above, then press Save.',
     customJsonLoadedWithKey: 'Filled in, including an API key — check the fields above, then press Save.',
+    // Said out loud because the consequence is invisible: the key field is a
+    // password field, so "blank" and "a key you cannot see" look identical,
+    // and blank means the stored key keeps being used -- against whatever
+    // endpoint the paste just set.
+    customJsonLoadedKeptKey: 'Filled in. The paste had no API key, so the key already stored will be used with this endpoint — type a new one in the API key field above if that is not what you want.',
 
     // AUTHORED -- autonomous cycle (v0.0.6).
     //

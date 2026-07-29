@@ -112,6 +112,12 @@ try {
     { method: 'POST', headers: auth, body: JSON.stringify({ json: JSON.stringify({ providers: { a: { baseUrl: 'http://127.0.0.1:1', models: [{ id: 'x' }] }, b: { baseUrl: 'http://127.0.0.1:2', models: [{ id: 'y' }] } } }) }) })
   await hit('G2 POST .../preview (dialect we cannot speak)', '/api/agent/custom-provider/preview', 400,
     { method: 'POST', headers: auth, body: JSON.stringify({ json: JSON.stringify({ api: 'openai-completions', baseUrl: 'http://127.0.0.1:1', model: 'm' }) }) })
+  // The route's OWN model-id gate, which the parser deliberately does not
+  // apply (it returns the raw id so both call sites gate identically). Without
+  // this case that branch is unexercised -- the parser accepts the id, so only
+  // a live request proves the route rejects it.
+  await hit('G2 POST .../preview (model id the pattern rejects)', '/api/agent/custom-provider/preview', 400,
+    { method: 'POST', headers: auth, body: JSON.stringify({ json: JSON.stringify({ baseUrl: 'http://127.0.0.1:1', model: 'bad model/../id!' }) }) })
 
   // ── G3 channels ───────────────────────────────────────────────────────────
   const ch = await hit('G3 GET /api/channels/status', '/api/channels/status', 200)
