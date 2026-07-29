@@ -156,9 +156,11 @@ console.log('wiring:')
     Array.isArray(g.hooks) && g.hooks.some((h) => typeof h.command === 'string' && h.command.includes('context-gauge.mjs')))
   check('template registers gauge on Stop', hasGauge(template.hooks.Stop))
   check('template registers gauge on SessionStart', hasGauge(template.hooks.SessionStart))
-  const httpSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'http-server.cjs'), 'utf8')
-  check('http-server carries the gauge additive migration', httpSrc.includes("const GAUGE_HOOK = 'context-gauge.mjs'"))
-  check('migration covers BOTH event groups', /hasGaugeIn\(settings\.hooks\.Stop\)/.test(httpSrc) && /hasGaugeIn\(settings\.hooks\.SessionStart\)/.test(httpSrc))
+  // The gauge additive migration (ensureSettingsLocalAdditions) moved to
+  // onboarding/harness-render.cjs (issue #9 PR-3) -- same assertions, new home.
+  const renderSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'harness-render.cjs'), 'utf8')
+  check('harness-render carries the gauge additive migration', renderSrc.includes("const GAUGE_HOOK = 'context-gauge.mjs'"))
+  check('migration covers BOTH event groups', /hasGaugeIn\(settings\.hooks\.Stop\)/.test(renderSrc) && /hasGaugeIn\(settings\.hooks\.SessionStart\)/.test(renderSrc))
   // Route bodies moved to onboarding/routes/agent-lifecycle.cjs (issue #9 PR-2).
   const lifecycleSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'routes', 'agent-lifecycle.cjs'), 'utf8')
   check('/api/context-status route exists', lifecycleSrc.includes("pathname === '/api/context-status'"))

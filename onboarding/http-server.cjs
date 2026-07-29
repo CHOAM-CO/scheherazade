@@ -114,45 +114,9 @@ const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Docume
 const CONFIG_DIR = DATA_HOME
 const CREDENTIALS_DIR = path.join(CONFIG_DIR, '.credentials')
 
-// Read-only TEMPLATES checked into the repo (and therefore inside app.asar
-// once packaged -- see package.json's build.files, which now explicitly
-// includes .mcp.json for exactly this reason). Seeded into CONFIG_DIR on
-// first run only, by seedConfigFromTemplates() below; every write after
-// that targets CONFIG_DIR exclusively, and these template paths are never
-// written to. .env and .agent-config have no checked-in template today
-// (both are gitignored, deliberately -- shipping a real .env would leak
-// whatever secrets the person who ran `npm run dist` happened to have on
-// their own machine into every distributed build). Their seed step below
-// is a safe no-op until/unless that changes; first real content comes from
-// the wizard itself (writeAgentConfig / writeEnv).
-const TEMPLATE_MCP_JSON_PATH = path.join(REPO_ROOT, '.mcp.json')
-const TEMPLATE_ENV_PATH = path.join(REPO_ROOT, '.env')
-const TEMPLATE_AGENT_CONFIG_PATH = path.join(REPO_ROOT, '.agent-config')
-// Pre-approves the tool surface the headless brain needs (Bash/Read/Edit/
-// Write/Glob/Grep + both bundled MCP servers' tools) plus
-// enableAllProjectMcpServers -- without this, claude's first headless spawn
-// (run.sh -> expect -> claude, cwd == CONFIG_DIR) shows an interactive "New
-// MCP server found -- approve?" trust prompt with no one to answer it, and
-// the expect script's timeout/pattern list doesn't cover that prompt text
-// (see run.sh's own EXPECT_EOF block), so the agent hangs forever instead
-// of ever reaching channel.mjs. Also carries the SessionStart/Stop hook
-// wiring docs/ARCHITECTURE.md's Hook System section describes (memory
-// restore + felt/checkpoint nudges) -- see seedSettingsLocal() for the
-// {AGENT_DIR} render that makes those hook paths resolve in both the
-// packaged and CLI deployments. Deliberately lives under onboarding/
-// templates/ and NOT at a real .claude/settings.local.json path: a common
-// GLOBAL gitignore rule (`**/.claude/settings.local.json`, e.g. in
-// ~/.config/git/ignore) would silently mark a repo-root .claude/ copy as
-// untracked -- shipping fine from a dev's working tree tonight but MISSING
-// from a fresh clone / CI checkout, silently no-op-ing the seed and
-// re-hanging. onboarding/** is already in package.json's build.files, so
-// this tracked path ships with no extra build wiring.
-const TEMPLATE_SETTINGS_LOCAL_PATH = path.join(REPO_ROOT, 'onboarding', 'templates', 'claude-settings.local.json')
-
 const AGENT_CONFIG_PATH = path.join(CONFIG_DIR, '.agent-config')
 const ENV_PATH = path.join(CONFIG_DIR, '.env')
 const MCP_JSON_PATH = path.join(CONFIG_DIR, '.mcp.json')
-const SETTINGS_LOCAL_PATH = path.join(CONFIG_DIR, '.claude', 'settings.local.json')
 
 // Process-side liveness status (spawned/failed), written by main.cjs's
 // child-process lifecycle. See onboarding/agent-status.cjs's own header for
@@ -170,14 +134,6 @@ const { getAgentStatus } = require('./agent-status.cjs')
 // between the two files (one is ESM, one CJS -- not worth a shared module
 // for a two-field JSON contract).
 const LIVENESS_MARKER_PATH = path.join(DATA_HOME, '.agent-live')
-// Harness-refresh failure marker (nogabi issue #6). Boot re-renders the
-// harness (CLAUDE.md / ONTOLOGY_GUIDE.md / system_prompt.md / bootstrap
-// scripts) for already-onboarded installs. That refresh used to log an error
-// and continue, so a failed render meant the agent ran against whatever was
-// on disk with the fact visible only in a log nobody reads at boot. This file
-// is the durable record: written on failure, deleted on success, and checked
-// by main.cjs before it will spawn.
-const HARNESS_FAILURE_PATH = path.join(DATA_HOME, '.harness-failed')
 // Generous vs. channel.mjs's 60s heartbeat interval -- tolerates one missed
 // beat before calling the marker stale, without ever letting a real dead
 // agent's LAST marker read as perpetually "live".
@@ -426,311 +382,27 @@ function ensureConfigDir() {
   fs.mkdirSync(CONFIG_DIR, { recursive: true })
 }
 
-// Seeds a writable CONFIG_DIR file from its checked-in (read-only, asar-
-// safe) template the first time this app ever runs on a machine. No-op if
-// the target already exists (never clobbers a user's live config) or if
-// there is no template to seed from (see TEMPLATE_* comment above).
-function seedConfigFromTemplate(templatePath, targetPath) {
-  if (fs.existsSync(targetPath)) return
-  if (!fs.existsSync(templatePath)) return
-  ensureConfigDir()
-  fs.copyFileSync(templatePath, targetPath)
-  log(`seeded ${path.basename(targetPath)} into CONFIG_DIR from bundled template`)
-}
-
-// settings.local.json gets its own seeder (not the plain copy above) for two
-// reasons: (1) it nests one level deeper at CONFIG_DIR/.claude/, and (2) its
-// hook commands carry a {AGENT_DIR} placeholder that has to be rendered to a
-// real, executable hook-script location. {AGENT_DIR} -> toUnpackedPath(
-// REPO_ROOT): in a packaged build REPO_ROOT is inside app.asar (read-only,
-// and bash cannot exec a script from the asar virtual FS), so it is mapped
-// to app.asar.unpacked, where package.json's asarUnpack now ships hooks/**
-// as real files. Off-asar (dev / CLI) toUnpackedPath() is a no-op and this
-// resolves to the plain repo root. setup.sh's own render() applies the exact
-// same {AGENT_DIR} substitution for its CLI-deployment copy, so both seed
-// paths produce working absolute hook paths. Seeds only when absent -- never
-// clobbers a user's edited hooks/permissions.
-function seedSettingsLocal() {
-  if (fs.existsSync(SETTINGS_LOCAL_PATH)) return
-  if (!fs.existsSync(TEMPLATE_SETTINGS_LOCAL_PATH)) return
-  const rendered = fs
-    .readFileSync(TEMPLATE_SETTINGS_LOCAL_PATH, 'utf8')
-    .split('{AGENT_DIR}')
-    .join(toUnpackedPath(REPO_ROOT))
-  fs.mkdirSync(path.dirname(SETTINGS_LOCAL_PATH), { recursive: true })
-  fs.writeFileSync(SETTINGS_LOCAL_PATH, rendered)
-  log('seeded settings.local.json into CONFIG_DIR/.claude (hook paths rendered) from bundled template')
-}
-
-// Additive-only settings.local.json migration for EXISTING installs.
-// seedSettingsLocal() above is seed-if-absent by design (never clobbers user
-// edits), which means a hook added to the bundled template after a user's
-// first run would never reach them -- the exact "disk updated, config
-// frozen" half-update class diagnosed live on Mino's install 2026-07-13.
-// This runs on every boot and ONLY appends known-missing entries; it never
-// removes or rewrites anything the user has, so hand-edited hooks and
-// permissions survive. Currently migrates:
-//   - permissions.allow += mcp__agent-channel__send_file_to_discord
-//   - hooks.Stop += stop-reply-guard.mjs (silent-text regression detector,
-//     added after the agent composed replies without calling the reply tool
-//     and looked dead from Discord)
-//   - hooks.PreToolUse += pre-reply-negation-check.mjs (v0.0.4)
-//   - bash hook commands -> node .mjs ports (win-port Phase 3; the .sh
-//     files were deleted from the bundle, see the rewrite block below for
-//     why this one is a rewrite rather than an addition)
-function ensureSettingsLocalAdditions() {
-  if (!fs.existsSync(SETTINGS_LOCAL_PATH)) return // fresh install: seeder covers it
-  let settings
-  try {
-    settings = JSON.parse(fs.readFileSync(SETTINGS_LOCAL_PATH, 'utf8'))
-  } catch (err) {
-    // Fail-loud but non-fatal: overwriting a corrupt (possibly hand-edited)
-    // file would destroy user configuration to fix a hook.
-    console.error(`[scheherazade/onboarding] settings.local.json is not valid JSON, skipping additive migration: ${err.message}`)
-    return
-  }
-  // Snapshot BEFORE mutation -- the in-place mutations below alias the parsed
-  // object, so a post-mutation snapshot would always equal the result and the
-  // write would silently never happen (same aliasing bug class as
-  // ensureMcpJsonAgentName's 2026-07-03 fix below).
-  const beforeText = JSON.stringify(settings, null, 2)
-
-  if (!settings.permissions || typeof settings.permissions !== 'object') settings.permissions = {}
-  if (!Array.isArray(settings.permissions.allow)) settings.permissions.allow = []
-  const SEND_FILE_PERM = 'mcp__agent-channel__send_file_to_discord'
-  if (!settings.permissions.allow.includes(SEND_FILE_PERM)) settings.permissions.allow.push(SEND_FILE_PERM)
-
-  if (!settings.hooks || typeof settings.hooks !== 'object') settings.hooks = {}
-  if (!Array.isArray(settings.hooks.Stop)) settings.hooks.Stop = []
-  if (settings.hooks.Stop.length === 0) settings.hooks.Stop.push({ hooks: [] })
-  const stopGroup = settings.hooks.Stop[0]
-  if (!Array.isArray(stopGroup.hooks)) stopGroup.hooks = []
-  const hasReplyGuard = settings.hooks.Stop.some((group) =>
-    Array.isArray(group.hooks) && group.hooks.some((h) => typeof h.command === 'string' && h.command.includes('stop-reply-guard.mjs')))
-  if (!hasReplyGuard) {
-    stopGroup.hooks.push({
-      type: 'command',
-      command: `node ${path.join(toUnpackedPath(REPO_ROOT), 'hooks', 'stop-reply-guard.mjs')}`,
-    })
-  }
-
-  // v0.0.4: negation-check on the reply tool (denial gate -- see the hook's
-  // own header). Appends into the existing mcp__agent-channel__reply
-  // PreToolUse matcher group when present; creates the group when a user
-  // config predates PreToolUse entirely. Same additive-only contract.
-  if (!Array.isArray(settings.hooks.PreToolUse)) settings.hooks.PreToolUse = []
-  const NEGATION_HOOK = 'pre-reply-negation-check.mjs'
-  const hasNegation = settings.hooks.PreToolUse.some((group) =>
-    Array.isArray(group.hooks) && group.hooks.some((h) => typeof h.command === 'string' && h.command.includes(NEGATION_HOOK)))
-  if (!hasNegation) {
-    let replyGroup = settings.hooks.PreToolUse.find((g) => g && g.matcher === 'mcp__agent-channel__reply')
-    if (!replyGroup) {
-      replyGroup = { matcher: 'mcp__agent-channel__reply', hooks: [] }
-      settings.hooks.PreToolUse.push(replyGroup)
-    }
-    if (!Array.isArray(replyGroup.hooks)) replyGroup.hooks = []
-    replyGroup.hooks.push({
-      type: 'command',
-      command: `node ${path.join(toUnpackedPath(REPO_ROOT), 'hooks', NEGATION_HOOK)}`,
-    })
-  }
-
-  // v0.0.12: permission-wall translator on Bash results -- silence-during-
-  // diagnosis killer; see the hook's header. Same additive-only contract as
-  // the negation block above. (history: docs/HISTORY.md)
-  const TRANSLATOR_HOOK = 'post-bash-permission-translator.mjs'
-  if (!Array.isArray(settings.hooks.PostToolUse)) settings.hooks.PostToolUse = []
-  const hasTranslator = settings.hooks.PostToolUse.some((group) =>
-    Array.isArray(group.hooks) && group.hooks.some((h) => typeof h.command === 'string' && h.command.includes(TRANSLATOR_HOOK)))
-  if (!hasTranslator) {
-    let bashGroup = settings.hooks.PostToolUse.find((g) => g && g.matcher === 'Bash')
-    if (!bashGroup) {
-      bashGroup = { matcher: 'Bash', hooks: [] }
-      settings.hooks.PostToolUse.push(bashGroup)
-    }
-    if (!Array.isArray(bashGroup.hooks)) bashGroup.hooks = []
-    bashGroup.hooks.push({
-      type: 'command',
-      command: `node ${path.join(toUnpackedPath(REPO_ROOT), 'hooks', TRANSLATOR_HOOK)}`,
-    })
-  }
-
-  // v0.0.22: context-gauge tap on Stop + SessionStart -- advisory
-  // instrument, additive-only, both event groups checked independently so
-  // a hand-edited config missing only one still converges. See the hook's
-  // header for the mechanism. (history: docs/HISTORY.md)
-  const GAUGE_HOOK = 'context-gauge.mjs'
-  const gaugeCommand = `node ${path.join(toUnpackedPath(REPO_ROOT), 'hooks', GAUGE_HOOK)}`
-  const hasGaugeIn = (groups) => Array.isArray(groups) && groups.some((group) =>
-    Array.isArray(group.hooks) && group.hooks.some((h) => typeof h.command === 'string' && h.command.includes(GAUGE_HOOK)))
-  if (!hasGaugeIn(settings.hooks.Stop)) {
-    // stopGroup already normalized above (reply-guard block)
-    stopGroup.hooks.push({ type: 'command', command: gaugeCommand })
-  }
-  if (!Array.isArray(settings.hooks.SessionStart)) settings.hooks.SessionStart = []
-  if (settings.hooks.SessionStart.length === 0) settings.hooks.SessionStart.push({ hooks: [] })
-  if (!hasGaugeIn(settings.hooks.SessionStart)) {
-    const ssGroup = settings.hooks.SessionStart[0]
-    if (!Array.isArray(ssGroup.hooks)) ssGroup.hooks = []
-    ssGroup.hooks.push({ type: 'command', command: gaugeCommand })
-  }
-
-  // win-port Phase 3: the 3 bash hooks were ported to .mjs and the .sh
-  // files DELETED from the bundle -- an existing install's settings still
-  // says `bash .../hooks/session-start.sh`, which now fails on every fire
-  // (session-start dying = the boot restore summary silently gone). This is
-  // the one place the additive-only contract allows a REWRITE: only
-  // commands matching the exact seeded shape `bash <path>/hooks/<one of
-  // the 3>.sh` are touched, and they point at files that no longer exist,
-  // so there is nothing of the user's to preserve. Hand-edited commands
-  // that don't match the shape are left alone.
-  const BASH_HOOK_PORT = /^bash .*[\\/]hooks[\\/](session-start|felt-check|checkpoint-nudge)\.sh$/
-  for (const groups of Object.values(settings.hooks)) {
-    if (!Array.isArray(groups)) continue
-    for (const group of groups) {
-      if (!group || !Array.isArray(group.hooks)) continue
-      for (const h of group.hooks) {
-        if (typeof h.command !== 'string') continue
-        const m = h.command.match(BASH_HOOK_PORT)
-        if (m) h.command = `node ${path.join(toUnpackedPath(REPO_ROOT), 'hooks', `${m[1]}.mjs`)}`
-      }
-    }
-  }
-
-  // Boot-context diet (2026-07-28): felt-check + stop-skill-extraction-nudge
-  // were cut from the Stop lane (advisory nags; the Felt discipline itself
-  // stays in CLAUDE.md §2) and their files DELETED from the bundle. Like the
-  // BASH_HOOK_PORT rewrite above, this touches only commands matching the
-  // exact seeded shape pointing at files that no longer exist — so removal
-  // never fights a user's intent: a hand-re-added command in this shape is
-  // dead anyway (the file is gone), and anything not matching the shape is
-  // left alone. Runs AFTER the bash rewrite on purpose: a pre-port
-  // `bash .../felt-check.sh` first becomes `node .../felt-check.mjs`, then
-  // falls to this filter — one boot converges either starting point.
-  const DIET_REMOVED_HOOKS = /^node .*[\\/]hooks[\\/](felt-check|stop-skill-extraction-nudge)\.mjs$/
-  for (const groups of Object.values(settings.hooks)) {
-    if (!Array.isArray(groups)) continue
-    for (const group of groups) {
-      if (!group || !Array.isArray(group.hooks)) continue
-      group.hooks = group.hooks.filter((h) => !(typeof h.command === 'string' && DIET_REMOVED_HOOKS.test(h.command)))
-    }
-  }
-
-  const afterText = JSON.stringify(settings, null, 2)
-  if (afterText !== beforeText) {
-    fs.writeFileSync(SETTINGS_LOCAL_PATH, afterText + '\n')
-    log('settings.local.json additive migration applied (send_file permission / stop-reply-guard hook / bash-hook .mjs port)')
-  }
-}
-
-// Subagent definitions (v0.0.4 item b): templates/agents/*.md ->
-// CONFIG_DIR/.claude/agents/. Per-file seed-if-absent, same contract as the
-// other seeds -- a user who edited a definition keeps their edit; NEW
-// definitions added in later app versions still arrive because absence is
-// checked per file, not per directory.
-const TEMPLATE_AGENTS_DIR = path.join(REPO_ROOT, 'onboarding', 'templates', 'agents')
-const AGENTS_DIR = path.join(CONFIG_DIR, '.claude', 'agents')
-
-function seedAgentDefinitions() {
-  if (!fs.existsSync(TEMPLATE_AGENTS_DIR)) return
-  let entries
-  try {
-    entries = fs.readdirSync(TEMPLATE_AGENTS_DIR).filter((f) => f.endsWith('.md'))
-  } catch (err) {
-    console.error(`[scheherazade/onboarding] cannot read agent templates dir: ${err.message}`)
-    return
-  }
-  for (const name of entries) {
-    const target = path.join(AGENTS_DIR, name)
-    if (fs.existsSync(target)) continue
-    // tmp+rename (atomic on same volume) + per-file catch: an interrupted
-    // plain copyFileSync leaves a truncated file that the exists-check
-    // treats as "seeded" forever, and one throwing file used to abort the
-    // whole seedConfigFromTemplates() boot path.
-    try {
-      fs.mkdirSync(AGENTS_DIR, { recursive: true })
-      const tmp = `${target}.tmp`
-      fs.copyFileSync(path.join(TEMPLATE_AGENTS_DIR, name), tmp)
-      fs.renameSync(tmp, target)
-      log(`seeded subagent definition ${name} into .claude/agents`)
-    } catch (err) {
-      console.error(`[scheherazade/onboarding] seeding subagent ${name} failed (continuing): ${err.message}`)
-    }
-  }
-}
-
-function seedConfigFromTemplates() {
-  seedConfigFromTemplate(TEMPLATE_MCP_JSON_PATH, MCP_JSON_PATH)
-  seedConfigFromTemplate(TEMPLATE_ENV_PATH, ENV_PATH)
-  seedConfigFromTemplate(TEMPLATE_AGENT_CONFIG_PATH, AGENT_CONFIG_PATH)
-  seedSettingsLocal()
-  ensureSettingsLocalAdditions()
-  seedAgentDefinitions()
-}
-
-// Global Claude Code CLI first-run state -- NOT part of CONFIG_DIR, and NOT
-// covered by seedConfigFromTemplate()'s copy-a-template shape. run.sh's
-// headless spawn sets no CLAUDE_CONFIG_DIR/HOME override (confirmed:
-// neither appears anywhere in run.sh or spawnRealAgentChild()'s env block
-// above, unlike e.g. doze-portable's launcher.sh, which isolates
-// CLAUDE_CONFIG_DIR specifically because it runs in a fresh container), so
-// the spawned `claude` reads/writes the REAL user's own ~/.claude.json. On
-// a machine where the person has ever run `claude` interactively before,
-// hasCompletedOnboarding (and theme) are already set there and this is a
-// no-op. On a genuinely first-ever `claude` invocation (the exact machine
-// state setup.sh's own auto-install path can produce -- it `npm install -g
-// @anthropic-ai/claude-code`'s the CLI but never runs it interactively):
-// the CLI's own first-run "Choose the text style that looks best
-// with your terminal" picker hangs the headless expect spawn indefinitely
-// -- run.sh's `-re "text style"` pattern matches that prompt's text and
-// sends \r, but the picker does not advance on a bare \r (repeated
-// exp_continue matches just re-send \r into the same screen for the whole
-// 25s window, then expect falls through to `expect eof` with no one left
-// to answer). Same failure shape as the settings.local.json gap above, one
-// step earlier in the sequence. MERGE-ONLY: never overwrites a real,
-// existing ~/.claude.json wholesale (it can hold the user's own separate
-// interactive Claude Code state -- OAuth account info, project trust list,
-// history -- this only fills in the three keys that gate the first-run
-// prompts, and only when they aren't already satisfied).
-// (history: docs/HISTORY.md)
-const REAL_CLAUDE_JSON_PATH = path.join(os.homedir(), '.claude.json')
-
-function ensureClaudeOnboardingDone() {
-  let existing = {}
-  if (fs.existsSync(REAL_CLAUDE_JSON_PATH)) {
-    try {
-      existing = JSON.parse(fs.readFileSync(REAL_CLAUDE_JSON_PATH, 'utf8'))
-    } catch (err) {
-      log(`ensureClaudeOnboardingDone: existing ~/.claude.json is not valid JSON, leaving it untouched: ${err.message}`)
-      return
-    }
-    // No-op only when ALL THREE first-run gates are already satisfied. The
-    // fullscreen upsell has its OWN gate, independent of onboarding/theme:
-    // claude skips the "Try the new fullscreen renderer?" prompt only when
-    // (fullscreenUpsellSeenCount ?? 0) >= 3 (verified against the bundled CLI
-    // binary: `fullscreenUpsellSeenCount??0)>=uos)return!1`, uos===3), and
-    // run.sh's expect list covers none of that prompt's labels ("Yes, try
-    // it"/"Not now"). So a merge that set only hasCompletedOnboarding+theme
-    // still hung there on a real terminal (the pty self-test happened not to
-    // surface it; a genuine TTY did). All three keys required.
-    if (existing.hasCompletedOnboarding && existing.theme && (existing.fullscreenUpsellSeenCount ?? 0) >= 3) return
-  }
-  const merged = { ...existing, hasCompletedOnboarding: true }
-  if (!merged.theme) merged.theme = 'dark'
-  merged.fullscreenUpsellSeenCount = Math.max(existing.fullscreenUpsellSeenCount ?? 0, 3)
-  // Atomic write: temp file in the SAME directory (so rename() is a
-  // same-filesystem atomic swap) + rename, never an in-place writeFileSync.
-  // A crash or a concurrent external `claude` writing this same file
-  // mid-write would otherwise leave a torn/partial ~/.claude.json that
-  // claude's own JSON.parse chokes on -- turning a first-run convenience
-  // into a boot-fatal corruption. This does not lock against a concurrent
-  // writer's lost update (inherent to a read-modify-write merge), but it
-  // guarantees the file on disk is always one whole valid JSON or the other.
-  const tmp = `${REAL_CLAUDE_JSON_PATH}.tmp-${process.pid}`
-  fs.writeFileSync(tmp, JSON.stringify(merged, null, 2) + '\n')
-  fs.renameSync(tmp, REAL_CLAUDE_JSON_PATH)
-  log('seeded hasCompletedOnboarding/theme/fullscreenUpsellSeenCount into ~/.claude.json (first-run claude gates)')
-}
+// ── substrate rendering / config+harness seeding (issue #9 PR-3) ────────
+// The boot-seed layer (seedConfigFromTemplates / ensureClaudeOnboardingDone
+// / renderHarnessFiles / refreshHarnessIfOnboarded / renderAgentSubstrate /
+// the harness-failure marker trio) moved VERBATIM into
+// onboarding/harness-render.cjs -- same bodies-only shape as routes/*.cjs:
+// shared singletons (log, toUnpackedPath, readAgentConfig, ensureConfigDir,
+// the CONFIG_DIR target paths) keep exactly one owner HERE and bind once
+// via createHarnessRender(ctx). That module must never require this file
+// back (require-cycle snapshot hazard, same rule as the route files).
+// TDZ-safe at this position: every const in the ctx literal is declared
+// above, and the function references are hoisted declarations.
+// NOTE for source-text-pinned tests: the BASH_HOOK_PORT / DIET_REMOVED_HOOKS
+// migration regexes, the GAUGE_HOOK migration, and the attach-bootstrap.sh /
+// sudo-askpass.sh render lines now live in THAT file --
+// scripts/test-hooks-port.mjs, test-context-gauge.mjs, and
+// test-attach-topology.mjs read its raw source.
+const harnessRender = require('./harness-render.cjs').createHarnessRender({
+  log, toUnpackedPath, readAgentConfig, ensureConfigDir,
+  REPO_ROOT, AGENT_NAME, DATA_HOME, CONFIG_DIR,
+  AGENT_CONFIG_PATH, ENV_PATH, MCP_JSON_PATH,
+})
 
 // ── fail-loud JSON helpers ──────────────────────────────────────────────
 function sendJson(res, status, obj) {
@@ -1588,223 +1260,6 @@ async function writePersonaPreferences({ tone, primaryTask, proactiveEnabled, pr
   }
 }
 
-// ── agent substrate rendering (app-path parity with setup.sh, 2026-07-08) ─
-// setup.sh's fuller bootstrap (CLAUDE.md / ONTOLOGY_GUIDE.md /
-// self_persona.md / checkpoint.md / memory dirs) never ran in the packaged
-// app path, so a DMG-installed agent booted with NO substrate at all: no
-// restore procedure, no dream cycle, no self-doubt loop -- just the bare
-// Claude Code default behavior. This renders the same templates setup.sh
-// renders, at onboarding-complete time, with the same
-// create-if-absent/re-render split setup.sh uses: CLAUDE.md,
-// ONTOLOGY_GUIDE.md, and system_prompt.md are harness (always re-rendered);
-// self_persona.md and checkpoint.md are the agent's own history (never
-// overwritten). {AGENT_DIR} renders to the UNPACKED repo root -- the agent
-// invokes cycle scripts with bash by absolute path, and bash cannot exec a
-// file inside app.asar (same class as the toUnpackedPath comment above).
-// Harness-only render, extracted (07-13) so app boot can re-render harness
-// files for EXISTING installs when the app updates -- previously harness
-// files only refreshed at onboarding-complete time, so a shipped CLAUDE.md
-// fix (e.g. the §10 memory-write rules) never reached installs that had
-// already onboarded. Harness files are "always re-rendered" by design (see
-// the create-if-absent/re-render split comment above); this just adds a
-// second call site with the same semantics. Never touches self_persona.md /
-// checkpoint.md.
-// ALL-OR-NOTHING (nogabi issue #6). This used to read, render and write each
-// file in turn, so a template that failed to read partway through left a
-// MIXED harness on disk: a new CLAUDE.md beside an old system_prompt.md. The
-// old log line called that "stale", which is the wrong word for a worse
-// state -- stale is at least internally consistent. Every source is now read
-// and rendered before anything is written, so a read or render failure
-// leaves the previous harness completely intact. The writes then go to .tmp
-// siblings and rename into place, which is atomic per file and collapses the
-// remaining window to the (disk-full class) case.
-// opts are test seams (scripts/test-harness-refresh.mjs), same shape as
-// resolveOutboundChannel's in channel.mjs: production call sites pass nothing
-// and get real fs. Needed because the two failures worth pinning here (a
-// template that cannot be READ, and a harness file that cannot be WRITTEN)
-// are otherwise only reachable by breaking the repo or the disk.
-function renderHarnessFiles({ displayName, tone, primaryTask }, opts = {}) {
-  const readFileFn = opts.readFileFn || fs.readFileSync
-  const writeFileFn = opts.writeFileFn || fs.writeFileSync
-  const agentDir = toUnpackedPath(REPO_ROOT)
-  const staged = []
-  const renderHarness = (srcName, dstName, mode) => {
-    const src = readFileFn(path.join(REPO_ROOT, srcName), 'utf8')
-    const rendered = src
-      .replaceAll('{AGENT_DIR}', agentDir)
-      .replaceAll('{AGENT_NAME}', AGENT_NAME)
-      .replaceAll('{MEMORY_DIR}', DATA_HOME)
-    staged.push({ dstName, rendered, mode })
-  }
-
-  renderHarness('CLAUDE.md', 'CLAUDE.md')
-  renderHarness('ONTOLOGY_GUIDE.md', 'ONTOLOGY_GUIDE.md')
-  // Trigger-load procedure files (boot-context diet, 2026-07-28): the
-  // journal-compression / persona-reflux / madoromi procedure bodies moved
-  // out of CLAUDE.md into files the agent Reads at the moment of use, so
-  // they stop costing every boot. Same harness semantics as CLAUDE.md
-  // (always re-rendered, never the agent's own history).
-  fs.mkdirSync(path.join(DATA_HOME, 'procedures'), { recursive: true })
-  for (const proc of ['journal-compression.md', 'persona-reflux.md', 'madoromi.md']) {
-    renderHarness(path.join('procedures', proc), path.join('procedures', proc))
-  }
-  // Attach-topology bootstrap (0.1.0 prep): harness-rendered so RUN_SH/MEM
-  // paths always match the installed app version. Executed only ever by the
-  // USER in their terminal -- the app renders the file, never runs it (TCC
-  // attribution must descend from the terminal, see the template's header).
-  renderHarness(path.join('onboarding', 'templates', 'attach-bootstrap.sh'), 'attach-bootstrap.sh')
-  // sudo askpass helper (0.1.0 prep): must be executable -- sudo -A execs it.
-  // Content carries no secret (it fetches at run time); 0700 anyway.
-  renderHarness(path.join('onboarding', 'templates', 'sudo-askpass.sh'), 'sudo-askpass.sh', 0o700)
-
-  const promptSrc = readFileFn(
-    path.join(REPO_ROOT, 'onboarding', 'templates', 'agent-system-prompt.md'),
-    'utf8'
-  )
-  staged.push({
-    dstName: 'system_prompt.md',
-    rendered: promptSrc
-      .replaceAll('{DISPLAY_NAME}', displayName)
-      .replaceAll('{TONE}', tone)
-      .replaceAll('{PRIMARY_TASK}', primaryTask || '일상 대화와 기록'),
-  })
-
-  // Every source read and rendered. Only now does anything touch the harness.
-  for (const { dstName, rendered, mode } of staged) {
-    const dst = path.join(DATA_HOME, dstName)
-    const tmp = `${dst}.tmp`
-    writeFileFn(tmp, rendered)
-    if (mode !== undefined) fs.chmodSync(tmp, mode)
-    fs.renameSync(tmp, dst)
-  }
-}
-
-// Boot-time harness refresh for already-onboarded installs. Fail-loud in
-// log, non-fatal: a broken template must not stop the whole server, but it
-// must never be silent either.
-function refreshHarnessIfOnboarded(opts = {}) {
-  try {
-    const config = readAgentConfig()
-    if (!config.ONBOARDING_COMPLETE) return false
-    renderHarnessFiles({
-      displayName: config.DISPLAY_NAME || AGENT_NAME,
-      tone: config.TONE || 'casual',
-      primaryTask: config.PRIMARY_TASK || '',
-    }, opts)
-    // Success clears any previous failure: the whole point of re-rendering at
-    // every boot is that a shipped fix repairs an install without the user
-    // doing anything, so recovery must be automatic and must un-block spawn.
-    clearHarnessFailure()
-    console.error('[scheherazade/onboarding] harness re-rendered at boot (CLAUDE.md / ONTOLOGY_GUIDE.md / system_prompt.md)')
-    return true
-  } catch (err) {
-    // Durable, not just logged (nogabi #6). renderHarnessFiles is all-or-nothing,
-    // so reaching here means the harness on disk is the PREVIOUS one, intact but
-    // possibly older than the runtime that is about to read it. main.cjs refuses
-    // to spawn while this file exists, and the UI shows the reason.
-    writeHarnessFailure(err)
-    console.error('[scheherazade/onboarding] boot harness refresh FAILED (agent will NOT be spawned):', err.message)
-    return false
-  }
-}
-
-// Written by refreshHarnessIfOnboarded on failure, removed on the next
-// success. Deliberately a plain file rather than in-memory state: the check
-// lives in main.cjs (a different module, and on a later tick), and a crash
-// between refresh and spawn must not lose the fact.
-function writeHarnessFailure(err) {
-  try {
-    fs.writeFileSync(
-      HARNESS_FAILURE_PATH,
-      JSON.stringify({ at: new Date().toISOString(), message: err && err.message ? err.message : String(err) }, null, 2) + '\n'
-    )
-  } catch (writeErr) {
-    // Nothing left to escalate to. Say so rather than pretending the gate is armed.
-    console.error('[scheherazade/onboarding] could not record the harness failure marker:', writeErr.message)
-  }
-}
-
-function clearHarnessFailure() {
-  try {
-    fs.rmSync(HARNESS_FAILURE_PATH, { force: true })
-  } catch (err) {
-    console.error('[scheherazade/onboarding] could not clear the harness failure marker:', err.message)
-  }
-}
-
-// Read by main.cjs before spawning. Returns null when the harness is fine.
-function readHarnessFailure() {
-  try {
-    if (!fs.existsSync(HARNESS_FAILURE_PATH)) return null
-    return JSON.parse(fs.readFileSync(HARNESS_FAILURE_PATH, 'utf8'))
-  } catch {
-    // Unreadable/corrupt marker still means a failure was recorded. Fail closed.
-    return { at: null, message: 'harness failure marker exists but could not be read' }
-  }
-}
-
-function renderAgentSubstrate({ displayName, tone, primaryTask }) {
-  for (const dir of ['session_notes/.archive', 'journals', 'dreams', 'logs', '.review']) {
-    fs.mkdirSync(path.join(DATA_HOME, dir), { recursive: true })
-  }
-
-  renderHarnessFiles({ displayName, tone, primaryTask })
-
-  const personaPath = path.join(DATA_HOME, 'self_persona.md')
-  if (!fs.existsSync(personaPath)) {
-    const today = new Date().toISOString().slice(0, 10)
-    fs.writeFileSync(
-      personaPath,
-      [
-        `# ${displayName} -- Self Persona`,
-        '',
-        '> Identity, not instructions. CLAUDE.md governs behavior; this file',
-        '> governs who is behaving. It changes only through the persona reflux',
-        '> cycle (see CLAUDE.md §4 and scripts/persona-reflux.mjs) -- never edited',
-        '> on impulse.',
-        '',
-        '## Identity',
-        '',
-        '(Nothing here yet. This fills in from lived sessions, not from invention',
-        '-- leave it blank until there is real history to draw from.)',
-        '',
-        '## Voice',
-        '',
-        `(How ${displayName} actually talks, once there is enough of a record to say.)`,
-        '',
-        '## Values',
-        '',
-        `(What ${displayName} holds to, learned from friction -- not declared up front.)`,
-        '',
-        '## Evolution Log',
-        '',
-        `- ${today} -- persona created from template. No lived history yet.`,
-        '',
-      ].join('\n')
-    )
-  }
-
-  const checkpointPath = path.join(DATA_HOME, 'checkpoint.md')
-  if (!fs.existsSync(checkpointPath)) {
-    fs.writeFileSync(
-      checkpointPath,
-      [
-        '# Checkpoint',
-        '',
-        '> Cross-session handoff. Overwritten on significant state changes -- a',
-        '> snapshot, not a log. For history, see session_notes/ and journals/.',
-        '',
-        '## Status',
-        '',
-        '(First session has not happened yet.)',
-        '',
-      ].join('\n')
-    )
-  }
-
-  log('rendered agent substrate into DATA_HOME (CLAUDE.md, ONTOLOGY_GUIDE.md, system_prompt.md; persona/checkpoint seeded if absent)')
-}
-
 // Net-change collapse for the session feed: without it, ONE correction row
 // can render TWICE -- once "추가됨", once "수정됨", identical preview text,
 // because both previews resolve to the row's CURRENT content. The write
@@ -2518,10 +1973,10 @@ const ROUTE_TO_FILE = {
 // launch. Optional (not required) so this file stays independently
 // testable/requireable without an Electron main process wired up.
 function createOnboardingServer(onOnboardingComplete, agentControls) {
-  seedConfigFromTemplates() // first-run only; no-op once CONFIG_DIR has real files
+  harnessRender.seedConfigFromTemplates() // first-run only; no-op once CONFIG_DIR has real files
   ensureMcpJsonAgentName() // correctness fix applied every boot, independent of wizard progress
-  ensureClaudeOnboardingDone() // first-ever-claude-run only; no-op once ~/.claude.json already has it
-  refreshHarnessIfOnboarded() // every boot: shipped harness fixes reach existing installs (no-op pre-onboarding)
+  harnessRender.ensureClaudeOnboardingDone() // first-ever-claude-run only; no-op once ~/.claude.json already has it
+  harnessRender.refreshHarnessIfOnboarded() // every boot: shipped harness fixes reach existing installs (no-op pre-onboarding)
 
   return new Promise((resolve, reject) => {
     let allowedHosts = null // populated once listen() resolves and the real ephemeral port is known
@@ -2725,7 +2180,7 @@ const staticCtx = {
   // logs / topology / permission probes
   logBuffer, attachTopology, permissionProbes,
   // onboarding-complete side effects + the memory boundary
-  writePersonaPreferences, renderAgentSubstrate,
+  writePersonaPreferences, renderAgentSubstrate: harnessRender.renderAgentSubstrate,
   getSessionEvents, getMemoryService, CATEGORY_TABLES,
 }
 
@@ -2769,9 +2224,9 @@ module.exports = {
   // failed boot harness refresh must stop the spawn, not just print a line.
   // Kept here rather than in main.cjs because this file owns both
   // DATA_HOME and the render itself.
-  readHarnessFailure,
-  HARNESS_FAILURE_PATH,
-  refreshHarnessIfOnboarded,
+  readHarnessFailure: harnessRender.readHarnessFailure,
+  HARNESS_FAILURE_PATH: harnessRender.HARNESS_FAILURE_PATH,
+  refreshHarnessIfOnboarded: harnessRender.refreshHarnessIfOnboarded,
   // Exported for scripts/test-credential-store.mjs (pure, no Electron
   // dependency): getElectron() requires 'electron' lazily precisely so
   // this file stays testable outside an Electron main process, so the
