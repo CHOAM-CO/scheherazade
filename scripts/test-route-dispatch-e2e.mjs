@@ -248,6 +248,25 @@ try {
   })
   chk('G10 code without the onboard token is refused', noTokCode.status === 403, noTokCode.status)
 
+  // ── G11 chat proxy (binding-level only; behavior lives in ────────────────
+  // scripts/test-chat-proxy.mjs against a real fake channel). No
+  // local-channel.json exists in this fixture, so every route takes its
+  // not-running branch -- which still proves the staticCtx bindings (fs,
+  // path, DATA_HOME, activeChannelBackend) this file exists to catch.
+  const chs = await hit('G11 GET /api/chat/status', '/api/chat/status', 200)
+  const chsBody = await chs.json()
+  chk('G11 status reads not_running on a fresh fixture', chsBody.up === false && chsBody.reason === 'not_running', JSON.stringify(chsBody))
+  // Plain fetch, not hit(): these two routes PROMISE a 503 here (chat channel
+  // not running), so hit()'s blanket never-≥500 check would fail the correct
+  // answer. "Exactly 503, not 500" is itself the binding-intact proof -- a
+  // missed staticCtx binding surfaces as 500, never as this named 503.
+  const chOut = await fetch(`${base}/api/chat/out`)
+  chk('G11 GET /api/chat/out (no channel) -> exactly 503, not a binding 500', chOut.status === 503, chOut.status)
+  const chIn = await fetch(`${base}/api/chat/in`, { method: 'POST', headers: auth, body: JSON.stringify({ text: 'x' }) })
+  chk('G11 POST /api/chat/in (no channel) -> exactly 503, not a binding 500', chIn.status === 503, chIn.status)
+  const chNoTok = await fetch(`${base}/api/chat/in`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'x' }) })
+  chk('G11 in without the onboard token is refused', chNoTok.status === 403, chNoTok.status)
+
   // ── dispatch-contract edges (the old chain's exact fall-through) ──────────
   // 'chatgpt' IS in LOGIN_PROVIDERS (login-status.cjs), so the allowlist
   // passes and PUT hits none of the GET/POST/DELETE branches -- the old

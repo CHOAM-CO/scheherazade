@@ -2346,9 +2346,11 @@ const staticCtx = {
   getSessionEvents, getMemoryService, CATEGORY_TABLES,
 }
 
-// Group order G1..G9 (design §1); INTERNAL order inside each file preserves
-// the old if-chain order verbatim (memory.cjs: the specific /api/memory/*
-// literal blocks stay dispatched BEFORE the :table regex).
+// Group order G1..G11 (G1..G9 = design §1's original move; G10 setup-token
+// and G11 chat were born as route files, nothing moved); INTERNAL order
+// inside each file preserves the old if-chain order verbatim (memory.cjs:
+// the specific /api/memory/* literal blocks stay dispatched BEFORE the
+// :table regex).
 const API_ROUTES = [
   ...require('./routes/onboarding-meta.cjs').createRoutes(staticCtx), // G1
   ...require('./routes/provider.cjs').createRoutes(staticCtx), // G2
@@ -2360,6 +2362,7 @@ const API_ROUTES = [
   ...require('./routes/memory.cjs').createRoutes(staticCtx), // G8
   ...require('./routes/settings.cjs').createRoutes(staticCtx), // G9
   ...require('./routes/setup-token.cjs').createRoutes(staticCtx), // G10
+  ...require('./routes/chat.cjs').createRoutes(staticCtx), // G11
 ]
 
 module.exports = {
