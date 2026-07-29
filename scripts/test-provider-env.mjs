@@ -293,35 +293,32 @@ assert(!PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes('ollama'), 'PROVIDERS_REQ
   ]
   for (const [provider, deps, config] of cases) {
     const result = buildProviderEnv(provider, config, deps)
-    assert(result.env && !('CLAUDE_CONFIG_DIR' in result.env), `${provider}: built env carries no CLAUDE_CONFIG_DIR`)
+    if (provider === 'claude-cli') continue // asserted below: cleared, not merely absent
+    assert(result.env && !('CLAUDE_CONFIG_DIR' in result.env), `${provider}: built env sets no CLAUDE_CONFIG_DIR`)
   }
 }
-// SCOPE, stated because the previous two versions of this comment overstated
-// it and a red team rejected both: these lines prove only that no ROW emits
-// CLAUDE_CONFIG_DIR. They cannot prove the spawned child never receives one.
-// main.cjs builds `{...process.env, ...providerEnvResult.env}`
-// (main.cjs:1032-1053), so a CLAUDE_CONFIG_DIR already in the parent's
-// environment reaches the child no matter what this module returns, and
-// nothing here would notice.
+// claude-cli ACTIVELY CLEARS it, which is different from not setting it and
+// is the whole point. main.cjs spawns with {...process.env, ...rowEnv}, so a
+// CLAUDE_CONFIG_DIR exported in the launching environment would otherwise
+// reach the child -- and send the CLI to a different credential slot than the
+// one this app checked to decide the mode was even available.
 //
-// That is left as inherit-by-default ON PURPOSE, not by oversight, and it is
-// a genuinely two-sided call rather than a bug to be patched:
-//   - a user who exports CLAUDE_CONFIG_DIR and logged in under it has their
-//     credentials in the namespaced slot, so INHERITING is what makes
-//     claude-cli find the login it promises to reuse;
-//   - a user who exports it but logged in without it is the opposite case,
-//     and inheriting shows "Not logged in".
-// Actively clearing it would fix the second user by breaking the first. The
-// shipped path (a .app launched from Finder) inherits no shell exports at
-// all, so this only bites CLI-launched development. Deciding it needs
-// evidence about which case real users are in -- it is an open question, and
-// writing a clear here to make an assertion look stronger would be choosing
-// blind. When the subscription lane needs its own config dir, THAT is when
-// this gets settled, with the wiring, per-provider.
+// That check is hardcoded: http-server.cjs's CLAUDE_CLI_CREDENTIALS_PATH is
+// `~/.claude/.credentials.json` built from os.homedir(), and its
+// computeAvailableProviders gate does not follow CLAUDE_CONFIG_DIR. So an
+// inherited one makes detection and spawn read different dirs, in a mode
+// whose entire promise is "we reuse the login you already have" -- the one
+// that was found. Clearing makes the spawn look where the probe looked.
+//
+// Two earlier rounds left this inherited, on the theory that a user who
+// exports CLAUDE_CONFIG_DIR and logs in under it would want that honoured.
+// That user never reaches this code: with no ~/.claude/.credentials.json,
+// claude-cli is never offered to them. The only reachable case was the
+// inconsistent one, so it was not a two-sided call after all.
 {
   const cli = buildProviderEnv('claude-cli', {}, { readProviderKey: () => null })
-  assert(!('CLAUDE_CONFIG_DIR' in cli.env),
-    'claude-cli: this ROW emits no config-dir override (per-provider isolation added later must keep skipping this row; an inherited one is out of scope, see above)')
+  assert('CLAUDE_CONFIG_DIR' in cli.env && cli.env.CLAUDE_CONFIG_DIR === undefined,
+    'claude-cli: CLAUDE_CONFIG_DIR is actively CLEARED (present-as-undefined), not merely unset -- an inherited one would send the spawn to a different slot than the availability probe checked')
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -472,6 +469,47 @@ for (const bad of [['a'], 123, { id: 'a' }]) {
   assert(!!r.error, '400 models: refused')
   assert(r.error.length < 2000, `many models: refusal stays small (was ${r.error.length} chars)`)
   assert(r.error.includes('390 more'), 'refusal message says how many names it did not list')
+}
+
+// -- null inside a provider entry is ABSENT, not a competing value. The
+// merge compared with JSON.stringify, which made `"apiKey": null` disagree
+// with a top-level key -- re-creating the false-refusal class the merge was
+// written to remove, and contradicting this same function's documented
+// null-as-absent handling everywhere else.
+{
+  const r = parseCustomProviderJson(JSON.stringify({
+    apiKey: 'sk-global',
+    providers: { p: { baseUrl: 'http://127.0.0.1:1', model: 'm', apiKey: null } },
+  }))
+  assert(!r.error, 'explicit null inside the entry: reads as absent, not as a disagreement')
+  assert(r.apiKey === 'sk-global', 'explicit null inside the entry: the top-level value is used')
+}
+
+// -- two byte-identical model lists written in different KEY ORDER are not a
+// disagreement. JSON.stringify said they were.
+assert(!parseCustomProviderJson(JSON.stringify({
+  models: [{ id: 'm', api: 'anthropic-messages' }],
+  providers: { p: { baseUrl: 'http://127.0.0.1:1', models: [{ api: 'anthropic-messages', id: 'm' }] } },
+})).error, 'same models written in a different field order: accepted, not refused as disagreeing')
+
+// -- a model ROW carrying its own endpoint or key. This function already
+// walks these rows (it reads api and id), so dropping these two silently is
+// narrowing at a level it demonstrably reads.
+for (const k of ['baseUrl', 'apiKey']) {
+  const r = parseCustomProviderJson(JSON.stringify({
+    providers: { p: { baseUrl: 'http://entry:1', apiKey: 'sk-entry', models: [{ id: 'm', [k]: k === 'baseUrl' ? 'http://row:2' : 'sk-row' }] } },
+  }))
+  assert(!!r.error && r.error.includes(k), `a model row carrying its own "${k}": refused, not dropped whole`)
+}
+
+// -- an absurdly long base URL is refused BEFORE anything quotes it. The
+// error paths interpolate the URL, and these errors reach a one-line status
+// element; a ~950KB baseUrl produced a ~950KB 400 body from two OTHER routes
+// that the preview route's own response cap never touched.
+{
+  const r = parseCustomProviderJson(JSON.stringify({ baseUrl: `http://x.example/${'A'.repeat(950_000)}`, model: 'm' }))
+  assert(!!r.error && r.error.includes('too long'), 'a 950KB base URL: refused on length')
+  assert(r.error.length < 200, `length refusal does not quote the URL back (${r.error.length} chars)`)
 }
 
 // -- error messages name the right problem. Both of these used to report a

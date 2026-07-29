@@ -157,6 +157,19 @@ function resolveCustomBaseUrl(rawUrl) {
     return { error: 'CUSTOM_BASE_URL is required for the custom provider' }
   }
   const trimmed = String(rawUrl).trim()
+  // Length gate BEFORE anything interpolates the value. Two reasons, and the
+  // second is the one that bit: (a) nothing that long is a base URL anyone
+  // meant to type; (b) every error below quotes it, and these errors reach a
+  // one-line status element in the settings page. readJsonBody accepts 1 MB,
+  // so a ~950 KB baseUrl produced a ~950 KB 400 body from BOTH
+  // /api/agent/custom-provider and /api/byok/validate -- a red-team
+  // measurement, and a defect the preview route's own response cap did not
+  // touch because it lives in a different handler. Bounding the value here
+  // fixes every caller at once instead of one route at a time. 2048 is the
+  // conventional practical URL ceiling and is far past any real proxy URL.
+  if (trimmed.length > 2048) {
+    return { error: `custom base URL is too long (${trimmed.length} characters, limit 2048)` }
+  }
   let parsed
   try {
     parsed = new URL(trimmed)
@@ -267,14 +280,31 @@ function parseCustomProviderJson(text) {
     if (inner.providers !== undefined) {
       return { error: `provider "${snip(ids[0])}" contains its own "providers" -- flatten the paste so it describes exactly one provider` }
     }
+    // null counts as ABSENT here, exactly as it does at every field-level
+    // check below -- an emitter writing `"apiKey": null` for an unset option
+    // is the same emitter this function already accommodates, and treating
+    // that null as a competing value re-created the false refusal the merge
+    // was written to remove. Scalars compare by value; `models` compares by
+    // identity of the resolved id list, because two byte-identical model rows
+    // written in different key order are not a disagreement (a JSON.stringify
+    // comparison called them one). Both were red-team catches, 2026-07-29.
+    const present = (v) => v !== undefined && v !== null
+    const modelIds = (v) => (Array.isArray(v)
+      ? v.map((m) => (typeof m === 'string' ? m : (m && typeof m === 'object' ? m.id : null))).join(' ')
+      : null)
     entry = {}
     for (const k of ['baseUrl', 'apiKey', 'model', 'models', 'api']) {
       const top = parsed[k]
       const own = inner[k]
-      if (own !== undefined && top !== undefined && JSON.stringify(own) !== JSON.stringify(top)) {
-        return { error: `the paste sets "${k}" twice with different values (top level and inside "${snip(ids[0])}") -- keep the one that describes the provider you want` }
+      if (present(own) && present(top)) {
+        const differs = k === 'models'
+          ? modelIds(own) !== modelIds(top)
+          : own !== top
+        if (differs) {
+          return { error: `the paste sets "${k}" twice with different values (top level and inside "${snip(ids[0])}") -- keep the one that describes the provider you want` }
+        }
       }
-      const chosen = own !== undefined ? own : top
+      const chosen = present(own) ? own : top
       if (chosen !== undefined) entry[k] = chosen
     }
   }
@@ -286,6 +316,18 @@ function parseCustomProviderJson(text) {
       if (!m || typeof m !== 'object') continue
       const modelDialect = dialectError(m.api, ` (on model "${snip(m.id)}")`)
       if (modelDialect) return { error: modelDialect }
+      // A model row carrying its OWN endpoint or key is a per-model override
+      // this app cannot honour -- one PROVIDER/MODEL pair runs at a time, and
+      // the row's values would be dropped whole while the paste reported
+      // success. This function already walks these rows (it reads `api` and
+      // `id` right here), so ignoring these two is silent narrowing at a level
+      // it demonstrably reads -- not the out-of-scope deep nesting the note
+      // above disclaims. (Red-team catch, 2026-07-29.)
+      for (const k of ['baseUrl', 'apiKey']) {
+        if (m[k] !== undefined && m[k] !== null) {
+          return { error: `model "${snip(m.id)}" carries its own "${k}" -- this app runs one endpoint at a time, so move it up to the provider or remove it` }
+        }
+      }
     }
   }
 
@@ -517,6 +559,24 @@ const PROVIDER_ROWS = [
       ANTHROPIC_API_KEY: undefined,
       ANTHROPIC_BASE_URL: undefined,
       CLAUDE_CODE_OAUTH_TOKEN: undefined,
+      // Cleared for the same reason as the three above, against a different
+      // leak: main.cjs spreads ...process.env into the child, so a
+      // CLAUDE_CONFIG_DIR exported in the launching environment would send
+      // the spawned CLI to a DIFFERENT credential slot than the one this app
+      // checked to decide the mode was available at all. That check is
+      // hardcoded -- http-server.cjs's CLAUDE_CLI_CREDENTIALS_PATH is
+      // `~/.claude/.credentials.json` via os.homedir(), and it does not
+      // follow CLAUDE_CONFIG_DIR (see its computeAvailableProviders gate). So
+      // detection and spawn could read different dirs, and this mode's whole
+      // promise is "we reuse the login you already have" -- the one that was
+      // found. Clearing it makes the spawn look where the probe looked.
+      //
+      // This was left inherited through two earlier rounds on the theory that
+      // a user who exports CLAUDE_CONFIG_DIR and logs in under it would want
+      // it honoured. That user does not reach this code: with no
+      // ~/.claude/.credentials.json, claude-cli is never offered to them.
+      // The only reachable case was the inconsistent one.
+      CLAUDE_CONFIG_DIR: undefined,
     }),
   },
   {
@@ -680,7 +740,17 @@ const PROVIDERS_REQUIRING_STORED_CREDENTIAL = ['claude', 'claude-subscription']
 // added without it would surface the literal string "undefined" in the
 // onboarding status line. Throwing here fails at require() -- loud, on the
 // author's machine -- instead of at a user's first spawn.
+const CREDENTIAL_MODES = ['none', 'optional', 'required']
 for (const row of PROVIDER_ROWS) {
+  // `credential` FIRST, because it is the field the rest branch on: a typo
+  // ('requried') sails past a !== 'none' gate, skips the notReady check
+  // entirely, and reaches readProviderKey with an undefined key. Validating
+  // keyName while leaving the value that selects the whole code path
+  // unchecked catches the mistake nobody makes and misses the one that
+  // matters. (Red-team catch, 2026-07-29.)
+  if (!CREDENTIAL_MODES.includes(row.credential)) {
+    throw new Error(`provider-env: row "${row.id}" has credential "${row.credential}", not one of ${CREDENTIAL_MODES.join('/')}`)
+  }
   if (row.credential === 'none') continue
   // keyName is as load-bearing as notReady: buildProviderEnv calls
   // readProviderKey(row.keyName) for every row that reads a credential at all,

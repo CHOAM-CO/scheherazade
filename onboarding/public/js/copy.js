@@ -653,7 +653,12 @@ window.COPY = {
     // an empty one look identical, and an empty one means the stored key is
     // reused; the host is the part the user cannot otherwise see. Never shows
     // the key itself -- the warning is about where it goes.
-    customSwitchConfirmKeyToNewHost: (m, host, priorHost) => `Switch to the custom proxy (model: ${m}) and restart the agent.\n\nThe proxy is currently saved as ${priorHost}, and this changes it to ${host}. A stored API key will be sent there. Continue?`,
+    // `stored` picks which key is actually travelling. Saying "a stored API
+    // key" for a key that came out of a paste is a false statement about the
+    // user's own data, and it is the sentence they are being asked to judge.
+    customSwitchConfirmKeyToNewHost: (m, host, priorHost, stored) => stored
+      ? `Switch to the custom proxy (model: ${m}) and restart the agent.\n\nThe saved API key was stored for ${priorHost}, and this points the proxy at ${host}. That key will be sent there. Continue?`
+      : `Switch to the custom proxy (model: ${m}) and restart the agent.\n\nThe pasted API key arrived with ${priorHost}, but the proxy is now set to ${host}. That key will be sent there. Continue?`,
     customSave: 'Save',
     customSaved: 'Saved. Restarting the agent.',
     // Pasted definition (2026-07-29). Folded shut by default -- it is a

@@ -118,6 +118,30 @@ try {
   // a live request proves the route rejects it.
   await hit('G2 POST .../preview (model id the pattern rejects)', '/api/agent/custom-provider/preview', 400,
     { method: 'POST', headers: auth, body: JSON.stringify({ json: JSON.stringify({ baseUrl: 'http://127.0.0.1:1', model: 'bad model/../id!' }) }) })
+  // Response-size bound, asserted on the WIRE. readJsonBody accepts 1MB and
+  // refusal text quotes user input, and the settings page drops these bodies
+  // into a one-line status element. Deleting the route's own .slice() used to
+  // leave every suite green, so the cap that actually holds the response had
+  // no test at all. Named model ids are what get echoed back, so 20 of them
+  // at 60KB each is the shape that maximizes it.
+  {
+    // Sized to stay UNDER readJsonBody's 1MB cap on the outer request: past
+    // it the server destroys the socket (correctly), which tests the body
+    // limit rather than the response bound this case is about.
+    const huge = JSON.stringify({ baseUrl: 'http://127.0.0.1:1', models: Array.from({ length: 12 }, (_, i) => ({ id: `${'M'.repeat(50_000)}-${i}` })) })
+    const r = await hit('G2 POST .../preview (a paste built to maximize the error body)', '/api/agent/custom-provider/preview', 400,
+      { method: 'POST', headers: auth, body: JSON.stringify({ json: huge }) })
+    const body = await r.text()
+    chk('G2 preview bounds its 400 body regardless of input size', body.length < 1500, `body was ${body.length} bytes for a ${huge.length}-byte paste`)
+  }
+  // NOT tested here: the same bound on POST /api/agent/custom-provider and
+  // POST /api/byok/validate, which were the routes actually measured at
+  // ~950KB. Both are unreachable in this harness -- the save route's
+  // `agentControls not wired` 500 fires before any URL validation, so a case
+  // written against it would go green on a 500 body and prove nothing. Their
+  // fix is in resolveCustomBaseUrl itself (a length gate BEFORE anything
+  // quotes the value), which is where every one of those routes gets its
+  // error string; scripts/test-provider-env.mjs asserts it at that source.
 
   // ── G3 channels ───────────────────────────────────────────────────────────
   const ch = await hit('G3 GET /api/channels/status', '/api/channels/status', 200)

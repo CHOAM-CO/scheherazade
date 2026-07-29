@@ -756,13 +756,44 @@
   // above: every category on this page is shown regardless of the current
   // provider, not gated on it -- switching TO custom and editing an
   // already-custom install's fields are the same form.
-  // Host comparison for the save-time credential warning below. Deliberately
-  // compares host+port only: http->https on the same host is not a new party,
-  // and a path change is not either. Anything unparseable is treated as a
-  // DIFFERENT host (warn rather than stay quiet) -- the server validates the
-  // URL for real, this is only deciding whether to say something.
-  const hostOf = (u) => { try { return new URL(u).host } catch { return '' } }
-  const sameHost = (a, b) => { const x = hostOf(a); return Boolean(x) && x === hostOf(b) }
+  // Comparison for the save-time credential warning below. ORIGIN, not host:
+  // an earlier version dropped the scheme, so moving a saved credential from
+  // https://api.vendor.com to http://api.vendor.com read as "same host" and
+  // said nothing -- a silent TLS downgrade that puts the key on the wire in
+  // cleartext. Same host, different port is also a different service and
+  // counts. A path change does not. Anything unparseable is treated as
+  // DIFFERENT (warn rather than stay quiet); the server validates the URL for
+  // real, this only decides whether to say something.
+  const originOf = (u) => { try { return new URL(u).origin } catch { return '' } }
+  const sameOrigin = (a, b) => { const x = originOf(a); return Boolean(x) && x === originOf(b) }
+
+  // Decides whether saving is about to send an API key somewhere it was not
+  // paired with. Pulled out as a PURE function on purpose: this predicate got
+  // it wrong twice (once warning on the wrong comparison, once phrasing the
+  // wrong key), and both times nothing could catch it because browser JS has
+  // no test harness here. scripts/test-custom-key-host.mjs extracts this
+  // function by name from this file's source and executes it -- so renaming it
+  // breaks that test loudly, which is the intended trade.
+  //
+  // Returns { warn, stored, priorUrl }. `stored` selects the copy: a stored
+  // key and a pasted key are different objects and the dialog must not call
+  // one the other.
+  function credentialCrossesHosts({ nextUrl, typedKey, keyFromPaste, pastedKeyBaseUrl, storedUrl, hasStoredKey }) {
+    const typed = String(typedKey || '').trim()
+    const reusingStoredKey = !typed && Boolean(hasStoredKey)
+    const carryingPastedKey = Boolean(typed) && Boolean(keyFromPaste)
+    if (!reusingStoredKey && !carryingPastedKey) return { warn: false, stored: false, priorUrl: '' }
+    // A pasted key's reference host is the URL that arrived WITH it; a stored
+    // key's is the URL it was stored under. One comparison cannot serve both.
+    const priorUrl = carryingPastedKey ? String(pastedKeyBaseUrl || '') : String(storedUrl || '')
+    // No reference recorded is UNKNOWN, not safe -- a key stored through
+    // /api/byok/validate leaves no CUSTOM_BASE_URL behind, and a stored key
+    // with no known host would otherwise travel anywhere in silence. A pasted
+    // key with no baseUrl cannot happen (the paste is refused without one),
+    // so that branch stays quiet rather than crying wolf.
+    const warn = priorUrl ? !sameOrigin(priorUrl, nextUrl) : reusingStoredKey
+    return { warn, stored: reusingStoredKey, priorUrl }
+  }
 
   const CUSTOM_PRESETS = [
     { label: C.customPresetClinePass, url: 'http://localhost:18084' },
@@ -819,7 +850,11 @@
     // the user edits the field, because from that point the value is theirs
     // and they chose it against the URL they can see.
     let keyFromPaste = false
-    $('set-custom-key-input').oninput = () => { keyFromPaste = false }
+    // The baseUrl that arrived in the SAME paste as the key. This is the host
+    // the pasted key was paired with, and the only correct thing to compare a
+    // later URL change against.
+    let pastedKeyBaseUrl = ''
+    $('set-custom-key-input').oninput = () => { keyFromPaste = false; pastedKeyBaseUrl = '' }
 
     // Pasted definition (2026-07-29). Resolves server-side and fills the three
     // fields above; it never saves. The status line stays visible after a
@@ -857,6 +892,7 @@
         // paste says. (Red-team catch, 2026-07-29.)
         $('set-custom-key-input').value = parsed.apiKey || ''
         keyFromPaste = Boolean(parsed.apiKey)
+        pastedKeyBaseUrl = parsed.apiKey ? parsed.baseUrl : ''
         // Blank field means "keep the stored key" at the save route, so when
         // the paste has no key AND one is on file, say so -- otherwise the
         // user switches endpoint believing no key is involved while the
@@ -910,11 +946,27 @@
       // cries wolf on the normal case gets clicked through on the abnormal
       // one, which costs more than it saves. Hence keyFromPaste, cleared the
       // moment the user touches the field themselves.
-      const priorUrl = cfg.CUSTOM_BASE_URL || ''
-      const reusingStoredKey = !apiKey.trim() && Boolean(cfg.hasCustomApiKey)
-      const carryingPastedKey = Boolean(apiKey.trim()) && keyFromPaste
-      const confirmText = ((reusingStoredKey || carryingPastedKey) && priorUrl && !sameHost(priorUrl, baseUrl))
-        ? C.customSwitchConfirmKeyToNewHost(model, hostOf(baseUrl) || baseUrl, hostOf(priorUrl) || priorUrl)
+      // TWO cases, TWO reference hosts. Collapsing them onto one comparison
+      // (the stored CUSTOM_BASE_URL) was wrong in both directions:
+      //   - it MISSED the leak it was written for. Saved localhost:8766, paste
+      //     vendor-A's url+key, then pick the Grok preset -> url returns to
+      //     localhost:8766, stored-vs-final says "same host", no warning, and
+      //     vendor A's key is saved against localhost:8766.
+      //   - it FIRED on the normal case. Paste a definition whose baseUrl and
+      //     apiKey travel together, change nothing, and it warned -- about a
+      //     key that was paired with that exact host inside the same blob.
+      // A pasted key's reference is the URL that arrived WITH it; a stored
+      // key's reference is the URL it was stored under.
+      const verdict = credentialCrossesHosts({
+        nextUrl: baseUrl,
+        typedKey: apiKey,
+        keyFromPaste,
+        pastedKeyBaseUrl,
+        storedUrl: cfg.CUSTOM_BASE_URL || '',
+        hasStoredKey: Boolean(cfg.hasCustomApiKey),
+      })
+      const confirmText = verdict.warn
+        ? C.customSwitchConfirmKeyToNewHost(model, originOf(baseUrl) || baseUrl, originOf(verdict.priorUrl) || verdict.priorUrl, verdict.stored)
         : C.customSwitchConfirm(model)
       const ok = await window.confirmDialog(confirmText, C.switchOk, C.cancel)
       if (!ok) return
