@@ -653,12 +653,26 @@ window.COPY = {
     // an empty one look identical, and an empty one means the stored key is
     // reused; the host is the part the user cannot otherwise see. Never shows
     // the key itself -- the warning is about where it goes.
-    // `stored` picks which key is actually travelling. Saying "a stored API
-    // key" for a key that came out of a paste is a false statement about the
-    // user's own data, and it is the sentence they are being asked to judge.
-    customSwitchConfirmKeyToNewHost: (m, host, priorHost, stored) => stored
-      ? `Switch to the custom proxy (model: ${m}) and restart the agent.\n\nThe saved API key was stored for ${priorHost}, and this points the proxy at ${host}. That key will be sent there. Continue?`
-      : `Switch to the custom proxy (model: ${m}) and restart the agent.\n\nThe pasted API key arrived with ${priorHost}, but the proxy is now set to ${host}. That key will be sent there. Continue?`,
+    // THREE strings, because there are three different true things to say and
+    // the last two revisions each shipped a false one.
+    //
+    // `stored`: CUSTOM_BASE_URL is the last URL SAVED, not where the key was
+    // stored -- the save route rewrites it on a blank-key save while leaving
+    // the key store untouched, so the two diverge. A previous revision said
+    // "The saved API key was stored for X", which asserts provenance the data
+    // does not carry. This says only what is true: the proxy is currently
+    // saved as X, it is becoming Y, and the stored key goes along.
+    //
+    // `storedNoHost`: a key stored through /api/byok/validate leaves no
+    // CUSTOM_BASE_URL behind, so there is no prior host to name. The previous
+    // revision interpolated the empty string and rendered "was stored for ,
+    // and this points...". Say the truth instead: we do not know.
+    //
+    // `pasted`: the ONE case where provenance is actually known, because the
+    // baseUrl and the apiKey arrived in the same blob.
+    customSwitchConfirmKeyToNewHost: (m, host, priorHost) => `Switch to the custom proxy (model: ${m}) and restart the agent.\n\nThe proxy is currently saved as ${priorHost}, and this changes it to ${host}. The stored API key will be sent there. Continue?`,
+    customSwitchConfirmKeyNoPriorHost: (m, host) => `Switch to the custom proxy (model: ${m}) and restart the agent.\n\nA stored API key will be sent to ${host}. There is no record of which host that key was saved for. Continue?`,
+    customSwitchConfirmPastedKeyToNewHost: (m, host, priorHost) => `Switch to the custom proxy (model: ${m}) and restart the agent.\n\nThe pasted API key arrived with ${priorHost}, but the proxy is now set to ${host}. That key will be sent there. Continue?`,
     customSave: 'Save',
     customSaved: 'Saved. Restarting the agent.',
     // Pasted definition (2026-07-29). Folded shut by default -- it is a

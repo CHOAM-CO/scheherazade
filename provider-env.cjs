@@ -222,6 +222,24 @@ function parseCustomProviderJson(text) {
   if (typeof text !== 'string' || !text.trim()) {
     return { error: 'paste a provider definition (JSON) first' }
   }
+  // Shared by every check below: an explicit null means "not specified", the
+  // same as omitting the field. JSON emitters write nulls for unset optional
+  // fields routinely, and treating one as a value produced both a false
+  // refusal (a null inside an entry "disagreeing" with a top-level value) and
+  // a bogus type error (`models: null` reaching the non-empty-array check).
+  const present = (v) => v !== undefined && v !== null
+  // Structural equality with key order normalised. `===` is identity for
+  // objects, so two byte-identical values written at both levels refused as
+  // "different values" -- and the advice in that message could not be
+  // followed. A plain JSON.stringify compare had the opposite bug, calling
+  // two identical objects with different key order different. Both were real.
+  const sameValue = (a, b) => {
+    if (a === b) return true
+    const norm = (v) => (Array.isArray(v)
+      ? v.map(norm)
+      : (v && typeof v === 'object' ? Object.keys(v).sort().map((k) => [k, norm(v[k])]) : v))
+    return JSON.stringify(norm(a)) === JSON.stringify(norm(b))
+  }
   let parsed
   try {
     parsed = JSON.parse(text)
@@ -288,24 +306,24 @@ function parseCustomProviderJson(text) {
     // identity of the resolved id list, because two byte-identical model rows
     // written in different key order are not a disagreement (a JSON.stringify
     // comparison called them one). Both were red-team catches, 2026-07-29.
-    const present = (v) => v !== undefined && v !== null
     const modelIds = (v) => (Array.isArray(v)
-      ? v.map((m) => (typeof m === 'string' ? m : (m && typeof m === 'object' ? m.id : null))).join(' ')
+      ? v.map((m) => (typeof m === 'string' ? m : (m && typeof m === 'object' ? m.id : null))).join(' ')
       : null)
     entry = {}
     for (const k of ['baseUrl', 'apiKey', 'model', 'models', 'api']) {
       const top = parsed[k]
       const own = inner[k]
       if (present(own) && present(top)) {
-        const differs = k === 'models'
-          ? modelIds(own) !== modelIds(top)
-          : own !== top
+        const differs = k === 'models' ? modelIds(own) !== modelIds(top) : !sameValue(own, top)
         if (differs) {
           return { error: `the paste sets "${k}" twice with different values (top level and inside "${snip(ids[0])}") -- keep the one that describes the provider you want` }
         }
       }
+      // Only a PRESENT value is carried down. Assigning an explicit null here
+      // would defeat the null-as-absent rule above: `models: null` survived
+      // the merge and then tripped the non-empty-array refusal.
       const chosen = present(own) ? own : top
-      if (chosen !== undefined) entry[k] = chosen
+      if (present(chosen)) entry[k] = chosen
     }
   }
 
@@ -340,7 +358,7 @@ function parseCustomProviderJson(text) {
     return { error: `"model" must be a string, but the paste has ${describeType(entry.model)} -- fix it or remove it` }
   }
   let model = ''
-  if (entry.models !== undefined) {
+  if (present(entry.models)) {
     if (!Array.isArray(entry.models) || entry.models.length === 0) {
       return { error: '"models" must be a non-empty array' }
     }
@@ -491,6 +509,7 @@ const PROVIDER_ROWS = [
       ANTHROPIC_API_KEY: key,
       ANTHROPIC_BASE_URL: undefined, // clear any stale base_url from a prior chatgpt/ollama session
       CLAUDE_CODE_OAUTH_TOKEN: undefined, // clear any stale subscription token
+      CLAUDE_CONFIG_DIR: undefined, // see the claude-cli row: cleared on EVERY row so one inherited value cannot relocate ~/.claude.json under the harness seeding
     }),
   },
   {
@@ -506,6 +525,7 @@ const PROVIDER_ROWS = [
       CLAUDE_CODE_OAUTH_TOKEN: key,
       ANTHROPIC_API_KEY: undefined, // do NOT inject an API key alongside the OAuth token (LOCKED design, mode 1)
       ANTHROPIC_BASE_URL: undefined, // clear any stale base_url from a prior chatgpt/ollama session
+      CLAUDE_CONFIG_DIR: undefined, // see the claude-cli row: cleared on EVERY row so one inherited value cannot relocate ~/.claude.json under the harness seeding
     }),
   },
   {
@@ -594,6 +614,7 @@ const PROVIDER_ROWS = [
       ANTHROPIC_BASE_URL: `http://localhost:${values.port}`,
       ANTHROPIC_API_KEY: CHATGPT_PLACEHOLDER_KEY,
       CLAUDE_CODE_OAUTH_TOKEN: undefined, // force api-key auth precedence -- see sirin ground-truth comment
+      CLAUDE_CONFIG_DIR: undefined, // see the claude-cli row: cleared on EVERY row (harness-render seeds ~/.claude.json for all modes)
     }),
   },
   {
@@ -619,6 +640,7 @@ const PROVIDER_ROWS = [
       MODEL: values.model,
       SKIP_MODEL_GUARD: '1', // matches run-agent.sh:205's shape; NOTE run.sh has no such guard today -- see task report gaps
       CLAUDE_CODE_OAUTH_TOKEN: undefined, // force api-key auth precedence -- see sirin ground-truth comment
+      CLAUDE_CONFIG_DIR: undefined, // see the claude-cli row: cleared on EVERY row (harness-render seeds ~/.claude.json for all modes)
     }),
   },
   {
@@ -663,6 +685,7 @@ const PROVIDER_ROWS = [
       MODEL: values.model,
       SKIP_MODEL_GUARD: '1', // same reasoning as 'ollama' above -- not an Anthropic model id
       CLAUDE_CODE_OAUTH_TOKEN: undefined, // force api-key auth precedence -- see sirin ground-truth comment
+      CLAUDE_CONFIG_DIR: undefined, // see the claude-cli row: cleared on EVERY row (harness-render seeds ~/.claude.json for all modes)
     }),
   },
 ]

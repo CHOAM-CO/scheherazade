@@ -69,7 +69,7 @@ function createRoutes(staticCtx) {
           return
         }
         if (!PROVIDERS.includes(provider)) {
-          sendJson(res, 400, { error: `unknown provider: ${provider}` })
+          sendJson(res, 400, { error: `unknown provider: ${String(provider).slice(0, 80)}` })
           return
         }
         // 4-provider-mode wiring (2026-07-04): ollama has no user secret, but
@@ -202,7 +202,7 @@ function createRoutes(staticCtx) {
         // login-shell-out providers (claude-subscription is an explicit defer,
         // spec v0.2 Q3) -- 400, not 404, to make the contract loud.
         if (!LOGIN_PROVIDERS.includes(provider)) {
-          sendJson(res, 400, { error: `unknown login provider: ${provider}` })
+          sendJson(res, 400, { error: `unknown login provider: ${String(provider).slice(0, 80)}` })
           return
         }
         if (isStatusPath && req.method === 'GET') {

@@ -965,9 +965,17 @@
         storedUrl: cfg.CUSTOM_BASE_URL || '',
         hasStoredKey: Boolean(cfg.hasCustomApiKey),
       })
-      const confirmText = verdict.warn
-        ? C.customSwitchConfirmKeyToNewHost(model, originOf(baseUrl) || baseUrl, originOf(verdict.priorUrl) || verdict.priorUrl, verdict.stored)
-        : C.customSwitchConfirm(model)
+      // Three outcomes, three strings -- see copy.js. `priorOrigin` is empty
+      // when the reference URL is missing OR unparseable, and both mean the
+      // same thing to the user: we cannot name the host it came from, so we
+      // must not print one.
+      const nextOrigin = originOf(baseUrl) || baseUrl
+      const priorOrigin = originOf(verdict.priorUrl)
+      let confirmText
+      if (!verdict.warn) confirmText = C.customSwitchConfirm(model)
+      else if (!verdict.stored) confirmText = C.customSwitchConfirmPastedKeyToNewHost(model, nextOrigin, priorOrigin || verdict.priorUrl)
+      else if (priorOrigin) confirmText = C.customSwitchConfirmKeyToNewHost(model, nextOrigin, priorOrigin)
+      else confirmText = C.customSwitchConfirmKeyNoPriorHost(model, nextOrigin)
       const ok = await window.confirmDialog(confirmText, C.switchOk, C.cancel)
       if (!ok) return
       const btn = $('set-custom-save')

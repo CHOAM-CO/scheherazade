@@ -265,23 +265,27 @@ assert(!PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes('chatgpt'), 'PROVIDERS_RE
 assert(!PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes('ollama'), 'PROVIDERS_REQUIRING_STORED_CREDENTIAL excludes "ollama" (no user secret)')
 
 // ─────────────────────────────────────────────────────────────────────────
-// 8. no provider gets a CLAUDE_CONFIG_DIR (2026-07-29)
+// 8. EVERY row actively clears CLAUDE_CONFIG_DIR (2026-07-29)
 //
-// This asserts on the BUILT ENV, which is the only thing the spawn path
-// actually consumes. An earlier draft shipped an `isolate` data column plus an
-// exported accessor and pinned THOSE instead -- and a red team showed the
-// assertions could not fail for the regression they named: a global
-// CLAUDE_CONFIG_DIR would land in main.cjs's supervisorEnv, which never reads
-// the column, so `claude-cli` would break with all of it still green. The
-// column is gone; this is what replaced it.
+// Cleared, not merely unset -- `'X' in env && env.X === undefined` is the
+// distinction, and it is the same one section 1b makes for the auth vars.
+// main.cjs spawns with {...process.env, ...rowEnv}, so a CLAUDE_CONFIG_DIR
+// exported in the launching environment reaches the child unless a row
+// clears it.
 //
-// Why it matters: the claude CLI namespaces its credential store BY config
-// dir (keychain service `Claude Code-credentials` when unset,
-// `Claude Code-credentials-<sha256(dir)[0..8]>` when set -- read out of the
-// CLI binary and confirmed live 2026-07-29, where a spawn with a fresh
-// CLAUDE_CONFIG_DIR reports "Not logged in · Please run /login" while the
-// machine's real session stays untouched). `claude-cli` works precisely BY
-// seeing the user's own un-namespaced slot.
+// Why it matters, and why it is ALL rows rather than just claude-cli:
+//   - claude-cli's availability probe is hardcoded to
+//     ~/.claude/.credentials.json via os.homedir() (http-server.cjs) and does
+//     NOT follow CLAUDE_CONFIG_DIR, so an inherited one makes detection and
+//     spawn read different dirs in the one mode whose promise is "we reuse
+//     the login you already have".
+//   - onboarding/harness-render.cjs seeds first-run gates into
+//     ~/.claude.json for EVERY mode. An inherited CLAUDE_CONFIG_DIR
+//     relocates that file and defeats the seeding, dropping the headless
+//     spawn onto an interactive first-run prompt.
+// Two earlier rounds got this wrong in opposite directions -- first a data
+// column nothing read, then a clear on one row while five others kept the
+// same exposure. Same variable, same divergence: all or nothing.
 {
   const cases = [
     ['claude', { readProviderKey: fakeReadProviderKey({ claude: 'k' }) }, {}],
@@ -293,32 +297,9 @@ assert(!PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes('ollama'), 'PROVIDERS_REQ
   ]
   for (const [provider, deps, config] of cases) {
     const result = buildProviderEnv(provider, config, deps)
-    if (provider === 'claude-cli') continue // asserted below: cleared, not merely absent
-    assert(result.env && !('CLAUDE_CONFIG_DIR' in result.env), `${provider}: built env sets no CLAUDE_CONFIG_DIR`)
+    assert(result.env && 'CLAUDE_CONFIG_DIR' in result.env && result.env.CLAUDE_CONFIG_DIR === undefined,
+      `${provider}: CLAUDE_CONFIG_DIR actively cleared (present-as-undefined), so an inherited one cannot reach the child`)
   }
-}
-// claude-cli ACTIVELY CLEARS it, which is different from not setting it and
-// is the whole point. main.cjs spawns with {...process.env, ...rowEnv}, so a
-// CLAUDE_CONFIG_DIR exported in the launching environment would otherwise
-// reach the child -- and send the CLI to a different credential slot than the
-// one this app checked to decide the mode was even available.
-//
-// That check is hardcoded: http-server.cjs's CLAUDE_CLI_CREDENTIALS_PATH is
-// `~/.claude/.credentials.json` built from os.homedir(), and its
-// computeAvailableProviders gate does not follow CLAUDE_CONFIG_DIR. So an
-// inherited one makes detection and spawn read different dirs, in a mode
-// whose entire promise is "we reuse the login you already have" -- the one
-// that was found. Clearing makes the spawn look where the probe looked.
-//
-// Two earlier rounds left this inherited, on the theory that a user who
-// exports CLAUDE_CONFIG_DIR and logs in under it would want that honoured.
-// That user never reaches this code: with no ~/.claude/.credentials.json,
-// claude-cli is never offered to them. The only reachable case was the
-// inconsistent one, so it was not a two-sided call after all.
-{
-  const cli = buildProviderEnv('claude-cli', {}, { readProviderKey: () => null })
-  assert('CLAUDE_CONFIG_DIR' in cli.env && cli.env.CLAUDE_CONFIG_DIR === undefined,
-    'claude-cli: CLAUDE_CONFIG_DIR is actively CLEARED (present-as-undefined), not merely unset -- an inherited one would send the spawn to a different slot than the availability probe checked')
 }
 
 // ─────────────────────────────────────────────────────────────────────────

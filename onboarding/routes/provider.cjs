@@ -33,7 +33,7 @@ function createRoutes(staticCtx) {
         // settings page's POST /api/agent/custom-provider is the primary path.
         const { provider, key, proxyPort, baseUrl } = await readJsonBody(req)
         if (!PROVIDERS.includes(provider)) {
-          sendJson(res, 400, { error: `unknown provider: ${provider}` })
+          sendJson(res, 400, { error: `unknown provider: ${String(provider).slice(0, 80)}` })
           return
         }
         // PIECE 3 enforcement: reject BEFORE ever validating/storing a key for

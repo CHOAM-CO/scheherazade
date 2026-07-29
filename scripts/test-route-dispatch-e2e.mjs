@@ -134,10 +134,17 @@ try {
     const body = await r.text()
     chk('G2 preview bounds its 400 body regardless of input size', body.length < 1500, `body was ${body.length} bytes for a ${huge.length}-byte paste`)
   }
-  // NOT tested here: the same bound on POST /api/agent/custom-provider and
-  // POST /api/byok/validate, which were the routes actually measured at
-  // ~950KB. Both are unreachable in this harness -- the save route's
-  // `agentControls not wired` 500 fires before any URL validation, so a case
+  // /api/byok/validate IS reachable here (it is hit above), so its bound gets
+  // a real case. An earlier version of this comment claimed both routes were
+  // unreachable -- false, and in the very file that calls one of them.
+  {
+    const r = await hit('G2 POST /api/byok/validate (900KB base URL)', '/api/byok/validate', 200,
+      { method: 'POST', headers: auth, body: JSON.stringify({ provider: 'custom', key: 'k', baseUrl: `http://x.example/${'A'.repeat(900_000)}` }) })
+    const body = await r.text()
+    chk('G2 byok/validate bounds its body for a 900KB base URL', body.length < 800, `body was ${body.length} bytes`)
+  }
+  // NOT tested here: POST /api/agent/custom-provider. Its `agentControls not
+  // wired` 500 fires before any URL validation in this harness, so a case
   // written against it would go green on a 500 body and prove nothing. Their
   // fix is in resolveCustomBaseUrl itself (a length gate BEFORE anything
   // quotes the value), which is where every one of those routes gets its

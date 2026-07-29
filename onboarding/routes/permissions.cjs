@@ -145,7 +145,7 @@ function createRoutes(staticCtx) {
       handler: async (req, res, callCtx) => {
         const { topology } = await readJsonBody(req)
         if (topology !== 'spawn' && topology !== 'attach') {
-          sendJson(res, 400, { error: `invalid topology: ${topology}` })
+          sendJson(res, 400, { error: `invalid topology: ${String(topology).slice(0, 80)}` })
           return
         }
         writeAgentConfig({ AGENT_TOPOLOGY: topology })
@@ -240,7 +240,7 @@ function createRoutes(staticCtx) {
         const { cls } = await readJsonBody(req)
         const paneUrl = permissionProbes.DEEP_LINKS[cls]
         if (!paneUrl) {
-          sendJson(res, 400, { error: `no settings pane for class "${cls}" (SIP/sudo have no pane — that is the point)` })
+          sendJson(res, 400, { error: `no settings pane for class "${String(cls).slice(0, 80)}" (SIP/sudo have no pane — that is the point)` })
           return
         }
         const { shell } = getElectron()

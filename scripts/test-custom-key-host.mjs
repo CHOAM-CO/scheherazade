@@ -154,5 +154,95 @@ const VENDOR_B = 'https://api.vendor-b.com'
   assert(v.warn === true, 'unparseable stored URL: warns rather than staying quiet')
 }
 
+// ── 7. the WIRING, not just the arithmetic ────────────────────────────────
+// A mutation battery on the previous version found the gap: deleting
+// `pastedKeyBaseUrl` from the call site makes priorUrl empty, which turns
+// warn into false and silently restores the leak this whole file exists to
+// pin -- and every assertion above stayed green, because they call the
+// function directly with arguments the test supplies. The predicate's inputs
+// have to be pinned too, and they live in the call site.
+//
+// These are SOURCE-TEXT assertions (this repo's known hazard, see this file's
+// header). They fail loudly on a rename, which is the trade.
+{
+  // Anchored on `= credentialCrossesHosts(` so it cannot match the function
+  // DEFINITION, which appears first in the file and whose parameter list
+  // would satisfy a looser pattern while proving nothing about the call.
+  const call = SRC.match(/=\s*credentialCrossesHosts\(\{[^]*?\}\)/)
+  assert(Boolean(call), 'the call site passes an object literal to credentialCrossesHosts')
+  const callSrc = call ? call[0] : ''
+  for (const [field, source] of [
+    ['nextUrl', 'baseUrl'],
+    ['typedKey', 'apiKey'],
+    ['keyFromPaste', 'keyFromPaste'],
+    ['pastedKeyBaseUrl', 'pastedKeyBaseUrl'],
+    ['storedUrl', 'cfg.CUSTOM_BASE_URL'],
+    ['hasStoredKey', 'cfg.hasCustomApiKey'],
+  ]) {
+    // Either `field: source` or the ES6 shorthand `field,` when the two names
+    // coincide -- both are the same wiring.
+    const explicit = new RegExp(`${field}:\\s*[^,}]*${source.replace('.', '\\.')}`)
+    const shorthand = field === source ? new RegExp(`\\b${field}\\s*,`) : null
+    assert(explicit.test(callSrc) || (shorthand !== null && shorthand.test(callSrc)),
+      `call site feeds ${field} from ${source} (dropping any one of these silently disables the warning)`)
+  }
+}
+// The two state variables must be set together when a paste lands, and
+// cleared together when the user takes the field over. Setting one without
+// the other is exactly how a stale reference host survives a second paste.
+{
+  const fill = SRC.match(/keyFromPaste = Boolean\(parsed\.apiKey\)[^\n]*\n[^\n]*/)
+  assert(Boolean(fill) && /pastedKeyBaseUrl = /.test(fill[0]),
+    'the paste handler sets pastedKeyBaseUrl on the line after keyFromPaste')
+  const oninput = SRC.match(/oninput = \(\) => \{[^}]*\}/)
+  assert(Boolean(oninput) && /keyFromPaste = false/.test(oninput[0]) && /pastedKeyBaseUrl = ''/.test(oninput[0]),
+    'the key field oninput clears BOTH keyFromPaste and pastedKeyBaseUrl')
+}
+
+// ── 8. the COPY the user actually reads ───────────────────────────────────
+// The previous version tested the boolean and never the sentence, so swapping
+// the two dialog strings -- re-introducing the "wrong key named" bug this
+// commit series already shipped once -- passed clean. These render the real
+// functions out of copy.js.
+{
+  const copySrc = fs.readFileSync(path.join(ROOT, 'onboarding/public/js/copy.js'), 'utf8')
+  const grab = (name) => {
+    const m = copySrc.match(new RegExp(`\\n    ${name}: (\\([^)]*\\) => \`[^\`]*\`)`))
+    if (!m) { console.log(`FAIL  could not extract ${name} from copy.js`); process.exit(1) }
+    return new Function(`return ${m[1]}`)()
+  }
+  const stored = grab('customSwitchConfirmKeyToNewHost')
+  const noHost = grab('customSwitchConfirmKeyNoPriorHost')
+  const pasted = grab('customSwitchConfirmPastedKeyToNewHost')
+
+  const s1 = stored('m1', 'https://new.example', 'https://old.example')
+  assert(s1.includes('https://old.example') && s1.includes('https://new.example'), 'stored-key dialog names both hosts')
+  assert(/stored API key/.test(s1), 'stored-key dialog calls it a stored key')
+  assert(!/pasted/i.test(s1), 'stored-key dialog does NOT call it a pasted key')
+  // It must describe where the PROXY is saved, not claim the key was stored
+  // for that host -- CUSTOM_BASE_URL is the last URL saved, and the save route
+  // rewrites it on a blank-key save while leaving the key store untouched, so
+  // the two genuinely diverge. A previous revision asserted the provenance.
+  assert(!/key was stored for/i.test(s1), 'stored-key dialog does not claim the key was stored FOR that host (the data does not carry provenance)')
+
+  const s2 = noHost('m1', 'https://new.example')
+  assert(s2.includes('https://new.example'), 'no-prior-host dialog names the destination')
+  assert(/no record/i.test(s2), 'no-prior-host dialog says the prior host is unknown instead of printing an empty one')
+  assert(!/ for ,| as ,|  /.test(s2), 'no-prior-host dialog has no empty-interpolation artifact')
+
+  const s3 = pasted('m1', 'https://new.example', 'https://paste.example')
+  assert(/pasted API key/.test(s3), 'pasted-key dialog calls it a pasted key')
+  assert(!/stored API key/.test(s3), 'pasted-key dialog does NOT call it a stored key')
+  assert(s3.includes('https://paste.example') && s3.includes('https://new.example'), 'pasted-key dialog names both hosts')
+
+  // And the call site must route each verdict to the matching string.
+  assert(/!verdict\.stored[^\n]*customSwitchConfirmPastedKeyToNewHost/.test(SRC),
+    'call site sends the NOT-stored verdict to the pasted-key string')
+  assert(/priorOrigin\)?\s*confirmText = C\.customSwitchConfirmKeyToNewHost/.test(SRC.replace(/\n/g, ' ')),
+    'call site sends a stored verdict WITH a known host to the stored-key string')
+  assert(/else confirmText = C\.customSwitchConfirmKeyNoPriorHost/.test(SRC),
+    'call site sends a stored verdict with NO known host to the no-prior-host string')
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)
