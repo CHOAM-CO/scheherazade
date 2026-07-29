@@ -60,11 +60,12 @@ console.log('\n-- wiring: the .sh originals are gone and nothing still points at
   // migration their settings keep saying `bash .../session-start.sh` after
   // the .sh files are deleted -- the boot restore summary dies silently
   // ("disk updated, config frozen" class, diagnosed live 07-13). The
-  // migration regex is extracted from http-server.cjs SOURCE and executed
+  // migration regex is extracted from onboarding/harness-render.cjs SOURCE
+  // (ensureSettingsLocalAdditions moved there, issue #9 PR-3) and executed
   // here -- testing the actual rule, not a copy of it.
-  const httpSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'http-server.cjs'), 'utf8')
-  const m = httpSrc.match(/const BASH_HOOK_PORT = \/(.+)\/\n/)
-  ok('http-server carries the bash-hook port migration', Boolean(m))
+  const renderSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'harness-render.cjs'), 'utf8')
+  const m = renderSrc.match(/const BASH_HOOK_PORT = \/(.+)\/\n/)
+  ok('harness-render carries the bash-hook port migration', Boolean(m))
   if (m) {
     const rx = new RegExp(m[1])
     ok('migration matches the exact seeded bash shape',
@@ -88,8 +89,9 @@ console.log('\n-- detection-only deps: the win gate exists and mac keeps managed
     typeof b.MANUAL_INSTALL_PAGES.ollama === 'string' && b.MANUAL_INSTALL_PAGES.ollama.startsWith('https://ollama.com'))
   // Bootstrap route BODIES moved to onboarding/routes/onboarding-meta.cjs
   // (issue #9 PR-2) -- same assertions, new home. The BASH_HOOK_PORT /
-  // DIET_REMOVED_HOOKS migration pins elsewhere in this file stay on
-  // http-server.cjs (ensureSettingsLocalAdditions did not move).
+  // DIET_REMOVED_HOOKS migration pins elsewhere in this file moved to
+  // onboarding/harness-render.cjs (issue #9 PR-3 relocated
+  // ensureSettingsLocalAdditions there).
   const routeSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'routes', 'onboarding-meta.cjs'), 'utf8')
   const gateIdx = routeSrc.indexOf('if (!MANAGED_INSTALL_SUPPORTED)')
   const startIdx = routeSrc.indexOf('startBootstrap(dep).catch')
@@ -198,11 +200,12 @@ console.log('\n-- diet: felt-check + stop-skill-extraction-nudge are gone and un
   ok('settings template no longer wires the cut hooks',
     !template.includes('felt-check.mjs') && !template.includes('stop-skill-extraction-nudge.mjs'))
   // The removal migration for EXISTING installs -- extracted from
-  // http-server.cjs SOURCE and executed here, same discipline as the
-  // BASH_HOOK_PORT block above: test the actual rule, not a copy of it.
-  const httpSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'http-server.cjs'), 'utf8')
-  const m = httpSrc.match(/const DIET_REMOVED_HOOKS = \/(.+)\/\n/)
-  ok('http-server carries the cut-hook removal migration', Boolean(m))
+  // onboarding/harness-render.cjs SOURCE (issue #9 PR-3) and executed here,
+  // same discipline as the BASH_HOOK_PORT block above: test the actual
+  // rule, not a copy of it.
+  const renderSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'harness-render.cjs'), 'utf8')
+  const m = renderSrc.match(/const DIET_REMOVED_HOOKS = \/(.+)\/\n/)
+  ok('harness-render carries the cut-hook removal migration', Boolean(m))
   if (m) {
     const rx = new RegExp(m[1])
     ok('removal matches the exact seeded shape for both cut hooks',
@@ -212,7 +215,7 @@ console.log('\n-- diet: felt-check + stop-skill-extraction-nudge are gone and un
       !rx.test('node /x/hooks/felt-check.mjs --flag') && !rx.test('node /x/hooks/checkpoint-nudge.mjs') &&
       !rx.test('node /x/myhooks/my-felt-check.mjs'))
     ok('removal runs AFTER the bash-hook port rewrite (one-boot convergence)',
-      httpSrc.indexOf('BASH_HOOK_PORT') < httpSrc.indexOf('DIET_REMOVED_HOOKS'))
+      renderSrc.indexOf('BASH_HOOK_PORT') < renderSrc.indexOf('DIET_REMOVED_HOOKS'))
   }
 }
 
