@@ -36,26 +36,29 @@
 // I have measured was 108 characters, but a sample of one is not a spec, and
 // a wrong length check fails closed on a token that would have worked.
 //
-// THERE IS NO DOWNSTREAM VALIDITY CHECK. An earlier version of this comment
-// said validity was "proven by the caller handing the result to the same
-// provider-validation call the manual paste path already uses", so a
-// mis-capture would surface as an honest "token rejected". That was FALSE and
-// it was load-bearing: validateProviderKey('claude-subscription', ...) is a
-// hardcoded `return { ok: true }` for any non-empty string
-// (onboarding/http-server.cjs, the claude-subscription branch) -- it never
-// contacts Anthropic, because a setup-token OAuth token is not an x-api-key
-// and the original design declined to build a pty driver just to exercise it.
-// Nothing can produce 'token_rejected' for this provider today.
+// THIS PARSER IS STILL THE PRIMARY GATE, and the history matters enough to
+// keep. An earlier version of this comment said validity was "proven by the
+// caller handing the result to the same provider-validation call the manual
+// paste path already uses", so a mis-capture would surface as an honest
+// "token rejected". That was FALSE and it was load-bearing:
+// validateProviderKey('claude-subscription', ...) was a hardcoded
+// `return { ok: true }` for any non-empty string. The name sounded like the
+// guarantee and nobody opened it; the claim reached four separate files.
 //
-// So this parser IS the gate, and it is written that way: the un-wrap below
-// only joins a line when the previous line actually FILLED the terminal,
-// which is the only condition under which a wrap can occur. Without that
-// check a bare word printed after the token was silently absorbed into it,
-// stored, and reported to the user as "Connected" -- a keychain entry that
-// fails the first time the real agent spawns, with nothing pointing back
-// here. Making claude-subscription validation real is the right follow-up,
-// but it needs a live token to verify against and must not be guessed at:
-// a wrong validation call rejects credentials that work.
+// That call is real as of 2026-07-29 (onboarding/http-server.cjs) -- it now
+// pings Anthropic with the token as an OAuth bearer. But it is FAIL-OPEN by
+// design: it rejects only on an explicit 401 authentication_error, because a
+// setup-token is print-once and a false rejection destroys it. So it catches
+// a mangled capture and does NOT catch, say, a capture that is somehow a
+// different account's valid token. Do not weaken anything here on the
+// strength of it.
+//
+// The un-wrap below therefore stays strict: it only joins a line when the
+// previous line actually FILLED the terminal, which is the only condition
+// under which a wrap can occur. Without that check a bare word printed after
+// the token was silently absorbed into it, stored, and reported to the user
+// as "Connected" -- a keychain entry that fails the first time the real agent
+// spawns, with nothing pointing back here.
 'use strict'
 
 // Matches the supervisor's pty geometry (supervisor.mjs spawnPtyChild uses

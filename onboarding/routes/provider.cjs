@@ -65,12 +65,19 @@ function createRoutes(staticCtx) {
           storeProviderKeyVerified(provider, key) // throws (fail loud) on storage failure -> caught by outer handler -> 500
         }
         // Spread `result` rather than a hardcoded `{ ok: true }` (server-side
-        // validate fix, 2026-07-04): for 'claude'/'claude-subscription' this is
-        // still exactly `{ ok: true }` (unchanged shape), but for 'chatgpt'/
-        // 'ollama' it now also carries the informational `reachable`/`detail`
-        // local-liveness fields from checkLocalLiveness() -- additive, backward
-        // compatible with wizard.js's existing `if (result.ok) {...}` check,
-        // which ignores unknown extra fields.
+        // validate fix, 2026-07-04): 'chatgpt'/'ollama' carry the informational
+        // `reachable`/`detail` local-liveness fields from checkLocalLiveness(),
+        // and 'claude-subscription' can carry `verified:false` + `detail` when
+        // the OAuth ping could not reach a verdict (real validation, 2026-07-29
+        // -- an earlier version of this comment promised that provider was
+        // "still exactly { ok: true }"). All additive and backward compatible
+        // with wizard.js's existing `if (result.ok) {...}` check, which ignores
+        // unknown extra fields.
+        //
+        // Worth naming since the storage above already ran: on `verified:false`
+        // a credential we could NOT confirm has just been persisted. That is
+        // the deliberate trade -- see the claude-subscription branch in
+        // validateProviderKey -- because a setup-token cannot be pasted twice.
         sendJson(res, 200, result)
         return
       },
