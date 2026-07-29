@@ -217,6 +217,8 @@ const VENDOR_B = 'https://api.vendor-b.com'
 
   const s1 = stored('m1', 'https://new.example', 'https://old.example')
   assert(s1.includes('https://old.example') && s1.includes('https://new.example'), 'stored-key dialog names both hosts')
+  assert(s1.indexOf('https://old.example') < s1.indexOf('https://new.example'),
+    'stored-key dialog says CURRENT host first, then the destination -- swapping the two interpolations tells the user the key is going where it already is')
   assert(/stored API key/.test(s1), 'stored-key dialog calls it a stored key')
   assert(!/pasted/i.test(s1), 'stored-key dialog does NOT call it a pasted key')
   // It must describe where the PROXY is saved, not claim the key was stored
@@ -228,20 +230,36 @@ const VENDOR_B = 'https://api.vendor-b.com'
   const s2 = noHost('m1', 'https://new.example')
   assert(s2.includes('https://new.example'), 'no-prior-host dialog names the destination')
   assert(/no record/i.test(s2), 'no-prior-host dialog says the prior host is unknown instead of printing an empty one')
-  assert(!/ for ,| as ,|  /.test(s2), 'no-prior-host dialog has no empty-interpolation artifact')
+  // The old form of this assertion looked for ", " artifacts in a string that
+  // has no prior-host slot at all -- it could not fail. What actually
+  // regresses is someone giving it one again: called with the arity it has,
+  // any extra slot renders as "undefined".
+  assert(!/undefined|\bnull\b/.test(s2), 'no-prior-host dialog interpolates nothing it was not given (a reintroduced host slot renders "undefined")')
+  assert(!s2.includes('https://old.example'), 'no-prior-host dialog cannot name a prior host -- it does not receive one')
 
   const s3 = pasted('m1', 'https://new.example', 'https://paste.example')
   assert(/pasted API key/.test(s3), 'pasted-key dialog calls it a pasted key')
   assert(!/stored API key/.test(s3), 'pasted-key dialog does NOT call it a stored key')
   assert(s3.includes('https://paste.example') && s3.includes('https://new.example'), 'pasted-key dialog names both hosts')
+  assert(s3.indexOf('https://paste.example') < s3.indexOf('https://new.example'),
+    'pasted-key dialog says where the key CAME FROM first, then where it is going')
 
-  // And the call site must route each verdict to the matching string.
+  // And the call site must route each verdict to the matching string. ORDER
+  // matters and is asserted: this is an if/else chain, so the first matching
+  // branch wins. Swapping the pasted-key branch below the stored-key one makes
+  // a PASTED key render "The stored API key will be sent there" -- verbatim
+  // the wrong-key-named bug this file exists to stop -- while every
+  // does-this-line-exist assertion stays green.
+  const iPasted = SRC.indexOf('customSwitchConfirmPastedKeyToNewHost(model')
+  const iStored = SRC.indexOf('customSwitchConfirmKeyToNewHost(model')
+  const iNoHost = SRC.indexOf('customSwitchConfirmKeyNoPriorHost(model')
+  assert(iPasted > 0 && iStored > 0 && iNoHost > 0, 'call site references all three dialog strings')
   assert(/!verdict\.stored[^\n]*customSwitchConfirmPastedKeyToNewHost/.test(SRC),
     'call site sends the NOT-stored verdict to the pasted-key string')
-  assert(/priorOrigin\)?\s*confirmText = C\.customSwitchConfirmKeyToNewHost/.test(SRC.replace(/\n/g, ' ')),
-    'call site sends a stored verdict WITH a known host to the stored-key string')
+  assert(iPasted < iStored && iStored < iNoHost,
+    'the branches are in the only correct order: pasted-key first (it is the narrower condition), then stored-with-host, then the no-host fallback')
   assert(/else confirmText = C\.customSwitchConfirmKeyNoPriorHost/.test(SRC),
-    'call site sends a stored verdict with NO known host to the no-prior-host string')
+    'the no-prior-host string is the final else, not a condition that could shadow the others')
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

@@ -276,7 +276,7 @@ function parseCustomProviderJson(text) {
   // version did, on mere presence -- rejects a paste that says exactly one
   // thing. Only an actual DISAGREEMENT is ambiguous, and only that is refused.
   let entry = parsed
-  if (parsed.providers !== undefined) {
+  if (present(parsed.providers)) {
     if (!parsed.providers || typeof parsed.providers !== 'object' || Array.isArray(parsed.providers)) {
       return { error: '"providers" must be an object keyed by provider id' }
     }
@@ -295,7 +295,7 @@ function parseCustomProviderJson(text) {
     // providers this function would otherwise drop whole -- dialect, endpoint
     // and all. That is the same silent narrowing the >1-provider refusal
     // exists to prevent, so it gets the same treatment.
-    if (inner.providers !== undefined) {
+    if (present(inner.providers)) {
       return { error: `provider "${snip(ids[0])}" contains its own "providers" -- flatten the paste so it describes exactly one provider` }
     }
     // null counts as ABSENT here, exactly as it does at every field-level

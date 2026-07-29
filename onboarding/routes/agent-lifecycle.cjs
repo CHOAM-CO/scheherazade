@@ -183,7 +183,7 @@ function createRoutes(staticCtx) {
         if (provider !== undefined && provider !== null && provider !== '') {
           providerValue = typeof provider === 'string' ? provider.trim() : ''
           if (!PROVIDERS.includes(providerValue)) {
-            sendJson(res, 400, { error: `invalid provider: ${providerValue}` })
+            sendJson(res, 400, { error: `invalid provider: ${String(providerValue).slice(0, 80)}` })
             return
           }
           if (rejectIfRouterNotWired(res, providerValue)) return

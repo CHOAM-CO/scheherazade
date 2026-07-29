@@ -132,7 +132,7 @@ try {
     const r = await hit('G2 POST .../preview (a paste built to maximize the error body)', '/api/agent/custom-provider/preview', 400,
       { method: 'POST', headers: auth, body: JSON.stringify({ json: huge }) })
     const body = await r.text()
-    chk('G2 preview bounds its 400 body regardless of input size', body.length < 1500, `body was ${body.length} bytes for a ${huge.length}-byte paste`)
+    chk('G2 preview bounds its 400 body regardless of input size', body.length < 800, `body was ${body.length} bytes for a ${huge.length}-byte paste`)
   }
   // /api/byok/validate IS reachable here (it is hit above), so its bound gets
   // a real case. An earlier version of this comment claimed both routes were
@@ -141,7 +141,7 @@ try {
     const r = await hit('G2 POST /api/byok/validate (900KB base URL)', '/api/byok/validate', 200,
       { method: 'POST', headers: auth, body: JSON.stringify({ provider: 'custom', key: 'k', baseUrl: `http://x.example/${'A'.repeat(900_000)}` }) })
     const body = await r.text()
-    chk('G2 byok/validate bounds its body for a 900KB base URL', body.length < 800, `body was ${body.length} bytes`)
+    chk('G2 byok/validate bounds its body for a 900KB base URL', body.length < 300, `body was ${body.length} bytes`)
   }
   // NOT tested here: POST /api/agent/custom-provider. Its `agentControls not
   // wired` 500 fires before any URL validation in this harness, so a case
