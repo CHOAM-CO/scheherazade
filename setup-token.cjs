@@ -94,6 +94,22 @@ function stripAnsi(text) {
   return String(text).replace(ANSI_OSC, '').replace(ANSI_CSI, '').replace(ANSI_ESC_SHORT, '')
 }
 
+// Cursor-forward (CSI n C) moves the cursor right WITHOUT emitting a
+// character, which is how this CLI indents -- it does not pad with spaces.
+// stripAnsi deletes those sequences, so a stripped line is shorter than the
+// column the row actually reaches. That undercount is the dangerous direction
+// for the wrap rule below: it makes a genuinely full row look short, the join
+// is refused, and a TRUNCATED token is returned as a successful capture. So
+// the cells are counted rather than assumed to be small.
+// `CSI C` with no parameter means 1.
+const ANSI_CURSOR_FORWARD = /\x1B\[(\d*)C/g
+function renderedWidth(rawLine) {
+  const line = String(rawLine)
+  let forward = 0
+  for (const m of line.matchAll(ANSI_CURSOR_FORWARD)) forward += m[1] === '' ? 1 : Number(m[1])
+  return stripAnsi(line).length + forward
+}
+
 // Split on CRLF, LF, or a bare CR. A lone CR in a TUI means "return to
 // column 0", i.e. what follows overwrites rather than appends -- treating it
 // as a line break is the conservative reading: it can only split a token that
@@ -104,18 +120,35 @@ function toLines(text) {
   return stripAnsi(text).split(/\r\n|\r|\n/)
 }
 
+// Split the RAW stream first, so each line's cursor-forward cells can be
+// attributed to that line before its escapes are discarded. Splitting after
+// stripping (what this did originally) loses that information irrecoverably.
+function toLineRecords(text) {
+  return String(text).split(/\r\n|\r|\n/).map((raw) => ({
+    text: stripAnsi(raw).trim(),
+    width: renderedWidth(raw),
+  }))
+}
+
 // Is this line a pure continuation of a wrapped token? Prose lines all
 // contain spaces or punctuation outside the token alphabet; the recorded
 // trailer ("Store this token securely...") fails on its first space.
 const CONTINUATION_RE = new RegExp(`^[${TOKEN_CHARS}]+$`)
 
-// How far short of the terminal width a line may fall and still count as
-// "filled". A wrapped line is `cols` cells wide, but the stripped text can be
-// a little shorter than the cell count: the CLI indents with a cursor-forward
-// (ESC[1C) rather than spaces, and a multi-cell character occupies more cells
-// than characters. Small enough that a 108-character token line can never be
-// mistaken for filling a 200-column terminal.
-const WRAP_FILL_TOLERANCE = 8
+// How far short of the terminal width a row may fall and still count as
+// "filled". Now that renderedWidth() counts the cursor-forward indent instead
+// of discarding it, the only remaining sources of undercount are exotic
+// (a multi-cell character in a token drawn from single-width ASCII; a cursor
+// move this parser does not model). So this is small on purpose.
+//
+// It was 8, chosen to be "small enough that a 108-char line can't look full".
+// That reasoning defended only the ceiling -- over-joining. The floor is the
+// direction that actually hurts: if the measured width is too LOW, a genuine
+// wrap is refused and a TRUNCATED token is returned as a successful capture,
+// which is the same silent-corruption failure this rule was added to stop,
+// just from the other side. With indent counted, measurement error is ~0 and
+// a wide tolerance buys nothing while widening the over-join window.
+const WRAP_FILL_TOLERANCE = 2
 
 /**
  * Extract the OAuth token from accumulated `claude setup-token` pty output.
@@ -141,32 +174,44 @@ function extractSetupToken(rawOutput, opts = {}) {
   if (typeof rawOutput !== 'string' || rawOutput === '') {
     return { found: false, reason: 'no_output' }
   }
-  const lines = toLines(rawOutput)
-  const startIdx = lines.findIndex((line) => line.includes(TOKEN_PREFIX))
+  const lines = toLineRecords(rawOutput)
+  const startIdx = lines.findIndex((line) => line.text.includes(TOKEN_PREFIX))
   if (startIdx === -1) return { found: false, reason: 'no_token_in_output' }
 
   // Take from the prefix to end-of-line. Anything before it on that line is
   // rendering (indentation, colour) -- the prefix is the anchor.
   const first = lines[startIdx]
-  let body = first.slice(first.indexOf(TOKEN_PREFIX) + TOKEN_PREFIX.length).trim()
+  let body = first.text.slice(first.text.indexOf(TOKEN_PREFIX) + TOKEN_PREFIX.length).trim()
 
   // Un-wrap: absorb following lines while they are pure token alphabet AND
-  // the line before them actually filled the terminal. That second condition
-  // is what makes this safe rather than merely convenient -- a wrap can only
-  // happen at the right margin, so a short token line followed by a bare word
-  // is NOT a wrap and joining them would silently corrupt the credential.
-  // (It did, before this check: the corrupted value stored fine and the user
-  // was told "Connected".) The loop is bounded by TOKEN_MAX_BODY rather than
-  // by a line count so a stream of junk cannot build an unbounded string.
-  let prevFilled = first.length >= cols - WRAP_FILL_TOLERANCE
+  // the line before them actually filled the terminal. A wrap can only happen
+  // at the right margin, so a short token line followed by a bare word is NOT
+  // a wrap and joining them would silently corrupt the credential. (It did,
+  // before this check: the corrupted value stored fine and the user was told
+  // "Connected".) The loop is bounded by TOKEN_MAX_BODY rather than by a line
+  // count so a stream of junk cannot build an unbounded string.
+  const filled = (line) => line.width >= cols - WRAP_FILL_TOLERANCE
+  let prevFilled = filled(first)
+  let stoppedOnCandidate = false
   for (let i = startIdx + 1; i < lines.length; i++) {
-    if (!prevFilled) break
-    const next = lines[i].trim()
-    if (!CONTINUATION_RE.test(next)) break
+    const next = lines[i].text
+    const isCandidate = CONTINUATION_RE.test(next)
+    if (!prevFilled) {
+      // A continuation-shaped line that we are NOT joining. This is the
+      // ambiguous case and it is dangerous in BOTH directions: either it is a
+      // bare word that would corrupt the token if joined, or it is a real wrap
+      // whose first line we measured as short and refusing it TRUNCATES the
+      // token. Nothing in the byte stream distinguishes them, and there is no
+      // downstream validation to catch either. Fail closed.
+      stoppedOnCandidate = isCandidate
+      break
+    }
+    if (!isCandidate) break
     if (body.length + next.length > TOKEN_MAX_BODY) break
     body += next
-    prevFilled = lines[i].length >= cols - WRAP_FILL_TOLERANCE
+    prevFilled = filled(lines[i])
   }
+  if (stoppedOnCandidate) return { found: false, reason: 'ambiguous_wrap' }
 
   if (body.length < TOKEN_MIN_BODY) return { found: false, reason: 'token_too_short' }
   if (body.length > TOKEN_MAX_BODY) return { found: false, reason: 'token_too_long' }
@@ -208,6 +253,7 @@ module.exports = {
   awaitingManualCode,
   isPlausibleAuthCode,
   stripAnsi,
+  renderedWidth,
   WRAP_FILL_TOLERANCE,
   SETUP_TOKEN_PTY_COLS,
   SETUP_TOKEN_PTY_ROWS,

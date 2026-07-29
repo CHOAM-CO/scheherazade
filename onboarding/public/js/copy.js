@@ -188,6 +188,12 @@ window.COPY = {
               token_too_long: 'The login ended without producing a token. Try again, or use the manual steps below.',
               token_malformed: 'The login ended without producing a token. Try again, or use the manual steps below.',
               token_rejected: 'The token was captured but Anthropic rejected it. Try again.',
+              // Distinct from the family above on purpose: a token WAS
+              // printed here, we just could not read it unambiguously and
+              // refused rather than store something possibly truncated or
+              // possibly corrupted. Saying "ended without producing a token"
+              // would be false.
+              ambiguous_wrap: 'The token could not be read cleanly from the login output. Try again, or use the manual steps below.',
               store_failed: 'The token could not be saved to the keychain. Try again.',
               user_cancelled: 'Login cancelled.',
             }[reason] || 'The login did not complete. Try again, or use the manual steps below.'),
