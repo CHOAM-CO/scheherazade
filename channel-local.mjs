@@ -35,7 +35,7 @@ import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import {
   installStdoutHygiene, resolveDataHome, localNow,
-  createMarkerStore,
+  createMarkerStore, createBootAnnouncer,
 } from './channel-runtime.mjs'
 
 const log = installStdoutHygiene()
@@ -287,6 +287,26 @@ async function boot() {
 
   markers.writeLiveness()
   setInterval(() => markers.writeLiveness(), markers.LIVENESS_HEARTBEAT_MS).unref()
+
+  // Boot announce, same unit as the other backends (channel-runtime): direct
+  // line into the queue -> ts advance -> greeting inject to the model. For a
+  // fresh onboarding this IS "setup ends at the agent's first message" -- the
+  // wizard lands the user on /chat and the first thing the pane shows is the
+  // agent arriving. The queue always exists, so fetchTarget cannot fail and
+  // the last-channel fallback can never engage (the stub load is honest: home
+  // never being unreachable means it is never consulted).
+  const announceBoot = createBootAnnouncer({
+    dataHome: DATA_HOME,
+    homeId: LOCAL_CHANNEL_ID,
+    lastChannelStore: { load: async () => null, persist: () => {} },
+    fetchTarget: async () => ({ id: LOCAL_CHANNEL_ID }),
+    idOf: (t) => t.id,
+    sendText: (t, text) => { enqueueOutbound(text) },
+    notify: (params) => mcp.notification({ method: 'notifications/claude/channel', params }),
+    log,
+    noun: 'chat',
+  })
+  announceBoot().catch((err) => log(`boot announce failed: ${err.message}`))
 }
 
 if (isMainModule) {

@@ -15,7 +15,7 @@
 function createRoutes(staticCtx) {
   const {
     readJsonBody, sendJson, validateDiscordToken, storeDiscordTokenVerified, readDiscordToken,
-    enumerateDiscordTargets, writeEnv, writeAgentConfig, activeChannelBackend,
+    enumerateDiscordTargets, writeEnv, writeAgentConfig, readAgentConfig, activeChannelBackend,
     channelBackendReadiness, readTelegramToken, enumerateTelegramChats, telegramApi,
     storeTelegramTokenVerified, readSlackBotToken, readSlackAppToken, enumerateSlackChannels,
     slackApi, storeSlackBotTokenVerified, storeSlackAppTokenVerified, CHANNEL_BACKENDS,
@@ -315,6 +315,51 @@ function createRoutes(staticCtx) {
           agentControls.restartAgent().catch((err) => console.error('[scheherazade/onboarding] channel switch restart threw:', err))
         }
         sendJson(res, 202, { ok: true, active: backend })
+        return
+      },
+    },
+    // ── In-app chat as the onboarding completer (in-app chat slice 5) ────────
+    // The third way onboarding can finish, next to /api/discord/validate
+    // (same completion contract: stamp + spawn callback) and /api/channels/
+    // switch (same backend mechanics: config + .mcp.json + restart). There
+    // is nothing to validate -- the "platform" is the app itself -- so the
+    // whole route is the stamp and the spawn. This is what makes the wizard's
+    // channel step OPTIONAL: before it, "do this later" ended setup with an
+    // agent the user could not reach.
+    {
+      method: 'POST',
+      match: (pathname) => pathname === '/api/channels/local/complete',
+      handler: async (req, res, callCtx) => {
+        const { onOnboardingComplete, agentControls } = callCtx // per-call values, never staticCtx
+        const already = readAgentConfig().ONBOARDING_COMPLETE === '1'
+        const stamp = { CHANNEL_BACKEND: 'local', ONBOARDING_STEP: '4' }
+        if (!already) {
+          // COMPLETED_AT records when onboarding happened; a wizard re-entry
+          // (?step=4 resume) landing here must not falsify that record --
+          // same rule the discord reconnect routes state above.
+          stamp.ONBOARDING_COMPLETE = '1'
+          stamp.ONBOARDING_COMPLETED_AT = new Date().toISOString()
+        }
+        writeAgentConfig(stamp)
+        // .mcp.json NOW, not at next boot -- the spawn below reads it at the
+        // claude child's spawn (same reason /api/channels/switch does this).
+        ensureMcpJsonAgentName()
+        if (!already) {
+          // Fresh onboarding: fire the spawn callback, same contract and
+          // same never-break-the-response guard as /api/discord/validate.
+          if (typeof onOnboardingComplete === 'function') {
+            try {
+              onOnboardingComplete()
+            } catch (err) {
+              console.error('[scheherazade/onboarding] onOnboardingComplete callback threw:', err)
+            }
+          }
+        } else if (agentControls && typeof agentControls.restartAgent === 'function') {
+          // Already-onboarded re-entry: the agent is (or was) running on
+          // another backend -- this is a switch, so restart like one.
+          agentControls.restartAgent().catch((err) => console.error('[scheherazade/onboarding] local complete restart threw:', err))
+        }
+        sendJson(res, 202, { ok: true, active: 'local', completedNow: !already })
         return
       },
     },

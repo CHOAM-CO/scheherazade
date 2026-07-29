@@ -189,5 +189,65 @@ console.log('\n9. orphan guard: parent death (stdin EOF) takes the process AND t
   fs.rmSync(tmp, { recursive: true, force: true })
 }
 
+console.log('\n10. boot announce: the greeting is the first thing the chat pane shows')
+// Slice 5's "setup ends at the agent's first message" depends on this:
+// wizard lands on /chat, and the boot announce unit (channel-runtime,
+// same rule as every backend: direct line -> ts advance -> greeting
+// inject) puts the first content into the queue. Real child, real marker,
+// real HTTP -- the same boot path production takes.
+{
+  const { spawn } = await import('node:child_process')
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const { fileURLToPath } = await import('node:url')
+  const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-localchan-announce-'))
+  // Marker BEFORE spawn, the way the supervisor writes it before each leaf.
+  fs.writeFileSync(path.join(tmp, '.boot-event.json'), JSON.stringify({ ts: Date.now(), iteration: 1 }))
+
+  const child = spawn(process.execPath, [path.join(ROOT, 'channel-local.mjs')], {
+    env: { ...process.env, AGENT_NAME: 'announce-test', AGENT_DATA_HOME: tmp },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+  const stdoutLines = []
+  let outBuf = ''
+  child.stdout.on('data', (c) => {
+    outBuf += c
+    let nl
+    while ((nl = outBuf.indexOf('\n')) >= 0) { stdoutLines.push(outBuf.slice(0, nl)); outBuf = outBuf.slice(nl + 1) }
+  })
+
+  const portFile = path.join(tmp, 'local-channel.json')
+  const deadline = Date.now() + 10_000
+  while (!fs.existsSync(portFile) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100))
+  assert(fs.existsSync(portFile), 'child boots and writes the port file')
+  const ep = JSON.parse(fs.readFileSync(portFile, 'utf8'))
+
+  let out = { items: [] }
+  while (out.items.length === 0 && Date.now() < deadline) {
+    try {
+      const r = await fetch(`http://127.0.0.1:${ep.port}/out`, { headers: { authorization: `Bearer ${ep.token}` } })
+      if (r.status === 200) out = await r.json()
+    } catch { /* listener racing up */ }
+    if (out.items.length === 0) await new Promise((r) => setTimeout(r, 150))
+  }
+  assert(out.items.length === 1, 'exactly one announce line lands in the queue')
+  assert(out.items[0] && out.items[0].text.includes('🔁') && out.items[0].text.includes('기동'),
+    'the queue item is the boot direct line (first thing the pane shows)')
+  const greetInject = stdoutLines
+    .map((l) => { try { return JSON.parse(l) } catch { return null } })
+    .find((m) => m && m.method === 'notifications/claude/channel' && m.params && m.params.meta && m.params.meta.sender === 'SYSTEM')
+  assert(Boolean(greetInject), 'the greeting inject reaches the model as a SYSTEM notification')
+  assert(greetInject && greetInject.params.meta.channelId === 'in-app', 'the inject points the model at the in-app conversation')
+  assert(!fs.existsSync(path.join(tmp, '.boot-event.json')), 'the marker is consumed (no double-announce within one life)')
+
+  const exited = new Promise((resolve) => child.on('exit', (code) => resolve(code)))
+  child.stdin.end()
+  const code = await Promise.race([exited, new Promise((r) => setTimeout(() => r('TIMEOUT'), 5_000))])
+  if (code === 'TIMEOUT') child.kill('SIGKILL')
+  fs.rmSync(tmp, { recursive: true, force: true })
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

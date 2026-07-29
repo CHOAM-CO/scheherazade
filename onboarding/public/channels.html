@@ -15,6 +15,21 @@
       </div>
       <p class="subtitle" id="ch-subtitle"></p>
 
+      <!-- In-app chat (slice 5). First on purpose: it is the backend with
+           nothing to configure, and the /chat page's "switch here" pointer
+           lands on this row. No reconnect flow -- there is no credential. -->
+      <div class="category" id="ch-local">
+        <div class="entries">
+          <div class="entry-row">
+            <div class="entry-main">
+              <div class="entry-value" id="ch-local-name"></div>
+              <div class="entry-meta" id="ch-local-status"></div>
+            </div>
+            <button class="secondary hidden" id="ch-local-switch"></button>
+          </div>
+        </div>
+      </div>
+
       <!-- Discord. Reconnect flow markup moved verbatim from connectors.html
            (2026-07-16 channels split) -- ids renamed conn-* -> ch-* only. -->
       <div class="category" id="ch-discord">

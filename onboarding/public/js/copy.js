@@ -333,8 +333,13 @@ window.COPY = {
   },
 
   step4: {
-    title: "Connect where you'll talk",
-    body: (name) => `${name} talks through Discord. You'll create a bot and connect it. Takes about 5 minutes.`,
+    title: "Where will you talk?",
+    // De-lied for in-app chat (slice 5): the old body claimed "talks
+    // through Discord... about 5 minutes" -- no longer the shape of the
+    // step. In-app is instant and primary; messengers are the upgrade.
+    body: (name) => `${name} can talk right here in the app — no accounts, no tokens. Connecting a messenger is optional, now or anytime from the Channels tab.`,
+    startChat: 'Start chatting now',
+    startChatNote: 'Finishes setup and opens the conversation',
     // Mino 07-13 click-test: three platform buttons, each a redirect.
     // Discord keeps the real flow (opens the dev portal AND enters the
     // existing tutorial -- redirect alone would kill the guided steps,
@@ -356,10 +361,13 @@ window.COPY = {
       slack: 'https://api.slack.com/apps',
       telegram: 'https://t.me/botfather',
     },
-    // De-lied (source file, Step 4 note): no local-chat fallback exists
-    // (Mino rejected it 13:55; localhost is onboarding-only). This button
-    // only saves settings and parks the user on the waiting screen.
-    laterButton: 'Do this later — save settings and wait',
+    // History, kept because it reads like a contradiction otherwise: an
+    // early local-chat fallback idea was rejected (Mino 07-13, "localhost
+    // is onboarding-only") and this section long said so. The in-app chat
+    // BACKEND (channel-local.mjs + /chat, Mino go 07-30 00:28 on
+    // docs/in-app-chat-plan.md) supersedes that -- it is a real channel,
+    // not the rejected localhost stopgap, and the "later — save and wait"
+    // button this comment used to describe is gone with it.
   },
 
   discordTutorial: {
@@ -872,7 +880,7 @@ window.COPY = {
     switching: 'Switching and restarting the agent…',
     switched: (name) => `Switched to ${name}`,
     notConfiguredYet: 'Finish connecting before you can switch',
-    names: { discord: 'Discord', slack: 'Slack', telegram: 'Telegram' },
+    names: { local: 'In-app chat', discord: 'Discord', slack: 'Slack', telegram: 'Telegram' },
     connectButton: 'Connect',
     reconnectButton: 'Reconnect',
     closeButton: 'Close',

@@ -1313,6 +1313,14 @@ async function enumerateSlackChannels(botToken, appToken, fetchImpl = fetch) {
 function channelBackendReadiness() {
   const cfg = readAgentConfig()
   return {
+    // In-app chat has NOTHING to configure -- the "platform" is the app
+    // itself, so it is always switchable. This entry is load-bearing, not
+    // decorative: /api/channels/switch reads readiness[backend].configured,
+    // and before this entry existed readiness['local'] was undefined, so
+    // switching to a backend that was already registered in
+    // CHANNEL_SCRIPT_PATHS 500'd on the property read (in-app chat slice 5
+    // catch, 2026-07-30).
+    local: { configured: true, home: '', detail: '' },
     discord: {
       configured: Boolean(readDiscordToken() && readHomeChannelId()),
       home: cfg.HOME_CHANNEL_NAME || readHomeChannelId() || '',

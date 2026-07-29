@@ -92,13 +92,23 @@
           </div>
         </section>
 
-        <!-- Step 4: connect platform (Mino 07-13: three connect buttons) -->
+        <!-- Step 4: where to talk (in-app chat slice 5). In-app chat is the
+             PRIMARY action -- it needs no third-party account, and clicking
+             it finishes setup with a conversation open. Messengers demoted
+             to optional upgrades; the old "do this later" link is GONE
+             because it ended setup with an agent the user could not reach
+             (docs/in-app-chat-plan.md WHY) -- in-app chat is what "later"
+             should always have been. -->
         <section class="step hidden" data-step="4">
           <h1 id="s4-title"></h1>
           <p id="s4-body"></p>
           <div class="connect-list">
             <div class="connect-item">
-              <button id="s4-connect-discord"></button>
+              <button id="s4-start-chat"></button>
+              <span class="connect-note" id="s4-chat-note"></span>
+            </div>
+            <div class="connect-item">
+              <button class="secondary" id="s4-connect-discord"></button>
               <span class="connect-note" id="s4-discord-note"></span>
             </div>
             <div class="connect-item">
@@ -109,10 +119,6 @@
               <button class="secondary" id="s4-connect-telegram"></button>
               <span class="connect-note" id="s4-telegram-note"></span>
             </div>
-          </div>
-          <div class="step-actions">
-            <button class="link" id="s4-later"></button>
-            <span></span>
           </div>
         </section>
 

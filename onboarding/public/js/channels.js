@@ -62,7 +62,11 @@
 
   async function refreshStatus() {
     lastStatus = await api('/api/channels/status')
-    for (const key of ['discord', 'telegram', 'slack']) renderBackendRow(key, lastStatus)
+    // local first, matching the page's card order. Missing from the server's
+    // backends map (an older server) renders nothing rather than crashing.
+    for (const key of ['local', 'discord', 'telegram', 'slack']) {
+      if (lastStatus.backends[key]) renderBackendRow(key, lastStatus)
+    }
   }
 
   // ── Discord reconnect (moved verbatim from connectors.js) ────────────────

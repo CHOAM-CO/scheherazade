@@ -1012,17 +1012,42 @@
     }
   }
 
-  // ── Step 4: connect platform (Mino 07-13: three connect buttons) ────
+  // ── Step 4: where to talk (in-app chat slice 5) ─────────────────────
+  // In-app chat is the primary action: one click completes onboarding
+  // (POST /api/channels/local/complete stamps the config and fires the
+  // spawn callback server-side, same contract as the discord validate
+  // route) and lands on /chat, where the agent's boot greeting is the
+  // first thing the pane shows. The messenger buttons stay as optional
+  // upgrades; the old "later" escape to /waiting is gone -- it ended
+  // setup with an agent the user could not reach.
   function renderStep4() {
     $('s4-title').textContent = C.step4.title
     $('s4-body').textContent = C.step4.body(state.displayName)
+    $('s4-start-chat').textContent = C.step4.startChat
+    $('s4-chat-note').textContent = C.step4.startChatNote
     $('s4-connect-discord').textContent = C.step4.connectDiscord
     $('s4-discord-note').textContent = C.step4.connectDiscordNote
     $('s4-connect-slack').textContent = C.step4.connectSlack
     $('s4-slack-note').textContent = C.step4.supportSoonNote
     $('s4-connect-telegram').textContent = C.step4.connectTelegram
     $('s4-telegram-note').textContent = C.step4.supportSoonNote
-    $('s4-later').textContent = C.step4.laterButton
+    $('s4-start-chat').onclick = async () => {
+      const btn = $('s4-start-chat')
+      btn.disabled = true
+      try {
+        await api('/api/channels/local/complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        })
+        window.location.href = '/chat'
+      } catch (err) {
+        // The note under the button is the failure surface; the button
+        // re-enables so the click can be retried.
+        $('s4-chat-note').textContent = C.genericError(err.message)
+        btn.disabled = false
+      }
+    }
     $('s4-connect-discord').onclick = () => {
       window.open(C.step4.links.discord, '_blank', 'noopener')
       state.tutorialIndex = -1 // 2FA pre-warning intro, before step 1 of 6
@@ -1034,9 +1059,6 @@
     }
     $('s4-connect-telegram').onclick = () => {
       window.open(C.step4.links.telegram, '_blank', 'noopener')
-    }
-    $('s4-later').onclick = () => {
-      window.location.href = '/waiting'
     }
   }
 

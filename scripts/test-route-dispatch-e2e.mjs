@@ -154,6 +154,32 @@ try {
   const ch = await hit('G3 GET /api/channels/status', '/api/channels/status', 200)
   const chBody = await ch.json()
   chk('G3 channels/status has active+backends shape', 'active' in chBody && 'backends' in chBody, JSON.stringify(chBody).slice(0, 200))
+  chk('G3 backends map carries the local entry (readiness; its absence 500d the switch route)',
+    chBody.backends.local && chBody.backends.local.configured === true, JSON.stringify(chBody.backends).slice(0, 200))
+
+  // Switch to local: safe to fire for real here (no agentControls in this
+  // harness -> no restart), and it is the exact call that 500'd on
+  // readiness['local'].configured before the readiness entry existed
+  // (in-app chat slice 5 catch) -- the 202 is the whole proof.
+  const sw = await hit('G3 POST /api/channels/switch to local', '/api/channels/switch', 202,
+    { method: 'POST', headers: auth, body: JSON.stringify({ backend: 'local' }) })
+  chk('G3 switch reports local active', (await sw.json()).active === 'local')
+
+  // The in-app onboarding completer (slice 5). Fresh fixture -> stamps now;
+  // the second call must NOT re-stamp (ONBOARDING_COMPLETED_AT is a record
+  // of when onboarding happened, same falsification rule as the discord
+  // reconnect routes). onOnboardingComplete is absent in this harness, so
+  // no spawn fires.
+  const lc = await hit('G3 POST /api/channels/local/complete', '/api/channels/local/complete', 202,
+    { method: 'POST', headers: auth, body: '{}' })
+  const lcBody = await lc.json()
+  chk('G3 local complete stamps a fresh fixture (completedNow:true)', lcBody.ok === true && lcBody.active === 'local' && lcBody.completedNow === true, JSON.stringify(lcBody))
+  const cfgAfterLocal = await (await hit('G3 GET /api/config (after local complete)', '/api/config', 200)).json()
+  chk('G3 the stamp landed in config', cfgAfterLocal.CHANNEL_BACKEND === 'local' && cfgAfterLocal.ONBOARDING_COMPLETE === '1',
+    JSON.stringify({ backend: cfgAfterLocal.CHANNEL_BACKEND, complete: cfgAfterLocal.ONBOARDING_COMPLETE }))
+  const lc2 = await hit('G3 POST local/complete again (already onboarded)', '/api/channels/local/complete', 202,
+    { method: 'POST', headers: auth, body: '{}' })
+  chk('G3 re-complete does not re-stamp (completedNow:false)', (await lc2.json()).completedNow === false)
 
   // ── G4 mcp-connectors ─────────────────────────────────────────────────────
   const mc = await hit('G4 GET /api/mcp-connector/status?name=github', '/api/mcp-connector/status?name=github', 200)
