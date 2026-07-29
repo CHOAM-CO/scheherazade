@@ -26,11 +26,18 @@
 //   - `claude auth status` is NOT a substitute for any of this: with a garbage
 //     token it still answers {"loggedIn":true,"authMethod":"oauth_token"}. It
 //     reports presence. The name is the whole trap.
-// NOT verified: that a *valid* token answers 200 — that needs a live
-// credential. What stands in for it is that the request is copied off the wire
-// from the CLI, which IS known to work with a real token. The branch is also
-// written so the unverified half cannot strand anyone: see the fail-open cases
-// below, which are the substance of the design, not defensive padding.
+// NOW ALSO VERIFIED WITH A REAL TOKEN (2026-07-29, minted for this and revoked
+// straight after): this exact shape answers 200. So does /v1/models, and so
+// does the plainer docs-only shape — meaning ?beta=true, x-app and the
+// claude-code beta are all optional, and an earlier version of this header
+// which framed them as the difference between working and rejecting every
+// valid credential was overstating a risk that measured zero. They stay
+// because matching the known-working client is the better default, not
+// because anything was caught.
+//
+// The fail-open cases below are still the substance of the design: what they
+// protect against is not an unverified shape, it is the day the endpoint,
+// the network or the account has a bad minute.
 //
 // SCOPE: this stubs globalThis.fetch. It proves the branch's decision table
 // and the exact request it issues. It does NOT contact Anthropic, does not

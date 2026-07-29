@@ -995,26 +995,32 @@ async function validateProviderKey(provider, key, opts = {}) {
       // sends `POST /v1/messages?beta=true` with `x-app: cli` and an
       // anthropic-beta list LED BY `claude-code-20250219`, then oauth-2025-04-20.
       //
-      // The CLI's own embedded documentation shows only `-H "anthropic-beta:
-      // oauth-2025-04-20"`, and a first cut of this function believed it. If
-      // any of the three extras turns out to be load-bearing for an OAuth
-      // credential, that version would have rejected every valid token --
-      // precisely the failure this whole branch is written to avoid, shipped
-      // by trusting a quote over an observation. Which of them are strictly
-      // required is NOT known and does not need to be: matching the working
-      // client costs nothing and removes the question.
+      // MEASURED WITH A REAL TOKEN 2026-07-29, and the measurement is kept here
+      // because it corrects this comment's own earlier draft. A live 1-year
+      // setup-token was minted and both shapes were sent:
+      //   this wire-copied shape                       -> 200
+      //   the docs-only shape (no ?beta=true, no x-app,
+      //     anthropic-beta: oauth-2025-04-20 alone)    -> 200 ALSO
+      // So none of the three extras is load-bearing, and the draft that said
+      // the docs-only version "would have rejected every valid token" was
+      // describing a risk that measured zero. It is kept as the wire shape
+      // anyway -- matching the client that is known to work is still the right
+      // default when the alternative is inferring from prose -- but the reason
+      // is now conservatism, not a bug that was caught.
       // Keep this in sync with the CLI if that capture is ever redone.
       //
-      // WHY /v1/messages AND NOT A FREE GET: /v1/models answers the identical
-      // authentication_error for a bogus token and would cost nothing, but
-      // nothing establishes that a *valid* setup-token is accepted there --
-      // its scope set is inference-oriented, and an endpoint that rejects a
-      // working credential for scope reasons is indistinguishable here from
-      // one that rejects a broken one. /v1/messages is the request the CLI's
-      // own docs demonstrate with an OAuth bearer, so it is the one shape
-      // with positive evidence behind it. max_tokens:1 keeps it ~free.
-      // (Follow-up, only decidable with a live token in hand: if /v1/models
-      // also accepts a valid one, move to it and drop the inference entirely.)
+      // WHY /v1/messages AND NOT THE FREE GET: /v1/models was measured with the
+      // same live token and also answers 200, so cost is no longer the
+      // deciding factor -- it would work. /v1/messages is kept because it
+      // exercises the capability the credential is actually stored FOR. A
+      // token that authenticates but cannot infer passes /v1/models and fails
+      // the first real spawn, which is precisely the silent-failure shape this
+      // whole branch exists to end. max_tokens:1 makes the difference one
+      // token of output, which is not worth a weaker check.
+      // (Superseded follow-up, left visible on purpose: this comment used to
+      // promise "if /v1/models also accepts a valid one, move to it and drop
+      // the inference entirely". It does accept one. Not moving, for the
+      // reason above -- a promise reversed by its own evidence, not forgotten.)
       //
       // FAIL-OPEN, DELIBERATELY, AND THE ASYMMETRY IS THE WHOLE DESIGN. This
       // rejects ONLY on an explicit 401 authentication_error. A network
