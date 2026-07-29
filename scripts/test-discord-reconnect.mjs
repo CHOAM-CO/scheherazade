@@ -134,9 +134,12 @@ console.log('discord reconnect (enumerate + apply pins)\n')
 
 // ── 5. Source pins: the routes keep their promises ──────────────────────────
 {
-  const src = fs.readFileSync(path.join(ROOT, 'onboarding', 'http-server.cjs'), 'utf8')
+  // Route bodies moved to onboarding/routes/channels.cjs (issue #9 PR-2).
+  // Bracket end: the entry AFTER apply in the group file is /api/channels/status
+  // (the old bracket, /api/proxy/health, lives in routes/agent-lifecycle.cjs now).
+  const src = fs.readFileSync(path.join(ROOT, 'onboarding', 'routes', 'channels.cjs'), 'utf8')
   const applyStart = src.indexOf("'/api/discord/reconnect/apply'")
-  const applyEnd = src.indexOf("'/api/proxy/health'")
+  const applyEnd = src.indexOf("'/api/channels/status'")
   check('apply route exists (and this pin can bracket it)', applyStart > 0 && applyEnd > applyStart)
   const applyBlock = src.slice(applyStart, applyEnd)
   check('apply NEVER writes onboarding stamps (no ONBOARDING_ anywhere in the block)', !applyBlock.includes('ONBOARDING_'))
@@ -150,7 +153,10 @@ console.log('discord reconnect (enumerate + apply pins)\n')
   const mainSrc = fs.readFileSync(path.join(ROOT, 'main.cjs'), 'utf8')
   check('main.cjs exposes proxyHealth in agentControls', /agentControls = \{[^}]*proxyHealth/.test(mainSrc))
   check('proxyHealth reports the LIVE /health fetch, never codexProxyModel', mainSrc.includes('async function proxyHealth') && /proxyHealth\(\) \{(?:(?!codexProxyModel)[\s\S])*?\n\}/.test(mainSrc.slice(mainSrc.indexOf('async function proxyHealth'), mainSrc.indexOf('const agentControls'))))
-  check('http-server serves GET /api/proxy/health via the injected control', src.includes("'/api/proxy/health'") && src.includes('agentControls.proxyHealth'))
+  // /api/proxy/health is group 5 -- it lives in routes/agent-lifecycle.cjs
+  // after the PR-2 move, not in the channels group file read above.
+  const lifecycleSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'routes', 'agent-lifecycle.cjs'), 'utf8')
+  check('route table serves GET /api/proxy/health via the injected control', lifecycleSrc.includes("'/api/proxy/health'") && lifecycleSrc.includes('agentControls.proxyHealth'))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

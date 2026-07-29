@@ -30,13 +30,14 @@ const nav = read('onboarding/public/js/nav.js')
 const settings = read('onboarding/public/js/settings.js')
 const settingsHtml = read('onboarding/public/settings.html')
 const main = read('main.cjs')
-const server = read('onboarding/http-server.cjs')
+// Route bodies moved to onboarding/routes/agent-lifecycle.cjs (issue #9 PR-2).
+const server = read('onboarding/routes/agent-lifecycle.cjs')
 
 // ── the reality source exists end to end ────────────────────────────────────
 check('main.cjs records the child birth config at the spawn moment',
   /agentSupervisorPid = child\.pid[\s\S]{0,900}lastSpawnInfo = \{/.test(main))
 check('...and spawn-info rides agentControls', main.includes('spawnInfo: () => lastSpawnInfo'))
-check('http-server serves GET /api/agent/spawn-info', server.includes("'/api/agent/spawn-info'"))
+check('route table serves GET /api/agent/spawn-info (routes/agent-lifecycle.cjs)', server.includes("'/api/agent/spawn-info'"))
 
 // ── the shell reads reality, never config ───────────────────────────────────
 check('nav.js fills model/effort from spawn-info', nav.includes("api('/api/agent/spawn-info')") && nav.includes('renderRealityDetails'))

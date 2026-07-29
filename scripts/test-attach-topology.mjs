@@ -160,9 +160,13 @@ console.log('template + wiring tripwires:')
   // which is the check that should have been here in the first place.
   check('harness render includes sudo-askpass.sh + mode 0700',
     /'sudo-askpass\.sh'\)?,\s*'sudo-askpass\.sh',\s*0o700/.test(httpSrc) || /sudo-askpass\.sh'\),\s*'sudo-askpass\.sh',\s*0o700/.test(httpSrc))
-  check('/api/topology route exists', httpSrc.includes("pathname === '/api/topology'"))
-  check('/api/sudo/password double gate: token AND settings toggle', httpSrc.includes("req.headers['x-askpass-token'] !== askpassToken") && httpSrc.includes("readAgentConfig().SUDO_ENABLED !== 'yes'"))
-  check('sudo password stored via the verified vault path', httpSrc.includes("storeProviderKeyVerified('sudo-pass'"))
+  // Route BODIES moved to onboarding/routes/permissions.cjs (issue #9 PR-2);
+  // the harness-render / createOnboardingServer pins above stay on
+  // http-server.cjs, which still owns that code. Same assertions, new home.
+  const permSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'routes', 'permissions.cjs'), 'utf8')
+  check('/api/topology route exists', permSrc.includes("pathname === '/api/topology'"))
+  check('/api/sudo/password double gate: token AND settings toggle', permSrc.includes("req.headers['x-askpass-token'] !== askpassToken") && permSrc.includes("readAgentConfig().SUDO_ENABLED !== 'yes'"))
+  check('sudo password stored via the verified vault path', permSrc.includes("storeProviderKeyVerified('sudo-pass'"))
 
   const mainSrc = fs.readFileSync(path.join(ROOT, 'main.cjs'), 'utf8')
   check('spawn path branches to attachStartFromSession on attach topology', /=== 'attach'\)\s*{\s*return attachStartFromSession\(config\)/.test(mainSrc))
