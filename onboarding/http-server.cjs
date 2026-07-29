@@ -1009,6 +1009,25 @@ async function validateProviderKey(provider, key, opts = {}) {
       // is now conservatism, not a bug that was caught.
       // Keep this in sync with the CLI if that capture is ever redone.
       //
+      // DO NOT "IMPROVE" THIS TO /api/oauth/validate. That endpoint exists, it
+      // is named exactly like the thing this function does, and it REJECTS a
+      // perfectly good setup-token. Measured 2026-07-29 with a live one:
+      //   POST /api/oauth/validate -> 403 permission_error "OAuth token does
+      //     not meet scope requirement any_of(user:profile, user:office,
+      //     user:ccr_inference)"
+      //   GET  /api/oauth/profile  -> 403, same shape
+      //   POST /v1/messages        -> 200
+      // A setup-token carries `user:inference` and nothing else -- visible in
+      // the authorize URL the CLI opens (scope=user%3Ainference) and stated
+      // outright in a CLI diagnostic string ("env-var and setup-token sessions
+      // default to user:inference only"). So the endpoint whose NAME promises
+      // validation is the one guaranteed to fail here. Pick the endpoint that
+      // matches the token's scope, not the one that matches the verb.
+      // (The fail-open rule below already contains this mistake if someone
+      // makes it anyway: 403 permission_error is not an authentication_error,
+      // so it returns ok:true rather than destroying the credential. That was
+      // chosen for the print-once reason, and it happens to cover this too.)
+      //
       // WHY /v1/messages AND NOT THE FREE GET: /v1/models was measured with the
       // same live token and also answers 200, so cost is no longer the
       // deciding factor -- it would work. /v1/messages is kept because it

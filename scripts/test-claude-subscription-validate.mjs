@@ -144,7 +144,11 @@ console.log('\n4. FAIL-OPEN: nothing else may reject a print-once credential')
   // rejection here means redoing the whole interactive OAuth flow.
   const cases = [
     [401, { type: 'error', error: { type: 'invalid_request_error', message: 'x' } }, '401 but NOT authentication_error'],
-    [403, { type: 'error', error: { type: 'permission_error', message: 'x' } }, '403 permission/scope error'],
+    // Not hypothetical: this is verbatim what a VALID setup-token gets from
+    // /api/oauth/validate, the endpoint whose name most invites a future
+    // "improvement" here (measured 2026-07-29). If that swap ever happens,
+    // this row is what keeps it from destroying every credential.
+    [403, { type: 'error', error: { type: 'permission_error', message: 'OAuth token does not meet scope requirement any_of(user:profile, user:office, user:ccr_inference)' } }, '403 permission/scope error'],
     [429, { type: 'error', error: { type: 'rate_limit_error', message: 'x' } }, '429 rate limited'],
     [500, { type: 'error', error: { type: 'api_error', message: 'x' } }, '500 upstream broken'],
     [503, {}, '503 with an empty body'],
