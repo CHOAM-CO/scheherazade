@@ -813,6 +813,13 @@
     // successful save below.
     $('set-custom-key-input').value = ''
     $('set-custom-key-input').placeholder = cfg.hasCustomApiKey ? C.customKeyStoredPlaceholder : C.customKeyEmptyPlaceholder
+    // Whether the value sitting in the key field came from a PASTE rather than
+    // from the user's own typing -- the save-time host warning below turns on
+    // it. Declared per render, so it resets with the form; cleared as soon as
+    // the user edits the field, because from that point the value is theirs
+    // and they chose it against the URL they can see.
+    let keyFromPaste = false
+    $('set-custom-key-input').oninput = () => { keyFromPaste = false }
 
     // Pasted definition (2026-07-29). Resolves server-side and fills the three
     // fields above; it never saves. The status line stays visible after a
@@ -849,6 +856,7 @@
         // host. Every fill leaves the field showing exactly what the CURRENT
         // paste says. (Red-team catch, 2026-07-29.)
         $('set-custom-key-input').value = parsed.apiKey || ''
+        keyFromPaste = Boolean(parsed.apiKey)
         // Blank field means "keep the stored key" at the save route, so when
         // the paste has no key AND one is on file, say so -- otherwise the
         // user switches endpoint believing no key is involved while the
@@ -895,10 +903,18 @@
       // Both end with a credential at a host the user never paired it with.
       // We do not block it (pointing one key at two proxies is legitimate);
       // we refuse to let it happen without saying the host out loud.
+      // NOT warned about: a key the user typed into the field during this
+      // visit. They entered it while looking at the URL box, so it is the
+      // host they meant. Warning there would fire on the single most common
+      // flow -- "switching proxies, here is its key" -- and a warning that
+      // cries wolf on the normal case gets clicked through on the abnormal
+      // one, which costs more than it saves. Hence keyFromPaste, cleared the
+      // moment the user touches the field themselves.
       const priorUrl = cfg.CUSTOM_BASE_URL || ''
-      const keyGoesAlong = Boolean(apiKey.trim()) || Boolean(cfg.hasCustomApiKey)
-      const confirmText = (keyGoesAlong && priorUrl && !sameHost(priorUrl, baseUrl))
-        ? C.customSwitchConfirmKeyToNewHost(model, hostOf(baseUrl))
+      const reusingStoredKey = !apiKey.trim() && Boolean(cfg.hasCustomApiKey)
+      const carryingPastedKey = Boolean(apiKey.trim()) && keyFromPaste
+      const confirmText = ((reusingStoredKey || carryingPastedKey) && priorUrl && !sameHost(priorUrl, baseUrl))
+        ? C.customSwitchConfirmKeyToNewHost(model, hostOf(baseUrl) || baseUrl, hostOf(priorUrl) || priorUrl)
         : C.customSwitchConfirm(model)
       const ok = await window.confirmDialog(confirmText, C.switchOk, C.cancel)
       if (!ok) return

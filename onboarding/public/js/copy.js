@@ -646,11 +646,14 @@ window.COPY = {
     customModelPlaceholder: 'Enter a model name the proxy recognizes',
     customMissingFields: 'Enter both Base URL and model ID',
     customSwitchConfirm: (m) => `Switch to the custom proxy (model: ${m}) and restart the agent. Continue?`,
-    // Names the HOST, because that is the part the user cannot otherwise see:
-    // the key field is a password field, so a filled one and an empty one look
-    // identical, and an empty one means the stored key is reused. Says "an API
-    // key" rather than showing it -- the warning is about where it goes.
-    customSwitchConfirmKeyToNewHost: (m, host) => `Switch to the custom proxy (model: ${m}) and restart the agent.\n\nAn API key will be sent to ${host}, which is not the host it was last saved for. Continue?`,
+    // Names BOTH hosts and states them as facts, rather than asserting which
+    // host the key "belongs" to -- the app does not know that. It knows the
+    // proxy was saved as one host and is about to become another while a key
+    // rides along. The key field is a password field, so a populated one and
+    // an empty one look identical, and an empty one means the stored key is
+    // reused; the host is the part the user cannot otherwise see. Never shows
+    // the key itself -- the warning is about where it goes.
+    customSwitchConfirmKeyToNewHost: (m, host, priorHost) => `Switch to the custom proxy (model: ${m}) and restart the agent.\n\nThe proxy is currently saved as ${priorHost}, and this changes it to ${host}. A stored API key will be sent there. Continue?`,
     customSave: 'Save',
     customSaved: 'Saved. Restarting the agent.',
     // Pasted definition (2026-07-29). Folded shut by default -- it is a
