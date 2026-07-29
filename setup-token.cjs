@@ -34,11 +34,28 @@
 //
 // What this deliberately does NOT do: pin a token LENGTH. The one real token
 // I have measured was 108 characters, but a sample of one is not a spec, and
-// a wrong length check fails closed on a token that would have worked. Shape
-// is checked here; VALIDITY is proven by the caller handing the result to the
-// same provider-validation call the manual paste path already uses. A
-// mis-capture therefore surfaces to the user as an honest "token rejected"
-// rather than as silence or as a stored credential that never works.
+// a wrong length check fails closed on a token that would have worked.
+//
+// THERE IS NO DOWNSTREAM VALIDITY CHECK. An earlier version of this comment
+// said validity was "proven by the caller handing the result to the same
+// provider-validation call the manual paste path already uses", so a
+// mis-capture would surface as an honest "token rejected". That was FALSE and
+// it was load-bearing: validateProviderKey('claude-subscription', ...) is a
+// hardcoded `return { ok: true }` for any non-empty string
+// (onboarding/http-server.cjs, the claude-subscription branch) -- it never
+// contacts Anthropic, because a setup-token OAuth token is not an x-api-key
+// and the original design declined to build a pty driver just to exercise it.
+// Nothing can produce 'token_rejected' for this provider today.
+//
+// So this parser IS the gate, and it is written that way: the un-wrap below
+// only joins a line when the previous line actually FILLED the terminal,
+// which is the only condition under which a wrap can occur. Without that
+// check a bare word printed after the token was silently absorbed into it,
+// stored, and reported to the user as "Connected" -- a keychain entry that
+// fails the first time the real agent spawns, with nothing pointing back
+// here. Making claude-subscription validation real is the right follow-up,
+// but it needs a live token to verify against and must not be guessed at:
+// a wrong validation call rejects credentials that work.
 'use strict'
 
 // Matches the supervisor's pty geometry (supervisor.mjs spawnPtyChild uses
@@ -92,6 +109,14 @@ function toLines(text) {
 // trailer ("Store this token securely...") fails on its first space.
 const CONTINUATION_RE = new RegExp(`^[${TOKEN_CHARS}]+$`)
 
+// How far short of the terminal width a line may fall and still count as
+// "filled". A wrapped line is `cols` cells wide, but the stripped text can be
+// a little shorter than the cell count: the CLI indents with a cursor-forward
+// (ESC[1C) rather than spaces, and a multi-cell character occupies more cells
+// than characters. Small enough that a 108-character token line can never be
+// mistaken for filling a 200-column terminal.
+const WRAP_FILL_TOLERANCE = 8
+
 /**
  * Extract the OAuth token from accumulated `claude setup-token` pty output.
  *
@@ -101,12 +126,18 @@ const CONTINUATION_RE = new RegExp(`^[${TOKEN_CHARS}]+$`)
  * fragment if invoked between the two halves of a wrapped token, which is
  * precisely the race the caller avoids by parsing at close.
  *
+ * @param {string} rawOutput
+ * @param {{cols?: number}} [opts]  the terminal width the pty was spawned
+ *   with. A following line is only joined when the preceding line FILLED that
+ *   width -- the sole condition that produces a wrap. Pass the real value;
+ *   the default assumes this module's own spawn geometry.
  * @returns {{found: true, token: string} | {found: false, reason: string}}
  *   `reason` is a fixed enum member, never interpolated child output: this
  *   value is allowed to reach a client, and the buffer it was derived from
  *   contains a credential.
  */
-function extractSetupToken(rawOutput) {
+function extractSetupToken(rawOutput, opts = {}) {
+  const cols = typeof opts.cols === 'number' && opts.cols > 0 ? opts.cols : SETUP_TOKEN_PTY_COLS
   if (typeof rawOutput !== 'string' || rawOutput === '') {
     return { found: false, reason: 'no_output' }
   }
@@ -119,14 +150,22 @@ function extractSetupToken(rawOutput) {
   const first = lines[startIdx]
   let body = first.slice(first.indexOf(TOKEN_PREFIX) + TOKEN_PREFIX.length).trim()
 
-  // Un-wrap: absorb following lines while they are pure token alphabet. The
-  // loop is bounded by TOKEN_MAX_BODY rather than by a line count so a stream
-  // of junk cannot build an unbounded string in memory.
+  // Un-wrap: absorb following lines while they are pure token alphabet AND
+  // the line before them actually filled the terminal. That second condition
+  // is what makes this safe rather than merely convenient -- a wrap can only
+  // happen at the right margin, so a short token line followed by a bare word
+  // is NOT a wrap and joining them would silently corrupt the credential.
+  // (It did, before this check: the corrupted value stored fine and the user
+  // was told "Connected".) The loop is bounded by TOKEN_MAX_BODY rather than
+  // by a line count so a stream of junk cannot build an unbounded string.
+  let prevFilled = first.length >= cols - WRAP_FILL_TOLERANCE
   for (let i = startIdx + 1; i < lines.length; i++) {
+    if (!prevFilled) break
     const next = lines[i].trim()
     if (!CONTINUATION_RE.test(next)) break
     if (body.length + next.length > TOKEN_MAX_BODY) break
     body += next
+    prevFilled = lines[i].length >= cols - WRAP_FILL_TOLERANCE
   }
 
   if (body.length < TOKEN_MIN_BODY) return { found: false, reason: 'token_too_short' }
@@ -169,6 +208,7 @@ module.exports = {
   awaitingManualCode,
   isPlausibleAuthCode,
   stripAnsi,
+  WRAP_FILL_TOLERANCE,
   SETUP_TOKEN_PTY_COLS,
   SETUP_TOKEN_PTY_ROWS,
   TOKEN_PREFIX,

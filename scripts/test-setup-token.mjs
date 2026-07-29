@@ -8,8 +8,10 @@
 // next word) are invisible against a hand-simplified fixture.
 //
 // No real credential appears in this file and none is needed -- the parser is
-// pure, and validity is proven downstream by the provider-validate call, not
-// here.
+// pure. Note that there is NO downstream validity check to fall back on:
+// validateProviderKey('claude-subscription', ...) returns {ok:true} for any
+// non-empty string, so this parser is the only thing standing between a
+// mis-read pty and a stored credential. These tests are load-bearing.
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 const {
@@ -60,9 +62,15 @@ const preTokenOutput = [
   `${ESC}[1C${ESC}[1BPaste code here if prompted > ${ESC}[K\r\n`,
 ].join('')
 
+// The recorded session ran in an 80-column terminal -- that is WHY it wrapped.
+// The parser only joins a line when the previous one filled the width, so the
+// fixture must be parsed at the width that produced it. Passing the real cols
+// is not test bookkeeping: it is the safety property (see WRAP_FILL_TOLERANCE).
+const NARROW = { cols: 80 }
+
 // ── extraction: the wrap, which is the whole reason this module exists ─────
 {
-  const r = extractSetupToken(wrapped)
+  const r = extractSetupToken(wrapped, NARROW)
   assert(r.found === true, 'wrapped: token is found')
   assert(r.token === FAKE, 'wrapped: token is re-joined across the line break IN FULL')
   // The two specific bugs, named:
@@ -82,7 +90,7 @@ const preTokenOutput = [
   const fragment = TOKEN_PREFIX + BODY.slice(0, WRAP_AT)
   assert(fragment !== FAKE && fragment.length < FAKE.length,
     'non-vacuity: the un-wrapped fragment is materially different from the full token')
-  assert(extractSetupToken(wrapped).token !== fragment,
+  assert(extractSetupToken(wrapped, NARROW).token !== fragment,
     'non-vacuity: parser returns the joined token, not the fragment')
 }
 
@@ -93,7 +101,7 @@ const preTokenOutput = [
   const m = naive.match(/sk-ant-oat01-[A-Za-z0-9_-]+/)
   assert(m && m[0].startsWith(FAKE) && m[0].length > FAKE.length,
     'non-vacuity: the naive greedy match really does over-capture on this fixture')
-  assert(extractSetupToken(wrapped).token !== m[0],
+  assert(extractSetupToken(wrapped, NARROW).token !== m[0],
     'non-vacuity: parser does not reproduce the naive over-capture')
 }
 
@@ -120,7 +128,7 @@ assert(extractSetupToken(12345).found === false, 'non-string: not found (no thro
 // be absorbed whenever it happened to lack a space.
 {
   const r = extractSetupToken(
-    `${TOKEN_PREFIX}${BODY.slice(0, WRAP_AT)}\r\n${BODY.slice(WRAP_AT)}\r\nStore this token securely.\r\n`)
+    `${TOKEN_PREFIX}${BODY.slice(0, WRAP_AT)}\r\n${BODY.slice(WRAP_AT)}\r\nStore this token securely.\r\n`, NARROW)
   assert(r.token === FAKE, 'continuation stops at the real trailer line')
 }
 {
@@ -135,7 +143,7 @@ assert(extractSetupToken(12345).found === false, 'non-string: not found (no thro
   // Same isolation for the other end: a line that is pure token alphabet is
   // absorbed, so the stop above is attributable to the space and not to the
   // loop simply never running.
-  const r = extractSetupToken(`${TOKEN_PREFIX}${BODY.slice(0, WRAP_AT)}\r\n${BODY.slice(WRAP_AT)}\r\n`)
+  const r = extractSetupToken(`${TOKEN_PREFIX}${BODY.slice(0, WRAP_AT)}\r\n${BODY.slice(WRAP_AT)}\r\n`, NARROW)
   assert(r.token === FAKE, 'control: a pure-alphabet line IS absorbed, so the space test is meaningful')
 }
 {
@@ -144,16 +152,44 @@ assert(extractSetupToken(12345).found === false, 'non-string: not found (no thro
   assert(r.token === FAKE, 'a blank line terminates the continuation run')
 }
 
-// KNOWN BOUNDARY, asserted rather than left implicit: a single bare word on
-// the line immediately after an unwrapped token WOULD be absorbed, because
-// nothing in the byte stream distinguishes it from a wrap continuation. This
-// is why the caller spawns wide (so wraps do not occur) and why the captured
-// value is proven by the provider-validate call rather than by this parser.
-// The failure mode is an honest "token rejected", never a silent corruption.
+// ── the wrap-fill rule: what CLOSED the silent-corruption hole ─────────────
+// This block used to assert the opposite. A bare word on the line after the
+// token was absorbed into it, justified by "validate downstream is the real
+// gate" -- and that gate does not exist (see this file's header). The result
+// would have been a corrupted credential stored successfully, the user told
+// "Connected", and a failure surfacing much later with nothing pointing back
+// at onboarding. A wrap can only occur at the right margin, so the line
+// before a continuation must have FILLED the terminal.
 {
+  // 108-char token line in a 200-column terminal: cannot be a wrap.
   const r = extractSetupToken(`${TOKEN_PREFIX}${BODY}\r\nBAREWORD\r\n`)
-  assert(r.token === FAKE + 'BAREWORD',
-    'KNOWN BOUNDARY: a bare adjacent word is absorbed -- validate downstream is the real gate')
+  assert(r.token === FAKE, 'a bare adjacent word is NOT absorbed when the token line did not fill the width')
+  assert(!r.token.includes('BAREWORD'), 'the credential is not silently corrupted')
+}
+{
+  // Same bytes, but now the token line genuinely fills an 80-column terminal
+  // (the recorded case): the continuation IS a wrap and must be joined.
+  const r = extractSetupToken(`${TOKEN_PREFIX}${BODY.slice(0, WRAP_AT)}\r\n${BODY.slice(WRAP_AT)}\r\n`, NARROW)
+  assert(r.token === FAKE, 'a real wrap is still re-joined -- the rule discriminates, it does not just refuse')
+}
+{
+  // The discriminator is the WIDTH, nothing else: identical input, two widths,
+  // two answers. If this pair ever agrees, the rule has stopped working.
+  const input = `${TOKEN_PREFIX}${BODY.slice(0, WRAP_AT)}\r\n${BODY.slice(WRAP_AT)}\r\n`
+  const narrow = extractSetupToken(input, { cols: 80 }).token
+  const wide = extractSetupToken(input, { cols: 200 }).token
+  assert(narrow !== wide, 'the same bytes parse differently at different widths')
+  assert(narrow === FAKE, 'at the width that produced the wrap: joined')
+  assert(wide === TOKEN_PREFIX + BODY.slice(0, WRAP_AT), 'at a width where no wrap could occur: not joined')
+}
+{
+  // A line one character too short to have filled the terminal is not a wrap.
+  const shortBody = BODY.slice(0, 40)
+  const line = TOKEN_PREFIX + shortBody // 53 chars
+  const r = extractSetupToken(`${line}\r\nAAAABBBB\r\n`, { cols: 53 + 9 })
+  assert(r.token === line, 'just outside the fill tolerance: not joined')
+  const r2 = extractSetupToken(`${line}\r\nAAAABBBB\r\n`, { cols: 53 + 8 })
+  assert(r2.token === line + 'AAAABBBB', 'just inside the fill tolerance: joined')
 }
 
 // ── reason strings must never carry the buffer ─────────────────────────────

@@ -33,6 +33,19 @@
 const { extractSetupToken, awaitingManualCode, isPlausibleAuthCode,
   SETUP_TOKEN_PTY_COLS, SETUP_TOKEN_PTY_ROWS } = require('./setup-token.cjs')
 
+// Shutdown hook. The pty is a long-lived-credential OAuth login child, the
+// same class the codebase already refuses to let outlive the app
+// (killAllLoginChildren's own comment, Codex finding #3: an orphaned login
+// "could finish its OAuth exchange and write credentials after the app is
+// gone"). This one also holds a localhost /callback listener. Registered
+// rather than left to an implicit SIGHUP on pty close -- the project does not
+// trust that for its sibling children and should not start here.
+let liveSessionForShutdown = null
+function killSetupTokenChildOnShutdown() {
+  if (!liveSessionForShutdown) return
+  try { liveSessionForShutdown.cancel() } catch { /* already gone */ }
+}
+
 // The provider id this lane stores under. buildProviderEnv()'s
 // 'claude-subscription' row reads exactly this key back and exports it as
 // CLAUDE_CODE_OAUTH_TOKEN (provider-env.cjs).
@@ -121,7 +134,11 @@ function createSetupTokenSession(deps) {
     // found by mutation testing, which showed the guard was unreachable in
     // every case the tests exercised.
     if (timer) { clearTimeout(timer); timer = null }
-    const extracted = extractSetupToken(rawOutput)
+    // Pass the width the pty was actually spawned with: the parser only joins
+    // a wrapped line when the previous one filled the terminal, and it cannot
+    // know that width on its own. Getting this wrong in either direction is a
+    // corrupted or truncated credential.
+    const extracted = extractSetupToken(rawOutput, { cols: SETUP_TOKEN_PTY_COLS })
     // Drop the buffer before any await: from here on the only copy of the
     // credential is `extracted.token`, whose lifetime is this function.
     buffer = ''
@@ -140,9 +157,14 @@ function createSetupTokenSession(deps) {
       // Cancel is supposed to prevent.
       if (myRun !== runId) return
       if (!result || !result.ok) {
-        // The token was captured but Anthropic rejected it. This is the
-        // designed landing spot for a mis-capture -- honest and visible,
-        // rather than a stored credential that fails later at spawn time.
+        // NOT REACHABLE for this provider today, and the comment that used to
+        // sit here claimed otherwise -- that this was "the designed landing
+        // spot for a mis-capture". validateProviderKey('claude-subscription')
+        // is a hardcoded {ok:true} (see setup-token.cjs's header), so nothing
+        // rejects. The branch stays because it is the correct behaviour the
+        // moment that validation becomes real, and because a future provider
+        // reusing this session would need it -- but the mis-capture guarantee
+        // lives in the parser's wrap check, not here.
         setState('failed', 'token_rejected')
         clearChild()
         return
@@ -256,6 +278,12 @@ function createSetupTokenSession(deps) {
    */
   function submitCode(code) {
     if (!child) return { ok: false, reason: 'not_running' }
+    // Only while the CLI is actually at its code prompt. Without this, an
+    // early submit types inert text and an Enter at whatever prompt happens
+    // to be on screen -- harmless with this charset, but it is answering a
+    // question nobody asked, and 'validating' means the child has already
+    // exited so the write would just throw.
+    if (state !== 'awaiting_code') return { ok: false, reason: 'not_awaiting_code' }
     if (!isPlausibleAuthCode(code)) return { ok: false, reason: 'invalid_code' }
     // Two separate writes, with the submit deferred. Learned by breaking it
     // during the spike: a "\r" glued onto the code is swallowed by the TUI --
@@ -264,9 +292,23 @@ function createSetupTokenSession(deps) {
     // driver needed a slow send; node-pty's write is not char-throttled, so
     // the separation is what remains available and it is the half that
     // actually fixed it.
+    //
+    // The deferred write captures BOTH its generation and its specific child.
+    // Re-reading the shared `child` variable 250ms later was the last
+    // surviving instance of the bug class the generation counter was added
+    // for: submit, cancel, start again inside that window, and the leftover
+    // timer typed an Enter into a brand-new setup-token process the user had
+    // just started, at whatever screen it happened to be on. Capturing the
+    // object as well as the generation means even a matching runId cannot
+    // deliver the keystroke to the wrong process.
+    const submitRun = runId
+    const submitChild = child
     try {
       child.write(code)
-      setTimeout(() => { try { child && child.write('\r') } catch { /* child gone */ } }, 250)
+      setTimeout(() => {
+        if (submitRun !== runId) return
+        try { submitChild.write('\r') } catch { /* child gone */ }
+      }, 250)
     } catch (err) {
       log(`setup-token: code write failed: ${safeMessage(err && err.message)}`)
       return { ok: false, reason: 'write_failed' }
@@ -303,7 +345,12 @@ function createSetupTokenSession(deps) {
     }
   }
 
-  return { start, submitCode, cancel, status }
+  const api = { start, submitCode, cancel, status }
+  // Last session created wins the shutdown hook. In practice there is exactly
+  // one (getSetupTokenSession memoises it); tests construct many, and the
+  // hook is inert for any session with no child.
+  liveSessionForShutdown = api
+  return api
 }
 
 // Lazy require, matching supervisor.mjs: node-pty is a native module and only
@@ -316,6 +363,7 @@ function defaultSpawnPty(bin, args, opts) {
 
 module.exports = {
   createSetupTokenSession,
+  killSetupTokenChildOnShutdown,
   PROVIDER_ID,
   SETUP_TOKEN_TIMEOUT_MS,
   TERMINAL_STATES,

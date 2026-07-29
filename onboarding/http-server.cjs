@@ -63,7 +63,7 @@ const attachTopology = require('../attach-topology.cjs') // /api/topology read s
 // In-app `claude setup-token` capture. Pure-JS state machine; node-pty is
 // required lazily inside it, so importing this here cannot fail the server
 // boot on a box where the native module did not build.
-const { createSetupTokenSession } = require('../setup-token-session.cjs')
+const { createSetupTokenSession, killSetupTokenChildOnShutdown } = require('../setup-token-session.cjs')
 
 // sudo askpass per-boot token (0.1.0 prep): generated in createOnboardingServer's
 // listen callback, checked by GET /api/sudo/password. Module-level on purpose --
@@ -1866,6 +1866,14 @@ function killAllLoginChildren(signal = 'SIGTERM') {
     }
     mcpLoginChildren[name] = null
   }
+  // The in-app `claude setup-token` pty is the SAME class again -- a
+  // long-lived-credential OAuth login child, and this one additionally holds
+  // a localhost /callback listener open. It is not detached, but this
+  // function exists precisely because the project does not rely on implicit
+  // cleanup for its siblings, and an orphan here could finish an exchange and
+  // print a 1-year token into a pty whose owner is gone. Rides the same
+  // before-quit/fatal wiring in main.cjs rather than adding a second export.
+  killSetupTokenChildOnShutdown()
 }
 
 // List the account's claude.ai connectors. Read-only, no token needed. Runs

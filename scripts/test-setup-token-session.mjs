@@ -44,7 +44,10 @@ function makeHarness(overrides = {}) {
       exitCb: null,
       onData: (cb) => { c.dataCb = cb },
       onExit: (cb) => { c.exitCb = cb },
-      write: (s) => calls.writes.push(s),
+      // Per-child writes as well as the shared list: "did the WRONG child get
+      // typed at" is unanswerable from a single flat array.
+      writes: [],
+      write: (s) => { c.writes.push(s); calls.writes.push(s) },
       kill: () => { calls.kills++ },
     }
     children.push(c)
@@ -197,6 +200,57 @@ function makeHarness(overrides = {}) {
   const h = makeHarness()
   assert(h.session.submitCode('validcode123').ok === false, 'code before start is refused')
   assert(h.session.submitCode('validcode123').reason === 'not_running', 'reason is not_running')
+}
+{
+  // A child exists but the CLI has not reached its code prompt. Submitting
+  // here would type an Enter at whatever prompt happens to be on screen --
+  // answering a question nobody asked.
+  const h = makeHarness()
+  h.session.start()
+  assert(h.session.status().state === 'running', 'child is up, prompt not yet seen')
+  const r = h.session.submitCode('validcode123')
+  assert(r.ok === false && r.reason === 'not_awaiting_code', 'an early code submit is refused by state')
+  assert(h.calls.writes.length === 0, 'nothing is written to the pty before the prompt exists')
+}
+
+// ── the deferred submit must not land on a different child ─────────────────
+{
+  // submitCode writes the code, then schedules the Enter 250ms later. If that
+  // timer re-reads the shared `child`, cancelling and restarting inside the
+  // window delivers an unrequested keystroke to a brand-new setup-token
+  // process, at whatever screen it is on. Same bug class as the stale
+  // onData/onExit callbacks -- this was the site the first sweep missed.
+  const h = makeHarness()
+  h.session.start()
+  h.emit('Paste code here if prompted > ')
+  assert(h.session.status().state === 'awaiting_code', 'flow 1 is at the code prompt')
+  assert(h.session.submitCode('validcode123').ok === true, 'flow 1 accepts a code')
+  h.session.cancel()
+  h.session.start() // flow 2, brand new child, inside the 250ms window
+  assert(h.children.length === 2, 'control: a second child really was spawned')
+  await new Promise((r) => setTimeout(r, 400)) // let the deferred write fire
+  assert(h.children[1].writes.length === 0,
+    'the deferred Enter does NOT land on the new child')
+  assert(h.children[0].writes.join('') === 'validcode123',
+    'and the superseded child got only what it was actually sent -- no trailing submit')
+}
+
+// ── shutdown hook: the pty must not outlive the app ────────────────────────
+{
+  // Same class the codebase already refuses to orphan (killAllLoginChildren's
+  // own comment): a login child that could finish its OAuth exchange after the
+  // app is gone. This one also holds a localhost /callback listener.
+  const { killSetupTokenChildOnShutdown } = require('../setup-token-session.cjs')
+  const h = makeHarness()
+  h.session.start()
+  assert(h.calls.kills === 0, 'control: nothing killed yet')
+  killSetupTokenChildOnShutdown()
+  assert(h.calls.kills === 1, 'the shutdown hook kills a running setup-token child')
+  assert(h.session.status().state === 'cancelled', 'and leaves the session in a terminal state')
+  // Idempotent and inert with nothing running -- before-quit runs on every
+  // exit, including the overwhelming majority with no login in flight.
+  killSetupTokenChildOnShutdown()
+  assert(h.calls.kills === 1, 'the hook does not kill twice')
 }
 
 // ── idempotency and cancel ─────────────────────────────────────────────────

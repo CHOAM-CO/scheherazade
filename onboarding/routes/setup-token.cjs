@@ -30,11 +30,17 @@ function createRoutes(staticCtx) {
         const { agentControls } = callCtx // per-call value, never staticCtx
         const session = getSetupTokenSession(agentControls)
         const result = session.start()
-        // status() FIRST, then the call-specific fields. status() carries its
-        // own `reason`, which is null whenever the session is not in a failed
-        // state -- spread last, it silently overwrote the reason this call is
-        // reporting. Caught on the wire by the dispatch e2e, not by the
-        // session's own unit tests, which never see this object.
+        // status() FIRST, then the call-specific fields -- house convention
+        // for every handler in this file, so none of them can be read wrong.
+        //
+        // Honest scope: at THIS route the two `reason` values cannot actually
+        // diverge. start()'s failure branches call setState('failed', reason)
+        // synchronously with the same string before returning it, so the
+        // order is defensive here, not load-bearing. The real divergence, and
+        // the bug, is at /code below. An earlier version of this comment
+        // claimed the bug for this route too -- borrowed narrative, which
+        // reads as more load-bearing than it is and would send the next
+        // person hunting for a failure that cannot happen here.
         if (!result.ok) {
           sendJson(res, 409, { ...session.status(), ok: false, reason: result.reason })
           return
