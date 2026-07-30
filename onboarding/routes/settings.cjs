@@ -12,9 +12,58 @@
 // order exactly.
 'use strict'
 
+const os = require('node:os')
+const nodePath = require('node:path')
+const { spawn } = require('node:child_process')
+
+// ── clean uninstall plan (v0.0.35, Task: 클린테스트 in-app) ────────────────
+// Exported separately so scripts/test-uninstall-plan.mjs can attack the plan
+// without an Electron process: WHAT gets deleted is the security-sensitive
+// part, and it must be pinned as data, not read out of a shell string.
+//
+// The four residue classes (07-30 manual paste block, now productized):
+//   1. DATA_HOME -- the agent itself: memory, journals, config, credentials'
+//      encrypted blobs, the synced tmux-portable
+//   2. Electron per-app Library dirs (userData/caches/prefs/saved state/logs)
+//   3. the Keychain "Safe Storage" entry (the key the blobs were sealed with)
+//   4. ~/.claude/projects/<slug of DATA_HOME> -- the CLI's transcripts for
+//      OUR workspace only
+// NEVER on the list: ~/.claude.json (merge-only, three first-run flags the
+// user's own Claude Code shares) and ~/.claude itself. Deleting those breaks
+// the user's personal Claude Code to clean up after ours -- the one line the
+// 07-30 uninstall guide drew in bold, kept here as a tested invariant.
+function buildUninstallPlan(dataHome, home = os.homedir()) {
+  const slug = String(dataHome).replaceAll('/', '-')
+  const dirs = [
+    dataHome,
+    nodePath.join(home, 'Library', 'Application Support', 'Scheherazade'),
+    nodePath.join(home, 'Library', 'Caches', 'Scheherazade'),
+    nodePath.join(home, 'Library', 'Caches', 'com.choam.scheherazade'),
+    nodePath.join(home, 'Library', 'Caches', 'com.choam.scheherazade.ShipIt'),
+    nodePath.join(home, 'Library', 'Preferences', 'com.choam.scheherazade.plist'),
+    nodePath.join(home, 'Library', 'Saved Application State', 'com.choam.scheherazade.savedState'),
+    nodePath.join(home, 'Library', 'Logs', 'Scheherazade'),
+    nodePath.join(home, '.claude', 'projects', slug),
+  ]
+  const shq = (p) => `'${String(p).replace(/'/g, `'\\''`)}'`
+  // The script runs DETACHED and waits for this process to DIE first: an
+  // Electron app rewrites parts of userData on shutdown, so deleting before
+  // exit re-creates residue -- the exact half-clean this feature exists to
+  // end. The attach-lane tmux server (if any) is app infrastructure, not a
+  // user process: after uninstall it would supervise a deleted run.sh, so it
+  // goes too.
+  const script = [
+    `while /bin/kill -0 ${process.pid} 2>/dev/null; do sleep 0.2; done`,
+    `pkill -f 'tmux.*-L scheherazade' 2>/dev/null || true`,
+    ...dirs.map((d) => `rm -rf ${shq(d)}`),
+    `security delete-generic-password -s 'Scheherazade Safe Storage' >/dev/null 2>&1 || true`,
+  ].join('\n')
+  return { dirs, script }
+}
+
 function createRoutes(staticCtx) {
   const {
-    sendJson, readJsonBody, writeAgentConfig,
+    sendJson, readJsonBody, writeAgentConfig, DATA_HOME, getElectron,
   } = staticCtx
   return [
     {
@@ -31,7 +80,54 @@ function createRoutes(staticCtx) {
         return
       },
     },
+    // POST uninstall: the whole app, all four residue classes, no Terminal
+    // (Mino 07-30 "전체삭제하고 클린테스트하고싶은데" -> productized). Chain:
+    // typed-confirm body gate -> stop agent -> spawn the detached cleanup
+    // script (fires only after this process dies) -> answer the page ->
+    // trash the .app bundle -> exit. Mutating POST, so the per-launch
+    // X-Onboard-Token gate has already run.
+    {
+      method: 'POST',
+      match: (pathname) => pathname === '/api/uninstall',
+      handler: async (req, res, callCtx) => {
+        const { confirm } = await readJsonBody(req)
+        // The page sends the literal after its own dialog; a stray curl
+        // without it gets nothing. Not a security boundary (the token gate
+        // is), a fat-finger boundary.
+        if (confirm !== 'DELETE') {
+          sendJson(res, 400, { error: 'confirm: "DELETE" is required', reason: 'confirm_required' })
+          return
+        }
+        const { agentControls } = callCtx
+        try {
+          if (agentControls && typeof agentControls.stopAgent === 'function') await agentControls.stopAgent()
+        } catch (err) {
+          // The cleanup script kills the tmux lane and the dirs regardless;
+          // a stop that failed on a process about to lose its disk is noise.
+          console.error('[scheherazade/onboarding] uninstall: stopAgent failed (continuing):', err.message)
+        }
+        const plan = buildUninstallPlan(DATA_HOME)
+        spawn('/bin/bash', ['-c', plan.script], { detached: true, stdio: 'ignore' }).unref()
+        sendJson(res, 200, { ok: true })
+        // After the response: trash the bundle, then die so the reaper fires.
+        setTimeout(() => {
+          try {
+            const { app, shell } = getElectron()
+            const exe = app.getPath('exe') // .../Scheherazade.app/Contents/MacOS/Scheherazade
+            const bundle = nodePath.resolve(exe, '..', '..', '..')
+            const finish = () => setTimeout(() => app.exit(0), 300)
+            if (bundle.endsWith('.app')) shell.trashItem(bundle).then(finish, finish)
+            else finish() // dev electron:dev -- no bundle to trash
+          } catch (err) {
+            // dev-serve-ui (no Electron): dirs are scheduled against THIS
+            // process's death; say so instead of pretending the app closed.
+            console.error('[scheherazade/onboarding] uninstall: no Electron to exit (dev?) -- cleanup fires when this process stops:', err.message)
+          }
+        }, 300)
+        return
+      },
+    },
   ]
 }
 
-module.exports = { createRoutes }
+module.exports = { createRoutes, buildUninstallPlan }

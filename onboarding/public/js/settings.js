@@ -96,6 +96,33 @@
     $('set-group-agent').textContent = C.groupAgent || 'Agent'
     $('set-group-engine').textContent = C.groupEngine || 'Engine'
     $('set-group-system').textContent = C.groupSystem || 'System'
+
+    // ── danger zone: clean uninstall (v0.0.35) ─────────────────────────
+    $('set-group-danger').textContent = C.groupDanger || 'Danger zone'
+    $('set-danger-label').textContent = C.dangerLabel
+    $('set-danger-note').textContent = C.dangerNote
+    $('set-danger-delete').textContent = C.dangerButton
+    $('set-danger-delete').onclick = async () => {
+      let name = 'Scheherazade'
+      try { name = (await api('/api/config')).DISPLAY_NAME || name } catch { /* generic name is fine */ }
+      const ok = await window.confirmDialog(C.dangerConfirm(name), C.dangerConfirmButton, C.dangerCancel)
+      if (!ok) return
+      const btn = $('set-danger-delete')
+      btn.disabled = true
+      try {
+        await api('/api/uninstall', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirm: 'DELETE' }),
+        })
+        // The server answers, then exits: this toast is the last thing the
+        // window shows before the app closes itself.
+        showToast(C.dangerDone)
+      } catch (err) {
+        btn.disabled = false
+        showToast(GEN(err.message))
+      }
+    }
     $('set-signin-link').textContent = C.signinLink || 'Manage sign-ins'
     $('set-rename-label').textContent = C.renameLabel
     $('set-rename-save').textContent = C.renameButton

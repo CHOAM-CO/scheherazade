@@ -652,6 +652,18 @@ window.COPY = {
     groupAgent: 'Agent',
     groupEngine: 'Engine',
     groupSystem: 'System',
+    // Danger zone (v0.0.35). The confirm names EVERYTHING that dies --
+    // memory included -- and the one thing that survives (~/.claude.json,
+    // shared with the user's own Claude Code). No euphemisms: "deletes the
+    // agent's memory" is the sentence a user must read before clicking.
+    groupDanger: 'Danger zone',
+    dangerLabel: 'Delete the app and everything it made',
+    dangerNote: "Removes the agent, its memory and journals, saved credentials, caches, and the app itself — everything, without Terminal. Your personal Claude Code settings (~/.claude.json) are left untouched.",
+    dangerButton: 'Delete everything…',
+    dangerConfirm: (name) => `This permanently deletes ${name} — the agent, all of its memory and journals, saved tokens, and the app itself. There is no undo. The app will close when it's done.`,
+    dangerConfirmButton: 'Delete everything',
+    dangerCancel: 'Keep it',
+    dangerDone: 'Deleting. The app will close itself in a moment — it is already in the Trash.',
     // Sign-ins live on the connectors page while the model picker lives
     // here. Until that split is resolved, this link is what closes it.
     signinLink: 'Manage sign-ins',

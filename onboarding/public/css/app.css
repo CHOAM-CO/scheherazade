@@ -225,6 +225,14 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .category {
   margin-bottom: 2rem;
 }
+/* clean-uninstall block (v0.0.35): visually fenced off from settings that
+   are safe to poke at */
+.danger-zone {
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  padding: 1rem;
+}
+.danger-zone .category-label { color: var(--danger); }
 .category-label {
   font-size: 0.78rem;
   text-transform: uppercase;
