@@ -219,6 +219,25 @@ function createHarnessRender(ctx) {
       })
     }
 
+    // v0.0.33 (design 0017): receipt ledger on Bash results -- the evidence
+    // side of the rumination gate's new evidence branch. Advisory writer,
+    // additive-only, same contract as the translator block above.
+    const LEDGER_HOOK = 'post-bash-receipt-ledger.mjs'
+    const hasLedger = settings.hooks.PostToolUse.some((group) =>
+      Array.isArray(group.hooks) && group.hooks.some((h) => typeof h.command === 'string' && h.command.includes(LEDGER_HOOK)))
+    if (!hasLedger) {
+      let bashGroup = settings.hooks.PostToolUse.find((g) => g && g.matcher === 'Bash')
+      if (!bashGroup) {
+        bashGroup = { matcher: 'Bash', hooks: [] }
+        settings.hooks.PostToolUse.push(bashGroup)
+      }
+      if (!Array.isArray(bashGroup.hooks)) bashGroup.hooks = []
+      bashGroup.hooks.push({
+        type: 'command',
+        command: `node ${path.join(toUnpackedPath(REPO_ROOT), 'hooks', LEDGER_HOOK)}`,
+      })
+    }
+
     // v0.0.22: context-gauge tap on Stop + SessionStart -- advisory
     // instrument, additive-only, both event groups checked independently so
     // a hand-edited config missing only one still converges. See the hook's

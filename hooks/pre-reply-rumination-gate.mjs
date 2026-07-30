@@ -28,6 +28,19 @@
 // against). If a second blocking gate is ever added to this same tool, this
 // tradeoff should be revisited.
 //
+// EVIDENCE BRANCH (v1.2, design 0017 — deliberately grown INSIDE this gate
+// rather than shipped as a sibling, exactly because of the note above: one
+// blocking gate total keeps the consume design sound): besides claim-shaped
+// TEXT, the gate now also bounces on claim-shaped SILENCE — unacknowledged
+// failed commands this turn. post-bash-receipt-ledger.mjs (PostToolUse,
+// advisory) records one row per Bash result; rows newer than the cursor
+// stamped at the last judged reply are this reply's evidence. Any failed
+// row bounces ONCE with the specific receipt (command + exit marker), then
+// the same marker/consume machinery applies. The cursor advances on every
+// ALLOWED reply — including the consume path, so re-check commands that
+// fail again between bounce and retry don't re-bounce the retry — and rows
+// are judged exactly once per reply, never re-litigated.
+//
 // FAIL-LOUD (deliberately the ONE gate in this pack that does NOT fail-open):
 // every other gate in this pack is advisory and swallows its own errors
 // silently by design. This gate is the only BLOCKING gate, so a bug here
@@ -52,6 +65,11 @@ const CACHE_DIR = path.join(DATA_HOME, '.gates')
 const MARKER_PATH = path.join(CACHE_DIR, 'rumination.last_deny')
 const BOUNCE_WINDOW_MS = 10 * 60 * 1000 // 10 minutes
 
+// Evidence branch state (design 0017): ledger written by
+// post-bash-receipt-ledger.mjs; cursor stamped HERE on every allowed reply.
+const LEDGER_PATH = path.join(CACHE_DIR, 'receipt-ledger.jsonl')
+const CURSOR_PATH = path.join(CACHE_DIR, 'receipt-ledger.cursor')
+
 // ── PRODUCT COPY — PO 최종화 대기 ──────────────────────────────────────────
 // 초안 원칙(설계 문서 §1-3): 존댓말, 이모지/느낌표 금지, "버그가 아니라 확인
 // 절차"로 읽히도록. 최종 문구는 온보딩 카피(onboarding/public/js/copy.js)와
@@ -64,6 +82,13 @@ const GATE_COPY = {
     '방금 메시지에 "기억이 없다" 또는 "기록이 없다"는 표현이 있습니다. 실제로 찾아본 뒤에 하는 말인가요. 아직 찾아보지 않았다면 세션 기록을 먼저 확인한 뒤 다시 보내 주세요.',
   footer:
     '확인을 마쳤다면 같은 내용 그대로, 또는 고친 내용으로 다시 보내 주세요. 이번 한 번은 그대로 전송됩니다 (10분 이내). 이 확인은 오류가 아니라, 에이전트가 사실과 다른 보고를 하지 않도록 돕는 절차입니다.',
+  // Evidence branch copy (design 0017): the receipt is SPECIFIC — command +
+  // exit marker — because a blind "go check" bounce teaches nothing.
+  evidenceClaim: (failedRows, total) =>
+    `이번 턴에 실행한 명령 ${total}개 중 ${failedRows.length}개가 실패로 끝났습니다:\n` +
+    failedRows.slice(0, 3).map((r) => `  - \`${r.cmd}\` (${r.marker})`).join('\n') +
+    (failedRows.length > 3 ? `\n  - 외 ${failedRows.length - 3}개` : '') +
+    '\n이 실패가 지금 보내려는 답장에 반영되어 있나요. 반영되어 있다면 그대로 다시 보내면 통과됩니다. 아니라면 실패를 확인하고 답장에 담아 주세요.',
 }
 
 // CLASS_A: completion/verification claims. Curated action-verb stems, not a
@@ -87,6 +112,46 @@ const CLASS_B =
 
 function allow() {
   process.exit(0)
+}
+
+// Stamp = "every ledger row up to now has been judged against a reply that
+// was ALLOWED". Called on every allow path for the reply tool. Fail-loud:
+// a cursor that silently stops advancing would re-litigate old failures on
+// every future reply — a UX breakage, not a safe degradation.
+function stampCursorAndAllow() {
+  try {
+    mkdirSync(CACHE_DIR, { recursive: true })
+    writeFileSync(CURSOR_PATH, String(Date.now()), 'utf8')
+  } catch (e) {
+    failLoud('cursor stamp', e)
+  }
+  allow()
+}
+
+// Rows newer than the cursor = this reply's evidence. Unparseable lines are
+// skipped (an interrupted append cannot be proven a failure); a missing
+// ledger is simply no evidence — both degrade toward allowing, never toward
+// a wrong block, matching the ledger writer's fail-open contract.
+function readFreshLedgerRows() {
+  let cursor = 0
+  try {
+    cursor = Number(readFileSync(CURSOR_PATH, 'utf8')) || 0
+  } catch { /* never stamped */ }
+  let text = ''
+  try {
+    text = readFileSync(LEDGER_PATH, 'utf8')
+  } catch {
+    return []
+  }
+  const rows = []
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue
+    try {
+      const row = JSON.parse(line)
+      if (row && typeof row.ts === 'number' && row.ts > cursor) rows.push(row)
+    } catch { /* skip torn line */ }
+  }
+  return rows
 }
 
 function deny(reason) {
@@ -143,7 +208,14 @@ try {
   const hitA = CLASS_A.test(assertText)
   const hitB = CLASS_B.test(assertText)
 
-  if (!hitA && !hitB) allow()
+  // Evidence branch (design 0017): unacknowledged failed commands this turn
+  // bounce even when the reply text contains no claim wording at all —
+  // claim-shaped SILENCE, the smoother half of silent false success.
+  const freshRows = readFreshLedgerRows()
+  const failedRows = freshRows.filter((r) => r.failed === true)
+  const hitC = failedRows.length > 0
+
+  if (!hitA && !hitB && !hitC) stampCursorAndAllow()
 
   // ── One-bounce state check ──────────────────────────────────────────────
   if (existsSync(MARKER_PATH)) {
@@ -155,13 +227,16 @@ try {
     }
     if (age < BOUNCE_WINDOW_MS) {
       // This is the retry inside the grace window — consume the marker now
-      // (synchronous consume, see file-header note) and allow.
+      // (synchronous consume, see file-header note) and allow. Cursor stamps
+      // here too: rows created BETWEEN bounce and retry (the agent re-running
+      // the failed command to check — often failing again) are part of the
+      // judged evidence, not grounds to re-bounce the retry.
       try {
         unlinkSync(MARKER_PATH)
       } catch (e) {
         failLoud('marker consume (unlink)', e)
       }
-      allow()
+      stampCursorAndAllow()
     }
     // Stale marker (past the window) — fall through and bounce again.
   }
@@ -172,10 +247,13 @@ try {
   } catch (e) {
     failLoud('marker write', e)
   }
+  // Deny does NOT stamp the cursor: the failed rows stay live so the retry
+  // is judged against them (and passes via the marker consume above).
 
   const lines = [`[확인 절차] ${GATE_COPY.header}`, ''] // bracket label, not emoji — copy-register rule (no emoji) applies to gate strings too
   if (hitA) lines.push(GATE_COPY.completionClaim)
   if (hitB) lines.push(GATE_COPY.absenceClaim)
+  if (hitC) lines.push(GATE_COPY.evidenceClaim(failedRows, freshRows.length))
   lines.push('', GATE_COPY.footer)
 
   deny(lines.join('\n'))

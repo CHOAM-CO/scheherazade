@@ -44,6 +44,10 @@
           {
             "type": "command",
             "command": "node {AGENT_DIR}/hooks/post-bash-permission-translator.mjs"
+          },
+          {
+            "type": "command",
+            "command": "node {AGENT_DIR}/hooks/post-bash-receipt-ledger.mjs"
           }
         ]
       }
