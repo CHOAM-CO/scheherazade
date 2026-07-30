@@ -4,7 +4,10 @@
 // loopback HTTP listener that the app's own chat page talks to.
 //
 //   inbound:  POST /in  -> mcp.notification('notifications/claude/channel')
-//   outbound: `reply` tool -> outbound queue -> GET /out (the page polls)
+//             -> transcript (role 'user', recorded only once delivered)
+//   outbound: `reply` tool -> transcript (role 'agent')
+//   the page: GET /out drains the transcript by cursor and replays it in
+//             full on every load -- the queue IS the conversation record
 //
 // WHY THIS EXISTS: before it, every way to talk to the agent went through a
 // third-party messenger. A new user had to create a bot application, mint a
@@ -57,19 +60,35 @@ export const LOCAL_CHANNEL_ID = 'in-app'
 // sequence rather than silently missing messages in the middle.
 export const MAX_QUEUE = 500
 
-// ── outbound queue ────────────────────────────────────────────────────────
-// `reply` appends here; GET /out drains by sequence. Sequence numbers are
-// monotonic across trims ON PURPOSE: a client holding seq=N must be able to
-// tell "nothing new yet" from "you fell behind and lost some", and array
-// indices cannot express that.
+// ── transcript queue ──────────────────────────────────────────────────────
+// BOTH sides of the conversation, in arrival order: `reply` appends role
+// 'agent', a delivered /in message appends role 'user'. GET /out drains by
+// sequence. This is the transcript the page replays on every load — before
+// user messages lived here (v0.0.31), they existed only as DOM nodes in the
+// page that sent them, so any navigation erased the user's half of the
+// conversation and any reply that landed while the page was away was
+// swallowed by the reload's cursor seed (Mino's 07-30 repro, both symptoms).
+// Sequence numbers are monotonic across trims ON PURPOSE: a client holding
+// seq=N must be able to tell "nothing new yet" from "you fell behind and
+// lost some", and array indices cannot express that.
 let seq = 0
 let queue = []
 
-export function enqueueOutbound(text, { now = () => Date.now() } = {}) {
+function enqueue(role, text, now) {
   seq += 1
-  queue.push({ seq, role: 'agent', text: String(text), ts: now() })
+  queue.push({ seq, role, text: String(text), ts: now() })
   if (queue.length > MAX_QUEUE) queue = queue.slice(-MAX_QUEUE)
   return seq
+}
+
+export function enqueueOutbound(text, { now = () => Date.now() } = {}) {
+  return enqueue('agent', text, now)
+}
+
+// Called ONLY after deliverInbound resolves: a message the agent never
+// received must not appear in the transcript as if it had been.
+export function enqueueInbound(text, { now = () => Date.now() } = {}) {
+  return enqueue('user', text, now)
 }
 
 export function readOutbound(since = 0) {
@@ -223,6 +242,12 @@ export function createRequestHandler({ notify, token, onInbound = () => {} }) {
         const text = parsed && parsed.text
         if (typeof text !== 'string' || !text.trim()) return send(400, { error: 'text required' })
         const delivered = await deliverInbound(text, { notify })
+        // Into the transcript only AFTER the notification resolved -- and as
+        // `delivered` (the normalized content), so the record shows exactly
+        // what the agent was handed. A failed deliverInbound throws past
+        // this line: the client gets its error and keeps the input text, and
+        // the transcript never claims a delivery that didn't happen.
+        enqueueInbound(delivered)
         onInbound(delivered)
         return send(202, { ok: true })
       }

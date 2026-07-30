@@ -4,16 +4,18 @@
 // via POST /api/chat/in (window.api attaches the per-launch onboard token),
 // and renders honestly when the channel is down instead of pretending.
 //
-// What this page deliberately does NOT do (plan §out-of-scope): history
-// persistence, uploads, multiple threads. One list, one input.
+// What this page deliberately does NOT do (plan §out-of-scope): uploads,
+// multiple threads. One list, one input.
 //
 // Two shapes worth naming:
-//  - The outbound queue holds AGENT messages only (channel-local.mjs:
-//    inbound user text goes to the MCP notification, never into the queue).
-//    So user bubbles are rendered locally at send time, and a reload starts
-//    the view at "now" -- replaying the retained queue would show a
-//    one-sided conversation that reads as broken, so the first poll seeds
-//    the cursor and renders nothing.
+//  - The channel's queue is the TRANSCRIPT (both roles, channel-local.mjs)
+//    and this page replays it in full on every load. v0.0.31 shipped the
+//    opposite -- user bubbles were DOM-only and the first poll seeded the
+//    cursor past everything already queued -- so navigating away erased the
+//    user's half and swallowed any reply that landed while the page was
+//    gone (Mino's 07-30 repro). User bubbles now come from the transcript
+//    echo (a send triggers an immediate poll), never from a local append:
+//    one source of truth, no dedup bookkeeping.
 //  - A failed send KEEPS the text in the input. Losing the user's message
 //    to a restart race is the one unforgivable failure here.
 
@@ -130,18 +132,34 @@
     }
   }
 
+  // 'user' passes through, anything else renders as the agent: the enum is
+  // channel-owned and this page must not invent a third bubble style for a
+  // value it doesn't know.
+  function roleOf(m) { return m.role === 'user' ? 'user' : 'agent' }
+
+  let polling = false
+  let pollAgain = false
+
   async function pollOnce() {
+    // Re-entrancy guard: pollNow() can fire while a poll is awaiting its
+    // fetch. Two concurrent drains would both read the same cursor and
+    // render every item twice -- so the second call just asks the in-flight
+    // one to go again immediately.
+    if (polling) { pollAgain = true; return }
+    polling = true
     try {
       if (nextSeq === null) {
-        // Seed the cursor; render nothing (see header -- the queue is
-        // agent-side only, replaying it reads as a one-sided conversation).
+        // First successful contact: replay the whole retained transcript
+        // (both roles -- see header). The cursor lands on `latest`, so the
+        // steady-state branch below only ever renders what's new.
         const seed = await window.api('/api/chat/out?since=0')
+        for (const m of seed.items) appendMsg(roleOf(m), m.text)
         nextSeq = seed.latest
         showEmpty()
       } else {
         const result = await window.api(`/api/chat/out?since=${nextSeq}`)
         if (result.missed) appendGap()
-        for (const m of result.items) appendMsg('agent', m.text)
+        for (const m of result.items) appendMsg(roleOf(m), m.text)
         nextSeq = result.latest
         showEmpty()
       }
@@ -149,10 +167,21 @@
       // 503/502 land here via window.api's !res.ok throw. The periodic
       // status refresh below names the state; the cursor survives for when
       // the channel comes back, so no state to update here.
+    } finally {
+      polling = false
     }
     if (tick % STATUS_EVERY_TICKS === 0) await refreshStatus()
     tick++
-    pollTimer = setTimeout(pollOnce, POLL_MS)
+    if (pollTimer) clearTimeout(pollTimer)
+    pollTimer = setTimeout(pollOnce, pollAgain ? 0 : POLL_MS)
+    pollAgain = false
+  }
+
+  // Immediate drain, used right after a successful send: the user bubble is
+  // the transcript echo, and waiting up to POLL_MS for it reads as lag.
+  function pollNow() {
+    if (pollTimer) clearTimeout(pollTimer)
+    pollOnce()
   }
 
   async function send() {
@@ -165,9 +194,11 @@
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ text }),
       })
-      appendMsg('user', text)
+      // No local append: the 202 means the message is already in the
+      // transcript, and pollNow() renders it from there (see header).
       input.value = ''
       input.style.height = 'auto'
+      pollNow()
     } catch (err) {
       // The text stays in the input on purpose -- see header.
       console.error('chat send failed:', err)

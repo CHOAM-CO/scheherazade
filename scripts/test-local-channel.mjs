@@ -14,7 +14,7 @@
 // Mirrors scripts/test-provider-env.mjs's assert()/pass/fail convention.
 
 import {
-  enqueueOutbound, readOutbound, resetQueueForTest, deliverInbound,
+  enqueueOutbound, enqueueInbound, readOutbound, resetQueueForTest, deliverInbound,
   createRequestHandler, LOCAL_CHANNEL_ID, MAX_QUEUE,
 } from '../channel-local.mjs'
 
@@ -87,7 +87,23 @@ console.log('\n3. outbound cursor semantics')
   assert(after.items.length === 1 && after.items[0].text === 'three', 'since=N returns only newer')
   assert(readOutbound(3).items.length === 0, 'a caught-up cursor returns nothing')
   assert(readOutbound(3).missed === false, 'caught up is not "missed"')
-  assert(all.items.every((m) => m.role === 'agent'), 'queued messages are tagged as the agent')
+  assert(all.items.every((m) => m.role === 'agent'), 'reply-queued messages are tagged as the agent')
+}
+
+console.log('\n3b. the queue is a TRANSCRIPT: both roles, one sequence, arrival order')
+// The page replays this on every load -- if user messages did not live here
+// (v0.0.31), navigation erased the user's half of the conversation and any
+// reply landing while the page was away was swallowed by the reload's
+// cursor seed. Both 07-30 live-repro symptoms pin on this contract.
+{
+  resetQueueForTest()
+  enqueueInbound('ping')
+  enqueueOutbound('pong')
+  enqueueInbound('again')
+  const all = readOutbound(0)
+  assert(all.items.map((m) => m.role).join(',') === 'user,agent,user', 'roles interleave in arrival order')
+  assert(all.items.map((m) => m.text).join(',') === 'ping,pong,again', 'one monotonic sequence covers both sides')
+  assert(all.latest === 3, 'user messages advance the same cursor agent messages do')
 }
 
 console.log('\n4. the queue is bounded, and falling behind is REPORTED not hidden')
@@ -135,11 +151,26 @@ console.log('\n7. HTTP: posting a message')
   const ok = await call(handler, { method: 'POST', url: '/in', body: JSON.stringify({ text: 'hi' }) })
   assert(ok.code === 202, 'a valid post is accepted')
   assert(seen.length === 1 && seen[0].params.content === 'hi', '...and reaches the agent as a notification')
+  const echoed = readOutbound(0)
+  assert(echoed.items.length === 1 && echoed.items[0].role === 'user' && echoed.items[0].text === 'hi',
+    '...and lands in the transcript as the user, so a reload can replay it')
   assert((await call(handler, { method: 'POST', url: '/in', body: '{not json' })).code === 400, 'malformed json -> 400')
   assert((await call(handler, { method: 'POST', url: '/in', body: '{}' })).code === 400, 'missing text -> 400')
   assert((await call(handler, { method: 'POST', url: '/in', body: JSON.stringify({ text: '  ' }) })).code === 400,
     'blank text -> 400 at the HTTP edge (the agent is never woken for nothing)')
   assert((await call(handler, { method: 'GET', url: '/nope' })).code === 404, 'unknown path -> 404')
+}
+
+console.log('\n7b. a failed delivery never fakes a transcript entry')
+// enqueueInbound runs only after deliverInbound resolves: if the notify
+// throws, the client gets its error (and keeps the input text), and the
+// transcript must not claim the agent received something it did not.
+{
+  resetQueueForTest()
+  const handler = createRequestHandler({ notify: async () => { throw new Error('dead pipe') }, token: TOKEN })
+  const r = await call(handler, { method: 'POST', url: '/in', body: JSON.stringify({ text: 'lost' }) })
+  assert(r.code === 500, 'a failed delivery surfaces as an error, not a 202')
+  assert(readOutbound(0).items.length === 0, '...and the transcript records nothing')
 }
 
 console.log('\n8. an oversized body is refused rather than buffered')
