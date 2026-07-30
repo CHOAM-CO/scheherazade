@@ -29,11 +29,16 @@
 // No Electron imports -- plain node, usable from tests.
 
 const fs = require('node:fs')
+const os = require('node:os')
 const path = require('node:path')
 const { execFileSync } = require('node:child_process')
 
 const ATTACH_SOCKET = 'scheherazade'
 const ATTACH_SESSION = 'agent'
+
+// Same DATA_HOME convention as the hooks (stop-reply-guard.mjs): honor the
+// managed-spawn env first, fall back to the literal install path.
+const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', 'Scheherazade')
 
 // Verbs that cannot create a tmux server (all error with "no server running"
 // on a dead socket). Anything not listed here throws before reaching tmux.
@@ -46,11 +51,16 @@ const SAFE_VERBS = new Set([
   'pipe-pane',
 ])
 
-// Fixed locations first: a packaged Electron app's PATH is the launchd
+// The app-shipped portable tmux FIRST (v0.0.35, synced into DATA_HOME/bin by
+// harness-render at boot): it is the binary attach-bootstrap.sh uses, so
+// preferring it keeps the app's IPC client and the user's server the same
+// build (no protocol skew within one install). Fixed brew locations follow
+// as dev/legacy fallback -- a packaged Electron app's PATH is the launchd
 // default (/usr/bin:/bin:...) and does NOT include Homebrew, so PATH-only
 // resolution would "lose" tmux exactly in production (same class as
 // http-server.cjs's resolveBin comment).
 const TMUX_CANDIDATES = [
+  path.join(DATA_HOME, 'bin', 'tmux-portable', 'tmux'),
   '/opt/homebrew/bin/tmux',
   '/usr/local/bin/tmux',
   '/usr/bin/tmux',

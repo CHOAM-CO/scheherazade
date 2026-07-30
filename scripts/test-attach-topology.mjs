@@ -131,6 +131,69 @@ if (!tmuxBin) {
   }
 }
 
+// ── 2b. vendored portable tmux (v0.0.35, 극한의 딸깍) ───────────────────────
+// The brew wall was the one manual step left in attach onboarding (Mino
+// 07-30: "brew로 깔아야돼? 이거 귀찮은데"). These pin the whole chain:
+// vendored artifacts sound -> boot sync lands them in DATA_HOME/bin ->
+// the COPIED binary actually runs (the @executable_path/lib rewrite must
+// survive relocation, that being its entire job) -> resolveTmuxBin and the
+// bootstrap template prefer it.
+console.log('vendored portable tmux:')
+{
+  const vendorDir = path.join(ROOT, 'vendor', 'tmux-portable')
+  const vendorBin = path.join(vendorDir, 'tmux')
+  check('vendor tree is committed (tmux + VERSION + 3 dylibs)',
+    fs.existsSync(vendorBin) && fs.existsSync(path.join(vendorDir, 'VERSION')) &&
+    fs.readdirSync(path.join(vendorDir, 'lib')).length === 3)
+  const links = execFileSync('otool', ['-L', vendorBin], { encoding: 'utf8' })
+  check('vendored binary carries NO Homebrew load paths', !/\/opt\/homebrew\/|\/usr\/local\//.test(links))
+  check('vendored binary links its dylibs via @executable_path/lib', (links.match(/@executable_path\/lib\//g) || []).length === 3)
+  const sig = spawnSync('codesign', ['--verify', vendorBin])
+  check('vendored binary signature verifies (install_name_tool re-sign happened)', sig.status === 0)
+
+  // Boot sync, functionally: scratch DATA_HOME, real vendor source.
+  const { createHarnessRender } = require_(path.join(ROOT, 'onboarding', 'harness-render.cjs'))
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-tmuxsync-'))
+  const hr = createHarnessRender({
+    log: () => {},
+    toUnpackedPath: (p) => p,
+    readAgentConfig: () => ({}),
+    ensureConfigDir: () => {},
+    REPO_ROOT: ROOT,
+    AGENT_NAME: 'test',
+    DATA_HOME: scratch,
+    CONFIG_DIR: scratch,
+    AGENT_CONFIG_PATH: path.join(scratch, '.agent-config'),
+    ENV_PATH: path.join(scratch, '.env'),
+    MCP_JSON_PATH: path.join(scratch, '.mcp.json'),
+  })
+  const synced = hr.syncTmuxPortable()
+  const dstBin = path.join(scratch, 'bin', 'tmux-portable', 'tmux')
+  check('boot sync lands the tree in DATA_HOME/bin/tmux-portable', synced === true && fs.existsSync(dstBin))
+  const dstV = spawnSync(dstBin, ['-V'], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin', HOME: os.homedir() } })
+  check('the RELOCATED copy runs on a brew-less PATH (dylib rewrite survives the move)',
+    dstV.status === 0 && /^tmux \d/.test(String(dstV.stdout).trim()), String(dstV.stderr).trim())
+  const before = fs.statSync(dstBin).mtimeMs
+  hr.syncTmuxPortable()
+  check('same VERSION stamp -> second sync is a no-op (no churn under a running server)',
+    fs.statSync(dstBin).mtimeMs === before)
+  fs.writeFileSync(path.join(scratch, 'bin', 'tmux-portable', 'VERSION'), 'stale\n')
+  hr.syncTmuxPortable()
+  check('a stale VERSION stamp -> sync replaces the tree',
+    fs.readFileSync(path.join(scratch, 'bin', 'tmux-portable', 'VERSION'), 'utf8').trim() !== 'stale')
+  fs.rmSync(scratch, { recursive: true, force: true })
+
+  // Wiring pins.
+  const attachSrc = fs.readFileSync(path.join(ROOT, 'attach-topology.cjs'), 'utf8')
+  check('resolveTmuxBin prefers the DATA_HOME portable copy',
+    /TMUX_CANDIDATES = \[\s*\n?\s*path\.join\(DATA_HOME, 'bin', 'tmux-portable', 'tmux'\)/.test(attachSrc))
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
+  check('mac extraResources ships vendor/tmux-portable',
+    (pkg.build.mac.extraResources || []).some((e) => e.from === 'vendor/tmux-portable' && e.to === 'tmux-portable'))
+  const httpSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'http-server.cjs'), 'utf8')
+  check('boot path calls syncTmuxPortable every boot', httpSrc.includes('harnessRender.syncTmuxPortable()'))
+}
+
 // ── 3. template + wiring tripwires ──────────────────────────────────────────
 console.log('template + wiring tripwires:')
 {
@@ -142,6 +205,13 @@ console.log('template + wiring tripwires:')
   check('bootstrap bakes CLAUDE_BIN for app-only machines', tpl.includes("CLAUDE_BIN='$CLAUDE_BIN_BAKED'"))
   check('bootstrap bakes SUDO_ASKPASS', tpl.includes('SUDO_ASKPASS='))
   check('bootstrap refuses when a spawn-lane supervisor is live', tpl.includes('run\\.sh __loop'))
+  // v0.0.35 portable-tmux moves:
+  check('bootstrap prefers the app-shipped tmux over PATH', tpl.includes('TMUX_BIN="$MEM/bin/tmux-portable/tmux"'))
+  check('bootstrap never tells the user to brew install', !tpl.includes('brew install'))
+  check('bootstrap exports a terminfo fallback for brew-less Macs', tpl.includes('TERMINFO_DIRS'))
+  check('bootstrap names the protocol-mismatch wall after an app update', tpl.includes('protocol version mismatch'))
+  check('every tmux invocation goes through $TMUX_BIN (no bare tmux calls left)',
+    !/^\s*tmux /m.test(tpl) && !/\| tmux /.test(tpl))
 
   // Rendered form must be valid bash.
   const rendered = tpl.replaceAll('{AGENT_DIR}', '/tmp/fake-agent-dir').replaceAll('{MEMORY_DIR}', '/tmp/fake-mem')

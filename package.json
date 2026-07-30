@@ -1,6 +1,6 @@
 {
   "name": "scheherazade",
-  "version": "0.0.34",
+  "version": "0.0.35",
   "private": true,
   "type": "module",
   "description": "Mac-native local AI agent. Forked from agent-portable (Claude Code single-agent harness); P0 spike layers an Electron packaging shell on top.",
@@ -86,6 +86,10 @@
         {
           "from": "node_modules/@anthropic-ai/claude-code/bin/claude.exe",
           "to": "claude-cli/claude"
+        },
+        {
+          "from": "vendor/tmux-portable",
+          "to": "tmux-portable"
         }
       ],
       "target": [

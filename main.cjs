@@ -1332,7 +1332,10 @@ function stampAttachSpawnInfo(config) {
 async function attachStartFromSession(config) {
   const state = attachTopology.attachSessionState()
   if (!state.tmuxPresent) {
-    setAgentStatus('failed', 'bootstrap-needed', 'attach 모드인데 tmux가 없습니다. 터미널에서 `brew install tmux` 후 부트스트랩을 실행하세요.')
+    // v0.0.35: the app ships its own tmux (synced into DATA_HOME/bin at every
+    // boot), so "no tmux" now means that sync failed or never ran -- brew is
+    // no longer the remedy, a relaunch is.
+    setAgentStatus('failed', 'bootstrap-needed', 'attach 모드인데 tmux가 아직 준비되지 않았습니다. 앱을 한 번 재시작하면 내장 tmux가 자동으로 준비됩니다.')
     return null
   }
   if (!state.sessionPresent) {
@@ -1361,7 +1364,7 @@ async function attachStartFromSession(config) {
   const pidValid = Number.isInteger(panePid) && panePid > 0
   if (!pidValid) {
     setAgentStatus('failed', 'bootstrap-needed',
-      `attach 세션은 있는데 pane pid를 읽지 못했습니다 (tmux 일시 오류일 수 있음). 앱을 다시 열어 재시도하거나 터미널에서 확인하세요: tmux -L ${attachTopology.ATTACH_SOCKET} list-panes -t ${attachTopology.ATTACH_SESSION}`)
+      `attach 세션은 있는데 pane pid를 읽지 못했습니다 (tmux 일시 오류일 수 있음). 앱을 다시 열어 재시도하거나 터미널에서 확인하세요: "${attachTopology.resolveTmuxBin() || 'tmux'}" -L ${attachTopology.ATTACH_SOCKET} list-panes -t ${attachTopology.ATTACH_SESSION}`)
     return null
   }
   // A freshly respawned pane can still sit in its `sh -c` pre-exec window,
@@ -1375,7 +1378,7 @@ async function attachStartFromSession(config) {
   }
   if (!identityOk) {
     setAgentStatus('failed', 'bootstrap-needed',
-      `attach 세션(${attachTopology.ATTACH_SESSION})의 pane(pid=${panePid})이 우리 supervisor 시그니처가 아닙니다. 터미널에서 세션을 정리한 뒤 부트스트랩을 다시 실행하세요: tmux -L ${attachTopology.ATTACH_SOCKET} kill-session -t ${attachTopology.ATTACH_SESSION}`)
+      `attach 세션(${attachTopology.ATTACH_SESSION})의 pane(pid=${panePid})이 우리 supervisor 시그니처가 아닙니다. 터미널에서 세션을 정리한 뒤 부트스트랩을 다시 실행하세요: "${attachTopology.resolveTmuxBin() || 'tmux'}" -L ${attachTopology.ATTACH_SOCKET} kill-session -t ${attachTopology.ATTACH_SESSION}`)
     return null
   }
   try {

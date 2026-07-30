@@ -577,6 +577,48 @@ function createHarnessRender(ctx) {
     }
   }
 
+  // Portable tmux sync (v0.0.35, 극한의 딸깍): the vendored tmux tree
+  // (scripts/vendor-tmux.mjs -> extraResources Contents/Resources/
+  // tmux-portable) is copied into DATA_HOME/bin/tmux-portable at every boot
+  // where the VERSION stamp differs. Copied OUT of the app bundle on
+  // purpose: the attach topology needs the tmux server's TCC attribution to
+  // descend from the USER'S TERMINAL (probe-0016), and whether exec'ing a
+  // binary living INSIDE Scheherazade.app re-keys attribution to the bundle
+  // is unverified -- a binary in DATA_HOME makes the question moot.
+  // Replacing files under a RUNNING server is safe (the process holds the
+  // old inode), and the swap is staged+renamed so a crash mid-copy never
+  // leaves a half tree at the final path. Fail-loud non-fatal: attach is an
+  // optional lane; a failed sync must not block the spawn-lane boot.
+  function syncTmuxPortable() {
+    try {
+      const candidates = [
+        path.join(REPO_ROOT, '..', 'tmux-portable'), // packaged: Resources/ sibling of app.asar
+        path.join(REPO_ROOT, 'vendor', 'tmux-portable'), // dev / CLI deployment
+      ]
+      const src = candidates.find((p) => fs.existsSync(path.join(p, 'tmux')))
+      if (!src) return false // build predates vendoring -- nothing to sync
+      const dst = path.join(DATA_HOME, 'bin', 'tmux-portable')
+      const readVersion = (dir) => {
+        try { return fs.readFileSync(path.join(dir, 'VERSION'), 'utf8').trim() } catch { return null }
+      }
+      const srcVersion = readVersion(src)
+      if (srcVersion && srcVersion === readVersion(dst) && fs.existsSync(path.join(dst, 'tmux'))) {
+        return true // already current
+      }
+      const tmp = `${dst}.tmp`
+      fs.rmSync(tmp, { recursive: true, force: true })
+      fs.cpSync(src, tmp, { recursive: true })
+      fs.chmodSync(path.join(tmp, 'tmux'), 0o755)
+      fs.rmSync(dst, { recursive: true, force: true })
+      fs.renameSync(tmp, dst)
+      console.error(`[scheherazade/onboarding] tmux-portable synced into DATA_HOME/bin (${srcVersion || 'unversioned'})`)
+      return true
+    } catch (err) {
+      console.error('[scheherazade/onboarding] tmux-portable sync failed (attach lane may miss tmux):', err.message)
+      return false
+    }
+  }
+
   function renderAgentSubstrate({ displayName, tone, primaryTask }) {
     for (const dir of ['session_notes/.archive', 'journals', 'dreams', 'logs', '.review']) {
       fs.mkdirSync(path.join(DATA_HOME, dir), { recursive: true })
@@ -645,6 +687,7 @@ function createHarnessRender(ctx) {
     refreshHarnessIfOnboarded,
     renderAgentSubstrate,
     readHarnessFailure,
+    syncTmuxPortable,
     HARNESS_FAILURE_PATH,
   }
 }

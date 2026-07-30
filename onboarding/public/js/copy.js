@@ -681,7 +681,7 @@ window.COPY = {
     topologySave: 'Save',
     topologySaved: 'Saved. Applies from the next start or restart.',
     topologyStateSpawn: 'Currently running in spawn mode.',
-    topologyStateNoTmux: "tmux isn't installed. In Terminal: brew install tmux",
+    topologyStateNoTmux: "The app's bundled tmux isn't ready yet — quit and reopen the app once, then try again.",
     topologyStateBootstrapNeeded: "No session to attach to. Paste and run the command below in Terminal (or iTerm). The app doesn't run this for you on purpose — permissions need to be attached to Terminal's lineage to survive app updates.",
     topologyStatePaneDead: 'The session exists, but the agent is off. Use the Start button in the top bar to bring it back.',
     topologyStateAttached: (cmd) => `Attached to the session. To view it directly in Terminal: ${cmd}`,

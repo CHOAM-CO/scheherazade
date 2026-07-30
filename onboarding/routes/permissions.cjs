@@ -131,7 +131,10 @@ function createRoutes(staticCtx) {
           sessionPresent: state.sessionPresent,
           paneDead: state.paneDead,
           bootstrapCmd: attachTopology.bootstrapCommand(DATA_HOME),
-          attachCmd: `tmux -L ${attachTopology.ATTACH_SOCKET} attach -t ${attachTopology.ATTACH_SESSION}`,
+          // Resolved binary, not bare `tmux`: on app-only machines the user's
+          // terminal has no PATH tmux -- the paste line must name the
+          // app-shipped copy (v0.0.35).
+          attachCmd: `"${attachTopology.resolveTmuxBin() || 'tmux'}" -L ${attachTopology.ATTACH_SOCKET} attach -t ${attachTopology.ATTACH_SESSION}`,
         })
         return
       },

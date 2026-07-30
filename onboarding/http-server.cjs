@@ -2146,6 +2146,7 @@ function createOnboardingServer(onOnboardingComplete, agentControls) {
   ensureMcpJsonAgentName() // correctness fix applied every boot, independent of wizard progress
   harnessRender.ensureClaudeOnboardingDone() // first-ever-claude-run only; no-op once ~/.claude.json already has it
   harnessRender.refreshHarnessIfOnboarded() // every boot: shipped harness fixes reach existing installs (no-op pre-onboarding)
+  harnessRender.syncTmuxPortable() // every boot: vendored tmux -> DATA_HOME/bin (attach lane, 극한의 딸깍; no-op when stamp current)
 
   return new Promise((resolve, reject) => {
     let allowedHosts = null // populated once listen() resolves and the real ephemeral port is known
