@@ -32,7 +32,7 @@
 
 'use strict'
 
-const { app, BrowserWindow } = require('electron')
+const { app, BrowserWindow, shell } = require('electron')
 const { spawn, execFileSync } = require('node:child_process')
 const attachTopology = require('./attach-topology.cjs')
 const path = require('node:path')
@@ -221,6 +221,23 @@ function createMainWindow(url) {
 
   win.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
     fatal(`did-fail-load: ${errorCode} ${errorDescription}`)
+  })
+
+  // Every renderer window.open() (wizard's Discord/Slack/Telegram console
+  // links, bot-invite OAuth, connector auth URLs) goes to the USER'S DEFAULT
+  // BROWSER (Mino 07-30). Electron's default without this handler is a bare
+  // chromium child window: no address bar, no user sessions/passwords -- so
+  // "log into the Discord developer portal" landed the user in a browser
+  // where they are logged into nothing. http/https only: openExternal with
+  // any other scheme (file:, app protocols) is a classic Electron escape
+  // hatch, and no in-app link has a legitimate non-web target.
+  win.webContents.setWindowOpenHandler(({ url: target }) => {
+    if (/^https?:\/\//i.test(target)) {
+      shell.openExternal(target).catch((err) => {
+        console.error(`[scheherazade/main] openExternal(${target}) failed:`, err)
+      })
+    }
+    return { action: 'deny' }
   })
 
   return win
@@ -977,6 +994,21 @@ async function spawnRealAgentChildLocked() {
       return null
     }
     channelEnv.TELEGRAM_BOT_TOKEN = tgToken
+  } else if (channelBackend === 'local') {
+    // In-app chat (in-app chat slice 1): the "platform" is the app itself,
+    // so there is no third-party credential to read and NOTHING to gate the
+    // spawn on -- which is the entire point of the backend: a fresh user
+    // reaches the agent before configuring any messenger. Before this
+    // branch existed (bug, found 2026-07-30 via Mino's live repro), 'local'
+    // fell through to the discord else below: an install WITH a discord
+    // token spawned carrying a stale discord HOME_CHANNEL_ID, and a
+    // local-only install (the slice-5 wizard user this backend was built
+    // for) hit "no validated Discord bot token" and NEVER SPAWNED AT ALL --
+    // onboarding "completed" into an agent that did not exist.
+    // channel-local.mjs ignores HOME_CHANNEL_ID, but supervisorEnv always
+    // carries one, so hand it the backend's own constant (channel-local.mjs
+    // LOCAL_CHANNEL_ID) rather than another backend's leftover id.
+    homeChannelId = 'in-app'
   } else {
     // discord -- the default AND the unknown-value fallback, mirroring
     // http-server.cjs's activeChannelBackend() so spawn and .mcp.json can
