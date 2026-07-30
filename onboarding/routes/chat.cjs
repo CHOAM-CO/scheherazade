@@ -160,6 +160,39 @@ function createRoutes(staticCtx) {
         return
       },
     },
+    // POST react: an emoji tap on an agent bubble (DM interactions, v0.0.34).
+    // Mutating -> token-gated like /in. Validation here is shape-only
+    // (string, positive int); the channel owns the real rules (emoji enum,
+    // reactable target) so there is exactly one authority on what a valid
+    // reaction is.
+    {
+      method: 'POST',
+      match: (pathname) => pathname === '/api/chat/react',
+      handler: async (req, res) => {
+        const { emoji, targetSeq } = await readJsonBody(req)
+        const n = Number(targetSeq)
+        if (typeof emoji !== 'string' || !emoji.trim() || !Number.isInteger(n) || n < 1) {
+          sendJson(res, 400, { error: 'emoji and targetSeq are required', reason: 'bad_reaction' })
+          return
+        }
+        const ep = readChannelEndpoint()
+        if (!ep) {
+          sendJson(res, 503, { error: 'chat channel is not running', reason: 'not_running' })
+          return
+        }
+        const r = await proxyToChannel(ep, '/react', { method: 'POST', body: { emoji, targetSeq: n } })
+        if (r.status === 0) {
+          sendJson(res, 502, { error: 'chat channel did not answer', reason: 'unreachable' })
+          return
+        }
+        if (r.status !== 202) {
+          sendJson(res, 502, { error: 'chat channel refused the reaction', reason: 'upstream_refused' })
+          return
+        }
+        sendJson(res, 202, { ok: true })
+        return
+      },
+    },
   ]
 }
 

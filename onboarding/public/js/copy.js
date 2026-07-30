@@ -613,6 +613,13 @@ window.COPY = {
     gapMarker: '— some earlier messages fell out of the buffer —',
     empty: 'No messages yet. Say hi.',
     sendFailed: "Couldn't send. Your message is still in the box — try again.",
+    // DM interaction states (v0.0.34). `read` is honest by construction:
+    // a user message only enters the transcript after it was delivered
+    // into the agent process, so the label never claims more than that.
+    read: 'Read',
+    typingAria: 'The agent is typing…',
+    reactAria: (emoji) => `React with ${emoji}`,
+    reactFailed: "Couldn't react — try again.",
   },
 
   // AUTHORED (v0.0.20) -- session log viewer (Mino 07-16: 개발 중 앱이

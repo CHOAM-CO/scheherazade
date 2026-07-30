@@ -6,6 +6,17 @@
 //   inbound:  POST /in  -> mcp.notification('notifications/claude/channel')
 //             -> transcript (role 'user', recorded only once delivered)
 //   outbound: `reply` tool -> transcript (role 'agent')
+//   reactions: POST /react (user taps an emoji on a bubble) -> notification
+//             ("[reaction] ..." -- the agent SEES it, MAGI-style, but is not
+//             obliged to answer it); `react` tool (agent puts an emoji on the
+//             user's bubble). Both land in the transcript as kind:'reaction'
+//             items pointing at their target's seq, so a reload replays them.
+//   presence: GET /out carries state.awaitingReplySince -- the ts of the
+//             oldest user message nothing agent-authored (message OR
+//             reaction) has followed. The page derives BOTH DM affordances
+//             from this one value: "read" (delivered into the agent process
+//             -- entries only exist post-delivery) and "typing" (delivered,
+//             no agent response landed yet).
 //   the page: GET /out drains the transcript by cursor and replays it in
 //             full on every load -- the queue IS the conversation record
 //
@@ -74,11 +85,15 @@ export const MAX_QUEUE = 500
 let seq = 0
 let queue = []
 
-function enqueue(role, text, now) {
+function push(item) {
   seq += 1
-  queue.push({ seq, role, text: String(text), ts: now() })
+  queue.push({ seq, ...item })
   if (queue.length > MAX_QUEUE) queue = queue.slice(-MAX_QUEUE)
   return seq
+}
+
+function enqueue(role, text, now) {
+  return push({ kind: 'message', role, text: String(text), ts: now() })
 }
 
 export function enqueueOutbound(text, { now = () => Date.now() } = {}) {
@@ -91,6 +106,30 @@ export function enqueueInbound(text, { now = () => Date.now() } = {}) {
   return enqueue('user', text, now)
 }
 
+// A reaction is a transcript item too -- `text` mirrors the emoji so any
+// consumer that doesn't know the kind (an older page, a raw dump) still
+// shows something true instead of an empty bubble.
+export function enqueueReaction(role, emoji, targetSeq, { now = () => Date.now() } = {}) {
+  return push({ kind: 'reaction', role, emoji: String(emoji), targetSeq, text: String(emoji), ts: now() })
+}
+
+// The one presence value (see header). Asymmetric on purpose (live catch,
+// 07-30 dev-harness screenshot): a USER reaction is skipped -- a tap is not
+// a question awaiting an answer -- but an AGENT reaction counts as the agent
+// having spoken. The react tool exists precisely as a valid whole response;
+// leaving the typing dots up after the agent answered with an emoji shows
+// activity that is not happening.
+export function transcriptState() {
+  let since = null
+  for (let i = queue.length - 1; i >= 0; i--) {
+    const m = queue[i]
+    if (m.kind === 'reaction' && m.role === 'user') continue
+    if (m.role !== 'user') break
+    since = m.ts
+  }
+  return { awaitingReplySince: since }
+}
+
 export function readOutbound(since = 0) {
   const from = Number(since) || 0
   const items = queue.filter((m) => m.seq > from)
@@ -99,7 +138,7 @@ export function readOutbound(since = 0) {
   // caller's cursor is older than everything we still hold. Without it a
   // client that slept through a trim would see a normal-looking response and
   // silently skip messages.
-  return { items, latest: seq, missed: from > 0 && from < oldestRetained - 1 }
+  return { items, latest: seq, missed: from > 0 && from < oldestRetained - 1, state: transcriptState() }
 }
 
 export function resetQueueForTest() { seq = 0; queue = [] }
@@ -107,7 +146,9 @@ export function resetQueueForTest() { seq = 0; queue = [] }
 // ── MCP server ────────────────────────────────────────────────────────────
 const INSTRUCTIONS = `You are ${AGENT_NAME}. The user talks to you in the app's own chat window.
 
-Reply with the "reply" tool. There is exactly one conversation here, so channelId is unnecessary -- omit it. Everything you send with "reply" appears in the chat window; anything you write outside a tool call does not reach the user.`
+Reply with the "reply" tool. There is exactly one conversation here, so channelId is unnecessary -- omit it. Everything you send with "reply" appears in the chat window; anything you write outside a tool call does not reach the user.
+
+When the user's message needs acknowledgment but no words -- "고마워", "ㅇㅋ", something you simply agree with -- you can use the "react" tool instead: one emoji lands on their message bubble, like a messenger DM reaction. When the user reacts to YOUR message you'll see "[reaction] ...": that is a signal, not a question. Answer it only when you actually have something to add; staying silent after a reaction is normal.`
 
 const mcp = new Server(
   { name: AGENT_NAME, version: '1.0.0' },
@@ -153,12 +194,41 @@ const TOOLS = [
       required: [],
     },
   },
+  {
+    name: 'react',
+    description: "Attach one emoji to the user's message bubble, like a messenger DM reaction. Use it when acknowledgment needs no words; it is not a substitute for an answer that needs content.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        emoji: { type: 'string', description: 'A single emoji, e.g. 👍 or ❤️' },
+        targetSeq: { type: 'number', description: "OPTIONAL transcript seq of the message to react to (seqs are visible in read_channel_history). Defaults to the user's latest message." },
+        channelId: { type: 'string', description: 'OPTIONAL and unnecessary here.' },
+      },
+      required: ['emoji'],
+    },
+  },
 ]
+
+// Explicit targetSeq may point at any retained MESSAGE (reacting to a
+// reaction is turtles); the default is the user's latest message -- the
+// thing the agent is most plausibly nodding at.
+function findReactionTarget(targetSeq) {
+  if (targetSeq !== undefined && targetSeq !== null) {
+    const n = Number(targetSeq)
+    return queue.find((m) => m.seq === n && m.kind !== 'reaction') || null
+  }
+  for (let i = queue.length - 1; i >= 0; i--) {
+    const m = queue[i]
+    if (m.kind !== 'reaction' && m.role === 'user') return m
+  }
+  return null
+}
 
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
 
-mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
-  const { name, arguments: args } = req.params
+// Exported so tests exercise the real tool logic without connecting a
+// transport; the MCP handler below is a thin shell around this.
+export async function handleToolCall(name, args) {
   if (name === 'reply') {
     const text = args && args.text
     if (typeof text !== 'string' || text.trim() === '') {
@@ -184,8 +254,24 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     const recent = queue.slice(-limit)
     return { content: [{ type: 'text', text: JSON.stringify(recent, null, 1) }] }
   }
+  if (name === 'react') {
+    const emoji = typeof (args && args.emoji) === 'string' ? args.emoji.trim() : ''
+    // Length cap, not an allowlist: the agent may pick its emoji, but a
+    // paragraph riding the reaction lane would be a reply wearing a costume.
+    if (!emoji || emoji.length > 16) {
+      return { content: [{ type: 'text', text: 'react failed: emoji is required (one short emoji)' }], isError: true }
+    }
+    const target = findReactionTarget(args && args.targetSeq)
+    if (!target) {
+      return { content: [{ type: 'text', text: 'react failed: no message to react to (targetSeq not found, or the user has not written yet)' }], isError: true }
+    }
+    const n = enqueueReaction('agent', emoji, target.seq)
+    return { content: [{ type: 'text', text: `reacted ${emoji} to #${target.seq} (#${n})` }] }
+  }
   return { content: [{ type: 'text', text: `unknown tool: ${name}` }], isError: true }
-})
+}
+
+mcp.setRequestHandler(CallToolRequestSchema, async (req) => handleToolCall(req.params.name, req.params.arguments))
 
 // ── inbound: HTTP -> notification ─────────────────────────────────────────
 export async function deliverInbound(text, { notify, now = localNow } = {}) {
@@ -199,6 +285,30 @@ export async function deliverInbound(text, { notify, now = localNow } = {}) {
   })
   return content
 }
+
+// The user's emoji tap reaches the agent the way MAGI fleet reactions do:
+// injected as a bracketed line the model can see and choose to ignore. The
+// "[reaction]" prefix is LOAD-BEARING -- stop-reply-guard exempts triggers
+// that start with it, so a tap never drafts the agent into a forced
+// "고마워요" (a DM reaction is a signal, not a question). Same meta shape as
+// deliverInbound: no local-only branch for downstream consumers.
+export async function deliverReaction(emoji, target, { notify, now = localNow } = {}) {
+  const preview = String(target.text || '').replace(/\s+/g, ' ').slice(0, 80)
+  const content = `[reaction] user put ${emoji} on your message: "${preview}"`
+  await notify({
+    method: 'notifications/claude/channel',
+    params: {
+      content,
+      meta: { sender: 'user', channelId: LOCAL_CHANNEL_ID, authorId: 'local-user', timestamp: now() },
+    },
+  })
+  return content
+}
+
+// User-side reactions are a fixed menu (the two Mino named), so the emoji
+// arriving over HTTP is an enum member, never free text riding into the
+// agent's context.
+export const USER_REACTIONS = ['👍', '❤️']
 
 // ── loopback HTTP listener ────────────────────────────────────────────────
 // Bound to 127.0.0.1 with a per-run bearer token. Loopback alone is not
@@ -249,6 +359,28 @@ export function createRequestHandler({ notify, token, onInbound = () => {} }) {
         // the transcript never claims a delivery that didn't happen.
         enqueueInbound(delivered)
         onInbound(delivered)
+        return send(202, { ok: true })
+      }
+      if (url.pathname === '/react' && req.method === 'POST') {
+        let body = ''
+        for await (const chunk of req) {
+          body += chunk
+          if (body.length > 10_000) return send(413, { error: 'too large' })
+        }
+        let parsed
+        try { parsed = JSON.parse(body || '{}') } catch { return send(400, { error: 'bad json' }) }
+        const emoji = parsed && parsed.emoji
+        if (!USER_REACTIONS.includes(emoji)) return send(400, { error: 'unknown emoji' })
+        const n = Number(parsed && parsed.targetSeq)
+        // Only agent messages are reactable from the page (the UI offers the
+        // buttons there and nowhere else); enforcing it here keeps a crafted
+        // request from decorating the user's own bubbles.
+        const target = queue.find((m) => m.seq === n && m.kind !== 'reaction' && m.role === 'agent')
+        if (!target) return send(404, { error: 'no reactable message with that seq' })
+        // Same delivered-then-recorded order as /in: a reaction the agent
+        // never saw must not appear in the transcript as if it had been seen.
+        await deliverReaction(emoji, target, { notify })
+        enqueueReaction('user', emoji, target.seq)
         return send(202, { ok: true })
       }
       return send(404, { error: 'not found' })

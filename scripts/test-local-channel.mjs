@@ -14,8 +14,9 @@
 // Mirrors scripts/test-provider-env.mjs's assert()/pass/fail convention.
 
 import {
-  enqueueOutbound, enqueueInbound, readOutbound, resetQueueForTest, deliverInbound,
-  createRequestHandler, LOCAL_CHANNEL_ID, MAX_QUEUE,
+  enqueueOutbound, enqueueInbound, enqueueReaction, readOutbound, resetQueueForTest,
+  deliverInbound, deliverReaction, transcriptState, handleToolCall,
+  createRequestHandler, LOCAL_CHANNEL_ID, MAX_QUEUE, USER_REACTIONS,
 } from '../channel-local.mjs'
 
 let pass = 0
@@ -106,6 +107,48 @@ console.log('\n3b. the queue is a TRANSCRIPT: both roles, one sequence, arrival 
   assert(all.latest === 3, 'user messages advance the same cursor agent messages do')
 }
 
+console.log('\n3c. presence state: read/typing derive from ONE value (DM interactions, v0.0.34)')
+// awaitingReplySince = ts of the OLDEST user message no agent message has
+// followed. The page renders both "Read" and the typing dots from it; if
+// this value lies, both affordances lie together.
+{
+  resetQueueForTest()
+  assert(transcriptState().awaitingReplySince === null, 'empty transcript: not awaiting')
+  assert(readOutbound(0).state && readOutbound(0).state.awaitingReplySince === null,
+    '/out carries the state field')
+  enqueueInbound('first', { now: () => 111 })
+  enqueueInbound('second', { now: () => 222 })
+  assert(transcriptState().awaitingReplySince === 111,
+    'two unanswered user messages: since = the OLDEST (the wait started there)')
+  enqueueOutbound('answered')
+  assert(transcriptState().awaitingReplySince === null, 'an agent reply clears the wait')
+  enqueueInbound('again', { now: () => 333 })
+  assert(transcriptState().awaitingReplySince === 333, 'a new user message reopens it')
+  enqueueReaction('agent', '👍', 4)
+  assert(transcriptState().awaitingReplySince === null,
+    'an agent REACTION clears the wait -- the react tool is a valid whole response, and dots after it would fake activity (07-30 screenshot catch)')
+  enqueueInbound('one more', { now: () => 444 })
+  assert(transcriptState().awaitingReplySince === 444,
+    'a user message AFTER an agent reaction reopens the wait (the walk stops at the reaction)')
+  enqueueOutbound('now answered')
+  enqueueReaction('user', '❤️', 7)
+  assert(transcriptState().awaitingReplySince === null,
+    'a user REACTION does not reopen it -- a tap is not a question')
+}
+
+console.log('\n3d. reactions are transcript items: same cursor, replayable, self-describing')
+{
+  resetQueueForTest()
+  enqueueInbound('nice work')
+  const rSeq = enqueueReaction('agent', '👍', 1)
+  const all = readOutbound(0)
+  assert(all.latest === 2 && rSeq === 2, 'a reaction advances the same monotonic cursor')
+  const item = all.items[1]
+  assert(item.kind === 'reaction' && item.role === 'agent' && item.emoji === '👍' && item.targetSeq === 1,
+    'the item names its kind, reactor, emoji and target')
+  assert(item.text === '👍', 'text mirrors the emoji so a kind-blind consumer still shows something true')
+}
+
 console.log('\n4. the queue is bounded, and falling behind is REPORTED not hidden')
 {
   resetQueueForTest()
@@ -171,6 +214,59 @@ console.log('\n7b. a failed delivery never fakes a transcript entry')
   const r = await call(handler, { method: 'POST', url: '/in', body: JSON.stringify({ text: 'lost' }) })
   assert(r.code === 500, 'a failed delivery surfaces as an error, not a 202')
   assert(readOutbound(0).items.length === 0, '...and the transcript records nothing')
+}
+
+console.log('\n7c. the react tool: agent -> emoji on the user bubble')
+{
+  resetQueueForTest()
+  const none = await handleToolCall('react', { emoji: '👍' })
+  assert(none.isError === true, 'reacting before the user wrote anything is a named error, not a crash')
+  enqueueInbound('did you see it?')
+  enqueueOutbound('looking now')
+  enqueueInbound('take your time')
+  const r = await handleToolCall('react', { emoji: '👍' })
+  assert(!r.isError && r.content[0].text.includes('#3'), "default target is the user's LATEST message")
+  const items = readOutbound(0).items
+  const reaction = items[items.length - 1]
+  assert(reaction.kind === 'reaction' && reaction.role === 'agent' && reaction.targetSeq === 3,
+    '...and it lands in the transcript pointing at that message')
+  const explicit = await handleToolCall('react', { emoji: '❤️', targetSeq: 1 })
+  assert(!explicit.isError && readOutbound(0).items.pop().targetSeq === 1, 'explicit targetSeq is honored')
+  assert((await handleToolCall('react', { emoji: '' })).isError === true, 'empty emoji is refused')
+  assert((await handleToolCall('react', { emoji: 'x'.repeat(20) })).isError === true,
+    'a paragraph riding the reaction lane is refused (length cap)')
+  assert((await handleToolCall('react', { emoji: '👍', targetSeq: 999 })).isError === true,
+    'a targetSeq that does not exist is refused')
+}
+
+console.log('\n7d. HTTP /react: user tap -> injected like a MAGI reaction, recorded only after delivery')
+{
+  resetQueueForTest()
+  const seen = []
+  const handler = createRequestHandler({ notify: async (n) => seen.push(n), token: TOKEN })
+  enqueueOutbound('here is the plan')
+  const ok = await call(handler, { method: 'POST', url: '/react', body: JSON.stringify({ emoji: '❤️', targetSeq: 1 }) })
+  assert(ok.code === 202, 'a valid tap is accepted')
+  assert(seen.length === 1 && seen[0].params.content.startsWith('[reaction]'),
+    'the agent sees it as a [reaction] injection (the prefix stop-reply-guard exempts)')
+  assert(seen[0].params.content.includes('❤️') && seen[0].params.content.includes('here is the plan'),
+    '...naming the emoji and quoting the target')
+  const items = readOutbound(0).items
+  const rec = items[items.length - 1]
+  assert(rec.kind === 'reaction' && rec.role === 'user' && rec.targetSeq === 1, 'and it lands in the transcript')
+  assert((await call(handler, { method: 'POST', url: '/react', body: JSON.stringify({ emoji: '🔥', targetSeq: 1 }) })).code === 400,
+    `an emoji outside the fixed menu (${USER_REACTIONS.join(' ')}) is refused`)
+  assert((await call(handler, { method: 'POST', url: '/react', body: JSON.stringify({ emoji: '👍', targetSeq: 99 }) })).code === 404,
+    'a seq that does not exist is refused')
+  enqueueInbound('my own message')
+  assert((await call(handler, { method: 'POST', url: '/react', body: JSON.stringify({ emoji: '👍', targetSeq: 3 }) })).code === 404,
+    "the page only reacts to AGENT bubbles; a crafted request can't decorate the user's own")
+  // Delivered-then-recorded, same contract as /in (§7b):
+  const dead = createRequestHandler({ notify: async () => { throw new Error('dead pipe') }, token: TOKEN })
+  const before = readOutbound(0).items.length
+  const failed = await call(dead, { method: 'POST', url: '/react', body: JSON.stringify({ emoji: '👍', targetSeq: 1 }) })
+  assert(failed.code === 500, 'a failed delivery surfaces as an error, not a 202')
+  assert(readOutbound(0).items.length === before, '...and the transcript records no reaction the agent never saw')
 }
 
 console.log('\n8. an oversized body is refused rather than buffered')

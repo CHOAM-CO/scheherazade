@@ -55,11 +55,22 @@ function handleMessage(msg) {
   if (msg.method === 'notifications/claude/channel') {
     const content = (msg.params && msg.params.content) || ''
     console.log(`[driver] user said: ${JSON.stringify(content)}`)
-    // A visibly-canned echo, so nobody mistakes the toy for the agent.
+    // A user reaction tap: log it and stay silent -- mirrors the real
+    // agent's non-obligation (stop-reply-guard exempts [reaction] triggers),
+    // and lets the page prove no forced echo follows a tap.
+    if (content.startsWith('[reaction]')) return
+    // Manual-verification lever for the DM states: a message containing
+    // "react" draws an emoji reaction instead of an echo (badge on the USER
+    // bubble); "slow" delays the echo 8s so typing dots are watchable.
     replyCount++
+    if (/react/i.test(content)) {
+      setTimeout(() => { callTool('react', { emoji: '👍' }) }, 400)
+      return
+    }
+    const delay = /slow/i.test(content) ? 8_000 : 400
     setTimeout(() => {
       callTool('reply', { text: `(dev echo #${replyCount}) you said: ${content}` })
-    }, 400)
+    }, delay)
     return
   }
   if (msg.id !== undefined && msg.result !== undefined) {

@@ -107,6 +107,10 @@ const SKIP_PATTERNS = [
 const REPLY_TOOLS = new Set([
   'mcp__agent-channel__reply',
   'mcp__agent-channel__send_file_to_discord',
+  // v0.0.34: an emoji reaction IS an answer in DM terms -- without this the
+  // guard bounces every react-only turn into a forced verbal reply, which
+  // defeats the reaction's whole reason to exist.
+  'mcp__agent-channel__react',
 ])
 
 async function main() {
@@ -122,11 +126,13 @@ async function main() {
 
   const entries = tailJsonl(transcriptPath, SCAN_TAIL)
 
-  // Most recent user message containing a Discord channel tag.
-  // -? : Telegram group/supergroup chat ids are NEGATIVE numbers (multichannel
-  // v0.0.18). Digits-only left this guard silently inert for those chats --
-  // the trigger never matched, so the reply obligation was never enforced.
-  const channelRegex = /<channel\s+[^>]*channelId="(-?\d+)"[^>]*>([\s\S]*?)<\/channel>/
+  // Most recent user message carrying a channel tag. Id charset is [\w-]:
+  // Discord = digits, Telegram groups = NEGATIVE digits (multichannel
+  // v0.0.18 -- digits-only left the guard silently inert there), Slack =
+  // C0ABC123, in-app = the literal "in-app" (v0.0.34 -- digits-only left
+  // the guard inert on the LOCAL backend too, i.e. the 0.0.31 silent-agent
+  // class had no net exactly where Mino hit it).
+  const channelRegex = /<channel\s+[^>]*channelId="([\w-]+)"[^>]*>([\s\S]*?)<\/channel>/
   let triggerIdx = -1
   let triggerChannelId = null
   let triggerBody = ''
@@ -148,6 +154,12 @@ async function main() {
   for (const pat of SKIP_PATTERNS) {
     if (pat.test(triggerBody)) process.exit(0)
   }
+
+  // A reaction injection ("[reaction] user put 👍 on ...", channel-local's
+  // deliverReaction) is a signal, not a question: forcing a reply to every
+  // emoji tap turns a DM affordance into a call center. The agent still MAY
+  // answer one -- this only removes the obligation.
+  if (/^\s*\[reaction\]/.test(triggerBody)) process.exit(0)
 
   // Walk forward looking for a reply-class call that ANSWERED the trigger
   // channel. Two layers, receipt first (2026-07-15 Melchior chain review):

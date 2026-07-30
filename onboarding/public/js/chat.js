@@ -18,6 +18,18 @@
 //    one source of truth, no dedup bookkeeping.
 //  - A failed send KEEPS the text in the input. Losing the user's message
 //    to a restart race is the one unforgivable failure here.
+//
+// DM interaction states (v0.0.34, Mino 07-30 17:41 "인스타 DM쓰는것처럼"):
+//  - "Read" + typing dots both derive from ONE server value,
+//    state.awaitingReplySince (channel-local.mjs transcriptState) -- no
+//    client-side guessing about what the agent received. Read is honest by
+//    construction (a user message only enters the transcript after delivery
+//    into the agent process); typing means "delivered, no reply yet" and is
+//    CAPPED at 3 minutes -- past that, endless dots would dress a silent
+//    agent (the 0.0.31 failure class) as an active one.
+//  - Reactions are transcript items (kind:'reaction') replayed like
+//    messages: a tap POSTs /api/chat/react and the badge renders from the
+//    transcript echo via pollNow(), same one-source-of-truth as sends.
 
 ;(function () {
   const C = window.COPY.chat
@@ -25,6 +37,8 @@
   const POLL_MS = 1000
   const STATUS_EVERY_TICKS = 5 // /status is a live /health probe upstream; 5s is fresh enough
   const MAX_CLIENT_MSGS = 500 // mirror of the channel's MAX_QUEUE
+  const TYPING_SHOW_MAX_MS = 3 * 60 * 1000
+  const REACTIONS = ['👍', '❤️'] // mirror of the channel's USER_REACTIONS
 
   function $(id) { return document.getElementById(id) }
 
@@ -38,6 +52,12 @@
   let tick = 0
   let emptyEl = null
   let lastStatus = null
+  let bubbles = new Map() // seq -> bubble element, for attaching reaction badges
+  let lastUserBubble = null
+  let awaitingSince = null // state.awaitingReplySince from the last /out
+  let channelUp = false // freshest signal: did the last /out poll succeed
+  let typingEl = null
+  let readEl = null
 
   function setStatics() {
     $('ct-title').textContent = C.title
@@ -66,19 +86,115 @@
   }
 
   // textContent ONLY -- message text (either side's) never rides innerHTML.
-  function appendMsg(role, text) {
+  // textContent is assigned BEFORE any child node (react bar, badge) is
+  // attached: assigning it later would wipe them.
+  function appendMsg(m) {
     clearEmpty()
     const stick = atBottom()
+    const role = roleOf(m)
     const el = document.createElement('div')
     el.className = `chat-msg chat-${role}`
-    el.textContent = text
+    el.dataset.seq = m.seq
+    el.textContent = m.text
+    if (role === 'agent') attachReactBar(el, m.seq)
+    else lastUserBubble = el
     pane.appendChild(el)
+    bubbles.set(m.seq, el)
     msgCount++
     while (msgCount > MAX_CLIENT_MSGS && pane.firstChild) {
-      pane.firstChild.remove()
+      const gone = pane.firstChild
+      if (gone.dataset && gone.dataset.seq) bubbles.delete(Number(gone.dataset.seq))
+      if (gone === lastUserBubble) lastUserBubble = null
+      gone.remove()
       msgCount--
     }
     if (stick || role === 'user') pane.scrollTop = pane.scrollHeight
+  }
+
+  // Hover affordance on agent bubbles only -- the fixed two-emoji menu the
+  // channel accepts. The badge itself renders from the transcript echo
+  // (applyReaction), never optimistically.
+  function attachReactBar(el, seq) {
+    const bar = document.createElement('span')
+    bar.className = 'chat-react-bar'
+    for (const emoji of REACTIONS) {
+      const btn = document.createElement('button')
+      btn.type = 'button'
+      btn.textContent = emoji
+      btn.setAttribute('aria-label', C.reactAria(emoji))
+      btn.onclick = () => sendReaction(seq, emoji)
+      bar.appendChild(btn)
+    }
+    el.appendChild(bar)
+  }
+
+  // One badge per reactor per bubble: reacting again replaces (DM semantics),
+  // and the replay converges to the latest without duplicate chips.
+  function applyReaction(m) {
+    const target = bubbles.get(m.targetSeq)
+    if (!target) return // target fell out of the retained window -- honest skip
+    const from = m.role === 'user' ? 'user' : 'agent'
+    let badge = target.querySelector(`.chat-react-badge[data-from="${from}"]`)
+    if (!badge) {
+      badge = document.createElement('span')
+      badge.className = 'chat-react-badge'
+      badge.dataset.from = from
+      target.appendChild(badge)
+      target.classList.add('chat-has-react')
+    }
+    badge.textContent = m.emoji
+  }
+
+  function renderItem(m) {
+    if (m.kind === 'reaction') applyReaction(m)
+    else appendMsg(m)
+  }
+
+  async function sendReaction(seq, emoji) {
+    try {
+      await window.api('/api/chat/react', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ emoji, targetSeq: seq }),
+      })
+      pollNow()
+    } catch (err) {
+      console.error('chat react failed:', err)
+      window.showToast(C.reactFailed)
+    }
+  }
+
+  // Both DM affordances from the one server value (see header). Runs every
+  // poll tick, success or failure -- the failure path is what retires the
+  // dots when the channel dies mid-wait.
+  function updatePresence() {
+    const waiting = awaitingSince !== null && channelUp
+    const typing = waiting && (Date.now() - awaitingSince) < TYPING_SHOW_MAX_MS
+    if (typing) {
+      if (!typingEl) {
+        typingEl = document.createElement('div')
+        typingEl.className = 'chat-typing chat-msg chat-agent'
+        typingEl.setAttribute('aria-label', C.typingAria)
+        for (let i = 0; i < 3; i++) typingEl.appendChild(document.createElement('span'))
+      }
+      const stick = atBottom()
+      pane.appendChild(typingEl) // appendChild moves it back to the end if new bubbles landed above
+      if (stick) pane.scrollTop = pane.scrollHeight
+    } else if (typingEl) {
+      typingEl.remove()
+      typingEl = null
+    }
+    if (waiting && lastUserBubble) {
+      if (!readEl) {
+        readEl = document.createElement('div')
+        readEl.className = 'chat-read-label'
+        readEl.textContent = C.read
+      }
+      lastUserBubble.insertAdjacentElement('afterend', readEl)
+    } else if (readEl) {
+      readEl.remove()
+      readEl = null
+    }
   }
 
   function appendGap() {
@@ -153,23 +269,29 @@
         // (both roles -- see header). The cursor lands on `latest`, so the
         // steady-state branch below only ever renders what's new.
         const seed = await window.api('/api/chat/out?since=0')
-        for (const m of seed.items) appendMsg(roleOf(m), m.text)
+        for (const m of seed.items) renderItem(m)
         nextSeq = seed.latest
+        awaitingSince = (seed.state && seed.state.awaitingReplySince) || null
+        channelUp = true
         showEmpty()
       } else {
         const result = await window.api(`/api/chat/out?since=${nextSeq}`)
         if (result.missed) appendGap()
-        for (const m of result.items) appendMsg(roleOf(m), m.text)
+        for (const m of result.items) renderItem(m)
         nextSeq = result.latest
+        awaitingSince = (result.state && result.state.awaitingReplySince) || null
+        channelUp = true
         showEmpty()
       }
     } catch (err) {
       // 503/502 land here via window.api's !res.ok throw. The periodic
       // status refresh below names the state; the cursor survives for when
       // the channel comes back, so no state to update here.
+      channelUp = false
     } finally {
       polling = false
     }
+    updatePresence()
     if (tick % STATUS_EVERY_TICKS === 0) await refreshStatus()
     tick++
     if (pollTimer) clearTimeout(pollTimer)

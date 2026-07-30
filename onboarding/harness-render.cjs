@@ -164,6 +164,12 @@ function createHarnessRender(ctx) {
     const SEND_FILE_PERM = 'mcp__agent-channel__send_file_to_discord'
     if (!settings.permissions.allow.includes(SEND_FILE_PERM)) settings.permissions.allow.push(SEND_FILE_PERM)
 
+    // v0.0.34 (DM interactions): the react tool on the local backend --
+    // allowlist entry only, no hook rides it (an emoji cannot carry the
+    // completion-claim class the rumination gate exists for).
+    const REACT_PERM = 'mcp__agent-channel__react'
+    if (!settings.permissions.allow.includes(REACT_PERM)) settings.permissions.allow.push(REACT_PERM)
+
     if (!settings.hooks || typeof settings.hooks !== 'object') settings.hooks = {}
     if (!Array.isArray(settings.hooks.Stop)) settings.hooks.Stop = []
     if (settings.hooks.Stop.length === 0) settings.hooks.Stop.push({ hooks: [] })
