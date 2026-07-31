@@ -23,9 +23,11 @@
   command=`; win lane reads `CommandLine` via PowerShell
   `Get-CimInstance Win32_Process -Filter "ProcessId=<pid>"`. Same fail-safe
   posture: unreadable/empty/non-matching = NOT verified, never force-kill.
-  - UNVERIFIED: Get-CimInstance CommandLine availability/latency on the
-    magi-win box under the app's spawn context. Check: run it from a node
-    child_process on magi-win, assert output + <2s.
+  - ~~UNVERIFIED~~ → **VERIFIED BY EXECUTION, 2026-08-01 (Idea spike on
+    magi-win)**: Get-CimInstance CommandLine from a node child_process,
+    3 runs: 405/268/295ms (all <2s), CommandLine present and matching.
+    Measured during a CPU-quiet window (coordinated with Skia's REAP run).
+    Probe: MAGI tmp_scratch/win-spike/cim-probe.js, node 24.18.1.
 
 ## Runtime / ABI (the load-bearing packaging question)
 
@@ -111,8 +113,15 @@
 - win: `taskkill /PID <pid> /T /F` for the tree kill; orphan sweep via
   PowerShell `Get-CimInstance Win32_Process | Where CommandLine -match` +
   Stop-Process. No pkill, no ps.
-  - UNVERIFIED: taskkill /T reaches the CLI's own grandchildren (MCP server
-    processes) on win. Check on magi-win with a real process tree.
+  - ~~UNVERIFIED~~ → **VERIFIED BY EXECUTION, 2026-08-01 (Idea spike on
+    magi-win)**: synthetic 3-level node tree (parent 404 → child 24600 →
+    grandchild 21272), `taskkill /PID 404 /T /F` killed all three —
+    grandchild explicitly reported ("PID 21272 (child process of PID
+    24600) has been terminated"), ALIVE-AFTER empty. Caveat kept honest:
+    tree was plain node processes, not the real CLI+MCP tree — re-run the
+    same driver (tmp_scratch/win-spike/tree-test.ps1) once a live agent
+    session exists on win. taskkill also reaped an untracked conhost
+    child (10632), consistent with full-tree semantics.
 
 ## Session timeout
 

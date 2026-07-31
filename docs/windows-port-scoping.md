@@ -129,3 +129,18 @@ Phase 1 blueprint (supervisor-design.md + supervisor-semantics-inventory.md)
 + Mino's three locked calls (above) + tonight's green gate = nothing left in
 "준비" state. Next concrete step when Mino calls it: magi-win spike
 (prereqs + UNVERIFIED checklist), then supervisor.mjs implementation.
+
+### Spike executed — 2026-08-01 02:0x (Idea, Mino go 01:23 gated on Skia ACK 01:25)
+- magi-win prereqs INSTALLED: Node 24.18.1 LTS + Claude Code **2.1.220**
+  (≥2.1.211 stdin-crash fix line; native win32-x64 binary, winget both).
+  `claude --version` answers on fresh shell. NOT logged in — auth is
+  interactive → Mino's step, flagged.
+- Both supervisor-design UNVERIFIED items now VERIFIED BY EXECUTION
+  (receipts in supervisor-design.md): CIM CommandLine 268–405ms PASS;
+  taskkill /T reaches grandchildren PASS (synthetic tree; re-run vs real
+  CLI tree later).
+- Box coordination: Skia's REAP experiment co-resident on magi-win —
+  E:\iww_build, E:\iww_b002_play, E:\finetune_results, E:\moe_prune are
+  his, untouched. Probes ran inside his declared CPU-quiet window.
+- Phase 1 (supervisor.mjs implementation) now has zero unverified
+  assumptions on the win side.
