@@ -79,3 +79,53 @@ deferring it out of v1.
 2. SmartScreen friction: **감수** (unsigned v1, no Authenticode; release notes
    must document the "More info → Run anyway" flow).
 3. Arch: **x64만 지원** — x64 ONLY, arm64 cut entirely (not deferred).
+
+---
+
+## Delta — 2026-08-01 01:3x (Idea, on Mino's "미리 준비해놔" 01:11)
+
+Everything above stands. What changed since 07-13/07-14, verified tonight:
+
+### Gate: Claude Code native Windows — GREEN (fresh receipts 01:1x)
+- Native Win10 1809+/Server 2019+, PowerShell/CMD, x64+arm64 (we ship x64
+  only per locked call 3). Install: `install.ps1` / winget
+  (`Anthropic.ClaudeCode`) / npm (needs Node 22+; binary is native at
+  runtime). Headless `-p --output-format stream-json` documented.
+  Sources: code.claude.com/docs/en/setup.md, headless.md, cli-reference.md.
+- **No sandboxing on native Windows** (WSL2-only feature) — agent Bash/exec
+  runs on host. Not a blocker (mac app already runs unsandboxed-equivalent
+  for our purposes) but goes in release notes.
+- **Shell tool flips on Git-for-Windows presence**: no Git → PowerShell
+  tool; Git installed → Git Bash. 딸깍 users won't have Git → our agent
+  templates/hooks must survive a PowerShell-tool world OR Phase 3 detection
+  screen recommends Git for Windows install. DECISION NEEDED at Phase 3.
+- Windows sleep breaks live sessions (community-verified pain) → add
+  Electron `powerSaveBlocker` while agent loop is running. New Phase 4 item.
+- Pre-v2.1.211 silent stdin crash on Windows is fixed upstream — pin
+  bundled CLI ≥ 2.1.211 for the win build.
+
+### Releases that postdate the scoping (both mac-only, neither blocks the port)
+- **v0.0.35 vendored tmux + attach topology (design-0016)**: exists to solve
+  TCC attribution — a macOS-only problem. Windows has no TCC → the DIRECT
+  topology (spawnRealAgentChild seam, which supervisor.mjs already targets)
+  is the only topology Windows needs. vendor-tmux.mjs never ports; attach
+  lane stays mac-conditional. No new Windows work, one new guard: attach-lane
+  code paths must be gated `process.platform === 'darwin'` when Phase 2 lands.
+- **v0.0.36 in-app uninstall (buildUninstallPlan)**: plan's residue classes
+  are mac paths (~/Library/*, keychain). Windows analog = AppData/%LOCALAPPDATA%,
+  Credential Manager, NSIS uninstaller overlap (electron-builder NSIS already
+  removes the install dir — our plan only needs the DATA/residue classes).
+  Small new Phase 4 item, additive.
+
+### magi-win box state (probed 01:2x via ssh)
+- REACHABLE, Windows 11 26100. `node` NOT on ssh PATH, `claude` absent →
+  spike prereqs: winget Node LTS + winget Anthropic.ClaudeCode (or install.ps1).
+- supervisor-design.md's UNVERIFIED items (Get-CimInstance latency under
+  node child_process, ConPTY behavior of bundled CLI, etc.) = the spike
+  checklist to run on this box first.
+
+### Status: READY TO EXECUTE
+Phase 1 blueprint (supervisor-design.md + supervisor-semantics-inventory.md)
++ Mino's three locked calls (above) + tonight's green gate = nothing left in
+"준비" state. Next concrete step when Mino calls it: magi-win spike
+(prereqs + UNVERIFIED checklist), then supervisor.mjs implementation.
