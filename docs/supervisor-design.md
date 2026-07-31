@@ -122,6 +122,12 @@
     same driver (tmp_scratch/win-spike/tree-test.ps1) once a live agent
     session exists on win. taskkill also reaped an untracked conhost
     child (10632), consistent with full-tree semantics.
+  - Scope note (2026-08-01, comment-sync pass): the spike receipts cover
+    the taskkill tree kill and the CIM CommandLine READ. The orphan
+    sweep's ACTION (Where-Object -like + Stop-Process) has NOT been
+    executed on win — its premise (CommandLine visibility) is verified,
+    the sweep itself is not. Verify by leaving a real orphan once a live
+    win session exists.
 
 ## Session timeout
 

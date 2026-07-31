@@ -348,9 +348,11 @@ function isPidAlive(pid) {
 
 function defaultReadCommandLine(pid) {
   if (IS_WIN) {
-    // UNVERIFIED on magi-win (design doc flag): Get-CimInstance CommandLine
-    // availability/latency under the app's spawn context. Fail-safe posture
-    // means an error here just reads as "not verified".
+    // VERIFIED BY EXECUTION 2026-08-01 (Idea spike on magi-win): CommandLine
+    // read from a node-spawned child, 3 runs 268/295/405ms (all <2s),
+    // CommandLine present and matching -- receipts in
+    // docs/supervisor-design.md (Architecture). Fail-safe posture stands:
+    // an error here just reads as "not verified".
     return execFileSync('powershell.exe', ['-NoProfile', '-Command',
       `(Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}").CommandLine`], { encoding: 'utf8' }).trim()
   }
@@ -368,7 +370,11 @@ function defaultReadCommandLine(pid) {
 function sweepOrphansDefault(pkillPattern, log) {
   try {
     if (IS_WIN) {
-      // UNVERIFIED on magi-win: CommandLine -match sweep + Stop-Process.
+      // Sweep action (Where-Object -like + Stop-Process) still UNVERIFIED on
+      // magi-win; its premise -- CIM CommandLine visibility for node-spawned
+      // children -- got receipts in the 2026-08-01 spike (see
+      // defaultReadCommandLine above). Verify the sweep itself when a live
+      // win session exists to leave a real orphan behind.
       const escaped = pkillPattern.replace(/'/g, "''")
       execFileSync('powershell.exe', ['-NoProfile', '-Command',
         `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${escaped}*' -and $_.ProcessId -ne ${process.pid} } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`],
@@ -675,8 +681,12 @@ function spawnPtyChild(cfg, { now = () => Date.now(), log, watchdogBounces = [] 
   function killHandle(sig) {
     try {
       if (IS_WIN) {
-        // taskkill /T = whole tree. UNVERIFIED on magi-win whether /T reaches
-        // the CLI's grandchildren (MCP servers) -- design doc flag.
+        // taskkill /T = whole tree. VERIFIED BY EXECUTION 2026-08-01 (Idea
+        // spike on magi-win): synthetic 3-level node tree, grandchild
+        // explicitly reported terminated -- receipts in
+        // docs/supervisor-design.md (Kill lane). Caveat kept honest: tree
+        // was plain node processes; re-run the same driver against the real
+        // CLI+MCP tree once a live win session exists.
         execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { encoding: 'utf8' })
       } else {
         child.kill(sig)
