@@ -567,19 +567,30 @@ console.log('\n-- stall watchdog: transcript tail verdicts (teardown Root B)')
   }
   const nowAt = (offsetMs) => () => T0 + offsetMs
 
-  ok('transcriptDirFor munges cwd the way Claude Code does',
-    transcriptDirFor('/Users/cto/Documents/Scheherazade', '/Users/cto')
-      .endsWith(path.join('.claude', 'projects', '-Users-cto-Documents-Scheherazade')))
+  if (process.platform === 'win32') {
+    // 2026-08-01 magi-win first run: these two assert the POSIX munge rule
+    // with POSIX fixtures; win path.resolve prefixes a drive letter
+    // ('C:\...' -> 'C--Users-...'), so they test node's win path handling,
+    // not the munge. The watchdog is OFF on win anyway (supervisor.mjs
+    // watchdogOn gate: munge unverified there) -- same honesty as the
+    // integration SKIP: NOT a pass.
+    console.log('  SKIP  posix-fixture transcriptDirFor munge tests on win32 -- win munge rule unverified, watchdog off there; NOT a pass')
+  } else {
+    ok('transcriptDirFor munges cwd the way Claude Code does',
+      transcriptDirFor('/Users/cto/Documents/Scheherazade', '/Users/cto')
+        .endsWith(path.join('.claude', 'projects', '-Users-cto-Documents-Scheherazade')))
+    // Melchior counter-receipt: '_' and '.' are ALSO munged to '-' by the CLI
+    // (raw: ~/Documents/MAGI_Memory -> -Users-narr-Documents-MAGI-Memory).
+    ok('underscore and dot munge to dashes like the CLI does',
+      transcriptDirFor('/Users/x/My_Agent.data', '/h')
+        .endsWith(path.join('.claude', 'projects', '-Users-x-My-Agent-data')))
+  }
   // spark F1: a trailing slash must not mint a different (never-written)
   // watch dir -- that fails quiet, the silent-detector class itself.
+  // (platform-neutral: compares two calls, no posix fixture expectation)
   ok('trailing slash resolves to the same watch dir',
     transcriptDirFor('/Users/cto/Documents/Scheherazade/', '/Users/cto') ===
     transcriptDirFor('/Users/cto/Documents/Scheherazade', '/Users/cto'))
-  // Melchior counter-receipt: '_' and '.' are ALSO munged to '-' by the CLI
-  // (raw: ~/Documents/MAGI_Memory -> -Users-narr-Documents-MAGI-Memory).
-  ok('underscore and dot munge to dashes like the CLI does',
-    transcriptDirFor('/Users/x/My_Agent.data', '/h')
-      .endsWith(path.join('.claude', 'projects', '-Users-x-My-Agent-data')))
   // spark F1: symlinked MEM watches the CLI's REAL cwd munge
   {
     const real = fs.mkdtempSync(path.join(os.tmpdir(), 'real-mem-'))
