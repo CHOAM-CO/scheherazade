@@ -229,34 +229,74 @@ function mountedAsarEntries() {
   }
 }
 
-console.log('\n-- the required graph vs the mounted DMG asar (blocker-1 closure gate)')
-// predist runs BEFORE the build -- there is no fresh dmg to verify yet, so it
-// legitimately skips. Every OTHER invocation (postdist, manual, CI) must find
-// the exact-version dmg; a missing one is fail-closed, not a skip. (Skia catch:
-// no-dmg postdist skipped green, and a version-fallback verified the wrong dmg.)
-const lifecycle = process.env.npm_lifecycle_event
-if (lifecycle === 'predist') {
-  console.log(`  SKIP  DMG asar closure -- predist (pre-build); postdist verifies the freshly built ${pkg.version} dmg; NOT a pass`)
+// ── win lane closure source (release-lane split, 2026-08-01) ─────────────────
+// The NSIS installer cannot be mounted like a dmg (extraction needs 7z, a tool
+// nobody installs), but electron-builder stages release/win-unpacked/ in the
+// SAME run that packs the installer -- same bytes, one hop before compression.
+// Verify closure there. The mac exact-filename trick does not defend this path
+// (win-unpacked has no version in its name), so the version illusion is killed
+// harder: read package.json OUT OF the staged asar and demand an exact match.
+// A stale win-unpacked from last week fails loudly instead of verifying green.
+function stagedWinAsarEntries() {
+  // EXACT version only, same rule as findDmg: an old installer left in
+  // release/ is not proof of THIS build.
+  const exe = path.join(ROOT, 'release', `Scheherazade-Setup-${pkg.version}.exe`)
+  if (!fs.existsSync(exe)) return { status: 'no-exe' }
+  const asarPath = path.join(ROOT, 'release', 'win-unpacked', 'resources', 'app.asar')
+  if (!fs.existsSync(asarPath)) {
+    return { status: 'error', reason: 'installer exists but release/win-unpacked/resources/app.asar is absent -- cannot verify what NSIS packed' }
+  }
+  try {
+    const asar = require('@electron/asar')
+    const staged = JSON.parse(asar.extractFile(asarPath, 'package.json').toString('utf8'))
+    if (staged.version !== pkg.version) {
+      return { status: 'error', reason: `staged asar is version ${staged.version}, not ${pkg.version} -- stale win-unpacked, verifying it would be the version illusion (Skia catch)` }
+    }
+    const entries = asar.listPackage(asarPath)
+    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^\/+/, ''))) }
+  } catch (e) {
+    // fail-CLOSED, same as the dmg lane: an artifact that exists but cannot be
+    // listed is an UNVERIFIED artifact, never a skip.
+    return { status: 'error', reason: (e && e.message) || 'asar extract/list failed' }
+  }
+}
+
+// Platform dispatch: the build runs ON its target platform (dist:win is hard-
+// gated by scripts/assert-win32.mjs), so process.platform picks the lane.
+const WIN_LANE = process.platform === 'win32'
+console.log(`\n-- the required graph vs the shipped asar (${WIN_LANE ? 'staged win-unpacked' : 'mounted DMG'}; blocker-1 closure gate)`)
+// predist runs BEFORE the build -- there is no fresh artifact to verify yet, so
+// it legitimately skips. Every OTHER invocation (postdist, manual, CI) must find
+// the exact-version artifact; a missing one is fail-closed, not a skip. (Skia
+// catch: no-dmg postdist skipped green, and a version-fallback verified the
+// wrong dmg.) startsWith: the win lane fires as predist:win / postdist:win.
+const lifecycle = process.env.npm_lifecycle_event || ''
+if (lifecycle.startsWith('predist')) {
+  console.log(`  SKIP  artifact asar closure -- predist (pre-build); postdist verifies the freshly built ${pkg.version} artifact; NOT a pass`)
 } else {
-  const asarResult = mountedAsarEntries()
-  if (asarResult.status === 'no-dmg') {
-    // NOT predist: a missing exact-version dmg cannot be verified. In postdist
-    // it means the build never produced it (or built a different version).
-    ok(`the ${pkg.version} dmg exists to verify (${lifecycle || 'manual run'})`, false,
-      `no release/Scheherazade-${pkg.version}-arm64.dmg -- ${lifecycle === 'postdist' ? 'the build did not produce it (or built a different version)' : 'run npm run dist first'}`)
+  const isPost = lifecycle.startsWith('postdist')
+  const asarResult = WIN_LANE ? stagedWinAsarEntries() : mountedAsarEntries()
+  if (asarResult.status === 'no-dmg' || asarResult.status === 'no-exe') {
+    // NOT predist: a missing exact-version artifact cannot be verified. In
+    // postdist it means the build never produced it (or built a different version).
+    const wanted = WIN_LANE ? `Scheherazade-Setup-${pkg.version}.exe` : `Scheherazade-${pkg.version}-arm64.dmg`
+    ok(`the ${pkg.version} ${WIN_LANE ? 'installer' : 'dmg'} exists to verify (${lifecycle || 'manual run'})`, false,
+      `no release/${wanted} -- ${isPost ? 'the build did not produce it (or built a different version)' : `run npm run dist${WIN_LANE ? ':win' : ''} first`}`)
   } else if (asarResult.status === 'error') {
-    // fail-CLOSED: the dmg EXISTS but would not mount / list. A green skip here
-    // ships an UNVERIFIED artifact -- the v0.0.23 class, and exactly the fail-open
-    // Skia's fake-hdiutil vector exposed (hdiutil exit1 -> SKIP -> process exit 0).
-    ok('the built DMG mounts and its app.asar is listable', false,
-      `hdiutil/listPackage failed on an existing dmg: ${asarResult.reason}`)
+    // fail-CLOSED: the artifact EXISTS but would not mount / list. A green skip
+    // here ships an UNVERIFIED artifact -- the v0.0.23 class, and exactly the
+    // fail-open Skia's fake-hdiutil vector exposed (hdiutil exit1 -> SKIP ->
+    // process exit 0).
+    ok(WIN_LANE ? 'the staged win-unpacked asar matches this build and is listable'
+                : 'the built DMG mounts and its app.asar is listable', false,
+      `${WIN_LANE ? 'asar extract/list' : 'hdiutil/listPackage'} failed on an existing artifact: ${asarResult.reason}`)
   } else {
     const asarEntries = asarResult.entries
-    ok('the mounted asar listed something (an empty listing always passes)', asarEntries.size > 0)
+    ok(`the ${WIN_LANE ? 'staged' : 'mounted'} asar listed something (an empty listing always passes)`, asarEntries.size > 0)
     for (const m of [...rootModules].sort()) {
-      ok(`${m} is a real member of the shipped app.asar (mounted DMG, not staging)`,
+      ok(`${m} is a real member of the shipped app.asar (${WIN_LANE ? 'staged win-unpacked, version-pinned' : 'mounted DMG, not staging'})`,
         asarEntries.has(m),
-        'the require graph reaches it but the mounted DMG asar has no such entry -- dead require at open')
+        'the require graph reaches it but the shipped asar has no such entry -- dead require at open')
     }
   }
 }

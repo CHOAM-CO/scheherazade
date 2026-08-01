@@ -144,3 +144,32 @@ Phase 1 blueprint (supervisor-design.md + supervisor-semantics-inventory.md)
   his, untouched. Probes ran inside his declared CPU-quiet window.
 - Phase 1 (supervisor.mjs implementation) now has zero unverified
   assumptions on the win side.
+
+### Release-lane split — 2026-08-01 (Mino GO 13:58 "릴리즈만 잘 분리해줘 윈/맥", code hygiene delegated)
+One codebase, two release lanes. The seam (SUPERVISOR_LANE default bash +
+IS_WIN gates) stays the isolation mechanism — no physical code extraction
+(delegated call, held).
+
+- **mac lane (unchanged)**: `npm run dist` (alias `dist:mac`) on a mac →
+  `release/Scheherazade-{v}-arm64.dmg`. predist/postdist gates untouched;
+  postdist mounts the exact-version dmg (126 checks green after this change).
+- **win lane (new)**: `npm run dist:win` ON WINDOWS ONLY →
+  `release/Scheherazade-Setup-{v}.exe` (NSIS x64). Hard-gated by
+  scripts/assert-win32.mjs: asarUnpack ships the local node_modules verbatim,
+  so a mac cross-build would package darwin natives (node-pty) into the win
+  installer — install-fine, die-at-first-PTY-spawn class.
+- **win closure gate**: postdist:win verifies `release/win-unpacked/resources/
+  app.asar` (staged by the same electron-builder run; NSIS extraction would
+  need 7z). Version illusion killed harder than the mac name-check: the gate
+  reads package.json OUT OF the staged asar and demands an exact version
+  match. All three fail-closed rails (no exe / no staged asar / stale
+  version) verified by execution on mac via platform fake, 2026-08-01.
+  NOT yet executed: the happy path on a real win build — first `dist:win`
+  run on magi-win is the receipt (waits on box access + token/install plan).
+- **branch policy**: master holds everything platform-aware (seam config,
+  IS_WIN gates, test gates, release infra — win-port/test-gates a877e20
+  merged accordingly). win-port/* is for behavior-changing win work BEFORE
+  it is execution-verified on a win box; it merges when its receipts exist.
+- **versioning**: one semver, two artifacts per release. Win artifacts ship
+  only when the win lane's full-session test has passed (still blocked on
+  bot token / install plan — Mino).

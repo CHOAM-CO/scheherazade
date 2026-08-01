@@ -12,9 +12,13 @@
     "start": "node channel.mjs",
     "electron:dev": "electron .",
     "dist": "electron-builder --mac dmg",
+    "dist:mac": "npm run dist",
+    "dist:win": "node scripts/assert-win32.mjs && electron-builder --win nsis",
     "postinstall": "node scripts/fix-pty-helper.mjs",
     "predist": "node scripts/test-packaging.mjs",
-    "postdist": "node scripts/test-packaging.mjs"
+    "postdist": "node scripts/test-packaging.mjs",
+    "predist:win": "node scripts/test-packaging.mjs",
+    "postdist:win": "node scripts/test-packaging.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-code": "^2.1.199",
@@ -121,7 +125,16 @@
           "from": "node_modules/@anthropic-ai/claude-code/bin/claude.exe",
           "to": "claude-cli/claude.exe"
         }
-      ]
+      ],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Scheherazade-Setup-${version}.exe"
     },
     "asar": true,
     "npmRebuild": false
