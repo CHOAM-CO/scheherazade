@@ -24,7 +24,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 // Import-safety convention (mirrors test-outbound-channel.mjs /
 // test-liveness-marker.mjs exactly): channel-slack.mjs reads
@@ -53,7 +53,7 @@ const {
   toSlackTs,
   resolveSenderName,
   validateBotToken, validateAppToken,
-} = await import(channelModulePath)
+} = await import(pathToFileURL(channelModulePath).href)
 
 let passed = 0
 let failed = 0

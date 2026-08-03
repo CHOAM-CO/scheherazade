@@ -29,6 +29,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { pathToFileURL } from 'node:url'
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scheherazade-liveness-smoke-'))
 process.env.AGENT_DATA_HOME = tmpDir
@@ -40,8 +41,10 @@ process.env.AGENT_NAME = 'smoketest'
 // it does not attempt mcp.connect()/discord.login() on import.
 
 const channelModulePath = path.join(import.meta.dirname, '..', 'channel.mjs')
+// pathToFileURL, not a bare path: on Windows `import('C:\\...')` throws
+// ERR_UNSUPPORTED_ESM_URL_SCHEME (node reads 'c:' as a protocol).
 const { writeLivenessMarker, LIVENESS_MARKER_PATH, writeFailureMarker, FAILURE_MARKER_PATH, DATA_HOME } = await import(
-  channelModulePath
+  pathToFileURL(channelModulePath).href
 )
 
 let pass = 0

@@ -22,7 +22,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 // Import-safety convention (mirrors test-outbound-channel.mjs etc.): every
 // backend reads its tokens + HOME_CHANNEL_ID at module scope and FATAL-exits
@@ -78,7 +78,12 @@ for (const b of BACKENDS) {
 // ── 3. unified resolver contract: {target, note} + fail-closed ─────────────
 console.log('\nresolver contract ({target, note}, all three backends)')
 const mods = {}
-for (const b of BACKENDS) mods[b.file] = await import(path.join(ROOT, b.file))
+// pathToFileURL, not a bare path: on Windows `import('C:\\...')` throws
+// ERR_UNSUPPORTED_ESM_URL_SCHEME (node reads 'c:' as a protocol). Six tests
+// could not run at all on the win box for this (2026-08-04, first full suite
+// run there). Production already does this correctly -- it was only the
+// harness, which is exactly the safety net the Windows lane needs most.
+for (const b of BACKENDS) mods[b.file] = await import(pathToFileURL(path.join(ROOT, b.file)).href)
 for (const b of BACKENDS) {
   const { resolveOutboundChannel } = mods[b.file]
   // fetchFn returns the backend-native target kind the contract documents.

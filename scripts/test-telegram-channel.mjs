@@ -25,6 +25,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { pathToFileURL } from 'node:url'
 
 // Import-safety convention (mirrors test-liveness-marker.mjs /
 // test-outbound-channel.mjs exactly): channel-telegram.mjs reads
@@ -56,7 +57,7 @@ const {
   readHistoryEntries,
   HISTORY_LEDGER_PATH,
   verifyTokenOrFail,
-} = await import(channelModulePath)
+} = await import(pathToFileURL(channelModulePath).href)
 
 let pass = 0
 let fail = 0

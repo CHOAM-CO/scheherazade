@@ -7,7 +7,7 @@ process.env.SCHEHERAZADE_MEMORY_DB = path.join(tmp, 'memory.db')
 
 ;(async () => {
   const { createOnboardingServer } = require(path.join(__dirname, '..', 'onboarding', 'http-server.cjs'))
-  const memmod = await import(new URL(path.join(__dirname, '..', 'memory', 'server.mjs'), 'file:').href)
+  const memmod = await import(require('url').pathToFileURL(path.join(__dirname, '..', 'memory', 'server.mjs')).href)
   const db = memmod.initDb()
   memmod.journalWrite(db, { date: '2026-07-12', body: '어제의 나' })
   memmod.journalWrite(db, { date: '2026-07-13', body: '<img src=x onerror=alert(1)>' })

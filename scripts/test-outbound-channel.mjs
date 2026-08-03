@@ -27,6 +27,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 // Import-safety convention (mirrors test-liveness-marker.mjs exactly):
 // channel.mjs reads DISCORD_BOT_TOKEN/HOME_CHANNEL_ID at module scope and
@@ -41,7 +42,12 @@ process.env.HOME_CHANNEL_ID = '123456789012345678'
 process.env.AGENT_NAME = 'smoketest'
 
 const channelModulePath = path.join(import.meta.dirname, '..', 'channel.mjs')
-const { resolveOutboundChannel } = await import(channelModulePath)
+// pathToFileURL, not a bare path: on Windows `import('C:\\...')` throws
+// ERR_UNSUPPORTED_ESM_URL_SCHEME (node reads 'c:' as a protocol). Six tests
+// could not run at all on the win box for this (2026-08-04, first full suite
+// run there). Production already does this correctly -- it was only the
+// harness, which is exactly the safety net the Windows lane needs most.
+const { resolveOutboundChannel } = await import(pathToFileURL(channelModulePath).href)
 
 let passed = 0
 let failed = 0
