@@ -94,17 +94,35 @@
 // Skipping either half is the exact failure this const exists to stop.
 const AGENT_STATES = Object.freeze(['idle', 'connecting', 'live', 'stopped', 'failed'])
 
+// Grouped by WHOSE PROBLEM IT IS, because that is what decides the sentence
+// the user reads. The nine codes below 'harness_stale' were all a single
+// 'unknown' until 2026-08-04, at 13 call sites -- every one of which knew
+// exactly what had happened and reported that it did not.
 const AGENT_STATUS_CODES = Object.freeze([
-  'crash_loop',
-  'discord_token_bad',
+  // -- the user's credentials
+  'discord_token_bad', // token missing or rejected by the service
   'slack_token_bad',
   'telegram_token_bad',
+  'channel_token_error', // token could not be READ -- the OS refused to unseal it
+  'key_error', // same, for the provider key
+  // -- the user's configuration
   'provider_not_wired',
-  'key_error',
-  'harness_stale',
-  'bootstrap-needed',
-  'timeout',
-  'unknown',
+  'cli_missing', // Claude Code is not installed on this machine
+  'ollama_unavailable', // the local Ollama daemon is not up
+  'proxy_unavailable', // the local codex-as-api proxy is not up
+  'bootstrap-needed', // attach topology with nothing to attach to
+  // -- our problem
+  'app_files_missing', // a file we ship is absent from our own bundle
+  'harness_stale', // the boot harness re-render failed
+  'spawn_failed', // the supervisor process never started
+  'attach_failed', // could not respawn a dead attach pane
+  // -- it ran and then stopped
+  'crash_loop', // run.sh's write_failure(): 3+ quick-fail restarts
+  'agent_exited', // the supervisor started, then exited unexpectedly
+  'stop_unconfirmed', // a stop/restart could not confirm the old process died
+  // -- we genuinely do not know
+  'timeout', // computed downstream in http-server.cjs, never set here
+  'unknown', // last resort; never guess a specific code the emitter lacks
 ])
 
 let status = { state: 'idle', code: null, detail: null, since: new Date().toISOString() }

@@ -561,6 +561,71 @@ window.COPY = {
           action: () => 'Restart the app once -- the bundled tmux sets itself up on boot. If it persists, switch topology to spawn in Settings.',
           buttons: ['openSettings', 'openLogs'],
         },
+        // ── the nine that used to be 'unknown' (2026-08-04) ─────────────
+        // main.cjs had 13 sites passing 'unknown', so a missing Claude Code
+        // install, a dead Ollama daemon, an unreadable Discord token and an
+        // agent that started and then died all rendered the same sentence:
+        // "failed to start, wait a moment and click Check status again."
+        // Every one of those sites knew exactly what had happened.
+        //
+        // The grouping that decides the text is WHOSE PROBLEM IT IS. If it is
+        // ours, the user should not be sent to Settings to hunt for a control
+        // that cannot fix it; if it is theirs, we owe them the specific step.
+        cli_missing: {
+          cause: () => 'Claude Code is not installed on this machine. Scheherazade runs on top of your own Claude Code -- it does not ship one.',
+          // The install command is in `detail`, which wizard.js does not
+          // render (see the bootstrap-needed note above -- same limitation,
+          // same open decision). Until it does, this sentence has to carry the
+          // shape of the fix without the exact string.
+          action: () => 'Install Claude Code, run `claude` once to sign in, then quit this app and reopen it.',
+          buttons: ['openLogs'],
+        },
+        ollama_unavailable: {
+          cause: () => 'The local Ollama daemon is not running, so there is nothing for the agent to talk to.',
+          action: () => 'Start Ollama, confirm the model you picked is pulled (`ollama list`), then quit this app and reopen it.',
+          buttons: ['openSettings', 'openLogs'],
+        },
+        proxy_unavailable: {
+          cause: () => 'The local proxy this model connection needs did not come up, and the agent was not started rather than routed somewhere unverified.',
+          action: () => 'Quit the app and reopen it. If it keeps happening, switch the model connection in Settings.',
+          buttons: ['openSettings', 'openLogs'],
+        },
+        channel_token_error: {
+          cause: () => 'The stored chat-service token could not be read. This is the computer refusing to unseal it -- the token itself may be perfectly good.',
+          action: () => 'Quit the app and reopen it, and allow the credential prompt if one appears. If it keeps happening, re-save the token in Settings.',
+          buttons: ['openSettings', 'openLogs'],
+        },
+        // Ours, not theirs. No openSettings button on any of these three:
+        // there is no control in Settings that repairs a broken install, and
+        // sending someone to look for one wastes their time and reads as a
+        // deflection.
+        app_files_missing: {
+          cause: (name) => `Part of ${name}'s own installation is missing.`,
+          action: () => 'Reinstall the app. Nothing you entered is lost -- your settings and memory live outside the app.',
+          buttons: ['openLogs'],
+        },
+        spawn_failed: {
+          cause: (name) => `${name} could not be started at all.`,
+          action: () => 'Quit the app and reopen it. If it keeps happening, reinstall the app.',
+          buttons: ['openLogs'],
+        },
+        attach_failed: {
+          cause: (name) => `${name} is set to attach mode and the terminal session it was attached to could not be brought back.`,
+          action: () => 'Switch topology to spawn in Settings, or restart the app to rebuild the session.',
+          buttons: ['openSettings', 'openLogs'],
+        },
+        // Started, then stopped. Distinct from every code above: something DID
+        // run, so "it never started" advice would be wrong.
+        agent_exited: {
+          cause: (name) => `${name} started and then stopped unexpectedly.`,
+          action: () => 'Click Check status again to see if it came back on its own. If not, quit the app and reopen it.',
+          buttons: ['retry', 'openLogs'],
+        },
+        stop_unconfirmed: {
+          cause: (name) => `${name} was asked to stop and did not confirm it had -- it may still be running.`,
+          action: () => 'Quit the app and reopen it. That clears the old process for certain.',
+          buttons: ['openLogs'],
+        },
         unknown: {
           cause: (name) => `${name} failed to start.`,
           action: () => 'Wait a moment and click Check status again. If it keeps happening, quit the app and reopen it.',

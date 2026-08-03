@@ -961,12 +961,13 @@ async function spawnRealAgentChildLocked() {
         'is a PATH-visibility bug in a packaged app, not a missing install -- widen ' +
         'NPM_GLOBAL_BIN_DIRS rather than telling them to reinstall. Onboarding UI stays usable.'
     )
-    // Cause-code wiring (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 1):
-    // no dedicated code exists for "bundled CLI binary missing" -- it isn't
-    // one of the enumerated causes (crash_loop/discord_token_bad/
-    // provider_not_wired/key_error/timeout), so 'unknown' is the honest
-    // fallback rather than overloading a more specific code that doesn't fit.
-    setAgentStatus('failed', 'unknown', reason)
+    // 2026-08-04: this used to be 'unknown', on the honest grounds that no
+    // enumerated code fitted. That was right about the enum and wrong about
+    // what to do -- the answer was to add the code, not to shrug. Of the 13
+    // 'unknown' sites this was the worst one: `reason` above contains the
+    // literal install command, and the UI answered "we don't know why it
+    // failed, wait a moment and click Check status again".
+    setAgentStatus('failed', 'cli_missing', reason)
     return null
   }
 
@@ -976,8 +977,11 @@ async function spawnRealAgentChildLocked() {
   if (!fs.existsSync(launcherPath)) {
     const reason = `internal launcher not found at ${launcherPath} (${SUPERVISOR_LANE === 'node' ? 'supervisor.mjs' : 'run.sh'} missing from the packaged/unpacked app -- check build.files/build.asarUnpack)`
     console.error(`[scheherazade/main] BLOCKER: ${reason}`)
-    // Same 'unknown' reasoning as the claude-CLI-missing branch above.
-    setAgentStatus('failed', 'unknown', reason)
+    // NOT cli_missing: that one is "you have not installed Claude Code",
+    // which the user fixes. This one is "a file we ship is absent from our
+    // own bundle" -- nothing the user did, and the only thing they can do is
+    // reinstall. Two different sentences, so two different codes.
+    setAgentStatus('failed', 'app_files_missing', reason)
     return null
   }
 
@@ -1031,8 +1035,9 @@ async function spawnRealAgentChildLocked() {
 
   // chatgpt provider: a trusted proxy must be CONFIRMED up before the agent
   // spawns -- awaited, fail-closed (Codex security review finding #1; see
-  // ensureCodexProxy's header). No dedicated agent-status code exists for
-  // this blocker ('unknown' per the enum's own never-guess rule).
+  // ensureCodexProxy's header). Reported as 'proxy_unavailable' (2026-08-04;
+  // was 'unknown' when the enum had no row for it -- the enum was the thing
+  // that needed changing).
   if (provider === 'chatgpt') {
     let proxyOk = false
     try {
@@ -1041,7 +1046,7 @@ async function spawnRealAgentChildLocked() {
       console.error('[scheherazade/main] ensureCodexProxy threw unexpectedly:', err)
     }
     if (!proxyOk) {
-      setAgentStatus('failed', 'unknown', 'no trusted codex-as-api proxy is available (see app log) -- agent not spawned')
+      setAgentStatus('failed', 'proxy_unavailable', 'no trusted codex-as-api proxy is available (see app log) -- agent not spawned')
       return null
     }
   }
@@ -1050,7 +1055,7 @@ async function spawnRealAgentChildLocked() {
   // must be CONFIRMED up before the agent spawns (a bootstrap-installed
   // Ollama.app has no launched GUI, so nothing else ever starts one; see
   // onboarding/ollama-daemon.cjs's header for the full rules). Awaited,
-  // fail-closed, 'unknown' code per the enum's never-guess rule.
+  // fail-closed, reported as 'ollama_unavailable' (2026-08-04; was 'unknown').
   if (provider === 'ollama') {
     let daemonOk = false
     try {
@@ -1059,7 +1064,7 @@ async function spawnRealAgentChildLocked() {
       console.error('[scheherazade/main] ensureOllamaDaemon threw unexpectedly:', err)
     }
     if (!daemonOk) {
-      setAgentStatus('failed', 'unknown', 'no trusted ollama daemon is available (see app log) -- agent not spawned')
+      setAgentStatus('failed', 'ollama_unavailable', 'no trusted ollama daemon is available (see app log) -- agent not spawned')
       return null
     }
   }
@@ -1083,7 +1088,7 @@ async function spawnRealAgentChildLocked() {
       slackApp = readSlackAppToken()
     } catch (err) {
       console.error('[scheherazade/main] slack token read failed, cannot spawn agent:', err)
-      setAgentStatus('failed', 'unknown', `slack token read failed: ${err.message}`)
+      setAgentStatus('failed', 'channel_token_error', `slack token read failed: ${err.message}`)
       return null
     }
     if (!slackBot || !slackApp) {
@@ -1103,7 +1108,7 @@ async function spawnRealAgentChildLocked() {
       tgToken = readTelegramToken()
     } catch (err) {
       console.error('[scheherazade/main] telegram token read failed, cannot spawn agent:', err)
-      setAgentStatus('failed', 'unknown', `telegram token read failed: ${err.message}`)
+      setAgentStatus('failed', 'channel_token_error', `telegram token read failed: ${err.message}`)
       return null
     }
     if (!tgToken) {
@@ -1140,11 +1145,12 @@ async function spawnRealAgentChildLocked() {
       token = readDiscordToken()
     } catch (err) {
       console.error('[scheherazade/main] readDiscordToken failed, cannot spawn agent:', err)
-      // No dedicated code for a local safeStorage/Keychain read failure on the
-      // DISCORD token specifically (key_error is reserved for the PROVIDER
-      // key path above, discord_token_bad is reserved for the marker-driven
-      // missing/rejected-token paths in channel.mjs) -- 'unknown' fallback.
-      setAgentStatus('failed', 'unknown', `readDiscordToken failed: ${err.message}`)
+      // 'channel_token_error', deliberately distinct from its two neighbours:
+      // key_error is the PROVIDER key, and discord_token_bad is the marker-
+      // driven missing/rejected-token path in channel.mjs. This one is "the
+      // token may be perfectly good and the OS would not hand it over", which
+      // is a different thing to tell the user (2026-08-04; was 'unknown').
+      setAgentStatus('failed', 'channel_token_error', `readDiscordToken failed: ${err.message}`)
       return null
     }
     if (!token) {
@@ -1311,11 +1317,10 @@ async function spawnRealAgentChildLocked() {
     // run.sh's own loop (that's absorbed by run.sh's restart ladder).
     console.error('[scheherazade/main] agent child spawn error:', err)
     logBuffer.append('main!', `agent child spawn error: ${err.message}`)
-    // No dedicated code for the launcher process itself failing to spawn
-    // (distinct from run.sh's OWN crash-loop detector, which only fires
-    // once run.sh is actually running and restarting claude inside itself)
-    // -- 'unknown' fallback.
-    setAgentStatus('failed', 'unknown', `spawn error: ${err.message}`)
+    // 'spawn_failed': the launcher process itself never started. Distinct from
+    // run.sh's OWN crash-loop detector, which can only fire once run.sh IS
+    // running and restarting claude inside itself (2026-08-04; was 'unknown').
+    setAgentStatus('failed', 'spawn_failed', `spawn error: ${err.message}`)
     agentChild = null
     agentSupervisorPid = null
     stopFailurePoll()
@@ -1347,9 +1352,10 @@ async function spawnRealAgentChildLocked() {
       // this exit and re-stamps 'connecting'. Leave status untouched so the UI
       // never flickers through 'failed'/'stopped' mid-restart.
     } else {
-      // Unexpected exit of the SUPERVISOR itself. Same reasoning as the 'error'
-      // handler above -- no dedicated code; 'unknown' fallback.
-      setAgentStatus('failed', 'unknown', `agent process exited unexpectedly (code=${code} signal=${signal})`)
+      // Unexpected exit of the SUPERVISOR itself -- it started and then died,
+      // which is not the same failure as never starting (2026-08-04; both
+      // were 'unknown').
+      setAgentStatus('failed', 'agent_exited', `agent process exited unexpectedly (code=${code} signal=${signal})`)
     }
   })
 
@@ -1468,7 +1474,7 @@ async function attachStartFromSession(config) {
   if (state.paneDead) {
     const r = attachTopology.respawnAttachPane({ logFile: ATTACH_LOGFILE })
     if (!r.ok) {
-      setAgentStatus('failed', 'unknown', `attach respawn 실패: ${r.error}`)
+      setAgentStatus('failed', 'attach_failed', `attach respawn 실패: ${r.error}`)
       return null
     }
     panePid = r.panePid
@@ -1721,7 +1727,7 @@ async function stopAgent() {
   const cleared = agentTopologyIsAttach() ? await waitForSupervisorDeath() : await waitForAgentHandleCleared()
   if (!cleared) {
     intentionalStopMode = null
-    setAgentStatus('failed', 'unknown', 'stop did not confirm agent exit; it may still be running')
+    setAgentStatus('failed', 'stop_unconfirmed', 'stop did not confirm agent exit; it may still be running')
     return
   }
   setAgentStatus('stopped')
@@ -1751,7 +1757,7 @@ async function restartAgent() {
   const cleared = agentTopologyIsAttach() ? await waitForSupervisorDeath() : await waitForAgentHandleCleared()
   if (!cleared) {
     intentionalStopMode = null
-    setAgentStatus('failed', 'unknown', 'restart aborted: prior agent did not confirm exit')
+    setAgentStatus('failed', 'stop_unconfirmed', 'restart aborted: prior agent did not confirm exit')
     return
   }
   // Exit handler consumes the flag; ensure it's clear before respawn so the new
@@ -1775,7 +1781,7 @@ const onOnboardingComplete = () => {
   // try/catch around this callback in http-server.cjs.
   spawnRealAgentChild().catch((err) => {
     console.error('[scheherazade/main] spawnRealAgentChild rejected in onboarding-complete path:', err)
-    setAgentStatus('failed', 'unknown', `agent spawn attempt threw: ${err.message}`)
+    setAgentStatus('failed', 'spawn_failed', `agent spawn attempt threw: ${err.message}`)
   })
 }
 
