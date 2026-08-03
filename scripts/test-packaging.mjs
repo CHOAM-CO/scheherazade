@@ -395,24 +395,35 @@ ok('repo node_modules unixTerminal.js is patched (postinstall ran)', fs.readFile
   }
 }
 
-console.log('\n-- bundled claude CLI: per-platform extraResources (win-port Phase 2)')
+console.log('\n-- claude CLI is NOT redistributed (license gate)')
 {
-  // The old GLOBAL extraResources entry mapped bin/claude.exe -> claude-cli/
-  // claude for every platform. That extension strip is deliberate on mac
-  // (the claude-code postinstall hardlinks a Mach-O over the .exe
-  // placeholder) and FATAL on Windows (an extensionless PE is not
-  // executable). The mapping is now per-platform and resolveClaudeBin()
-  // picks the matching name -- these three checks keep that trio welded.
-  ok('no GLOBAL extraResources entry (the extension-strip-everywhere shape)', !pkg.build.extraResources,
-    'a global entry silently re-breaks the win artifact; keep the mapping under build.mac / build.win')
-  const macER = (pkg.build.mac && pkg.build.mac.extraResources) || []
-  ok('mac lane bundles the CLI as claude-cli/claude (extensionless Mach-O)',
-    macER.some((e) => e.from === 'node_modules/@anthropic-ai/claude-code/bin/claude.exe' && e.to === 'claude-cli/claude'))
-  const winER = (pkg.build.win && pkg.build.win.extraResources) || []
-  ok('win lane bundles the CLI as claude-cli/claude.exe (extension preserved)',
-    winER.some((e) => e.from === 'node_modules/@anthropic-ai/claude-code/bin/claude.exe' && e.to === 'claude-cli/claude.exe'))
+  // These assertions are INVERTED from what they were until 2026-08-03. They
+  // used to require that every artifact bundle
+  // node_modules/@anthropic-ai/claude-code/bin/claude.exe -- i.e. the test
+  // suite was mechanically enforcing the redistribution of a binary whose own
+  // LICENSE.md reads "(c) Anthropic PBC. All rights reserved." with no
+  // redistribution grant. A green suite is not evidence of a legal build; it
+  // is only evidence that the build matches whatever the suite was told to
+  // want. Now the suite wants the opposite, so re-bundling fails loudly here
+  // instead of shipping quietly.
+  //
+  // The user installs Claude Code themselves (npm, from Anthropic) and
+  // resolveClaudeBin() finds it on PATH. Automating that install on the
+  // user's machine is fine -- the bytes travel Anthropic -> user and never
+  // through our artifact. Copying them into our dmg is what was not.
+  const entries = [
+    ...(pkg.build.extraResources || []),
+    ...((pkg.build.mac && pkg.build.mac.extraResources) || []),
+    ...((pkg.build.win && pkg.build.win.extraResources) || []),
+  ]
+  const bundlesCli = entries.some((e) => String(e.from || '').includes('@anthropic-ai/claude-code'))
+  ok('no build lane ships the claude-code binary', !bundlesCli,
+    'redistributing an "All rights reserved" binary; the user installs it themselves')
   const mainSrc = fs.readFileSync(path.join(ROOT, 'main.cjs'), 'utf8')
-  ok("resolveClaudeBin picks the platform-matching bundled name", mainSrc.includes("isWin ? 'claude.exe' : 'claude'"))
+  ok('resolveClaudeBin does not look for a bundled copy', !mainSrc.includes("'claude-cli'"),
+    'a resolver that still probes Resources/claude-cli invites the bundle back')
+  ok('resolveClaudeBin searches npm global bin dirs', mainSrc.includes('NPM_GLOBAL_BIN_DIRS'),
+    'a packaged app inherits a minimal PATH; PATH alone will miss an npm -g install')
 }
 
 console.log('\n-- the permission strings the OS shows the user')

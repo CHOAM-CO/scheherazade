@@ -88,10 +88,6 @@
     "mac": {
       "extraResources": [
         {
-          "from": "node_modules/@anthropic-ai/claude-code/bin/claude.exe",
-          "to": "claude-cli/claude"
-        },
-        {
           "from": "vendor/tmux-portable",
           "to": "tmux-portable"
         }
@@ -120,12 +116,6 @@
       "sign": false
     },
     "win": {
-      "extraResources": [
-        {
-          "from": "node_modules/@anthropic-ai/claude-code/bin/claude.exe",
-          "to": "claude-cli/claude.exe"
-        }
-      ],
       "target": [
         {
           "target": "nsis",

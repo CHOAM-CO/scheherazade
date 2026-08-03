@@ -250,43 +250,90 @@ function createMainWindow(url) {
 // callback (fresh installs) -- see spawnRealAgentChildLocked() below for the
 // current spawn logic, and resolveClaudeBin() for how the bundled binary is
 // located in a packaged app. (history: docs/HISTORY.md)
+// npm -g bin locations, searched after PATH. A packaged Electron app is not
+// launched from a login shell, so process.env.PATH can be as bare as
+// /usr/bin:/bin -- which is exactly where an `npm i -g @anthropic-ai/claude-code`
+// never lands. Before 2026-08-03 this did not matter because a copy shipped
+// inside the app; now that the user brings their own, PATH alone would report
+// "not installed" to people who installed it correctly.
+const NPM_GLOBAL_BIN_DIRS = () => {
+  const home = os.homedir()
+  return process.platform === 'win32'
+    ? [path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'npm')]
+    : [
+        '/opt/homebrew/bin',
+        '/usr/local/bin',
+        path.join(home, '.local', 'bin'),
+        path.join(home, '.npm-global', 'bin'),
+        path.join(home, '.volta', 'bin'),
+      ]
+}
+
+// The claude CLI is NOT redistributed with this app: its LICENSE.md is
+// "(c) Anthropic PBC. All rights reserved." with no redistribution grant, so
+// shipping a copy inside the dmg was not ours to do. The user installs it
+// themselves -- see ensureClaudeCli() for the install-assist path -- and this
+// resolver only locates what is already on their machine.
 function resolveClaudeBin() {
   const isWin = process.platform === 'win32'
-  if (app.isPackaged) {
-    // electron-builder extraResources target -- see package.json's
-    // per-platform build.{mac,win}.extraResources and the RESOLVED comment
-    // above for how this gets populated at build time. The name is
-    // platform-conditional (win-port Phase 2): the old global `to:
-    // claude-cli/claude` stripped the .exe extension, which is harmless on
-    // mac (the postinstall put a Mach-O behind the .exe placeholder name)
-    // and FATAL on Windows (an extensionless PE binary is not executable).
-    const bundled = path.join(process.resourcesPath, 'claude-cli', isWin ? 'claude.exe' : 'claude')
-    if (fs.existsSync(bundled)) {
-      try {
-        fs.accessSync(bundled, fs.constants.X_OK)
-        return { bin: bundled, source: 'bundled' }
-      } catch {
-        // present but not executable -- fall through to PATH
-      }
-    }
-  }
-  // PATH fallback. On win, ONLY claude.exe: detection must mirror what the
+  // PATH first. On win, ONLY claude.exe: detection must mirror what the
   // supervisor's pty.spawn can actually exec -- a claude.cmd npm shim would
   // "detect" here and then fail at ConPTY spawn time (CreateProcess does not
   // interpret .cmd), a false-working state worse than a clean not-found.
   // UNVERIFIED on magi-win (flag class as supervisor.mjs's win lanes).
   const exeName = isWin ? 'claude.exe' : 'claude'
-  const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean)
-  for (const dir of dirs) {
-    const candidate = path.join(dir, exeName)
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK)
-      return { bin: candidate, source: 'system-path' }
-    } catch {
-      // not here, keep looking
+  const pathDirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean)
+  for (const [dirs, source] of [
+    [pathDirs, 'system-path'],
+    [NPM_GLOBAL_BIN_DIRS(), 'npm-global'],
+  ]) {
+    for (const dir of dirs) {
+      const candidate = path.join(dir, exeName)
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK)
+        return { bin: candidate, source }
+      } catch {
+        // not here, keep looking
+      }
     }
   }
   return null
+}
+
+// What the UI needs to say when the CLI is absent. Returned as DATA, not as a
+// side effect: nothing here installs anything. The install is the user's act
+// on the user's machine, so the command is shown, the license is named, and
+// the decision stays theirs.
+// The NATIVE installer, deliberately not npm. Anthropic's own docs call this
+// one "Native Install (Recommended)" and it needs nothing a normal person
+// would not already have: curl ships with macOS, irm is built into PowerShell.
+// The npm route needs Node 22+, and Homebrew/WinGet need a package manager --
+// all three are "no ordinary user has this" dependencies, which is the whole
+// class we are trying not to create. It also lands at ~/.local/bin/claude,
+// already covered by NPM_GLOBAL_BIN_DIRS above.
+// Docs: https://code.claude.com/docs/en/setup
+const CLAUDE_INSTALL_COMMAND =
+  process.platform === 'win32'
+    ? 'irm https://claude.ai/install.ps1 | iex'
+    : 'curl -fsSL https://claude.ai/install.sh | bash'
+
+function ensureClaudeCli() {
+  const resolved = resolveClaudeBin()
+  if (resolved) return { status: 'found', ...resolved }
+  return {
+    status: 'missing',
+    installCommand: CLAUDE_INSTALL_COMMAND,
+    // Claude Code needs a PAID plan: "Claude Code requires a Pro, Max, Team,
+    // Enterprise, or Console account. The free Claude.ai plan does not include
+    // Claude Code access." Saying this up front beats a stranger installing
+    // everything and only then discovering their free account cannot run it.
+    planRequirement: 'Pro, Max, Team, Enterprise, or Console (the free plan cannot run Claude Code)',
+    // Surfaced so the user agrees to Anthropic's terms with Anthropic, not with
+    // us. We are not a party to that install and do not want to look like one.
+    licenseUrl: 'https://code.claude.com/docs/en/legal-and-compliance',
+    docsUrl: 'https://code.claude.com/docs/en/setup',
+    searched: [...(process.env.PATH || '').split(path.delimiter).filter(Boolean), ...NPM_GLOBAL_BIN_DIRS()],
+  }
 }
 
 // run.sh as an INTERNAL bundled launcher (BUG 2 fix, see comment block
@@ -839,14 +886,16 @@ async function spawnRealAgentChildLocked() {
 
   const resolved = resolveClaudeBin()
   if (!resolved) {
+    const need = ensureClaudeCli()
     const reason =
-      'claude CLI not found -- expected the bundled binary at Resources/claude-cli/claude ' +
-      '(electron-builder extraResources, see resolveClaudeBin() above) to be present and ' +
-      'executable, and it is not; system PATH has no `claude` either.'
+      'Claude Code is not installed on this machine. Scheherazade runs on top of your own ' +
+      `Claude Code -- it does not ship one. Install it with: ${need.installCommand}  ` +
+      `then run 'claude' once to sign in. Requires ${need.planRequirement}.`
     console.error(
-      `[scheherazade/main] BLOCKER: ${reason} The real agent cannot be spawned. If this fires ` +
-        'in a packaged build, the extraResources copy is missing/corrupt/non-executable -- ' +
-        'check the build output. Onboarding UI stays usable.'
+      `[scheherazade/main] BLOCKER: ${reason} The real agent cannot be spawned. Searched PATH ` +
+        `and npm global bin dirs: ${need.searched.join(', ')}. If the user DID install it, this ` +
+        'is a PATH-visibility bug in a packaged app, not a missing install -- widen ' +
+        'NPM_GLOBAL_BIN_DIRS rather than telling them to reinstall. Onboarding UI stays usable.'
     )
     // Cause-code wiring (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 1):
     // no dedicated code exists for "bundled CLI binary missing" -- it isn't
@@ -1850,6 +1899,7 @@ process.on('unhandledRejection', (reason) => {
 module.exports = {
   spawnRealAgentChild,
   resolveClaudeBin,
+  ensureClaudeCli,
   killAgentSupervisor,
   isPidAlive,
   readPidFromFile,
