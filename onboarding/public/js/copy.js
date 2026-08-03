@@ -489,6 +489,36 @@ window.COPY = {
           action: () => 'Go back to the token step and paste a new token.',
           buttons: ['backToToken', 'openLogs'],
         },
+        // Slack and Telegram write their own codes into the failure marker
+        // (channel-slack.mjs's writeFailureMarker(..., 'slack_token_bad'),
+        // channel-telegram.mjs's 'telegram_token_bad') and main.cjs's
+        // pollFailureMarker relays them straight into setAgentStatus. Neither
+        // had a row here, so the single commonest way to misconfigure either
+        // channel rendered as the generic "failed to start / wait a moment and
+        // click Check status again" -- we knew exactly what was wrong and said
+        // we did not. Same defect as 'bootstrap-needed' above, found the same
+        // way (2026-08-04).
+        //
+        // NOT given the backToToken button: that button is hardcoded to the
+        // DISCORD tutorial's last step (wizard.js), so on a Slack or Telegram
+        // install it would send the user somewhere unrelated to the token that
+        // actually failed.
+        //
+        // Slack's marker also carries { token: 'bot' | 'app' } -- Slack is the
+        // one channel with two distinct tokens, and knowing WHICH one is
+        // rejected is most of the fix. wizard.js renders only `code` today, so
+        // this row cannot say it yet; naming that here rather than writing a
+        // sentence that quietly pretends the distinction does not exist.
+        slack_token_bad: {
+          cause: () => 'A Slack token is missing or was rejected. Slack uses two -- a bot token and an app-level token -- and either one can be the problem.',
+          action: () => 'Re-check both Slack tokens in Settings, then quit and reopen the app.',
+          buttons: ['openSettings', 'openLogs'],
+        },
+        telegram_token_bad: {
+          cause: () => 'The Telegram bot token is missing or was rejected.',
+          action: () => 'Re-check the token from BotFather in Settings, then quit and reopen the app.',
+          buttons: ['openSettings', 'openLogs'],
+        },
         provider_not_wired: {
           cause: () => "The model connection you chose isn't ready yet.",
           action: () => 'Switch the model to Claude in Settings, then quit and reopen the app.',
