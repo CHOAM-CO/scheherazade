@@ -128,11 +128,15 @@ console.log('\n5. the prose count matches reality')
 const countWord = { 1: 'One', 2: 'Two', 3: 'Three', 4: 'Four', 5: 'Five', 6: 'Six', 7: 'Seven', 8: 'Eight', 9: 'Nine', 10: 'Ten', 11: 'Eleven', 12: 'Twelve', 13: 'Thirteen', 14: 'Fourteen', 15: 'Fifteen' }
 const expectCommands = countWord[commandCount]
 const expectBlocking = (countWord[canBlock.size] || String(canBlock.size)).toLowerCase()
+// Label says WORD (n registered), not WORD (actual: n) -- the old form printed
+// the expected word beside the same number it was derived from, so a genuine
+// drift failure read as "Twelve (actual: 12)" and looked like a broken test
+// rather than a stale doc (2026-08-03).
 assert(!!expectCommands && doc.includes(`${expectCommands} hook commands`),
-  `the doc says "${expectCommands} hook commands" (actual: ${commandCount})`)
+  `ARCHITECTURE.md says "${expectCommands} hook commands" (${commandCount} registered)`)
 assert(doc.toLowerCase().includes(`${expectBlocking} of them can\nblock`) ||
        doc.toLowerCase().includes(`${expectBlocking} of them can block`),
-  `the doc says "${expectBlocking} of them can block" (actual: ${canBlock.size})`)
+  `ARCHITECTURE.md says "${expectBlocking} of them can block" (${canBlock.size} can)`)
 
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)
