@@ -145,11 +145,19 @@ console.log('vendored portable tmux:')
   check('vendor tree is committed (tmux + VERSION + 3 dylibs)',
     fs.existsSync(vendorBin) && fs.existsSync(path.join(vendorDir, 'VERSION')) &&
     fs.readdirSync(path.join(vendorDir, 'lib')).length === 3)
-  const links = execFileSync('otool', ['-L', vendorBin], { encoding: 'utf8' })
-  check('vendored binary carries NO Homebrew load paths', !/\/opt\/homebrew\/|\/usr\/local\//.test(links))
-  check('vendored binary links its dylibs via @executable_path/lib', (links.match(/@executable_path\/lib\//g) || []).length === 3)
-  const sig = spawnSync('codesign', ['--verify', vendorBin])
-  check('vendored binary signature verifies (install_name_tool re-sign happened)', sig.status === 0)
+  // otool + codesign are macOS binaries inspecting a macOS binary: the vendored
+  // tmux is a Mach-O that only ever runs in the darwin attach lane. On Windows
+  // execFileSync('otool') threw ENOENT and killed the whole file before the
+  // platform-independent checks below could run (2026-08-04 win suite).
+  if (process.platform === 'darwin') {
+    const links = execFileSync('otool', ['-L', vendorBin], { encoding: 'utf8' })
+    check('vendored binary carries NO Homebrew load paths', !/\/opt\/homebrew\/|\/usr\/local\//.test(links))
+    check('vendored binary links its dylibs via @executable_path/lib', (links.match(/@executable_path\/lib\//g) || []).length === 3)
+    const sig = spawnSync('codesign', ['--verify', vendorBin])
+    check('vendored binary signature verifies (install_name_tool re-sign happened)', sig.status === 0)
+  } else {
+    console.log('  n/a  otool/codesign checks on the vendored tmux -- Mach-O inspection, darwin only')
+  }
 
   // Boot sync, functionally: scratch DATA_HOME, real vendor source.
   const { createHarnessRender } = require_(path.join(ROOT, 'onboarding', 'harness-render.cjs'))

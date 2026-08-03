@@ -85,8 +85,15 @@ const goodClaude = readFileSync(CLAUDE, 'utf8')
 // Behavioural version of what scripts/test-attach-topology.mjs used to assert
 // by grepping for a chmodSync line: sudo -A execs this helper, so the mode is
 // the thing that matters, not the shape of the call that sets it.
-assert((statSync(path.join(SANDBOX, 'sudo-askpass.sh')).mode & 0o777) === 0o700,
-  'sudo-askpass.sh lands at 0700 after a real render')
+// POSIX only: sudo -A execs this helper, and both sudo and the exec bit are
+// POSIX concepts -- Node's chmod maps only the read-only bit on Windows, so
+// the mode can never be 0700 there (2026-08-04 win suite).
+if (process.platform === 'win32') {
+  console.log('  n/a  sudo-askpass.sh 0700 -- no sudo and no exec bit on Windows')
+} else {
+  assert((statSync(path.join(SANDBOX, 'sudo-askpass.sh')).mode & 0o777) === 0o700,
+    'sudo-askpass.sh lands at 0700 after a real render')
+}
 
 console.log('\n1. a template that cannot be read')
 const readBoom = () => { throw new Error('EIO: simulated unreadable template') }

@@ -283,7 +283,10 @@ console.log('\n-- persona-reflux.mjs (the two boot-test lessons must survive the
   ok('LESSON 1: mid-line 🔒 mention is NOT a correction', !proposals.includes('lines below in passing'))
   ok('marker stripped from the correction text', !proposals.includes('**Correction**: - 🔒'))
   const seen = fs.readFileSync(path.join(mem, '.review', '.reflux-seen'), 'utf8').trim().split('\n')
-  ok('LESSON 2: single-file run still keys as file:line', seen.every((k) => /session_notes\/2020-01-03\.md:\d+$/.test(k)), JSON.stringify(seen))
+  // [\\/] : the KEY is correct on Windows ('...\\session_notes\\2020-01-03.md:2'
+  // -- real path plus :line); it was this regex that assumed a POSIX
+  // separator. Asserting the shape, not the platform (2026-08-04 win run).
+  ok('LESSON 2: single-file run still keys as file:line', seen.every((k) => /session_notes[\\/]2020-01-03\.md:\d+$/.test(k)), JSON.stringify(seen))
   ok('reported 2 new corrections', r.stderr.includes('2 new correction(s)'), r.stderr)
 
   r = runPortedFull('scripts/persona-reflux.mjs', mem)
