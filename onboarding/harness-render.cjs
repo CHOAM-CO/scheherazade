@@ -486,6 +486,14 @@ function createHarnessRender(ctx) {
     // paths always match the installed app version. Executed only ever by the
     // USER in their terminal -- the app renders the file, never runs it (TCC
     // attribution must descend from the terminal, see the template's header).
+    // The app's own manual, rendered rather than shipped in docs/: a file
+    // inside app.asar exists and cannot be opened by the agent, which is a
+    // separate `claude` process reading real paths (same class as the
+    // toUnpackedPath comment above). Built it into docs/ first and the dmg
+    // proved it -- the agent could never have read a word of it. Lands beside
+    // CLAUDE.md in the agent's own directory, and is trigger-loaded from the
+    // system prompt rather than inlined, so it costs nothing per turn.
+    renderHarness(path.join('onboarding', 'templates', 'SCHEHERAZADE_MANUAL.md'), 'SCHEHERAZADE_MANUAL.md')
     renderHarness(path.join('onboarding', 'templates', 'attach-bootstrap.sh'), 'attach-bootstrap.sh')
     // sudo askpass helper (0.1.0 prep): must be executable -- sudo -A execs it.
     // Content carries no secret (it fetches at run time); 0700 anyway.

@@ -447,8 +447,8 @@ console.log('\n-- SCHEHERAZADE_MANUAL.md stays welded to the real option surface
   // the agent should be able to explain. Adding a switch without documenting it
   // now breaks the build instead of quietly widening the gap between what the
   // app can do and what the agent knows.
-  const manualPath = path.join(ROOT, 'docs', 'SCHEHERAZADE_MANUAL.md')
-  ok('docs/SCHEHERAZADE_MANUAL.md exists', fs.existsSync(manualPath),
+  const manualPath = path.join(ROOT, 'onboarding', 'templates', 'SCHEHERAZADE_MANUAL.md')
+  ok('onboarding/templates/SCHEHERAZADE_MANUAL.md exists', fs.existsSync(manualPath),
     'the agent has no inventory of its own app without it')
   if (fs.existsSync(manualPath)) {
     const manual = fs.readFileSync(manualPath, 'utf8')
@@ -498,13 +498,23 @@ console.log('\n-- SCHEHERAZADE_MANUAL.md stays welded to the real option surface
     // would spend context every single turn on something needed a few times a
     // month, and would make the prompt grow with every new option.
     const prompt = fs.readFileSync(path.join(ROOT, 'onboarding/templates/agent-system-prompt.md'), 'utf8')
-    ok('the prompt POINTS at the manual', prompt.includes('docs/SCHEHERAZADE_MANUAL.md'),
+    ok('the prompt POINTS at the manual', prompt.includes('SCHEHERAZADE_MANUAL.md'),
       'an agent that does not know the file exists will never read it')
     ok('the manual is NOT inlined into the prompt', !prompt.includes('## Danger zone'),
       'lazy-load it; a pasted copy both burns context every turn and rots separately from docs/')
     ok('the manual carries retrieval frontmatter (slug/title/aliases)',
       /^---\n[\s\S]*?slug:[\s\S]*?title:[\s\S]*?aliases:[\s\S]*?\n---/m.test(manual),
       'aliases are how a Korean phrasing finds an English page')
+    // REACHABILITY, not just presence. The first build shipped this file in
+    // docs/, which lands inside app.asar -- present in the artifact and
+    // unopenable by the agent, since the agent is a separate `claude` process
+    // reading real paths. Rendering it into the agent's data dir beside
+    // CLAUDE.md is what actually makes it readable, so that is what gets
+    // asserted; "the file exists in the repo" never implied the agent can read it.
+    const harness = fs.readFileSync(path.join(ROOT, 'onboarding/harness-render.cjs'), 'utf8')
+    ok('the manual is RENDERED into the agent data dir (not asar-trapped)',
+      /renderHarness\([^)]*SCHEHERAZADE_MANUAL\.md/.test(harness),
+      'a manual inside app.asar exists and cannot be opened by the agent')
     ok('the manual names the risk of the uninstall path', /uninstall/i.test(manual) && /memory/i.test(manual),
       'clean uninstall deletes the agent\'s memory; the agent must be able to say so before it runs')
   }
