@@ -123,7 +123,14 @@ function rootModulesReferencedBy(file) {
   // status.cjs') resolved to ROOT/login-status.cjs, missed on statSync, and
   // got dropped by a silent catch -- hiding whether it actually ships. That
   // exact blind spot is blocker-1.
-  return [...found].map((spec) => path.normalize(path.join(fileDir, spec)))
+  // POSIX separators, always. These are LOGICAL repo-relative ids that get
+  // compared against build.files globs, and electron-builder globs are '/'
+  // on every platform. path.join/normalize hand back 'onboarding\routes\
+  // chat.cjs' on Windows, which matches no pattern -- so on the win box every
+  // nested require reported "does not ship" and predist:win failed 21 rows,
+  // making `npm run dist:win` unbuildable (found 2026-08-03, first real run
+  // on magi-win). fs.existsSync takes forward slashes on Windows fine.
+  return [...found].map((spec) => path.posix.normalize(path.posix.join(fileDir.split(path.sep).join('/'), spec)))
 }
 
 // blocker-1 (Skia red-team 2026-07-23): the old scan walked ONE hop from the
@@ -374,9 +381,20 @@ ok('electron-builder native rebuild is OFF (npmRebuild:false)', pkg.build.npmReb
 const PATCHED_LINE = "if (!helperPath.includes('app.asar.unpacked')) helperPath = helperPath.replace('app.asar', 'app.asar.unpacked');"
 ok('postinstall carries the helperPath double-replace patch', fs.readFileSync(path.join(ROOT, 'scripts', 'fix-pty-helper.mjs'), 'utf8').includes(PATCHED_LINE),
   'without it, pty.spawn from the unpacked tree resolves spawn-helper to app.asar.unpacked.unpacked -> ENOENT')
-ok('repo node_modules unixTerminal.js is patched (postinstall ran)', fs.readFileSync(path.join(ROOT, 'node_modules', 'node-pty', 'lib', 'unixTerminal.js'), 'utf8').includes(PATCHED_LINE),
-  'run node scripts/fix-pty-helper.mjs (or npm install) -- the unpatched line corrupts helperPath in the packed app')
-{
+// spawn-helper, and therefore the whole helperPath defect, is a POSIX-only
+// thing: node-pty on Windows goes through conpty/winpty and ships no helper,
+// which is why fix-pty-helper.mjs prints "win32: nothing to do". Asserting the
+// patch unconditionally made predist:win fail a row it can never satisfy
+// (found on magi-win 2026-08-03). Guard it, do not weaken it.
+if (WIN_LANE) {
+  console.log('  n/a  unixTerminal.js helperPath patch -- POSIX-only (win32 uses conpty; no spawn-helper ships)')
+} else {
+  ok('repo node_modules unixTerminal.js is patched (postinstall ran)', fs.readFileSync(path.join(ROOT, 'node_modules', 'node-pty', 'lib', 'unixTerminal.js'), 'utf8').includes(PATCHED_LINE),
+    'run node scripts/fix-pty-helper.mjs (or npm install) -- the unpatched line corrupts helperPath in the packed app')
+}
+if (WIN_LANE) {
+  console.log('  n/a  built-artifact node-pty checks -- darwin-arm64 prebuild + exec-bit rows do not apply to the NSIS lane')
+} else {
   const unpackedPty = path.join(ROOT, 'release', 'mac-arm64', 'Scheherazade.app', 'Contents', 'Resources', 'app.asar.unpacked', 'node_modules', 'node-pty')
   if (!fs.existsSync(unpackedPty)) {
     console.log('  SKIP  built-artifact node-pty checks -- no release/mac-arm64 build output present (run npm run dist first); NOT a pass')
