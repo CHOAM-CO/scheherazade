@@ -281,6 +281,17 @@ const NPM_GLOBAL_BIN_DIRS = () => {
         // edit, so PATH alone does not see it until they log out.
         path.join(home, '.local', 'bin'),
         path.join(process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'Programs', 'claude'),
+        // WinGet's shim directory. Measured, not assumed: on magi-win
+        // (2026-08-04) `Get-Command claude` resolves to
+        // C:\Users\minom\AppData\Local\Microsoft\WinGet\Links\claude.exe and
+        // nothing else -- that box's only Claude Code is a WinGet install.
+        //
+        // It is found today ONLY because that dir happens to be on the
+        // inherited PATH, which is precisely the thing this list exists to not
+        // depend on: a packaged app inherits explorer.exe's PATH, and a
+        // freshly-installed shim dir is not in it until the user logs out.
+        // These are real .exe shims, so unlike claude.cmd they spawn fine.
+        path.join(process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'Microsoft', 'WinGet', 'Links'),
       ]
     : [
         '/opt/homebrew/bin',
@@ -341,11 +352,49 @@ const CLAUDE_INSTALL_COMMAND =
     ? 'irm https://claude.ai/install.ps1 | iex'
     : 'curl -fsSL https://claude.ai/install.sh | bash'
 
+// Windows only, and only reached when resolveClaudeBin() found nothing.
+//
+// `npm i -g @anthropic-ai/claude-code` on Windows does not write claude.exe --
+// it writes claude.cmd (and claude.ps1), shims that only a shell interprets.
+// resolveClaudeBin deliberately refuses to return those, because the supervisor
+// spawns through ConPTY and CreateProcess cannot exec a .cmd: detecting one
+// would produce a "found it" that dies at spawn, which is worse than a clean
+// not-found. That refusal is right and stays.
+//
+// What was wrong is what we then SAY. A user who ran the widely-documented npm
+// install is told "Claude Code is not installed on this machine", which they
+// know to be false, so the honest instruction that follows reads as a bug and
+// they stop there. The command we recommend does fix it -- the native installer
+// writes a real .exe -- but only if they believe us enough to run it.
+//
+// So: look for the shim, and if it is there, say the true thing instead. This
+// changes the SENTENCE only. Nothing here makes a shim spawnable.
+function findClaudeShim() {
+  if (process.platform !== 'win32') return null
+  const dirs = [...(process.env.PATH || '').split(path.delimiter).filter(Boolean), ...NPM_GLOBAL_BIN_DIRS()]
+  for (const dir of dirs) {
+    for (const name of ['claude.cmd', 'claude.bat', 'claude.ps1']) {
+      const candidate = path.join(dir, name)
+      try {
+        fs.accessSync(candidate, fs.constants.F_OK)
+        return candidate
+      } catch {
+        // not here, keep looking
+      }
+    }
+  }
+  return null
+}
+
 function ensureClaudeCli() {
   const resolved = resolveClaudeBin()
   if (resolved) return { status: 'found', ...resolved }
+  const shim = findClaudeShim()
   return {
     status: 'missing',
+    // Present only when the user DOES have Claude Code, in a form this app
+    // cannot drive. Callers that ignore it lose nothing.
+    shimOnlyPath: shim,
     installCommand: CLAUDE_INSTALL_COMMAND,
     // Claude Code needs a PAID plan: "Claude Code requires a Pro, Max, Team,
     // Enterprise, or Console account. The free Claude.ai plan does not include
@@ -951,10 +1000,18 @@ async function spawnRealAgentChildLocked() {
   const resolved = resolveClaudeBin()
   if (!resolved) {
     const need = ensureClaudeCli()
-    const reason =
-      'Claude Code is not installed on this machine. Scheherazade runs on top of your own ' +
-      `Claude Code -- it does not ship one. Install it with: ${need.installCommand}  ` +
-      `then run 'claude' once to sign in. Requires ${need.planRequirement}.`
+    // Two different sentences, because two different things are true. Telling
+    // someone who just ran `npm i -g @anthropic-ai/claude-code` that it is not
+    // installed is false to them, and once one sentence is visibly false the
+    // correct instruction under it stops being believed.
+    const reason = need.shimOnlyPath
+      ? `Claude Code is installed here as a shell shim (${need.shimOnlyPath}), which this app cannot launch directly -- ` +
+        'it drives the CLI through a real console process, and a .cmd shim is not one. ' +
+        `Install the native build alongside it with: ${need.installCommand}  ` +
+        `then run 'claude' once to sign in. Requires ${need.planRequirement}.`
+      : 'Claude Code is not installed on this machine. Scheherazade runs on top of your own ' +
+        `Claude Code -- it does not ship one. Install it with: ${need.installCommand}  ` +
+        `then run 'claude' once to sign in. Requires ${need.planRequirement}.`
     console.error(
       `[scheherazade/main] BLOCKER: ${reason} The real agent cannot be spawned. Searched PATH ` +
         `and npm global bin dirs: ${need.searched.join(', ')}. If the user DID install it, this ` +

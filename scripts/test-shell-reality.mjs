@@ -70,5 +70,28 @@ check('the FAILED state surfaces the refusal detail next to the picker',
 check('a change follows the settle instead of leaving a stale line',
   settings.includes('settleApplyState()'))
 
+// ── the Windows shim: the shell's reality vs the file's existence ───────────
+// Same principle as the rest of this file, in its purest form. On Windows,
+// `npm i -g @anthropic-ai/claude-code` writes claude.cmd -- a file named
+// claude that IS NOT a program. CreateProcess cannot exec it, so the
+// supervisor's ConPTY spawn cannot either, and a resolver that accepted it
+// would report "found" for something that dies at launch.
+//
+// Two invariants, and they pull in opposite directions, which is why both are
+// pinned. Weakening either one is what would break this.
+check('resolveClaudeBin still refuses shims on win32 (detection mirrors what ConPTY can actually exec)',
+  main.includes("const exeName = isWin ? 'claude.exe' : 'claude'"))
+check('but a present shim is FOUND for the purpose of explaining itself',
+  main.includes('function findClaudeShim()') && main.includes("'claude.cmd', 'claude.bat', 'claude.ps1'"))
+check('findClaudeShim is win32-only (a POSIX claude is a real executable; there is nothing to explain)',
+  /function findClaudeShim\(\)\s*\{\s*\n\s*if \(process\.platform !== 'win32'\) return null/.test(main))
+// The point of the whole thing: the user who ran the documented npm install
+// must not be told they have not installed it. One visibly false sentence
+// costs us the true instruction underneath it.
+check('the blocker message branches on the shim rather than asserting "not installed"',
+  main.includes('need.shimOnlyPath') && main.includes('installed here as a shell shim'))
+check('the shim branch still points at the native installer (the shim itself is never made spawnable)',
+  /shimOnlyPath[\s\S]{0,600}need\.installCommand/.test(main))
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)
