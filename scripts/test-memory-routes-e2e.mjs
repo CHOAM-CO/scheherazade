@@ -30,6 +30,11 @@ fs.writeFileSync(
   '# Fixture Memory\n\nnot a secret, just a heading to point at\n',
 )
 process.env.HOME = fixtureHome
+// USERPROFILE too, or this is not hermetic on Windows: os.homedir() reads
+// USERPROFILE there and ignores HOME entirely, so the scan walked the REAL
+// home and found 200 files instead of the single fixture CLAUDE.md
+// (2026-08-04 win suite). Setting both keeps one code path for both platforms.
+process.env.USERPROFILE = fixtureHome
 process.env.AGENT_DATA_HOME = path.join(tmp, 'data')
 fs.mkdirSync(process.env.AGENT_DATA_HOME, { recursive: true })
 process.env.SCHEHERAZADE_MEMORY_DB = path.join(tmp, 'memory.db')

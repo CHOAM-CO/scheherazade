@@ -29,6 +29,24 @@ function assert(cond, label) {
   else { fail++; console.log(`  FAIL ${label}`) }
 }
 
+// darwin only. buildUninstallPlan emits macOS residue classes (~/Library/...,
+// a .plist, `security delete-generic-password`) and this file asserts them as
+// literal POSIX paths; path.join inside the builder returns backslashes on
+// Windows, so every includes() missed (2026-08-04 win suite). The Windows
+// uninstall path is the NSIS uninstaller, and the route now refuses with 501
+// there -- which is what gets asserted below instead, so this file still
+// tests something real on Windows rather than being skipped whole.
+if (process.platform !== 'darwin') {
+  console.log('\n1. non-darwin: the in-app uninstall must REFUSE, not half-run')
+  const settingsSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'routes', 'settings.cjs'), 'utf8')
+  assert(/process\.platform !== 'darwin'/.test(settingsSrc) && /unsupported_platform/.test(settingsSrc),
+    'the /api/uninstall handler refuses on non-darwin')
+  assert(/reaper\.on\('error'/.test(settingsSrc),
+    "the reaper spawn carries an 'error' listener (an unhandled one reaches uncaughtException -> app.exit(1))")
+  console.log(`\n${pass} passed, ${fail} failed`)
+  process.exit(fail === 0 ? 0 : 1)
+}
+
 console.log('\n1. the list: four residue classes in, the protected paths out')
 {
   const home = '/Users/testuser'

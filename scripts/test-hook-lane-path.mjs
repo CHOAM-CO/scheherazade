@@ -49,12 +49,25 @@ if (control.status === 0) {
   check('shim dir appended, base preserved', patched.startsWith(BARE_PATH) && patched.includes(path.join(mem, 'bin')), patched)
   const hookScript = path.join(mem, 'fake-hook.mjs')
   fs.writeFileSync(hookScript, 'console.log("hook-ran:" + (7 * 6))\n')
-  // The EXACT shape Claude Code uses for hook commands: /bin/sh -c "node <script>"
-  const run = spawnSync('/bin/sh', ['-c', `node "${hookScript}"`], { env: { PATH: patched }, timeout: 15000 })
-  check('sh -c "node hook.mjs" runs via shim', run.status === 0 && String(run.stdout).includes('hook-ran:42'),
-    `status=${run.status} stdout=${String(run.stdout).trim()} stderr=${String(run.stderr).trim().slice(0, 200)}`)
-  const shimBody = fs.readFileSync(path.join(mem, 'bin', 'node'), 'utf8')
-  check('shim sets ELECTRON_RUN_AS_NODE for the app lane', shimBody.includes('ELECTRON_RUN_AS_NODE=1'))
+  // ensureNodeShim writes bin/node (sh) on POSIX and bin/node.cmd on Windows --
+  // see its IS_WIN branch. This file assumed the POSIX name and shape, so on
+  // the win box it died on ENOENT reading bin/node before asserting anything
+  // (2026-08-04 win suite). Both lanes are checked on their own terms now.
+  if (process.platform === 'win32') {
+    const run = spawnSync(process.env.COMSPEC || 'cmd.exe', ['/c', `node "${hookScript}"`],
+      { env: { ...process.env, PATH: patched, PATHEXT: process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD' }, timeout: 15000 })
+    check('cmd /c "node hook.mjs" runs via shim', run.status === 0 && String(run.stdout).includes('hook-ran:42'),
+      `status=${run.status} stdout=${String(run.stdout).trim()} stderr=${String(run.stderr).trim().slice(0, 200)}`)
+    const shimBody = fs.readFileSync(path.join(mem, 'bin', 'node.cmd'), 'utf8')
+    check('shim sets ELECTRON_RUN_AS_NODE for the app lane', shimBody.includes('ELECTRON_RUN_AS_NODE=1'))
+  } else {
+    // The EXACT shape Claude Code uses for hook commands: /bin/sh -c "node <script>"
+    const run = spawnSync('/bin/sh', ['-c', `node "${hookScript}"`], { env: { PATH: patched }, timeout: 15000 })
+    check('sh -c "node hook.mjs" runs via shim', run.status === 0 && String(run.stdout).includes('hook-ran:42'),
+      `status=${run.status} stdout=${String(run.stdout).trim()} stderr=${String(run.stderr).trim().slice(0, 200)}`)
+    const shimBody = fs.readFileSync(path.join(mem, 'bin', 'node'), 'utf8')
+    check('shim sets ELECTRON_RUN_AS_NODE for the app lane', shimBody.includes('ELECTRON_RUN_AS_NODE=1'))
+  }
 }
 
 // ── 2. wiring tripwire: the patch lives at the SHARED env layer ────────────
