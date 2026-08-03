@@ -280,7 +280,9 @@ console.log('template + wiring tripwires:')
 
 // ── 4. sudo askpass helper: real end-to-end against a live HTTP endpoint ───
 console.log('sudo askpass helper e2e:')
-{
+// LABELLED so the win32 branch below can leave the block -- this is a bare
+// block at module top level, not a function, so `return` is illegal here.
+sudoAskpass: {
   const http = await import('node:http')
   const mem = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-askpass-'))
   const SECRET = 'correct-horse-battery-staple'
@@ -305,6 +307,15 @@ console.log('sudo askpass helper e2e:')
   // ASYNC spawn on purpose: the helper curls the http server living in THIS
   // process -- a spawnSync here blocks the event loop and deadlocks the test
   // against its own server (caught live on first run: curl waited forever).
+  // The askpass helper is a bash script invoked by `sudo -A`; neither bash nor
+  // sudo exists on Windows, and spawn('/bin/bash') there raises an UNHANDLED
+  // 'error' event that kills the whole file -- the last Windows failure in this
+  // file after the Mach-O gates (2026-08-04 win suite).
+  if (process.platform === 'win32') {
+    console.log('  n/a  sudo-askpass helper round-trip -- no bash and no sudo -A on Windows')
+    server.close()
+    break sudoAskpass
+  }
   const { spawn } = await import('node:child_process')
   const runHelper = () => new Promise((resolve) => {
     const child = spawn('/bin/bash', [helper])

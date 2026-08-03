@@ -513,6 +513,24 @@ window.COPY = {
         },
         // Fallback row -- any code not in this table (including a literal
         // "unknown") lands here.
+        // 'bootstrap-needed' is set at FOUR places in main.cjs (the attach-
+        // topology paths) and had no row here, so causes[code] || causes.unknown
+        // rendered 'failed to start / wait a moment and click Check status
+        // again' -- advice that can never resolve it, because nothing about it
+        // is transient. Found by reading Codex's error taxonomy and asking what
+        // OUR codes do not cover (2026-08-04).
+        // NOTE for whoever touches this next: main.cjs's four call sites pass a
+        // precise Korean detail (including the exact command to run) and
+        // wizard.js deliberately never renders detail ('free-form debug prose').
+        // That rule is right for the other codes and wrong for this one; making
+        // the detail renderable is a bigger change than a copy row, so this row
+        // states the situation generically and the specific command still only
+        // reaches the console. Left as a decision for Mino, not silently taken.
+        'bootstrap-needed': {
+          cause: (name) => `${name} is set to attach mode, but there is no session to attach to yet.`,
+          action: () => 'Restart the app once -- the bundled tmux sets itself up on boot. If it persists, switch topology to spawn in Settings.',
+          buttons: ['openSettings', 'openLogs'],
+        },
         unknown: {
           cause: (name) => `${name} failed to start.`,
           action: () => 'Wait a moment and click Check status again. If it keeps happening, quit the app and reopen it.',
