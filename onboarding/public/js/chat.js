@@ -85,9 +85,13 @@
     emptyEl = null
   }
 
-  // textContent ONLY -- message text (either side's) never rides innerHTML.
-  // textContent is assigned BEFORE any child node (react bar, badge) is
-  // attached: assigning it later would wipe them.
+  // NO innerHTML -- message text (either side's) is model output and forwarded
+  // human text, i.e. exactly where an injection would arrive. renderMarkdown
+  // builds DOM nodes and puts every character through createTextNode, so the
+  // original textContent-only guarantee survives the addition of formatting
+  // (markdown.js header has the reasoning). Message text is still written
+  // BEFORE any child node (react bar, badge) is attached: renderMarkdown
+  // clears the element first, so calling it later would wipe them.
   function appendMsg(m) {
     clearEmpty()
     const stick = atBottom()
@@ -95,7 +99,7 @@
     const el = document.createElement('div')
     el.className = `chat-msg chat-${role}`
     el.dataset.seq = m.seq
-    el.textContent = m.text
+    renderMarkdown(el, m.text)
     if (role === 'agent') attachReactBar(el, m.seq)
     else lastUserBubble = el
     pane.appendChild(el)

@@ -572,8 +572,12 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   max-width: 78%;
   padding: 0.55rem 0.85rem;
   border-radius: 12px;
-  /* the agent's line breaks are part of the message */
-  white-space: pre-wrap;
+  /* Line breaks are still part of the message, but they are now carried by the
+     markdown renderer as real <br>/<p> nodes instead of by pre-wrap. Leaving
+     pre-wrap on would double every gap: the source newline AND the block it
+     already became. pre-wrap survives where it is still the meaning, inside
+     <pre> below. */
+  white-space: normal;
   word-break: break-word;
   font-size: 0.95rem;
   line-height: 1.5;
@@ -732,3 +736,45 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .log-gap { color: var(--fg-dim); font-style: italic; text-align: center; padding: 0.3rem 0; }
 .log-empty { color: var(--fg-faint); font-style: italic; }
 .log-file-note { margin-top: 0.5rem; font-size: 0.78rem; color: var(--fg-faint); word-break: break-all; }
+
+/* ── markdown inside a chat bubble ────────────────────────────────────────
+   Tight on purpose: this is a chat message, not a document. First and last
+   child lose their outer margin so a formatted bubble is the same height as a
+   plain one -- otherwise every bold-only reply gains padding nobody asked for. */
+.chat-msg p { margin: 0 0 0.5rem; }
+.chat-msg > :first-child { margin-top: 0; }
+.chat-msg > :last-child { margin-bottom: 0; }
+.chat-msg h3, .chat-msg h4, .chat-msg h5, .chat-msg h6 {
+  margin: 0.6rem 0 0.35rem;
+  font-size: 1em;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.chat-msg ul, .chat-msg ol { margin: 0 0 0.5rem; padding-left: 1.25rem; }
+.chat-msg li { margin: 0.15rem 0; }
+.chat-msg code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.88em;
+  padding: 0.1em 0.32em;
+  border-radius: 4px;
+  background: rgba(127, 127, 127, 0.18);
+  word-break: break-word;
+}
+.chat-msg pre {
+  margin: 0 0 0.5rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 8px;
+  background: rgba(127, 127, 127, 0.16);
+  /* a long line scrolls the block, never the whole chat pane sideways */
+  overflow-x: auto;
+  white-space: pre;
+}
+.chat-msg pre code { padding: 0; background: none; font-size: 0.85em; }
+.chat-msg blockquote {
+  margin: 0 0 0.5rem;
+  padding-left: 0.7rem;
+  border-left: 3px solid rgba(127, 127, 127, 0.4);
+  opacity: 0.9;
+}
+.chat-msg hr { border: 0; border-top: 1px solid rgba(127, 127, 127, 0.3); margin: 0.6rem 0; }
+.chat-msg a { color: inherit; text-decoration: underline; }
