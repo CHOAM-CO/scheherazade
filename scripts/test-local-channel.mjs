@@ -377,4 +377,15 @@ console.log('\n10. boot announce: the greeting is the first thing the chat pane 
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
-process.exit(fail === 0 ? 0 : 1)
+// exitCode, not process.exit() -- see the long note at the bottom of
+// scripts/test-codex-proxy-model.mjs for the measured reason. Short version:
+// on Windows (node 24.18.1 / libuv 1.52.1), process.exit() after >=3
+// fetch()-to-a-local-server round trips aborts the process with
+// `!(handle->flags & UV_HANDLE_CLOSING), src\win\async.c:94` -- after every
+// assertion has already passed. This file did it about 1 run in 5, which is
+// the worst kind: a flaky failure whose own output says 78 passed, 0 failed.
+//
+// This file spawns children. If it ever hangs here instead of exiting, one of
+// them outlived its teardown -- fix the leak rather than restoring
+// process.exit(), which only converted the leak into an abort.
+process.exitCode = fail === 0 ? 0 : 1

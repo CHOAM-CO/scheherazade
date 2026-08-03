@@ -42,7 +42,12 @@ async function healthModel(createApp) {
     const health = await (await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(2000) })).json()
     return health.model
   } finally {
-    srv.close()
+    // Awaited rather than fire-and-forget. Tried first as the fix for the
+    // Windows abort described at the bottom of this file, and it was NOT the
+    // cause -- the abort reproduced 5/5 with this in place. Kept anyway
+    // because abandoning a server mid-close is wrong on its own terms, but
+    // recorded as a falsified hypothesis so nobody re-tries it.
+    await new Promise((resolve) => srv.close(resolve))
   }
 }
 
@@ -84,4 +89,41 @@ ok('main.cjs gates on the /health model receipt (fail closed on mismatch)', main
 ok('a model swap rebuilds the live proxy (codexProxyModel compared on ensure)', mainSrc.includes('codexProxyModel === desiredModel') && mainSrc.includes('codexProxyModel = desiredModel'))
 
 console.log(`\n${pass} passed, ${fail} failed`)
-process.exit(fail === 0 ? 0 : 1)
+// NOT process.exit() -- exitCode, and let the loop drain (2026-08-04).
+//
+// On Windows this file printed "9 passed, 0 failed" and then exited
+// -1073740791 (0xC0000409, __fastfail), with:
+//
+//   Assertion failed: !(handle->flags & UV_HANDLE_CLOSING),
+//   file src\win\async.c, line 94
+//
+// i.e. uv_async_send() reaching an already-closing handle. A test that fails
+// while reporting every assertion green costs more to diagnose than the thing
+// it tests, so it was worth chasing to the bottom.
+//
+// It is NOT our bug. Minimal reproducer, node 24.18.1 / libuv 1.52.1 on
+// Windows, no dependency on anything in this repo:
+//
+//   import http from 'node:http'
+//   for (let i = 0; i < 3; i++) {
+//     const s = http.createServer((q, r) => r.end('{}')).listen(0, '127.0.0.1')
+//     await new Promise((r) => s.once('listening', r))
+//     await (await fetch(`http://127.0.0.1:${s.address().port}/`)).json()
+//     await new Promise((r) => s.close(r))
+//   }
+//   process.exit(0)
+//
+// Measured, each variant run 3-4 times:
+//   iterations 1, 2  -> exit 0.  iterations 3, 4, 5 -> abort, every run.
+//   drop process.exit(), let it drain -> exit 0 at every iteration count.
+//   drop AbortSignal.timeout -> still aborts (not the timer).
+//   await srv.close() -> still aborts (not the abandoned handle).
+//
+// So the trigger is process.exit() while undici's pool still holds handles
+// from >=3 completed fetches, and the fix available to us is to stop calling
+// it. macOS (node 24.7 / libuv 1.51) never reproduced this at any count.
+//
+// If a future edit makes this file hang instead of exiting, that is a handle
+// this test forgot to close -- find it rather than restoring process.exit(),
+// which only hid it behind an abort.
+process.exitCode = fail === 0 ? 0 : 1
