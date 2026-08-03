@@ -143,6 +143,42 @@ console.log('cap table:')
     const got = contextCapForModel(model)
     check(`cap(${model}) = ${cap}/${src}`, got.cap === cap && got.capSource === src, JSON.stringify(got))
   }
+
+  // ── every model the user can PICK resolves to a cap (2026-08-04) ──────
+  // The list above is hand-written, which makes it a THIRD copy of the same
+  // fact (settings.js's MODEL_CATALOG, http-server.cjs's cap table, here) --
+  // and copies drift. They already have: contextCapForModel's CLAUDE_1M set
+  // names claude-opus-4-7 and claude-sonnet-4-6, and neither exists in the
+  // catalog.
+  //
+  // That direction of drift is harmless -- a dead entry in the fallback set
+  // just never matches, and it is deliberately NOT asserted away here,
+  // because a user whose config carries an older model id still wants a
+  // gauge. The direction that HURTS is the reverse: a model added to the
+  // picker with no cap entry. Cap null renders as no gauge at all, so the
+  // user picks a model from our own menu and the context meter silently
+  // stops working. Nothing today catches that; this does.
+  //
+  // Source-text read, not import: settings.js is browser code (it touches
+  // `window` at load) and importing it here would fail rather than test.
+  const settingsSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'public', 'js', 'settings.js'), 'utf8')
+  const catStart = settingsSrc.indexOf('const MODEL_CATALOG = [')
+  const catEnd = settingsSrc.indexOf('\n  ]', catStart)
+  check('located MODEL_CATALOG in settings.js', catStart !== -1 && catEnd > catStart)
+  const catalogIds = [...settingsSrc.slice(catStart, catEnd).matchAll(/\{\s*id:\s*'([^']+)'/g)].map((m) => m[1])
+  check(`MODEL_CATALOG scan found rows (${catalogIds.length})`, catalogIds.length >= 5, catalogIds.join(','))
+
+  for (const id of catalogIds) {
+    // Ollama and custom-proxy ids are third-party model tags -- we have no
+    // receipts for their context windows and the cap table says so by
+    // returning null. Asserting a cap for those would be inventing one, which
+    // is the opposite of what this cap table is for. Only the two families we
+    // have receipts for are required to resolve.
+    const receiptsBacked = id.startsWith('claude-') || id.startsWith('gpt-')
+    if (!receiptsBacked) continue
+    const got = contextCapForModel(id)
+    check(`catalog model '${id}' resolves to a cap (else its gauge silently disappears)`, got.cap !== null, JSON.stringify(got))
+  }
 }
 
 // ── 5. wiring tripwires: template + existing-install migration ─────────────
