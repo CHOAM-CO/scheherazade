@@ -530,6 +530,18 @@
     // deepseek verified live by Mino (2026-07-13 19:41 "딥시크 정상작동 확인",
     // same round as glm/sonnet-5/opus-4.8; model-swap continuity also held).
     { id: 'deepseek-v4-pro:cloud', label: 'DeepSeek V4 Pro', group: 'Ollama', providers: ['ollama'] },
+    // deepseek-v4-flash:0731-cloud — added 2026-08-04 on Mino's ask. Tag taken
+    // VERBATIM from Ollama's own announcement mail (the `ollama launch claude
+    // --model deepseek-v4-flash:0731-cloud` line), not guessed from the model
+    // name: the date segment and the `-cloud` suffix are both part of the id,
+    // and this catalog's ids are passed straight through as MODEL.
+    // UNVERIFIED, deliberately labelled so: unlike the two rows around it,
+    // nobody has run a live tool-use session on it here. This lane has burned
+    // us exactly once before (kimi, 07-13: swapped in, went mute in
+    // production, every pre-swap probe passed). The mute-strike ledger will
+    // convict it on real behaviour if it misbehaves; until someone actually
+    // drives it, the label is the honest state.
+    { id: 'deepseek-v4-flash:0731-cloud', label: 'DeepSeek V4 Flash (0731, untested here)', group: 'Ollama', providers: ['ollama'] },
     // glm-5.2 tool-use verified live by Mino (2026-07-13 19:32, same ollama
     // lane as kimi: "glm5.2 << 문제 전혀없음") -- label cleared same day it
     // was added. sonnet-5 / opus-4.8 verified in the same test round.
