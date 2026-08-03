@@ -43,7 +43,12 @@ const CURSOR_PATH = path.join(GATES_DIR, 'receipt-ledger.cursor')
 const MAX_LEDGER_BYTES = 1024 * 1024
 
 try {
-  const raw = readFileSync('/dev/stdin', 'utf8').trim()
+  // fd 0, not '/dev/stdin': that path does not exist on Windows, so the read
+  // threw, the catch exited 0, and this hook did NOTHING on that platform --
+  // silently, which is the failure mode hooks are least able to report.
+  // (Found 2026-08-04 running the suite on the win box.) readFileSync(0) is
+  // the portable form and behaves identically on POSIX.
+  const raw = readFileSync(0, 'utf8').trim()
   if (!raw) process.exit(0)
   const input = JSON.parse(raw)
   if ((input.tool_name || '') !== 'Bash') process.exit(0)

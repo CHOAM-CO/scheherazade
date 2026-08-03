@@ -93,7 +93,12 @@ function failOpen(stage, err) {
 try {
   let raw
   try {
-    raw = readFileSync('/dev/stdin', 'utf8').trim()
+    // fd 0, not '/dev/stdin': that path does not exist on Windows, so the read
+    // threw, the catch exited 0, and this hook did NOTHING on that platform --
+    // silently, which is the failure mode hooks are least able to report.
+    // (Found 2026-08-04 running the suite on the win box.) readFileSync(0) is
+    // the portable form and behaves identically on POSIX.
+    raw = readFileSync(0, 'utf8').trim()
   } catch (e) {
     failOpen('stdin read', e)
   }

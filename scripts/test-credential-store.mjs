@@ -130,8 +130,19 @@ assert(leaking.length === 0,
   `the plaintext key appears in no file under the data home${leaking.length ? ` (leaked in: ${leaking.join(', ')})` : ''}`)
 
 console.log('\n2. file modes')
-assert((statSync(blobPath).mode & 0o777) === 0o600, 'the blob is 0600')
-assert((statSync(CRED_DIR).mode & 0o777) === 0o700, 'the credentials dir is 0700')
+// POSIX only, and SAID OUT LOUD rather than silently skipped. Node on Windows
+// maps only the read-only bit, so chmod(0o600) there is a no-op that throws
+// nothing: asserting it would fail forever, and dropping the assert without a
+// line would quietly retire a real security property on one platform. What
+// ships on Windows is the profile directory's inherited ACL, which is weaker
+// than what this comment block claims -- recorded 2026-08-04, not yet fixed
+// (an icacls /inheritance:r /grant:r pass is the open item).
+if (process.platform === 'win32') {
+  console.log('  n/a  0600/0700 blob+dir modes -- fs.chmod is a no-op on Windows (inherited ACLs only; see the open icacls item)')
+} else {
+  assert((statSync(blobPath).mode & 0o777) === 0o600, 'the blob is 0600')
+  assert((statSync(CRED_DIR).mode & 0o777) === 0o700, 'the credentials dir is 0700')
+}
 
 console.log('\n3. per-provider manifests do not clobber each other')
 // Regression guard for the 2026-07-03 fix: a single shared provider.json meant
