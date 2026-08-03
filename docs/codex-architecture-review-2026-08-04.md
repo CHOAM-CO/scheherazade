@@ -225,9 +225,18 @@ and there is a `windows-sandbox-rs` crate. **Treat the in-repo doc as stale.**
   routinely world-writable, so any trust boundary that assumed Unix permissions
   is void. Two details to lift exactly: `extraCount` (say "and 47 more", never
   truncate silently) and **`failedScan`** — an honest third state for "we could
-  not check", distinct from "we checked and it is clean". Directly relevant: our
-  `chmod 0o600` on the credential blobs is a no-op on Windows and what actually
-  protects them is the inherited profile ACL.
+  not check", distinct from "we checked and it is clean".
+
+  **Correction to an earlier draft of this line**, which claimed our
+  `chmod 0o600` on the credential blobs is what protects them on Windows and
+  that it is a no-op there. The second half is true — `fs.chmodSync` on
+  Windows maps only the read-only bit — but the conclusion was wrong. Those
+  blobs are `safeStorage.encryptString`'d before they are written, which on
+  Windows is DPAPI (`CryptProtectData`), scoped to the logged-in user
+  account. A file another account could read still would not decrypt. The
+  mode was always defence in depth, and losing it on Windows costs less than
+  it sounds like. Left as written rather than quietly deleted: a wrong
+  security claim is worth more as a visible correction than as a clean page.
 - **Codex answers our open Phase-3 decision.** `windows-port-scoping.md` records
   "shell tool flips PowerShell↔Git Bash on Git-for-Windows presence — DECISION
   STILL NEEDED." Codex's answer: the terminal is an **explicit user setting**

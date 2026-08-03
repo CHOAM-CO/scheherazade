@@ -794,7 +794,17 @@ function storeProviderKey(provider, key) {
   const { safeStorage } = getElectron()
   if (!safeStorage.isEncryptionAvailable()) {
     throw new Error(
-      'safeStorage encryption unavailable on this system (macOS Keychain not reachable) -- refusing to store the key in plaintext.'
+      // Named per platform. On Windows safeStorage is DPAPI, not a keychain,
+      // and telling a Windows user their macOS Keychain is unreachable is the
+      // same class of visibly-false sentence as the "Claude Code is not
+      // installed" one in main.cjs -- it teaches them to stop reading.
+      'safeStorage encryption unavailable on this system (' +
+        (process.platform === 'darwin'
+          ? 'macOS Keychain not reachable'
+          : process.platform === 'win32'
+            ? 'Windows DPAPI not reachable'
+            : 'no OS credential store reachable -- on Linux this needs a running keyring, e.g. gnome-keyring or kwallet') +
+        ') -- refusing to store the key in plaintext.'
     )
   }
   const encrypted = safeStorage.encryptString(key)

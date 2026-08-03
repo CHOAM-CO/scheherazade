@@ -133,12 +133,23 @@ console.log('\n2. file modes')
 // POSIX only, and SAID OUT LOUD rather than silently skipped. Node on Windows
 // maps only the read-only bit, so chmod(0o600) there is a no-op that throws
 // nothing: asserting it would fail forever, and dropping the assert without a
-// line would quietly retire a real security property on one platform. What
-// ships on Windows is the profile directory's inherited ACL, which is weaker
-// than what this comment block claims -- recorded 2026-08-04, not yet fixed
-// (an icacls /inheritance:r /grant:r pass is the open item).
+// line would quietly retire a real security property on one platform.
+//
+// CORRECTED 2026-08-04. An earlier version of this comment said the Windows
+// fallback is "the profile directory's inherited ACL, which is weaker than
+// what this comment block claims". The no-op is real; that conclusion was
+// not. The mode was always defence in depth on top of the actual protection:
+// the blob is safeStorage.encryptString'd before it is written, which on
+// Windows is DPAPI (CryptProtectData) scoped to the logged-in user account.
+// A file another account could read still does not decrypt.
+//
+// And that protection IS asserted on every platform -- section 1's
+// "plaintext key appears in no file" sweep above runs here too, and it is
+// the assertion that would catch encryption silently not happening. An
+// icacls /inheritance:r /grant:r pass is still worth doing; it is hardening,
+// not a hole.
 if (process.platform === 'win32') {
-  console.log('  n/a  0600/0700 blob+dir modes -- fs.chmod is a no-op on Windows (inherited ACLs only; see the open icacls item)')
+  console.log('  n/a  0600/0700 blob+dir modes -- fs.chmod is a no-op on Windows. What protects the blob there is DPAPI (asserted in section 1, on every platform); the mode was defence in depth.')
 } else {
   assert((statSync(blobPath).mode & 0o777) === 0o600, 'the blob is 0600')
   assert((statSync(CRED_DIR).mode & 0o777) === 0o700, 'the credentials dir is 0700')
