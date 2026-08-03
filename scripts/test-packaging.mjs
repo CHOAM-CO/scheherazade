@@ -432,5 +432,83 @@ ok('calendar full-access usage string is declared', typeof info.NSCalendarsFullA
   'without it macOS kills the process instead of prompting')
 ok('...and it says we only READ', /읽/.test(info.NSCalendarsFullAccessUsageDescription || ''))
 
+console.log('\n-- SCHEHERAZADE_MANUAL.md stays welded to the real option surface')
+{
+  // Why this test exists: on 2026-07-23 the sudo vault had shipped a week
+  // earlier and the agent's prompt never mentioned it, so the agent tried
+  // `sudo -n` (which can never reach an askpass helper), failed, and proposed
+  // adding NOPASSWD to sudoers. The infrastructure was fine; nobody had told
+  // the agent it existed. A manual written once and never revisited reproduces
+  // that exact failure one level up -- silently, because a stale document
+  // looks identical to a current one.
+  //
+  // So the manual is not trusted to stay true; it is checked. Every config key
+  // the app WRITES is a switch a person can flip, which means it is something
+  // the agent should be able to explain. Adding a switch without documenting it
+  // now breaks the build instead of quietly widening the gap between what the
+  // app can do and what the agent knows.
+  const manualPath = path.join(ROOT, 'docs', 'SCHEHERAZADE_MANUAL.md')
+  ok('docs/SCHEHERAZADE_MANUAL.md exists', fs.existsSync(manualPath),
+    'the agent has no inventory of its own app without it')
+  if (fs.existsSync(manualPath)) {
+    const manual = fs.readFileSync(manualPath, 'utf8')
+    // Keys that describe onboarding bookkeeping rather than a user-facing
+    // choice. Everything else must appear in the manual by name or by the
+    // plain-language label the agent would actually say out loud.
+    // Per-channel home ids/names are recorded BY the channel connect flow, not
+    // chosen as options -- the user picks a channel, these follow. Same class as
+    // the onboarding step counters.
+    const BOOKKEEPING = new Set([
+      'ONBOARDING_COMPLETE', 'ONBOARDING_COMPLETED_AT', 'ONBOARDING_STEP',
+      'HOME_GUILD_ID', 'HOME_GUILD_NAME', 'HOME_CHANNEL_NAME',
+      'TELEGRAM_HOME_CHAT_ID', 'TELEGRAM_HOME_CHAT_NAME', 'TELEGRAM_BOT_USERNAME',
+      'SLACK_HOME_CHANNEL_ID', 'SLACK_HOME_CHANNEL_NAME', 'SLACK_TEAM_NAME',
+    ])
+    // Plain-language stand-ins: the manual is read ALOUD to a non-technical
+    // person, so requiring the raw key name in the prose would make it worse
+    // to read in order to make it easier to test.
+    const SPOKEN_AS = {
+      DISPLAY_NAME: 'rename',
+      CHANNEL_BACKEND: 'channels',
+      AGENT_TOPOLOGY: 'Topology',
+      EFFORT_LEVEL: 'effort level',
+      SUDO_ENABLED: 'sudo',
+      PROVIDER: 'provider',
+      PROACTIVE: 'proactive',
+      PROACTIVE_WINDOW_START: 'PROACTIVE_WINDOW_START',
+      PROACTIVE_WINDOW_END: 'PROACTIVE_WINDOW_END',
+    }
+    const src = ['onboarding/http-server.cjs', 'main.cjs']
+      .concat(fs.readdirSync(path.join(ROOT, 'onboarding', 'routes')).map((f) => `onboarding/routes/${f}`))
+      .map((f) => { try { return fs.readFileSync(path.join(ROOT, f), 'utf8') } catch { return '' } })
+      .join('\n')
+    const written = new Set()
+    for (const m of src.matchAll(/writeAgentConfig\(\{([^}]*)\}/g)) {
+      for (const k of m[1].matchAll(/([A-Z][A-Z_]{2,})\s*:/g)) written.add(k[1])
+    }
+    const undocumented = [...written]
+      .filter((k) => !BOOKKEEPING.has(k))
+      .filter((k) => !manual.includes(SPOKEN_AS[k] || k))
+    ok('every user-flippable config key is explained in the manual', undocumented.length === 0,
+      `undocumented: ${undocumented.join(', ')} -- add it to docs/SCHEHERAZADE_MANUAL.md (or to BOOKKEEPING if it is not a user choice)`)
+    // LAZY LOAD, not bake-in (Mino 2026-08-03 18:38): the prompt carries a
+    // pointer and trigger phrases, the body stays on disk. Copied from Aside's
+    // harness -- small always-loaded L1 (MEMORY.md/USER.md), everything else a
+    // frontmatter page with `aliases` retrieved on demand. Baking the manual in
+    // would spend context every single turn on something needed a few times a
+    // month, and would make the prompt grow with every new option.
+    const prompt = fs.readFileSync(path.join(ROOT, 'onboarding/templates/agent-system-prompt.md'), 'utf8')
+    ok('the prompt POINTS at the manual', prompt.includes('docs/SCHEHERAZADE_MANUAL.md'),
+      'an agent that does not know the file exists will never read it')
+    ok('the manual is NOT inlined into the prompt', !prompt.includes('## Danger zone'),
+      'lazy-load it; a pasted copy both burns context every turn and rots separately from docs/')
+    ok('the manual carries retrieval frontmatter (slug/title/aliases)',
+      /^---\n[\s\S]*?slug:[\s\S]*?title:[\s\S]*?aliases:[\s\S]*?\n---/m.test(manual),
+      'aliases are how a Korean phrasing finds an English page')
+    ok('the manual names the risk of the uninstall path', /uninstall/i.test(manual) && /memory/i.test(manual),
+      'clean uninstall deletes the agent\'s memory; the agent must be able to say so before it runs')
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)
