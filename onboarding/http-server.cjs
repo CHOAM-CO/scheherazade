@@ -975,6 +975,29 @@ async function validateProviderKey(provider, key, opts = {}) {
     // spawn-time rejects, and must NEVER build a liveness URL whose host
     // isn't localhost (Codex finding #5 fix, 2026-07-04) -- shared guard,
     // see resolveChatgptProxyPort()'s own header comment (provider-env.cjs).
+    // NO PORT CONFIGURED is now the normal case (2026-08-04): the in-process
+    // proxy binds an ephemeral port at spawn, so before the first spawn there
+    // is no port to ping and nothing is expected to be listening.
+    //
+    // Pinging the old 18080 default here would have been actively harmful --
+    // "not reachable" for a healthy install (nothing has bound yet), or, worse,
+    // "reachable" because some unrelated process owns 18080, which is a green
+    // light for a proxy that is not ours and never will be.
+    //
+    // `reachable: null` is the third state, distinct from true and false:
+    // there is nothing to check yet.
+    const explicit = opts.proxyPort != null && String(opts.proxyPort).trim() !== ''
+    if (!explicit) {
+      return {
+        ok: true,
+        reachable: null,
+        detail: 'the app starts its own codex-as-api proxy on a free port when the agent launches -- nothing to reach until then',
+      }
+    }
+    // Validation-time must reject exactly the same proxyPort values
+    // spawn-time rejects, and must NEVER build a liveness URL whose host
+    // isn't localhost (Codex finding #5 fix, 2026-07-04) -- shared guard,
+    // see resolveChatgptProxyPort()'s own header comment (provider-env.cjs).
     const portResult = resolveChatgptProxyPort(opts.proxyPort)
     if (portResult.error) {
       // Non-blocking, consistent with checkLocalLiveness()'s own shape below

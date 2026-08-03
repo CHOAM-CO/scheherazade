@@ -159,7 +159,16 @@ function fakeReadProviderKey(store) {
   }
   const result = buildProviderEnv('chatgpt', {}, { readProviderKey: angryReadProviderKey })
   assert(!result.error, 'chatgpt: no error with no config at all (no secret required)')
-  assert(result.env.ANTHROPIC_BASE_URL === `http://localhost:${CHATGPT_PROXY_DEFAULT_PORT}`, `chatgpt: ANTHROPIC_BASE_URL defaults to :${CHATGPT_PROXY_DEFAULT_PORT}`)
+  // 2026-08-04: this used to assert a default of :18080. There is no default
+  // any more -- the in-process proxy binds an ephemeral port, so with nothing
+  // configured this function genuinely does not know the answer and says so by
+  // CLEARING the field. main.cjs fills it after the bind.
+  //
+  // `'X' in env` is the assertion that matters, same as the claude-cli rows
+  // above: the key must be PRESENT-and-undefined so a stale base URL from a
+  // previous provider is actively unset in the child, not merely not-set-here.
+  assert(result.env.ANTHROPIC_BASE_URL === undefined && 'ANTHROPIC_BASE_URL' in result.env,
+    'chatgpt: with no port configured, ANTHROPIC_BASE_URL is CLEARED rather than defaulted (main.cjs fills in the kernel-assigned port)')
   assert(result.env.ANTHROPIC_API_KEY === CHATGPT_PLACEHOLDER_KEY, 'chatgpt: ANTHROPIC_API_KEY == clearly-labeled placeholder (see task report: deliberate divergence from skia\'s bare run-agent.sh shape)')
   assert(result.env.CLAUDE_CODE_OAUTH_TOKEN === undefined && 'CLAUDE_CODE_OAUTH_TOKEN' in result.env, 'chatgpt: CLAUDE_CODE_OAUTH_TOKEN explicitly cleared (force api-key auth precedence)')
 }
@@ -168,11 +177,28 @@ function fakeReadProviderKey(store) {
   assert(result.env.ANTHROPIC_BASE_URL === 'http://localhost:19999', 'chatgpt: custom CHATGPT_PROXY_PORT from config is honored')
 }
 {
-  // whitespace-only port config falls back to the default rather than
-  // producing "http://localhost:" (a real, if unlikely, config-hygiene bug
-  // class -- worth a direct assertion).
+  // Whitespace-only port config must not produce "http://localhost:" -- a
+  // real, if unlikely, config-hygiene bug class, and the whole point of the
+  // assertion. It used to fall back to the default; it now reads as
+  // not-configured, which is the same answer to the same question now that
+  // there is no default to fall back to.
   const result = buildProviderEnv('chatgpt', { CHATGPT_PROXY_PORT: '   ' }, { readProviderKey: () => null })
-  assert(result.env.ANTHROPIC_BASE_URL === `http://localhost:${CHATGPT_PROXY_DEFAULT_PORT}`, 'chatgpt: whitespace-only CHATGPT_PROXY_PORT falls back to default, not "http://localhost:"')
+  assert(result.env.ANTHROPIC_BASE_URL === undefined && 'ANTHROPIC_BASE_URL' in result.env,
+    'chatgpt: whitespace-only CHATGPT_PROXY_PORT reads as unconfigured, never as "http://localhost:"')
+}
+{
+  // The port is a CONTRACT with main.cjs, not an internal detail: main.cjs
+  // overwrites this field after the bind, and if provider-env ever went back
+  // to emitting a plausible default, a lost overwrite would silently route
+  // the agent at whatever owns that port instead of failing loudly.
+  const unset = buildProviderEnv('chatgpt', {}, { readProviderKey: () => null })
+  assert(!/localhost:\d/.test(String(unset.env.ANTHROPIC_BASE_URL)),
+    'chatgpt: an unconfigured port never yields a guessable localhost URL (a lost overwrite must fail loud, not misroute)')
+  // ...while an EXPLICIT port still resolves here, because there the config
+  // does know the answer and main.cjs is reusing rather than binding.
+  const explicit = buildProviderEnv('chatgpt', { CHATGPT_PROXY_PORT: '18080' }, { readProviderKey: () => null })
+  assert(explicit.env.ANTHROPIC_BASE_URL === 'http://localhost:18080',
+    'chatgpt: an explicitly-configured port is still resolved by provider-env itself')
 }
 
 // ─────────────────────────────────────────────────────────────────────────

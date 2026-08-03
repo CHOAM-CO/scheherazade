@@ -643,20 +643,39 @@ const PROVIDER_ROWS = [
     id: 'chatgpt',
     credential: 'none',
     pre: (config) => {
-      const portResult = resolveChatgptProxyPort(config.CHATGPT_PROXY_PORT)
+      // Absent is not an error and not a default any more (2026-08-04). The
+      // proxy is in-process and now binds an EPHEMERAL port, so when the user
+      // configured nothing, THIS FUNCTION CANNOT KNOW THE ANSWER -- only the
+      // bind does. resolveChatgptProxyPort is still the single validator for
+      // the explicit case; it just is not consulted for a default that no
+      // longer exists.
+      const raw = config.CHATGPT_PROXY_PORT
+      const explicit = raw != null && String(raw).trim() !== ''
+      if (!explicit) return { values: { port: null } }
+      const portResult = resolveChatgptProxyPort(raw)
       if (portResult.error) {
         return {
           error: {
             kind: 'provider_not_wired',
             reason: portResult.error,
-            fix: `Set CHATGPT_PROXY_PORT to a whole number between 1 and 65535, or remove it entirely to use the default (${CHATGPT_PROXY_DEFAULT_PORT}).`,
+            fix: 'Set CHATGPT_PROXY_PORT to a whole number between 1 and 65535, or remove it entirely -- with it unset the app picks a free port itself, which is the normal case.',
           },
         }
       }
       return { values: { port: portResult.port } }
     },
     env: ({ values }) => ({
-      ANTHROPIC_BASE_URL: `http://localhost:${values.port}`,
+      // null port -> CLEARED, not guessed. main.cjs overwrites this with the
+      // port the kernel actually assigned, after ensureCodexProxy binds.
+      //
+      // Cleared rather than left at a plausible default ON PURPOSE. If that
+      // overwrite is ever lost, the agent has no base URL and fails loudly
+      // against the real Anthropic API with a placeholder key. The old
+      // behaviour -- a hardcoded localhost:18080 -- would instead hand the
+      // whole conversation stream to whatever process happened to own that
+      // port. A loud failure and a silent misroute are not comparable, so the
+      // failure mode is chosen deliberately.
+      ANTHROPIC_BASE_URL: values.port ? `http://localhost:${values.port}` : undefined,
       ANTHROPIC_API_KEY: CHATGPT_PLACEHOLDER_KEY,
       CLAUDE_CODE_OAUTH_TOKEN: undefined, // force api-key auth precedence -- see sirin ground-truth comment
       CLAUDE_CONFIG_DIR: undefined, // see the claude-cli row: cleared on EVERY row (harness-render seeds ~/.claude.json for all modes)

@@ -88,6 +88,32 @@ ok('main.cjs evicts the require cache per rebuild', mainSrc.includes("delete req
 ok('main.cjs gates on the /health model receipt (fail closed on mismatch)', mainSrc.includes('model passthrough FAILED'))
 ok('a model swap rebuilds the live proxy (codexProxyModel compared on ensure)', mainSrc.includes('codexProxyModel === desiredModel') && mainSrc.includes('codexProxyModel = desiredModel'))
 
+// ── ephemeral port wiring (2026-08-04) ────────────────────────────────────
+// The proxy binds port 0 by default, so the port EXISTS ONLY AFTER THE BIND.
+// buildProviderEnv runs before that and clears ANTHROPIC_BASE_URL (asserted in
+// test-provider-env.mjs); main.cjs is what fills it in. That handoff is the
+// whole risk of the change: if it is ever dropped, the agent spawns with no
+// base URL at all.
+//
+// It fails LOUD in that case rather than misrouting -- the old hardcoded
+// localhost:18080 default would have handed the conversation stream to
+// whatever owned that port -- but loud is still broken, so the wiring is
+// pinned here.
+ok('the default bind is ephemeral, not a fixed port', mainSrc.includes("const requestedPort = explicitPort ? Number(portResult.port) : 0"))
+ok('the bound port is read back from the socket, never assumed', /const bound = codexProxyServer\.address\(\)/.test(mainSrc) && mainSrc.includes('port = bound.port'))
+ok('ensureCodexProxy hands the caller the port it actually bound', /return \{ ok: true, port \}/.test(mainSrc))
+ok('the caller overwrites ANTHROPIC_BASE_URL with that port', mainSrc.includes('providerEnvResult.env.ANTHROPIC_BASE_URL = `http://localhost:${proxy.port}`'))
+ok('the caller refuses to spawn on a port it cannot use', mainSrc.includes('Number.isInteger(proxy.port)'))
+// The reuse path and the health reporter both have to read the LIVE port, not
+// recompute one from config -- config does not know it any more.
+ok('the live bound port is remembered for reuse/health (codexProxyPort)', mainSrc.includes('let codexProxyPort = null') && mainSrc.includes('codexProxyPort = port'))
+ok('...and cleared when the proxy goes down', /codexProxyServer = null\s*\n\s*codexProxyModel = null\s*\n\s*codexProxyPort = null/.test(mainSrc))
+ok('proxyHealth prefers the live bound port over config', mainSrc.indexOf('let port = codexProxyPort') < mainSrc.indexOf('portResult = resolveChatgptProxyPort(raw)'))
+// The old "default port is occupied -> refuse to spawn" branch must be GONE,
+// not merely unreachable: an ephemeral bind cannot collide, and leaving the
+// branch would invite someone to reinstate a default to feed it.
+ok('the occupied-default-port blocker is gone with the default that caused it', !mainSrc.includes('already listen on the default proxy port'))
+
 console.log(`\n${pass} passed, ${fail} failed`)
 // NOT process.exit() -- exitCode, and let the loop drain (2026-08-04).
 //
