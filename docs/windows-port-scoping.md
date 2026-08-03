@@ -173,3 +173,101 @@ IS_WIN gates) stays the isolation mechanism — no physical code extraction
 - **versioning**: one semver, two artifacts per release. Win artifacts ship
   only when the win lane's full-session test has passed (still blocked on
   bot token / install plan — Mino).
+
+---
+
+## 2026-08-04 status pass — what this doc got right, wrong, and what is now answered
+
+Written after the first Windows build shipped, ran on Mino's machine, and the
+suite went green there. Everything below is receipts, not plan.
+
+### The scoping's biggest miss
+
+This doc scoped the port and never said the release lane **had never been
+executed**. Three independent blockers sat between `npm run dist:win` and an
+installer, and all three were found in one sitting on 2026-08-03:
+
+1. `predist` (test-packaging.mjs) mis-flagged 21 files on path separators, so
+   electron-builder was never reached.
+2. npm 11.16 blocks install scripts by default; mac was on 11.5, so the mac
+   lane never saw it. Fixed with `allowScripts` for the four packages that
+   need them.
+3. `SUPERVISOR_LANE` defaulted to the bash lane on win32 with a hardcoded
+   `/bin/bash`, so an unset env var spawned ENOENT and parked the agent at
+   'failed' forever -- making the node-pty supervisor built *for this port*
+   unreachable without a manually-set variable.
+
+The lesson for the next platform doc: "the lane exists" and "the lane has been
+run once" are different claims, and only the second one is worth writing down.
+
+### The Phase 3 shell decision — ANSWERED, by Codex
+
+> "Shell tool flips on Git-for-Windows presence ... DECISION NEEDED at Phase 3."
+
+`openai/codex` makes the terminal an **explicit user setting** (PowerShell /
+cmd / Git Bash / WSL), applied to new sessions only -- not auto-detected.
+
+Take that. A shell that silently changes identity because the user installed
+Git last Tuesday is an unreproducible bug report, and "it worked yesterday" is
+the most expensive sentence a support conversation can contain. Detection may
+pick the *default*; it must not own the value.
+
+(Also from the same read: Codex's in-repo `docs/install.md` still says Windows
+11 "via WSL2" while its README ships a native PowerShell installer and the
+tree has a `windows-sandbox-rs` crate. Treat that doc as stale if anyone
+cites it.)
+
+### Items this doc filed, now closed
+
+- **"attach-lane code paths must be gated darwin when Phase 2 lands"** --
+  still open. Named again here because it has now survived two passes.
+- **Pin bundled CLI >= 2.1.211** -- moot. We no longer bundle the CLI at all
+  (its licence has no redistribution grant); the user brings their own, and
+  `resolveClaudeBin` locates it. The Windows-specific consequence is new:
+  npm's `claude.cmd` shim is deliberately NOT accepted, because ConPTY's
+  CreateProcess cannot exec a `.cmd` -- accepting it would produce a "found"
+  that dies at spawn. As of 2026-08-04 the message says so instead of
+  claiming Claude Code is not installed.
+- **`NPM_GLOBAL_BIN_DIRS` win branch** -- now also covers
+  `%LOCALAPPDATA%\Microsoft\WinGet\Links`, measured on magi-win, where that is
+  the ONLY claude on the box and it resolves today purely because that dir
+  happens to be on the inherited PATH.
+- **`chmod 0o600` -> "NTFS ACL hardening or explicit documented no-op"** --
+  documented no-op, and the reasoning behind the line was corrected: the blobs
+  are DPAPI-encrypted by safeStorage before they are written, so the mode was
+  defence in depth rather than the protection. icacls remains worth doing as
+  hardening. It is not a hole.
+
+### The Windows suite is green, and one of the failures was never ours
+
+52/52 on magi-win, three consecutive runs (2026-08-04). It had never been
+fully green before.
+
+The last two failures were one bug, in node, not in us. Minimal reproducer on
+node 24.18.1 / libuv 1.52.1: open three local HTTP servers on **distinct**
+ports, fetch each once, then call `process.exit()` -- aborts with
+`!(handle->flags & UV_HANDLE_CLOSING), src\win\async.c:94`, every run. Two
+iterations is clean; one server with twenty fetches is clean. The trigger is
+three undici pools, not fetch volume. macOS (node 24.7 / libuv 1.51) does not
+reproduce at any count.
+
+Full measurements in the commit message of `235e476`. Recorded here because
+it is a **platform property, not a test bug**: any shipped code path that
+talks to three local origins and then exits hard can hit it, and the app's own
+proxy/daemon health checks are exactly that shape.
+
+### Still open (unchanged, listed so the doc is not read as finished)
+
+- Tray + `powerSaveBlocker` (Phase 4). Closing the window still kills the
+  agent. Mino's product call, deliberately not taken.
+- Stall watchdog is disabled on Windows and says so at every spawn -- into a
+  pane the user cannot open. Codex's shape for this is a three-state readiness
+  value the UI renders (`ready` / `notConfigured` / `updateRequired`), where
+  the third state exists because "do something" and "do something *different
+  from last time*" are different user tasks.
+- Windows uninstall analog (AppData / Credential Manager / NSIS overlap).
+  `/api/uninstall` returns 501 on non-darwin today, which is honest and
+  incomplete.
+- Unsigned NSIS, SmartScreen friction accepted for v1. Worth knowing before
+  anyone buys a certificate: what removes the warning for Codex is **Store /
+  winget distribution**, not code signing alone.
