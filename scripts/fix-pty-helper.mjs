@@ -28,12 +28,31 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+const repoRoot = fileURLToPath(new URL('..', import.meta.url))
+
+// Defect 3 -- a SECOND binding lineage. npmRebuild is false because the N-API
+// prebuild already works under both runtimes, but node-pty's own install
+// script falls back to `node-gyp rebuild` and node-pty's loader checks
+// build/Release BEFORE prebuilds/ -- so a stray build/Release silently wins
+// over the lineage we tested and shipped. test-packaging asserts the shipped
+// artifact has none; removing it here means the assert never has to fail for a
+// reason a human has to remember to fix by hand. EVERY platform (the win box
+// grew one on 2026-08-03 and failed the artifact gate).
+const ptyBuild = path.join(repoRoot, 'node_modules', 'node-pty', 'build')
+try {
+  if (fs.existsSync(ptyBuild)) {
+    fs.rmSync(ptyBuild, { recursive: true, force: true })
+    console.log('[fix-pty-helper] removed node_modules/node-pty/build (shadowing lineage; prebuilds/ is what we ship)')
+  }
+} catch (err) {
+  console.log(`[fix-pty-helper] could not remove node-pty/build: ${err.message}`)
+}
+
 if (process.platform === 'win32') {
-  console.log('[fix-pty-helper] win32: no spawn-helper on this platform, nothing to do')
+  console.log('[fix-pty-helper] win32: no spawn-helper on this platform, nothing else to do')
   process.exit(0)
 }
 
-const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 const prebuilds = path.join(repoRoot, 'node_modules', 'node-pty', 'prebuilds')
 
 let touched = 0

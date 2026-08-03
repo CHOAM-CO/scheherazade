@@ -259,8 +259,14 @@ function stagedWinAsarEntries() {
     if (staged.version !== pkg.version) {
       return { status: 'error', reason: `staged asar is version ${staged.version}, not ${pkg.version} -- stale win-unpacked, verifying it would be the version illusion (Skia catch)` }
     }
+    // Normalize to POSIX ids. listPackage hands back native separators, so on
+    // Windows every entry read '\onboarding\routes\chat.cjs' while the require
+    // graph produces 'onboarding/routes/chat.cjs' -- 29 shipped files reported
+    // as dead requires against an asar that in fact contained all of them
+    // (2026-08-03, first real dist:win). Strip the leading separator in either
+    // form, then fold the rest.
     const entries = asar.listPackage(asarPath)
-    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^\/+/, ''))) }
+    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^[/\\]+/, '').split('\\').join('/'))) }
   } catch (e) {
     // fail-CLOSED, same as the dmg lane: an artifact that exists but cannot be
     // listed is an UNVERIFIED artifact, never a skip.
