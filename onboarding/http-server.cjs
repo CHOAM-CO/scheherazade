@@ -1572,7 +1572,16 @@ function serveStatic(req, res, urlPath) {
     if (!html.includes('<head>')) {
       throw new Error(`${resolved} has no literal "<head>" tag to inject the onboard token into -- refusing to serve it without auth wiring`)
     }
-    const injected = html.replace('<head>', `<head>\n    <meta name="onboard-token" content="${SERVER_TOKEN}">`)
+    // Platform rides along in the same injection. The UI used to be written
+    // for macOS only -- "this Mac", "Run claude in Terminal", a Full Disk
+    // Access card and a permissions panel that are macOS concepts with no
+    // Windows equivalent. Mino hit all of it on the first Windows install
+    // (2026-08-03 23:56). The renderer cannot see process.platform, so it
+    // gets told. copy.js reads this before it builds any string.
+    const injected = html.replace(
+      '<head>',
+      `<head>\n    <meta name="onboard-token" content="${SERVER_TOKEN}">\n    <meta name="host-platform" content="${process.platform}">`
+    )
     res.writeHead(200, { 'Content-Type': MIME[ext] })
     res.end(injected)
     return true

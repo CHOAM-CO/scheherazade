@@ -27,6 +27,29 @@ window.getOnboardToken = function () {
   return meta ? meta.getAttribute('content') : null
 }
 
+// Host platform, injected by serveStatic beside the token (same reason: the
+// renderer has no process.platform). Every macOS-specific word and every
+// macOS-only surface below branches on this. Defaults to darwin when the meta
+// is missing so a stale cached page keeps the shape it has always had.
+window.HOST_PLATFORM = (function () {
+  const meta = document.querySelector('meta[name="host-platform"]')
+  return (meta && meta.getAttribute('content')) || 'darwin'
+})()
+window.IS_WIN = window.HOST_PLATFORM === 'win32'
+window.IS_MAC = window.HOST_PLATFORM === 'darwin'
+
+// The two words that appear all over this file. THIS_MACHINE replaces the
+// literal "this Mac" -- deliberately not "this PC", because the same string
+// ships to Linux dev runs too. SHELL_APP is what the user opens to type a
+// command: Terminal on mac, PowerShell on Windows.
+const THIS_MACHINE = window.IS_MAC ? 'this Mac' : 'this computer'
+const SHELL_APP = window.IS_WIN ? 'PowerShell' : 'Terminal'
+// Where safeStorage actually puts things: Keychain on mac, DPAPI on Windows.
+// Naming the real store matters -- a user who goes looking for "the keychain"
+// on Windows finds nothing and concludes we lied about where their token is.
+const CRED_STORE = window.IS_MAC ? "this Mac's keychain" : "this computer's encrypted credential store"
+const CRED_STORE_THE = window.IS_MAC ? 'the macOS keychain' : "the OS's encrypted credential store"
+
 window.COPY = {
   step0: {
     title: 'Start setup',
@@ -76,7 +99,7 @@ window.COPY = {
   // decision calls for without another copy pass either way.
   step1: {
     title: 'Connect a model',
-    body: 'Log in with the account you already use. Your subscription plan applies as-is, and login info stays on this Mac.',
+    body: `Log in with the account you already use. Your subscription plan applies as-is, and login info stays on ${THIS_MACHINE}.`,
     // Zero-auth consent card (2026-07-13). Shown only when this Mac already has
     // a Claude Code CLI login. Three rules baked into this copy:
     //   1. Say what we did NOT do (no copy, no store, no read) -- the whole
@@ -103,7 +126,7 @@ window.COPY = {
       // spends the user's quota before they have agreed to spend any. So the
       // honest move is to spend one sentence, at the moment of consent, telling
       // the user what the failure will look like and how to fix it.
-      staleHint: "If this login has expired, the agent won't start. Run claude in Terminal once to log in again, then retry.",
+      staleHint: `If this login has expired, the agent won't start. Run claude in ${SHELL_APP} once to log in again, then retry.`,
     },
     tabs: [
       {
@@ -134,12 +157,12 @@ window.COPY = {
           failure: (reason) => `Token rejected (reason: ${reason}). Run the command again and paste a new token.`,
           precondition: 'Requires a Claude Pro or Max subscription and the claude command installed.',
           steps: [
-            'Run claude setup-token in Terminal',
+            `Run claude setup-token in ${SHELL_APP}`,
             'Log in with your Claude account in the browser',
-            'Paste the token shown in Terminal into the field below',
+            `Paste the token shown in ${SHELL_APP} into the field below`,
           ],
           copyCommand: 'claude setup-token',
-          subtext: "No API key needed. Your subscription applies as-is, and the token is stored only in this Mac's keychain.",
+          subtext: `No API key needed. Your subscription applies as-is, and the token is stored only in ${CRED_STORE}.`,
           button: 'Verify connection',
           // In-app capture: the app runs `claude setup-token` itself and
           // reads the token out of that process, so the credential never
@@ -167,13 +190,13 @@ window.COPY = {
             validating: 'Checking the token…',
             success: 'Connected. Your Claude subscription is set up.',
             cancel: 'Cancel',
-            manualToggle: 'Do it manually in Terminal instead',
+            manualToggle: `Do it manually in ${SHELL_APP} instead`,
             // Reason codes come from setup-token-session.cjs and are a fixed
             // enum -- never child output, so they are safe to switch on. The
             // default exists because a new reason must degrade to something
             // truthful rather than to an empty status line.
             failure: (reason) => ({
-              cli_missing: 'The claude command was not found on this Mac. Install it, then try again.',
+              cli_missing: `The claude command was not found on ${THIS_MACHINE}. Install it, then try again.`,
               spawn_failed: 'The login could not be started. Try the manual steps below.',
               timeout: 'The login was not finished in time. Try again.',
               // Capture-failure family. These five differ only in how the
@@ -194,7 +217,7 @@ window.COPY = {
               // possibly corrupted. Saying "ended without producing a token"
               // would be false.
               ambiguous_wrap: 'The token could not be read cleanly from the login output. Try again, or use the manual steps below.',
-              store_failed: 'The token could not be saved to the keychain. Try again.',
+              store_failed: `The token could not be saved to ${CRED_STORE_THE}. Try again.`,
               user_cancelled: 'Login cancelled.',
             }[reason] || 'The login did not complete. Try again, or use the manual steps below.'),
           },
@@ -207,7 +230,7 @@ window.COPY = {
         primary: {
           button: 'Connect to local Codex',
           precondition: 'Requires Codex installed and codex login (browser auth with your ChatGPT account).',
-          subtext: 'Codex on this Mac handles account auth. No key is stored in the app.',
+          subtext: `Codex on ${THIS_MACHINE} handles account auth. No key is stored in the app.`,
         },
       },
       {
@@ -217,13 +240,13 @@ window.COPY = {
         primary: {
           button: 'Connect to local Ollama (cloud model)',
           precondition: 'Requires the Ollama app installed and ollama signin completed.',
-          subtext: 'Ollama on this Mac handles account sign-in. No key is stored in the app.',
+          subtext: `Ollama on ${THIS_MACHINE} handles account sign-in. No key is stored in the app.`,
           // Honesty note (source file): Path A is friction-moved, not
           // friction-removed (install+signin happen outside the app) --
           // copy must not imply one-click. In-app signin (Path B) = v1.1.
           failures: {
             not_running: "Ollama isn't running. Open the Ollama app and try again.",
-            not_signed_in: 'Not signed in to Ollama. Run ollama signin in Terminal, then try again.',
+            not_signed_in: `Not signed in to Ollama. Run ollama signin in ${SHELL_APP}, then try again.`,
           },
         },
       },
@@ -250,7 +273,7 @@ window.COPY = {
         modelPlaceholder: 'Enter a model name',
         modelHint: 'Copy a name from the model list on ollama.com.',
       },
-      successNoPlan: 'Connected. Login info stays on this Mac.',
+      successNoPlan: `Connected. Login info stays on ${THIS_MACHINE}.`,
       starting: 'Starting login…',
       cancelled: 'Login cancelled. You can try again.',
       timeout: 'Login timed out. Try again.',
@@ -260,7 +283,7 @@ window.COPY = {
       // downloads and verifies it itself (Apple 서명 확인), no Terminal,
       // no admin password.
       install: {
-        needed: (name) => `${name} isn't installed on this Mac yet. It can be installed automatically.`,
+        needed: (name) => `${name} isn't installed on ${THIS_MACHINE} yet. It can be installed automatically.`,
         button: 'Install automatically',
         downloading: (pct) => (pct == null ? 'Downloading…' : `Downloading… (${pct}%)`),
         installing: 'Installing and verifying…',
@@ -284,7 +307,7 @@ window.COPY = {
       // Sirin red-team #5: verification itself is a real POST to the
       // provider's server, so "외부로 전송되지 않습니다" was a false claim.
       // This is the corrected/honest version.
-      body: "If you have an API key, you can connect directly. The key is stored only in the macOS keychain. It's sent only to the provider you entered, to verify it. Nothing is sent anywhere else, and nothing is collected.",
+      body: `If you have an API key, you can connect directly. The key is stored only in ${CRED_STORE_THE}. It's sent only to the provider you entered, to verify it. Nothing is sent anywhere else, and nothing is collected.`,
       tabs: [
         { id: 'claude', hint: 'Issued at console.anthropic.com. Starts with sk-ant-.' },
         { id: 'chatgpt', hint: 'Issued at platform.openai.com. Starts with sk-.' },
@@ -703,7 +726,7 @@ window.COPY = {
     // AUTHORED -- sudo askpass (0.1.0 prep, P4). Mechanism wording only, no
     // safety promises: where it's stored, where it never goes, when it works.
     sudoLabel: 'Admin privileges (sudo)',
-    sudoNote: "When on, the agent can use sudo commands. The password is encrypted and stored in a macOS keychain-based vault, and is designed to never appear in chat, logs, or conversation history. sudo doesn't work while the app is off.",
+    sudoNote: `When on, the agent can use sudo commands. The password is encrypted and stored in a vault backed by ${CRED_STORE_THE}, and is designed to never appear in chat, logs, or conversation history. sudo doesn't work while the app is off.`,
     sudoEnableLabel: 'Allow sudo',
     sudoPasswordLabel: 'Mac login password',
     sudoSave: 'Save',

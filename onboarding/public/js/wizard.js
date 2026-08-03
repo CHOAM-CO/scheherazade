@@ -91,7 +91,11 @@
       stopFdaPoll() // don't keep polling FDA status after leaving Step 0
       showStep('1')
     }
-    renderFdaCard()
+    // Full Disk Access is a macOS (TCC) concept. On Windows the card rendered
+    // a button that opens an x-apple.systempreferences: URL -- i.e. nothing --
+    // under a heading about "your Mac". Mino hit this on the first Windows
+    // install (2026-08-03). No card at all is the honest state there.
+    if (window.IS_MAC) renderFdaCard()
   }
 
   // ── Full Disk Access card (Step 0, 2026-07-07) ──────────────────────────

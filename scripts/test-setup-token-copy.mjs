@@ -54,7 +54,23 @@ assert(Boolean(failureMatch), 'located inApp.failure in copy.js')
 // `(reason) => (X)(reason)` parses as "call X's result", which hands back the
 // arrow itself instead of a string.
 const failureExpr = failureMatch ? failureMatch[0].replace(/^failure:\s*/, '') : ''
-const failureFn = failureMatch ? new Function('reason', `return (${failureExpr})(reason)`) : null
+// copy.js's strings interpolate its platform layer (THIS_MACHINE / SHELL_APP /
+// CRED_STORE*, added 2026-08-03 so the UI stops calling a Windows box "this
+// Mac"). Those are module-level consts in the browser; a bare new Function has
+// no binding for them, so they are injected as parameters here. Building the
+// mapper once PER PLATFORM also makes this test prove the mapper survives both
+// -- a string that only renders on mac is exactly the bug being fixed.
+const PLATFORM_BINDINGS = {
+  darwin: ['this Mac', 'Terminal', "this Mac's keychain", 'the macOS keychain'],
+  win32: ['this computer', 'PowerShell', "this computer's encrypted credential store", "the OS's encrypted credential store"],
+}
+const makeFailureFn = (platform) =>
+  new Function('reason', 'THIS_MACHINE', 'SHELL_APP', 'CRED_STORE', 'CRED_STORE_THE',
+    `return (${failureExpr})(reason)`)
+    .bind(null)
+const callFailure = (platform, reason) =>
+  makeFailureFn(platform)(reason, ...PLATFORM_BINDINGS[platform])
+const failureFn = failureMatch ? (reason) => callFailure('darwin', reason) : null
 assert(failureFn === null || typeof failureFn('cli_missing') === 'string',
   'extraction yields a function returning STRINGS (not the arrow itself)')
 
@@ -67,6 +83,14 @@ if (failureFn) {
   //
   // user_cancelled is included because cancel() sets it and the UI renders
   // cancelled through the same failure() call.
+  // Same completeness check on the Windows bindings: a mapper that throws or
+  // returns undefined off macOS ships a blank error message to the user.
+  for (const reason of [...reasons, 'user_cancelled']) {
+    const winText = callFailure('win32', reason)
+    assert(typeof winText === 'string' && winText.length > 0,
+      `win32 bindings render "${reason}" as a non-empty string`)
+  }
+
   const emitted = [...reasons, 'user_cancelled']
   for (const r of emitted) {
     const msg = failureFn(r)

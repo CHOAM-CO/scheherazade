@@ -194,7 +194,7 @@
   // has to be plain enough that the claim is checkable.
   const POINTERS_COPY = {
     label: "Other tools' memory (locations only)",
-    intro: "Finds the locations of memory files other AI tools left on this Mac, and lists them. It doesn't copy the contents, and doesn't mix them into its own memory. Paths that contain login credentials are excluded from scanning entirely.",
+    intro: `Finds the locations of memory files other AI tools left on ${window.IS_MAC ? 'this Mac' : 'this computer'}, and lists them. It doesn't copy the contents, and doesn't mix them into its own memory. Paths that contain login credentials are excluded from scanning entirely.`,
     scan: 'Scan now',
     clear: 'Clear list',
     scanning: 'Scanning…',

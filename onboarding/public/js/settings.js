@@ -165,8 +165,22 @@
 
     renderAgentConfig()
     renderCustomProvider().catch((err) => console.error(err))
-    renderPermissions().catch((err) => console.error(err))
-    renderTopology().catch((err) => console.error(err))
+    // Both of these are macOS-only surfaces, hidden rather than rendered
+    // empty on Windows (Mino, first win install 2026-08-03):
+    //  - permissions: every row is a TCC/macOS wall, and the buttons open
+    //    x-apple.systempreferences: URLs that do nothing off macOS.
+    //  - topology: attach mode IS tmux, which does not exist here; the copy
+    //    tells the user to paste a command into Terminal to tie "macOS
+    //    permissions to Terminal's lineage".
+    if (window.IS_MAC) {
+      renderPermissions().catch((err) => console.error(err))
+      renderTopology().catch((err) => console.error(err))
+    } else {
+      for (const id of ['set-perms', 'set-topology']) {
+        const el = document.getElementById(id)
+        if (el) el.classList.add('hidden')
+      }
+    }
     renderSudo().catch((err) => console.error(err))
   }
 
