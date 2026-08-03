@@ -1003,23 +1003,29 @@ async function spawnRealAgentChildLocked() {
   const provider = config.PROVIDER || 'claude'
   const providerEnvResult = buildProviderEnv(provider, config, { readProviderKey })
   if (providerEnvResult.error) {
-    const { kind, reason } = providerEnvResult.error
+    const { kind, reason, fix } = providerEnvResult.error
+    // `reason` is the diagnosis, `fix` the instruction (provider-env.cjs).
+    // The status pill shows `detail` and nothing else, so a detail without the
+    // fix leaves the user reading an accurate sentence they cannot act on.
+    const detail = fix ? `${reason} -- ${fix}` : reason
     if (kind === 'key_error') {
       console.error(`[scheherazade/main] buildProviderEnv(${provider}) key_error, cannot spawn agent: ${reason}`)
-      setAgentStatus('failed', 'key_error', reason)
+      setAgentStatus('failed', 'key_error', detail)
       return null
     }
     if (kind === 'not_ready') {
       // Quiet skip, matching this codebase's existing "no key yet" behavior
       // -- no setAgentStatus call, see provider-env.cjs's own doc comment on
-      // this error.kind.
-      log(`agent spawn skipped: ${reason}`)
+      // this error.kind. So the fix below reaches the app log only; it is
+      // logged rather than dropped so that a support conversation has it,
+      // NOT because the user will see it.
+      log(`agent spawn skipped: ${detail}`)
       return null
     }
     // 'provider_not_wired' (or any future unrecognized kind -- defense in
     // depth, same fallback this codebase's pre-existing `else` branch used).
     console.error(`[scheherazade/main] BLOCKER: buildProviderEnv(${provider}) provider_not_wired: ${reason}`)
-    setAgentStatus('failed', 'provider_not_wired', reason)
+    setAgentStatus('failed', 'provider_not_wired', detail)
     return null
   }
 

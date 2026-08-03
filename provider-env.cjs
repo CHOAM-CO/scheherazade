@@ -474,6 +474,21 @@ function snip(value, limit = 80) {
  *                           PROVIDERS allow-list should make this
  *                           unreachable via the wizard, this is the
  *                           hand-edited-config-file backstop).
+ *
+ * `error.fix` (2026-08-04) is a user-facing instruction in the imperative,
+ * present on every error this function can return. `reason` says what is
+ * wrong; `fix` says what to do, which is the only half a non-developer can
+ * act on. Kept as a separate field rather than appended to `reason` because
+ * `reason` is quoted verbatim in logs and pinned by tests, while `fix`
+ * changes every time the settings page moves a control.
+ *
+ * Caller MUST NOT assume `fix` reaches a human on its own -- main.cjs
+ * appends it to the `detail` it passes to setAgentStatus for the two kinds
+ * the UI renders ('key_error', 'provider_not_wired'). 'not_ready' is a quiet
+ * skip by design and today its fix reaches only the app log, which the user
+ * cannot open (the openLogs button is rendered disabled). The field is
+ * correct and ready for whatever surfaces it; it is not yet a shipped fix
+ * for that path.
  */
 // ── the provider table (2026-07-29) ─────────────────────────────────────
 // Each mode below used to be an `if (provider === '...')` branch inside
@@ -494,7 +509,14 @@ function snip(value, limit = 80) {
 //   notReady     reason string when a 'required' credential is missing.
 //                Kept per-row and verbatim: these strings are user-visible
 //                and two of them are test-pinned.
-//   pre(config)  optional precondition -> { values } | { error: { kind, reason } }.
+//   notReadyFix  what the user should DO about it, in the imperative. A
+//                separate field rather than a longer notReady because the
+//                two have different audiences and different lifetimes: the
+//                reason is a diagnosis (pinned by tests, quoted in logs and
+//                bug reports), the fix is instructions that change whenever
+//                the settings page moves a control. Concatenating them makes
+//                every UI reshuffle edit a test-pinned string.
+//   pre(config)  optional precondition -> { values } | { error: { kind, reason, fix } }.
 //   env(ctx)     the ONLY provider-specific part. ctx = { key, values, config }.
 //                Every row lists all three of ANTHROPIC_API_KEY /
 //                ANTHROPIC_BASE_URL / CLAUDE_CODE_OAUTH_TOKEN, setting
@@ -518,6 +540,7 @@ const PROVIDER_ROWS = [
     credential: 'required',
     keyName: 'claude',
     notReady: 'onboarding says PROVIDER=claude but no validated key is on file yet',
+    notReadyFix: 'Open Settings > Model, choose the Anthropic API key mode, and paste your key. It is checked against the API before it is stored, so a bad key is rejected there rather than here.',
     env: ({ key }) => ({
       ANTHROPIC_API_KEY: key,
       ANTHROPIC_BASE_URL: undefined, // clear any stale base_url from a prior chatgpt/ollama session
@@ -534,6 +557,7 @@ const PROVIDER_ROWS = [
     credential: 'required',
     keyName: 'claude-subscription',
     notReady: 'onboarding says PROVIDER=claude-subscription but no OAuth token is on file yet',
+    notReadyFix: 'Run `claude setup-token` in a terminal, copy the token it prints, and paste it into Settings > Model.',
     env: ({ key }) => ({
       CLAUDE_CODE_OAUTH_TOKEN: key,
       ANTHROPIC_API_KEY: undefined, // do NOT inject an API key alongside the OAuth token (LOCKED design, mode 1)
@@ -620,7 +644,15 @@ const PROVIDER_ROWS = [
     credential: 'none',
     pre: (config) => {
       const portResult = resolveChatgptProxyPort(config.CHATGPT_PROXY_PORT)
-      if (portResult.error) return { error: { kind: 'provider_not_wired', reason: portResult.error } }
+      if (portResult.error) {
+        return {
+          error: {
+            kind: 'provider_not_wired',
+            reason: portResult.error,
+            fix: `Set CHATGPT_PROXY_PORT to a whole number between 1 and 65535, or remove it entirely to use the default (${CHATGPT_PROXY_DEFAULT_PORT}).`,
+          },
+        }
+      }
       return { values: { port: portResult.port } }
     },
     env: ({ values }) => ({
@@ -643,7 +675,13 @@ const PROVIDER_ROWS = [
     pre: (config) => {
       const model = requiredModel(config)
       if (!model) {
-        return { error: { kind: 'not_ready', reason: 'onboarding says PROVIDER=ollama but no MODEL (ollama model tag) is on file yet' } }
+        return {
+          error: {
+            kind: 'not_ready',
+            reason: 'onboarding says PROVIDER=ollama but no MODEL (ollama model tag) is on file yet',
+            fix: 'Pick an Ollama model in Settings > Model. It has to be a tag the local daemon can actually resolve -- `ollama list` shows what is pulled.',
+          },
+        }
       }
       return { values: { model } }
     },
@@ -696,12 +734,26 @@ const PROVIDER_ROWS = [
           error: {
             kind: present ? 'provider_not_wired' : 'not_ready',
             reason: `onboarding says PROVIDER=custom but ${urlResult.error}`,
+            // Two different user tasks, so two different sentences. "You
+            // typed it wrong" and "you have not typed it yet" get the same
+            // instruction only if you assume the user remembers what they
+            // entered -- and the single commonest wrong value here is a
+            // scheme-less host, which looks correct to the person who wrote it.
+            fix: present
+              ? 'Check the Base URL in Settings > Model. It needs a scheme and a host -- `http://localhost:8080`, not `localhost:8080`.'
+              : 'Enter the Base URL of your OpenAI-compatible proxy in Settings > Model.',
           },
         }
       }
       const model = requiredModel(config)
       if (!model) {
-        return { error: { kind: 'not_ready', reason: 'onboarding says PROVIDER=custom but no MODEL (custom proxy model id) is on file yet' } }
+        return {
+          error: {
+            kind: 'not_ready',
+            reason: 'onboarding says PROVIDER=custom but no MODEL (custom proxy model id) is on file yet',
+            fix: 'Enter the model id your proxy expects in Settings > Model. It is passed through verbatim, so it has to match what that endpoint accepts, not an Anthropic model name.',
+          },
+        }
       }
       return { values: { url: urlResult.url, model } }
     },
@@ -741,6 +793,7 @@ function buildProviderEnv(provider, config, deps) {
       error: {
         kind: 'provider_not_wired',
         reason: `provider "${provider}" is not a recognized mode -- expected one of: ${PROVIDER_IDS_FOR_MESSAGE.join(', ')}`,
+        fix: 'Pick a provider in Settings > Model. Reaching this means the config file on disk holds a PROVIDER value the wizard cannot produce, so it was hand-edited.',
       },
     }
   }
@@ -762,10 +815,20 @@ function buildProviderEnv(provider, config, deps) {
     try {
       key = readProviderKey(row.keyName)
     } catch (err) {
-      return { error: { kind: 'key_error', reason: `readProviderKey(${row.keyName}) failed: ${err.message}` } }
+      return {
+        error: {
+          kind: 'key_error',
+          reason: `readProviderKey(${row.keyName}) failed: ${err.message}`,
+          // Deliberately NOT row.notReadyFix: "paste your key again" is the
+          // wrong instruction here. The key may well be on disk and correct --
+          // what failed is the read, which on macOS means the OS refused to
+          // unseal the credential store.
+          fix: 'The stored credential could not be read. Re-saving it in Settings > Model rewrites the entry; if that fails too, the OS credential store is refusing this app rather than the key being wrong.',
+        },
+      }
     }
     if (!key && row.credential === 'required') {
-      return { error: { kind: 'not_ready', reason: row.notReady } }
+      return { error: { kind: 'not_ready', reason: row.notReady, fix: row.notReadyFix } }
     }
   }
 
@@ -809,6 +872,13 @@ for (const row of PROVIDER_ROWS) {
   }
   if (row.credential === 'required' && (typeof row.notReady !== 'string' || !row.notReady)) {
     throw new Error(`provider-env: row "${row.id}" requires a credential but has no notReady reason`)
+  }
+  // Same argument as notReady one line up, one step further: a reason with no
+  // fix is a dead end shown to someone who cannot open the log. The whole
+  // point of splitting the field was that the fix would be maintained; an
+  // unchecked optional field is how it silently stops being.
+  if (row.credential === 'required' && (typeof row.notReadyFix !== 'string' || !row.notReadyFix)) {
+    throw new Error(`provider-env: row "${row.id}" requires a credential but has no notReadyFix instruction`)
   }
 }
 

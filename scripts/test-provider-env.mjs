@@ -533,5 +533,56 @@ assert(!!parseCustomProviderJson(JSON.stringify({ baseUrl: 'ftp://nope', model: 
   assert(r.model === 'spaced-model', 'model id is trimmed but otherwise unmodified -- the route still gates it on MODEL_ID_PATTERN')
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// 9. every error carries a FIX, not just a diagnosis (2026-08-04)
+//
+//    `reason` tells the user what is wrong. Only `fix` tells them what to do,
+//    and the user seeing these strings cannot open the app log or read this
+//    file. A reason without a fix is a dead end rendered in the status pill.
+//
+//    The table itself enforces this for the per-row `notReady` case at
+//    require() time (provider-env.cjs's invariant loop), so THIS block exists
+//    for the paths the table cannot see: the inline errors returned from
+//    pre() and from buildProviderEnv's own two returns. Those are plain object
+//    literals, and an object literal is exactly where a field goes missing.
+// ─────────────────────────────────────────────────────────────────────────
+{
+  const throwingRead = () => { throw new Error('simulated Keychain failure') }
+  const emptyRead = () => null
+  const cases = [
+    ['claude / no key on file', 'claude', {}, emptyRead],
+    ['claude / credential read throws', 'claude', {}, throwingRead],
+    ['claude-subscription / no token on file', 'claude-subscription', {}, emptyRead],
+    ['chatgpt / unusable proxy port', 'chatgpt', { CHATGPT_PROXY_PORT: 'not-a-port' }, emptyRead],
+    ['ollama / no model configured', 'ollama', {}, emptyRead],
+    ['custom / base URL absent', 'custom', {}, emptyRead],
+    ['custom / base URL present but scheme-less', 'custom', { CUSTOM_BASE_URL: 'localhost:8080', MODEL: 'm' }, emptyRead],
+    ['custom / model absent', 'custom', { CUSTOM_BASE_URL: 'http://127.0.0.1:8080' }, emptyRead],
+    ['provider string not recognized', 'not-a-real-provider', {}, emptyRead],
+  ]
+  for (const [label, provider, config, readProviderKey] of cases) {
+    const result = buildProviderEnv(provider, config, { readProviderKey })
+    assert(!!result.error, `${label}: errors (fixture still reaches the error path)`)
+    assert(typeof result.error.fix === 'string' && result.error.fix.trim() !== '', `${label}: carries a non-empty error.fix`)
+    // Two fields, two jobs. If they were identical the split bought nothing
+    // and the next person would be right to collapse them.
+    assert(result.error.fix !== result.error.reason, `${label}: fix is not a copy of reason`)
+  }
+
+  // The two 'custom' base-URL failures are DIFFERENT user tasks -- "you typed
+  // it wrong" vs "you have not typed it yet" -- and the whole reason the row
+  // branches on `present` is to say different things. Identical text here
+  // would mean the branch is decorative.
+  const absent = buildProviderEnv('custom', {}, { readProviderKey: () => null })
+  const malformed = buildProviderEnv('custom', { CUSTOM_BASE_URL: 'localhost:8080', MODEL: 'm' }, { readProviderKey: () => null })
+  assert(absent.error.fix !== malformed.error.fix, 'custom: an absent base URL and a malformed one give different instructions')
+
+  // key_error must NOT reuse the row's notReadyFix. "Paste your key again" is
+  // wrong advice when the key is on disk and the OS refused to unseal it.
+  const notReady = buildProviderEnv('claude', {}, { readProviderKey: () => null })
+  const keyError = buildProviderEnv('claude', {}, { readProviderKey: throwingRead })
+  assert(notReady.error.fix !== keyError.error.fix, 'claude: a missing credential and an unreadable one give different instructions')
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)
