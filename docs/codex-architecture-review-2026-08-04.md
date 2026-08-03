@@ -267,3 +267,24 @@ real run on a Windows box with an npm-installed CLI.
 requires the `onboarding/` one; nothing requires the root copy. Every repo-wide
 grep double-reports, and a fix landed in the root copy would ship nothing. Worth
 deleting, but it is a deletion — Mino's call, not taken here.
+
+---
+
+## Correction, same day: this document's opening was an incomplete search
+
+The "Which repo" section above sorts two projects and presents that as the
+disambiguation of "open codex". Both facts in it still hold. The framing does
+not: there is a **third** project, sharing a codebase with neither, and it is
+more relevant to Scheherazade than either one here.
+
+`lidge-jun/opencodex` (MIT, 6.9k★, v2.10.0) is a universal provider proxy for
+Codex **and Claude Code** — our provider lane, not an analogy to it. It is
+reviewed in `docs/opencodex-review-2026-08-04.md`, which is the one to read
+first for anything touching providers, proxy lifecycle, the model catalog, or
+the local management API.
+
+Nothing below is retracted — `openai/codex` remains the right reference for
+error taxonomy, config precedence, and Windows posture. But this document
+found two candidates, drew a distinction between them, and stopped; two
+plausible answers read as completeness. Left in place rather than rewritten,
+because the failure worth remembering is the stopping, not the sorting.
