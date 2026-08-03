@@ -413,7 +413,13 @@ function makeHarness(overrides = {}) {
   assert(!('ANTHROPIC_API_KEY' in env), 'child does not inherit ANTHROPIC_API_KEY')
   assert(!('CLAUDE_CODE_OAUTH_TOKEN' in env), 'child does not inherit an existing OAuth token')
   assert(!('ANTHROPIC_BASE_URL' in env), 'child does not inherit a base-URL override')
-  assert(env.PATH === process.env.PATH, 'control: the rest of the environment IS inherited')
+  // Case-insensitive PATH lookup. Windows env var names are case-insensitive
+  // and the block is commonly spelled 'Path' there, so a strict env.PATH read
+  // came back undefined and this CONTROL assertion failed while the three real
+  // ones above passed -- i.e. the test reported a leak that did not exist
+  // (2026-08-04 win suite).
+  const readPath = (o) => (o.PATH !== undefined ? o.PATH : o[Object.keys(o).find((k) => k.toUpperCase() === 'PATH')])
+  assert(readPath(env) === readPath(process.env), 'control: the rest of the environment IS inherited')
   // The parent's own environment must be untouched -- scrub the child, never
   // the process the app itself runs in.
   assert(process.env.ANTHROPIC_API_KEY === 'sk-ant-parent-should-not-be-inherited',

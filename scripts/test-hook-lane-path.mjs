@@ -54,7 +54,11 @@ if (control.status === 0) {
   // the win box it died on ENOENT reading bin/node before asserting anything
   // (2026-08-04 win suite). Both lanes are checked on their own terms now.
   if (process.platform === 'win32') {
-    const run = spawnSync(process.env.COMSPEC || 'cmd.exe', ['/c', `node "${hookScript}"`],
+    // Separate argv entries, NOT one pre-quoted string: cmd.exe and Node's own
+    // Windows argument escaping double-wrap the path and the quotes end up
+    // INSIDE the module specifier, so node reports Cannot find module on a
+    // name containing literal quote characters.
+    const run = spawnSync(process.env.COMSPEC || 'cmd.exe', ['/c', 'node', hookScript],
       { env: { ...process.env, PATH: patched, PATHEXT: process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD' }, timeout: 15000 })
     check('cmd /c "node hook.mjs" runs via shim', run.status === 0 && String(run.stdout).includes('hook-ran:42'),
       `status=${run.status} stdout=${String(run.stdout).trim()} stderr=${String(run.stderr).trim().slice(0, 200)}`)

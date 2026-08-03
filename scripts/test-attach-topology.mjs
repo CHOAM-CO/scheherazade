@@ -178,9 +178,16 @@ console.log('vendored portable tmux:')
   const synced = hr.syncTmuxPortable()
   const dstBin = path.join(scratch, 'bin', 'tmux-portable', 'tmux')
   check('boot sync lands the tree in DATA_HOME/bin/tmux-portable', synced === true && fs.existsSync(dstBin))
-  const dstV = spawnSync(dstBin, ['-V'], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin', HOME: os.homedir() } })
-  check('the RELOCATED copy runs on a brew-less PATH (dylib rewrite survives the move)',
-    dstV.status === 0 && /^tmux \d/.test(String(dstV.stdout).trim()), String(dstV.stderr).trim())
+  // Executing the vendored tmux is darwin-only: it is a Mach-O, and the whole
+  // attach lane it belongs to does not exist on Windows. The SYNC checks above
+  // and below are plain file copies and stay on both platforms.
+  if (process.platform === 'darwin') {
+    const dstV = spawnSync(dstBin, ['-V'], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin', HOME: os.homedir() } })
+    check('the RELOCATED copy runs on a brew-less PATH (dylib rewrite survives the move)',
+      dstV.status === 0 && /^tmux \d/.test(String(dstV.stdout).trim()), String(dstV.stderr).trim())
+  } else {
+    console.log('  n/a  running the relocated tmux -- Mach-O, darwin only')
+  }
   const before = fs.statSync(dstBin).mtimeMs
   hr.syncTmuxPortable()
   check('same VERSION stamp -> second sync is a no-op (no churn under a running server)',
@@ -225,9 +232,17 @@ console.log('template + wiring tripwires:')
   const rendered = tpl.replaceAll('{AGENT_DIR}', '/tmp/fake-agent-dir').replaceAll('{MEMORY_DIR}', '/tmp/fake-mem')
   const tmp = path.join(os.tmpdir(), `attach-bs-render-${process.pid}.sh`)
   fs.writeFileSync(tmp, rendered)
-  const bashCheck = spawnSync('/bin/bash', ['-n', tmp])
-  fs.rmSync(tmp, { force: true })
-  check('rendered bootstrap parses (bash -n)', bashCheck.status === 0)
+  // bash -n needs bash. The bootstrap script is the mac attach lane's own
+  // artifact, so on Windows there is neither a bash to check it with nor a
+  // lane that would run it.
+  if (process.platform === 'win32') {
+    fs.rmSync(tmp, { force: true })
+    console.log('  n/a  bash -n on the rendered bootstrap -- no bash, and no attach lane on Windows')
+  } else {
+    const bashCheck = spawnSync('/bin/bash', ['-n', tmp])
+    fs.rmSync(tmp, { force: true })
+    check('rendered bootstrap parses (bash -n)', bashCheck.status === 0)
+  }
 
   // renderHarnessFiles moved to onboarding/harness-render.cjs (issue #9
   // PR-3) -- same assertions, new home.
