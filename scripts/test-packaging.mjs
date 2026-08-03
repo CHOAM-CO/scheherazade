@@ -393,7 +393,26 @@ if (WIN_LANE) {
     'run node scripts/fix-pty-helper.mjs (or npm install) -- the unpatched line corrupts helperPath in the packed app')
 }
 if (WIN_LANE) {
-  console.log('  n/a  built-artifact node-pty checks -- darwin-arm64 prebuild + exec-bit rows do not apply to the NSIS lane')
+  // The mac rows above are what stands between us and "installs fine, dies at
+  // first PTY spawn" -- assert-win32.mjs exists for that exact class. Leaving
+  // the win lane with only an n/a would have left that hole open one layer
+  // down: a green dist:win proving nothing about the natives it shipped.
+  // Different natives, same question (conpty replaces spawn-helper; no exec
+  // bit and no unixTerminal patch on this platform).
+  const unpackedPty = path.join(ROOT, 'release', 'win-unpacked', 'resources', 'app.asar.unpacked', 'node_modules', 'node-pty')
+  if (!fs.existsSync(unpackedPty)) {
+    console.log('  SKIP  built-artifact node-pty checks -- no release/win-unpacked output present (run npm run dist:win first); NOT a pass')
+  } else {
+    const prebuild = path.join(unpackedPty, 'prebuilds', 'win32-x64')
+    for (const f of ['pty.node', 'conpty.node', 'conpty_console_list.node', 'winpty.dll', 'winpty-agent.exe']) {
+      ok(`artifact carries win32-x64/${f} as a real file`, fs.existsSync(path.join(prebuild, f)),
+        'a missing native here installs fine and dies at the first terminal spawn -- the v0.0.23 class')
+    }
+    ok('artifact carries the conpty support directory', fs.existsSync(path.join(prebuild, 'conpty')),
+      'conpty/conpty.dll is loaded at runtime alongside the .node binding')
+    ok('artifact has NO build/Release shadowing the prebuild', !fs.existsSync(path.join(unpackedPty, 'build', 'Release')),
+      'node-pty loads build/Release FIRST; a second lineage there silently wins over the tested prebuild')
+  }
 } else {
   const unpackedPty = path.join(ROOT, 'release', 'mac-arm64', 'Scheherazade.app', 'Contents', 'Resources', 'app.asar.unpacked', 'node_modules', 'node-pty')
   if (!fs.existsSync(unpackedPty)) {

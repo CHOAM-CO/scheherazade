@@ -149,6 +149,18 @@ function classify(err, stderr) {
 // >
 // Never throws. Never returns [] to mean "I couldn't look".
 function readEvents({ from, to, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  // This reader IS osascript + macOS Calendar. Without this branch a Windows
+  // agent called the tool, got `spawn /usr/bin/osascript ENOENT` classified as
+  // code 'unknown', and then relayed that to the user as a Korean sentence
+  // about the calendar failing -- a nonsense answer to a question the platform
+  // cannot answer at all. Say so in the shape callers already handle.
+  if (process.platform !== 'darwin') {
+    return Promise.resolve({
+      ok: false,
+      code: 'unsupported_platform',
+      reason: `캘린더 읽기는 macOS 전용입니다 (현재: ${process.platform}).`,
+    })
+  }
   const f = from instanceof Date ? from : new Date(from)
   const t = to instanceof Date ? to : new Date(to)
   if (Number.isNaN(f.getTime()) || Number.isNaN(t.getTime())) {

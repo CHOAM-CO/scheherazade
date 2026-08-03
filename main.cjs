@@ -219,7 +219,18 @@ function createMainWindow(url) {
 
   win.loadURL(url).catch((err) => fatal(`BrowserWindow failed to load ${url}`, err))
 
-  win.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
+  win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, _url, isMainFrame) => {
+    // Two filters, both load-bearing. ERR_ABORTED (-3) is what Chromium raises
+    // for an ORDINARY cancelled navigation -- including the ones during our own
+    // teardown: the uninstall route trashes the bundle and exits 300ms later,
+    // and the FDA route calls app.relaunch(); app.exit(0). Treating those as
+    // fatal flipped a clean exit into exit(1) and ran the crash cleanup instead.
+    // A subframe failure is likewise not a reason to kill the app.
+    if (errorCode === -3) return
+    if (isMainFrame === false) {
+      console.error(`[scheherazade/main] subframe did-fail-load (non-fatal): ${errorCode} ${errorDescription}`)
+      return
+    }
     fatal(`did-fail-load: ${errorCode} ${errorDescription}`)
   })
 
@@ -259,7 +270,18 @@ function createMainWindow(url) {
 const NPM_GLOBAL_BIN_DIRS = () => {
   const home = os.homedir()
   return process.platform === 'win32'
-    ? [path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'npm')]
+    ? [
+        path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'npm'),
+        // Where OUR OWN recommended install lands. CLAUDE_INSTALL_COMMAND on
+        // win32 is `irm https://claude.ai/install.ps1 | iex`, and the native
+        // installer writes %USERPROFILE%\.local\bin\claude.exe. Omitting it
+        // meant a user who followed the app's own instruction was told to
+        // install the thing they had just installed -- the packaged app's PATH
+        // is inherited from explorer.exe and predates the installer's user-PATH
+        // edit, so PATH alone does not see it until they log out.
+        path.join(home, '.local', 'bin'),
+        path.join(process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'Programs', 'claude'),
+      ]
     : [
         '/opt/homebrew/bin',
         '/usr/local/bin',
@@ -309,8 +331,10 @@ function resolveClaudeBin() {
 // would not already have: curl ships with macOS, irm is built into PowerShell.
 // The npm route needs Node 22+, and Homebrew/WinGet need a package manager --
 // all three are "no ordinary user has this" dependencies, which is the whole
-// class we are trying not to create. It also lands at ~/.local/bin/claude,
-// already covered by NPM_GLOBAL_BIN_DIRS above.
+// class we are trying not to create. It lands at ~/.local/bin/claude on POSIX
+// and %USERPROFILE%\.local\bin\claude.exe on Windows -- NPM_GLOBAL_BIN_DIRS
+// covers BOTH branches now (the win branch did not until 2026-08-03, so this
+// comment used to be false exactly where it mattered).
 // Docs: https://code.claude.com/docs/en/setup
 const CLAUDE_INSTALL_COMMAND =
   process.platform === 'win32'
@@ -351,8 +375,19 @@ const BASH_BIN = '/bin/bash' // confirmed present on stock macOS; hardcoded rath
 // unset -- keeps the battle-tested bash lane. Read ONCE at module load: a
 // lane is a process-lifetime decision, and flipping it mid-run would desync
 // the spawn/stop/identity trio that all key off it.
+// win32 has NO bash lane to fall back to -- BASH_BIN is a hardcoded /bin/bash,
+// so an unset SUPERVISOR_LANE there spawned ENOENT and parked the agent at
+// status 'failed' forever, making the entire node-pty supervisor built for
+// this port unreachable without a manually-set env var (found 2026-08-03,
+// first real win run). The env var still selects the lane on POSIX; on win32
+// the node lane is the only one that exists, so it is not a preference.
 const SUPERVISOR_MJS_PATH = toUnpackedPath(path.join(__dirname, 'supervisor.mjs'))
-const SUPERVISOR_LANE = (process.env.SUPERVISOR_LANE || '').trim().toLowerCase() === 'node' ? 'node' : 'bash'
+const SUPERVISOR_LANE =
+  process.platform === 'win32'
+    ? 'node'
+    : (process.env.SUPERVISOR_LANE || '').trim().toLowerCase() === 'node'
+      ? 'node'
+      : 'bash'
 
 // Fix C: this used to spawn `bash run.sh __loop` directly, bypassing
 // run.sh's OWN start_agent() PIDFILE entirely -- quit+reopen (or a second
@@ -428,6 +463,22 @@ function isPidAlive(pid) {
 //     tokens back-to-back (space-joined) is both necessary and
 //     sufficient, and depends on Fix A: without `-ww`, truncation could
 //     also sever this exact contiguous match.
+// Kill a detached child AND its descendants. Negative-pid group signals do not
+// exist on Windows (and POSIX signal names are not deliverable there), so every
+// such call threw into its catch and killed NOTHING -- detached login flows and
+// daemons survived app quit as orphans, and an orphaned OAuth flow can still
+// complete and write credentials after the app is gone. taskkill /T is the
+// Windows equivalent; supervisor.mjs:684 already uses it.
+function killTree(pid, signal) {
+  if (process.platform === 'win32') {
+    // /F because a detached console child will not honour a polite close, /T
+    // for the descendants the process group would have covered on POSIX.
+    execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
+    return
+  }
+  process.kill(-pid, signal)
+}
+
 function isOurSupervisor(pid) {
   // Recognition is deliberately LANE-AGNOSTIC (SUPERVISOR_LANE seam,
   // Windows-port Phase 1): both signatures are OUR supervisors on the same
@@ -442,10 +493,20 @@ function isOurSupervisor(pid) {
 function readSupervisorCommandLine(pid) {
   if (!isPidAlive(pid)) return null
   let commandLine
+  // Windows has no `ps`. Without this branch EVERY lookup threw, so every
+  // supervisor read as UNVERIFIED: a live supervisor's PIDFILE was called
+  // stale and the next launch double-spawned onto the same Discord token --
+  // the Fix-C disaster the lane-agnostic matching above exists to prevent.
+  // Same CIM read supervisor.mjs's defaultReadCommandLine() uses, which was
+  // execution-verified on magi-win 2026-08-01 (268/295/405ms).
+  const reader = process.platform === 'win32'
+    ? () => execFileSync('powershell.exe', ['-NoProfile', '-Command',
+        `(Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}").CommandLine`], { encoding: 'utf8' })
+    : () => execFileSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8' })
   try {
-    commandLine = execFileSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8' })
+    commandLine = reader()
   } catch (err) {
-    log(`readSupervisorCommandLine(${pid}): ps lookup failed (${err.message}) -- treating as UNVERIFIED, fail-safe`)
+    log(`readSupervisorCommandLine(${pid}): process lookup failed (${err.message}) -- treating as UNVERIFIED, fail-safe`)
     return null
   }
   if (commandLine.includes(`${RUN_SH_PATH} __loop`) || commandLine.includes(`${SUPERVISOR_MJS_PATH} __loop`)) return commandLine
@@ -489,6 +550,9 @@ function readPidFromFile(filePath) {
 // cross-process guard on top (the PIDFILE check below) for the quit+reopen
 // case, where this in-memory variable itself was reset by the process
 // restart and can't help.
+// The onboarding server is started ONCE and reused; app.on('activate') reads
+// this instead of starting a second one (see its comment).
+let onboardingServerUrl = null
 let agentChild = null
 let failurePollTimer = null
 let lastFailureMtimeMs = 0
@@ -906,8 +970,11 @@ async function spawnRealAgentChildLocked() {
     return null
   }
 
-  if (!fs.existsSync(RUN_SH_PATH)) {
-    const reason = `internal launcher not found at ${RUN_SH_PATH} (run.sh missing from the packaged/unpacked app -- check build.files/build.asarUnpack)`
+  // Per-lane launcher gate: the node lane never touches run.sh, so blocking on
+  // its absence there would fail a launch for a file the lane does not use.
+  const launcherPath = SUPERVISOR_LANE === 'node' ? SUPERVISOR_MJS_PATH : RUN_SH_PATH
+  if (!fs.existsSync(launcherPath)) {
+    const reason = `internal launcher not found at ${launcherPath} (${SUPERVISOR_LANE === 'node' ? 'supervisor.mjs' : 'run.sh'} missing from the packaged/unpacked app -- check build.files/build.asarUnpack)`
     console.error(`[scheherazade/main] BLOCKER: ${reason}`)
     // Same 'unknown' reasoning as the claude-CLI-missing branch above.
     setAgentStatus('failed', 'unknown', reason)
@@ -1491,8 +1558,8 @@ function killAgentSupervisor(signal = 'SIGTERM') {
       // hasn't been reaped/recycled since we still hold the ChildProcess
       // handle and haven't seen its 'exit' event, so it's safe to
       // group-signal without an extra identity re-check.
-      process.kill(-agentSupervisorPid, signal)
-      log(`sent ${signal} to agent supervisor process group (pgid=${agentSupervisorPid}) -- best-effort fast path`)
+      killTree(agentSupervisorPid, signal)
+      log(`sent ${signal} to agent supervisor process tree (pid=${agentSupervisorPid}) -- best-effort fast path`)
     } else if (isOurSupervisor(agentSupervisorPid)) {
       // Bug 1 fix: this pid was DISCOVERED via AGENT_PIDFILE (not spawned
       // by this process instance), so re-verify identity right before
@@ -1765,10 +1832,18 @@ app.whenReady().then(async () => {
     // every boot (see tcc-probe.cjs's own doc comment) -- a denied/failed
     // folder is fail-loud logged here but never throws, so a user who denies
     // one prompt does not lose the rest of app boot.
-    const tccResults = probeUserFolders({ homedir: os.homedir(), log })
-    log(`tcc-probe summary: ${JSON.stringify(tccResults)}`)
+    // darwin only: TCC is a macOS permission system. On Windows this wrote,
+    // read and deleted a probe file in Documents/Downloads/Desktop on every
+    // single launch to trigger consent prompts that do not exist -- and on a
+    // OneDrive-redirected or offline folder it logged three alarming
+    // DENIED/FAILED lines into the user's /logs pane for nothing.
+    if (process.platform === 'darwin') {
+      const tccResults = probeUserFolders({ homedir: os.homedir(), log })
+      log(`tcc-probe summary: ${JSON.stringify(tccResults)}`)
+    }
 
     const { url } = await startOnboardingServer(onOnboardingComplete, agentControls)
+    onboardingServerUrl = url
     createMainWindow(url)
 
     // Long-lived; deliberately not awaited to exit -- see
@@ -1791,11 +1866,25 @@ app.whenReady().then(async () => {
     // macOS convention: clicking the dock icon with no windows open
     // re-shows one. Not exercised by this headless spike, kept for
     // correctness since electron-builder targets mac.
-    if (BrowserWindow.getAllWindows().length === 0) {
-      startOnboardingServer(onOnboardingComplete, agentControls)
-        .then(({ url }) => createMainWindow(url))
-        .catch((err) => fatal('activate: failed to reopen window', err))
+    if (BrowserWindow.getAllWindows().length !== 0) return
+    // REUSE the running server. This used to call startOnboardingServer()
+    // again on every dock click: nothing ever closes the previous one, so each
+    // click leaked a bound, fully-authenticated listener on a new ephemeral
+    // port, re-ran the whole boot prelude (re-seeding config, rewriting
+    // .mcp.json, re-rendering the harness), and rotated the askpass token out
+    // from under the pages already open. It also re-entered the boot-seed
+    // failure path with fatal() as its catch, so a config that went bad after
+    // boot killed the app on a dock click.
+    if (onboardingServerUrl) {
+      createMainWindow(onboardingServerUrl)
+      return
     }
+    startOnboardingServer(onOnboardingComplete, agentControls)
+      .then(({ url }) => {
+        onboardingServerUrl = url
+        createMainWindow(url)
+      })
+      .catch((err) => fatal('activate: failed to reopen window', err))
   })
 })
 

@@ -230,7 +230,13 @@ console.log('\n-- main.cjs seam: SUPERVISOR_LANE wiring stays welded')
   // silently drifting apart. The REAL proof is a full live session on the
   // node lane -- until then run.sh stays production (design doc).
   const mainSrc = fs.readFileSync(path.join(ROOT, 'main.cjs'), 'utf8')
-  ok('lane flag exists and defaults to bash', mainSrc.includes("=== 'node' ? 'node' : 'bash'"))
+  // Two properties now, not one string. win32 is FORCED to the node lane
+  // (BASH_BIN is a hardcoded /bin/bash, so the bash lane cannot exist there --
+  // it spawned ENOENT and parked the agent at 'failed' forever, 2026-08-03),
+  // while POSIX keeps opt-in-by-env with bash as the default.
+  ok('lane flag defaults to bash on POSIX', mainSrc.includes("=== 'node'\n      ? 'node'\n      : 'bash'"))
+  ok('lane flag is FORCED to node on win32',
+    /SUPERVISOR_LANE =\s*\n\s*process\.platform === 'win32'\s*\n\s*\? 'node'/.test(mainSrc))
   ok('node lane spawns supervisor.mjs under ELECTRON_RUN_AS_NODE',
     mainSrc.includes("spawn(process.execPath, [SUPERVISOR_MJS_PATH, '__loop']") && mainSrc.includes("ELECTRON_RUN_AS_NODE: '1'"))
   ok('identity check recognizes BOTH lane signatures (lane-agnostic recognition)',

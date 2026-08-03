@@ -235,10 +235,23 @@ function parseCustomProviderJson(text) {
   // two identical objects with different key order different. Both were real.
   const sameValue = (a, b) => {
     if (a === b) return true
-    const norm = (v) => (Array.isArray(v)
-      ? v.map(norm)
-      : (v && typeof v === 'object' ? Object.keys(v).sort().map((k) => [k, norm(v[k])]) : v))
-    return JSON.stringify(norm(a)) === JSON.stringify(norm(b))
+    // Depth-capped. JSON.parse accepts far deeper input than a recursive walk
+    // can survive, so a deeply-nested paste threw RangeError out of the one
+    // function whose entire contract is "refuse out loud, never throw" -- the
+    // user got an opaque 500 instead of the specific 400 every other bad paste
+    // produces. Past the cap we simply decline to call them equal.
+    const MAX_DEPTH = 64
+    const DEEP = '\u0000__too_deep__'
+    const norm = (v, d = 0) => {
+      if (d > MAX_DEPTH) return DEEP
+      return Array.isArray(v)
+        ? v.map((x) => norm(x, d + 1))
+        : (v && typeof v === 'object' ? Object.keys(v).sort().map((k) => [k, norm(v[k], d + 1)]) : v)
+    }
+    const a2 = norm(a)
+    const b2 = norm(b)
+    if (JSON.stringify(a2).includes(DEEP) || JSON.stringify(b2).includes(DEEP)) return false
+    return JSON.stringify(a2) === JSON.stringify(b2)
   }
   let parsed
   try {
@@ -671,7 +684,20 @@ const PROVIDER_ROWS = [
     pre: (config) => {
       const urlResult = resolveCustomBaseUrl(config.CUSTOM_BASE_URL)
       if (urlResult.error) {
-        return { error: { kind: 'not_ready', reason: `onboarding says PROVIDER=custom but ${urlResult.error}` } }
+        // ABSENT is not_ready ("no URL yet" -- main.cjs skips the spawn
+        // silently, by design). PRESENT BUT INVALID is provider_not_wired, the
+        // same call the chatgpt row above makes for a bad port: it stamps a
+        // 'failed' status the UI can show. Collapsing both into not_ready meant
+        // a typo like CUSTOM_BASE_URL=localhost:8080 (no scheme) produced an
+        // app that opened, never spawned an agent, and eventually reported
+        // 'timeout' -- a diagnosis with nothing to do with the cause.
+        const present = String(config.CUSTOM_BASE_URL || '').trim() !== ''
+        return {
+          error: {
+            kind: present ? 'provider_not_wired' : 'not_ready',
+            reason: `onboarding says PROVIDER=custom but ${urlResult.error}`,
+          },
+        }
       }
       const model = requiredModel(config)
       if (!model) {

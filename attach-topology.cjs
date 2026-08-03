@@ -71,7 +71,10 @@ function resolveTmuxBin() {
     try { fs.accessSync(p, fs.constants.X_OK); return p } catch { /* next */ }
   }
   // Dev fallback: PATH lookup via `command -v` semantics without a shell.
-  for (const dir of String(process.env.PATH || '').split(':')) {
+  // path.delimiter, not ':' -- Windows separates PATH entries with ';' and its
+  // entries contain ':' themselves, so splitting on ':' yields garbage lookups
+  // rather than a clean miss.
+  for (const dir of String(process.env.PATH || '').split(path.delimiter)) {
     if (!dir) continue
     const p = path.join(dir, 'tmux')
     try { fs.accessSync(p, fs.constants.X_OK); return p } catch { /* next */ }

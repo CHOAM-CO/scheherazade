@@ -639,16 +639,31 @@ function memoryDelete(db, args) {
   // hygiene, so on failure we fail loud rather than silently claim a clean
   // secure delete, but we do NOT roll back the already-committed logical
   // delete, which succeeded correctly.
-  const checkpoint = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get()
+  // busy !== 0 is a DEFERRAL, not a failed delete. Production is two
+  // connections (MCP child + Electron main, see this file's note below), so
+  // whenever the agent holds a read snapshot the TRUNCATE blocks out its full
+  // busy_timeout and comes back busy. Throwing then turned a delete that had
+  // already committed into a 5-second hang and an HTTP 500 reading "delete
+  // failed" — and the user's retry answered "id not found", which looks like
+  // data loss for an operation that worked. Report the hygiene status instead;
+  // the next checkpoint (any writer, or close) folds the frames.
+  let checkpoint = null
+  try {
+    checkpoint = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get()
+  } catch (err) {
+    return { ...result, secureErase: 'deferred', secureEraseReason: err.message }
+  }
   if (!checkpoint || checkpoint.busy !== 0) {
-    throw new Error(
-      `memory_delete: id=${id} table="${table}" deleted successfully, but the post-delete WAL ` +
-      `checkpoint(TRUNCATE) did not fully complete (${JSON.stringify(checkpoint)}) — deleted ` +
-      `content may still be recoverable from the -wal file on disk.`,
-    )
+    return {
+      ...result,
+      secureErase: 'deferred',
+      secureEraseReason:
+        `post-delete WAL checkpoint(TRUNCATE) did not fully complete (${JSON.stringify(checkpoint)}); ` +
+        'the row is gone, but its bytes may persist in the -wal file until the next successful checkpoint',
+    }
   }
 
-  return result
+  return { ...result, secureErase: 'complete' }
 }
 
 // ── memory_recall_material: session-start helper, raw structured data ────

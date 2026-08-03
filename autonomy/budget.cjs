@@ -213,8 +213,13 @@ function readRange(file, from, to) {
       try { rows.push(JSON.parse(t)) } catch { /* corrupt row: skip, never guess */ }
     }
     return { rows, consumed: lastNl + 1 }
-  } catch {
-    return { rows: [], consumed: 0 }
+  } catch (err) {
+    // THIS FILE'S ONE RULE is that silence falls toward NOT SPENDING, and an
+    // empty result broke it: "no new rows" and "I could not read this file"
+    // were indistinguishable, so an unreadable 900k-token transcript reported
+    // 0 and the night cycle was green-lit to keep burning paid tokens past a
+    // cap it had already blown. Name the failure; the caller refuses to run.
+    return { rows: [], consumed: 0, error: err.code || err.message }
   } finally {
     if (fd !== undefined) { try { fs.closeSync(fd) } catch { /* ignore */ } }
   }
@@ -268,7 +273,14 @@ function collectRows(dataHome, fromMs, resolved = null) {
     try { st = fs.statSync(file) } catch { continue }
     // A file untouched since before the window we care about cannot contain a
     // row inside it. Skipped without being opened.
-    if (st.mtimeMs < fromMs) continue
+    if (st.mtimeMs < fromMs) {
+      // Drop its cached rows too. The prune above only runs for files that
+      // are still GROWING, so a transcript that went quiet kept its full row
+      // array alive for the life of the process -- unbounded growth in the
+      // long-lived channel.mjs watcher, none of it ever read again.
+      fileCache.delete(file)
+      continue
+    }
     files++
 
     const head = readHead(file, st.size)
@@ -284,7 +296,9 @@ function collectRows(dataHome, fromMs, resolved = null) {
     }
 
     if (st.size > c.offset) {
-      const { rows, consumed } = readRange(file, c.offset, st.size)
+      const { rows, consumed, error } = readRange(file, c.offset, st.size)
+      // Fail CLOSED: a transcript we cannot read may hold any amount of spend.
+      if (error) return { ok: false, reason: `transcript unreadable (${file}): ${error}` }
       for (const row of rows) {
         const usage = row && row.message && row.message.usage
         if (!usage || typeof row.timestamp !== 'string') continue
@@ -303,7 +317,12 @@ function collectRows(dataHome, fromMs, resolved = null) {
       // Bound memory: a transcript that has been open for weeks would otherwise
       // grow this array without limit. Two days back is enough to still answer
       // "what did last night cost" after a midnight rollover.
-      const cutoff = Date.now() - ROW_RETENTION_MS
+      // Never prune inside the window the caller just asked for. The bare
+      // now-48h cutoff silently deleted every row older than that BEFORE the
+      // `rec.t >= fromMs` filter below ran, so any fromMs further back
+      // returned used:0 with ok:true -- the unpaid-brief path then told the
+      // user a three-day-old night had cost nothing.
+      const cutoff = Math.min(Date.now() - ROW_RETENTION_MS, fromMs)
       if (c.rows.length > 512 && c.rows[0].t < cutoff) {
         c.rows = c.rows.filter((x) => x.t >= cutoff)
       }
@@ -340,7 +359,12 @@ function usageForDay(dataHome, now = new Date(), resolved = null) {
   const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
   const c = collectRows(dataHome, dayStart, resolved)
   if (!c.ok) return { ok: false, reason: c.reason }
-  const dayEnd = dayStart + 24 * 60 * 60 * 1000
+  // Next local midnight, NOT dayStart + 24h. Two days a year are 23 or 25
+  // hours long: on the 25-hour day the last 60 minutes fell outside the window
+  // and went uncounted, and on the 23-hour day the first hour of the NEXT day
+  // was billed to this one. Same class as the "two numbers under one name"
+  // problem this function's header warns about.
+  const dayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime()
   const rows = c.rows.filter((r) => r.t >= dayStart && r.t < dayEnd)
   return { ok: true, day: localDay(now), dir: c.dir, via: c.via, files: c.files, ...sumRows(rows) }
 }

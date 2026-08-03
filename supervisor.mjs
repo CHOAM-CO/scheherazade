@@ -182,7 +182,13 @@ export function resolveConfig(env = process.env, scriptDir = SCRIPT_DIR) {
     sessionTimeoutSec: Number(merged.SESSION_TIMEOUT) > 0 ? Number(merged.SESSION_TIMEOUT) : 43200,
     // v0.0.15 stall watchdog window (seconds). 0 disables. Default 15 min
     // (see the stall/thrash watchdog block below for why).
-    stallTimeoutSec: merged.STALL_TIMEOUT !== undefined ? Math.max(0, Number(merged.STALL_TIMEOUT) || 0) : 900,
+    // '15m', '900s', or an empty STALL_TIMEOUT= all used to coerce to 0 via
+    // `Number(x) || 0`, which SILENTLY disabled the whole stall/thrash
+    // watchdog -- the v0.0.15 incident recurring with a user message
+    // unanswered for hours until the 12h session timeout recycled it. An
+    // explicit 0 still disables (that is the documented opt-out); anything
+    // unparseable falls back to the default and says so.
+    stallTimeoutSec: parseStallTimeout(merged.STALL_TIMEOUT),
     systemPromptFile: fs.existsSync(path.join(mem, 'system_prompt.md')) ? path.join(mem, 'system_prompt.md') : null,
     // Context-bleed fix (2026-07-28): same guarded shape as
     // systemPromptFile -- see run.sh's MCP_CONFIG_FILE comment for the
@@ -288,6 +294,17 @@ export function writeBootEvent(cfg, iteration, { now = () => Date.now(), log = (
 // poller watches ONE file regardless of which layer caught the problem.
 // Atomic tmp+rename; best-effort -- diagnostic, never load-bearing for the
 // loop's own survival (run.sh:216-231).
+// See stallTimeoutSec below. Returns seconds; 900 (15 min) is the default.
+function parseStallTimeout(raw) {
+  if (raw === undefined || raw === null || String(raw).trim() === '') return 900
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n < 0) {
+    console.error(`[supervisor] STALL_TIMEOUT=${JSON.stringify(raw)} is not a number of seconds -- falling back to 900. Set STALL_TIMEOUT=0 if you meant to disable the watchdog.`)
+    return 900
+  }
+  return n
+}
+
 export function writeFailureMarker(failfile, reason, { now = () => Date.now(), log = () => {} } = {}) {
   const body = JSON.stringify({
     status: 'failed',
@@ -635,11 +652,19 @@ function spawnPtyChild(cfg, { now = () => Date.now(), log, watchdogBounces = [] 
   })
 
   const matcher = createAutoAnswerMatcher({ send: (r) => child.write(r), now })
-  let graceTimer = null
+  // A LIST, not one slot. Two independent paths arm a 10s SIGKILL grace timer
+  // (session timeout and the watchdog bounce). With a single variable the
+  // second arm orphaned the first: onExit cleared only the surviving handle,
+  // and the orphan fired later against a pid the OS may already have
+  // reassigned -- killHandle's empty catch makes killing the wrong process
+  // indistinguishable from a no-op. (Found 2026-08-03; now a live Windows
+  // path, since win32 forces this lane.)
+  const graceTimers = []
+  const armGrace = () => graceTimers.push(setTimeout(() => killHandle('SIGKILL'), 10_000))
   const sessionTimer = setTimeout(() => {
     log(`session timeout (${cfg.sessionTimeoutSec}s) -- terminating child ${child.pid}`)
     killHandle('SIGTERM')
-    graceTimer = setTimeout(() => killHandle('SIGKILL'), 10_000)
+    armGrace()
   }, cfg.sessionTimeoutSec * 1000)
 
   // Stall/thrash watchdog (see the v0.0.15 block above). All verdicts
@@ -654,7 +679,7 @@ function spawnPtyChild(cfg, { now = () => Date.now(), log, watchdogBounces = [] 
     bounced = true
     log(`watchdog: bouncing child ${child.pid} -- ${reason}`)
     killHandle('SIGTERM')
-    graceTimer = setTimeout(() => killHandle('SIGKILL'), 10_000)
+    armGrace()
   }
   // STALL_TIMEOUT=0 disables the whole watchdog (spark F2): one knob, no
   // half-disabled surprises for an operator opting out of bounces.
@@ -664,6 +689,13 @@ function spawnPtyChild(cfg, { now = () => Date.now(), log, watchdogBounces = [] 
     // unverified on Windows, so the watchdog stays off there -- but silently
     // off IS the silent-detector class, so say it at every spawn.
     log('watchdog: disabled on Windows (transcript path munge unverified) -- stall protection is NOT active')
+  }
+  // Same reasoning, the OTHER way off. The "not active" line used to live only
+  // under the IS_WIN branch, so an operator (or a config typo) that zeroed
+  // STALL_TIMEOUT on mac got no line at all -- silently off, which is the
+  // exact class the Windows line exists to prevent.
+  if (cfg.stallTimeoutSec === 0) {
+    log('watchdog: disabled by STALL_TIMEOUT=0 -- stall protection is NOT active')
   }
   if (watchdogOn) {
     const poll = createStallLane({
@@ -701,7 +733,7 @@ function spawnPtyChild(cfg, { now = () => Date.now(), log, watchdogBounces = [] 
     })
     child.onExit(({ exitCode, signal }) => {
       clearTimeout(sessionTimer)
-      if (graceTimer) clearTimeout(graceTimer)
+      for (const t of graceTimers) clearTimeout(t)
       if (stallTimer) clearInterval(stallTimer)
       resolve({ exitCode, signal })
     })
@@ -962,12 +994,23 @@ if (isMain) {
     console.error(err.message)
     process.exit(1)
   }
+  // A throw out of any mode used to kill the supervisor WITHOUT writing the
+  // failure marker main.cjs polls -- e.g. mkdirSync($MEM/logs) on a read-only
+  // or full volume, or where that path exists as a regular file. The UI then
+  // sat on 'connecting' until the 60s backstop flipped it to code=timeout, a
+  // cause unrelated to what actually happened. Marker first, then exit 1.
+  const fatalSupervisor = (err) => {
+    const reason = (err && err.message) || String(err)
+    console.error(`[supervisor] fatal: ${reason}`)
+    try { writeFailureMarker(cfg.failfile, `supervisor crashed: ${reason}`) } catch {}
+    process.exit(1)
+  }
   if (mode === 'start') {
-    startAgent(cfg)
+    try { startAgent(cfg) } catch (err) { fatalSupervisor(err) }
   } else if (mode === 'stop') {
-    await stopAgent(cfg)
+    try { await stopAgent(cfg) } catch (err) { fatalSupervisor(err) }
   } else if (mode === '__loop') {
-    await runLoop(cfg)
+    try { await runLoop(cfg) } catch (err) { fatalSupervisor(err) }
     process.exit(0)
   } else {
     console.error(`usage: supervisor.mjs [start|stop]`)

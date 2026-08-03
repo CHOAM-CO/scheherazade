@@ -79,6 +79,12 @@ async function alive(port) {
 
 function listenerPids(port) {
   try {
+    if (process.platform === 'win32') {
+      const out = execFileSync('powershell.exe', ['-NoProfile', '-Command',
+        `Get-NetTCPConnection -LocalPort ${Number(port)} -State Listen | Select-Object -ExpandProperty OwningProcess`],
+        { encoding: 'utf8', timeout: 5000 })
+      return [...new Set(out.split('\n').map((s) => s.trim()).filter(Boolean))]
+    }
     const out = execFileSync('/usr/sbin/lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {
       encoding: 'utf8',
       timeout: 3000,
@@ -91,6 +97,11 @@ function listenerPids(port) {
 
 function execPathOfPid(pid) {
   try {
+    if (process.platform === 'win32') {
+      const out = execFileSync('powershell.exe', ['-NoProfile', '-Command',
+        `(Get-Process -Id ${Number(pid)}).Path`], { encoding: 'utf8', timeout: 5000 })
+      return out.trim() || null
+    }
     // comm= on macOS reports the executable path the process was launched
     // as, un-truncated (unlike args-derived guesses). A relative/deleted
     // path simply fails the codesign step below -- fail-closed either way.
@@ -109,10 +120,25 @@ function execPathOfPid(pid) {
 // pass keeps the weird case fail-closed instead of first-match lucky.
 async function listenerIsOllama(port) {
   const pids = listenerPids(port)
-  if (!pids.length) return { ok: false, why: 'listener pid could not be determined (lsof empty/failed)' }
+  if (!pids.length) return { ok: false, why: 'listener pid could not be determined (port-owner lookup empty/failed)' }
   for (const pid of pids) {
     const exe = execPathOfPid(pid)
     if (!exe) return { ok: false, why: `pid ${pid}: executable path could not be read` }
+    // verifySignedByPinnedTeam is `codesign` -- macOS only. On Windows the
+    // whole identity lane used to come back empty and the CALLER is
+    // fail-closed, so picking the ollama provider on Windows blocked the
+    // daemon, which made ensureOllamaDaemon() return false, which parked the
+    // agent at 'failed' WITHOUT EVER SPAWNING IT -- while telling the user
+    // their own Ollama was an unrecognized service. Detection-only on Windows
+    // for v1 (the locked scoping call): match the executable by path and say
+    // out loud that this is weaker than the mac check.
+    if (process.platform === 'win32') {
+      if (!/[\\/]ollama(\.exe)?$/i.test(exe)) {
+        return { ok: false, why: `pid ${pid} (${exe}): does not look like ollama.exe` }
+      }
+      log(`win32: :${port} owner pid ${pid} accepted by PATH MATCH only (${exe}) -- no signature check on this platform`)
+      continue
+    }
     try {
       await verifySignedByPinnedTeam(exe, 'ollama')
     } catch (err) {
@@ -240,8 +266,15 @@ function killOllamaDaemon(signal = 'SIGTERM') {
   try {
     // Group kill (detached spawn above): negative pid signals the whole
     // process group, reaping model-runner grandchildren with the daemon.
-    process.kill(-pid, signal)
-    log(`killOllamaDaemon: sent ${signal} to process group ${pid}`)
+    // Windows has no process groups to signal, so taskkill /T is the
+    // equivalent -- without it this always threw and the fallback below
+    // reached only the daemon, leaving model-runner grandchildren alive.
+    if (process.platform === 'win32') {
+      execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
+    } else {
+      process.kill(-pid, signal)
+    }
+    log(`killOllamaDaemon: sent ${signal} to process tree ${pid}`)
   } catch (err) {
     // Group already gone, or platform quirk -- fall back to the lone child.
     try {

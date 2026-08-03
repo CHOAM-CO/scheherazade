@@ -114,13 +114,39 @@ function createHarnessRender(ctx) {
   // same {AGENT_DIR} substitution for its CLI-deployment copy, so both seed
   // paths produce working absolute hook paths. Seeds only when absent -- never
   // clobbers a user's edited hooks/permissions.
+  // Substitute INSIDE the parsed object, never in the raw text. A Windows
+  // REPO_ROOT is 'C:\Users\...\app.asar.unpacked'; spliced into the template
+  // text its backslashes become invalid JSON escapes ('\U'), so the file we
+  // just wrote no longer parses. Claude Code then reads no settings at all --
+  // every hook silently dead, the MCP allowlist gone -- and
+  // ensureSettingsLocalAdditions() below hits its own JSON.parse catch, so the
+  // install never self-heals. JSON.stringify escapes the backslashes for us.
+  // (Found 2026-08-03 on the first real Windows pass; reproduced as
+  // "SyntaxError: Bad escaped character in JSON".)
+  function renderPlaceholders(node, agentDir) {
+    if (typeof node === 'string') return node.split('{AGENT_DIR}').join(agentDir)
+    if (Array.isArray(node)) return node.map((v) => renderPlaceholders(v, agentDir))
+    if (node && typeof node === 'object') {
+      const out = {}
+      for (const [k, v] of Object.entries(node)) out[k] = renderPlaceholders(v, agentDir)
+      return out
+    }
+    return node
+  }
+
   function seedSettingsLocal() {
     if (fs.existsSync(SETTINGS_LOCAL_PATH)) return
     if (!fs.existsSync(TEMPLATE_SETTINGS_LOCAL_PATH)) return
-    const rendered = fs
-      .readFileSync(TEMPLATE_SETTINGS_LOCAL_PATH, 'utf8')
-      .split('{AGENT_DIR}')
-      .join(toUnpackedPath(REPO_ROOT))
+    let template
+    try {
+      template = JSON.parse(fs.readFileSync(TEMPLATE_SETTINGS_LOCAL_PATH, 'utf8'))
+    } catch (err) {
+      // The template is ours and ships in the asar, so this is a build defect,
+      // not user data. Loud and non-fatal: onboarding stays usable.
+      console.error(`[scheherazade/onboarding] bundled settings.local.json template is not valid JSON, not seeding: ${err.message}`)
+      return
+    }
+    const rendered = JSON.stringify(renderPlaceholders(template, toUnpackedPath(REPO_ROOT)), null, 2)
     fs.mkdirSync(path.dirname(SETTINGS_LOCAL_PATH), { recursive: true })
     fs.writeFileSync(SETTINGS_LOCAL_PATH, rendered)
     log('seeded settings.local.json into CONFIG_DIR/.claude (hook paths rendered) from bundled template')

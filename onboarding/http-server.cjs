@@ -49,7 +49,21 @@ const { PROVIDERS_REQUIRING_STORED_CREDENTIAL, resolveChatgptProxyPort, resolveC
 // any FUTURE external-binary spawn (Codex security review, 2026-07-07):
 // resolve via resolveBin() below and use a FIXED argv -- the LOGIN_SPECS
 // table is the single existing site.
-const { spawn, execFile } = require('node:child_process')
+const { spawn, execFile, execFileSync } = require('node:child_process')
+
+// Kill a detached child AND its descendants. Negative-pid process-group signals
+// do not exist on Windows, so every group-kill below threw straight into its
+// catch and killed nothing: detached `codex login` / `claude mcp login`
+// children outlived app quit, and an orphaned OAuth flow can still finish its
+// exchange and write credentials after the app is gone -- the exact Codex
+// finding #3 these call sites exist to prevent. (Found 2026-08-03.)
+function killTree(pid, signal) {
+  if (process.platform === 'win32') {
+    execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
+    return
+  }
+  process.kill(-pid, signal)
+}
 
 // The autonomous cycle's meter and decision logic. The SAME modules the
 // channel.mjs watcher enforces against -- the settings page must not compute
@@ -640,7 +654,21 @@ function ensureMcpJsonAgentName() {
     try {
       existing = JSON.parse(fs.readFileSync(MCP_JSON_PATH, 'utf8'))
     } catch (err) {
-      throw new Error(`existing .mcp.json is not valid JSON, refusing to overwrite blindly: ${err.message}`)
+      // NEVER throw from here. This runs in createOnboardingServer's
+      // synchronous prelude, whose only caller wraps boot in a catch that
+      // calls fatal() -> app.exit(1). A .mcp.json truncated by a crash mid-
+      // write therefore bricked the app permanently: double-click, no window,
+      // no dialog, and no in-app way back -- the app that would show the error
+      // is the one refusing to start. Preserve the bad file (it is the user's
+      // data and may hold hand-added servers) and re-seed beside it.
+      const backup = `${MCP_JSON_PATH}.corrupt-${Date.now()}`
+      try {
+        fs.renameSync(MCP_JSON_PATH, backup)
+        console.error(`[scheherazade/onboarding] .mcp.json was not valid JSON (${err.message}); moved to ${backup} and re-seeding from defaults`)
+      } catch (mvErr) {
+        console.error(`[scheherazade/onboarding] .mcp.json is not valid JSON (${err.message}) and could not be set aside (${mvErr.message}); re-seeding over it`)
+      }
+      existing = null
     }
   }
   // Snapshot the "before" text BEFORE any mutation below. servers (next)
@@ -687,7 +715,10 @@ function ensureMcpJsonAgentName() {
       env: { AGENT_NAME, ELECTRON_RUN_AS_NODE: '1' },
     }
   }
-  if (!servers['calendar']) {
+  // darwin only: the calendar server is osascript + macOS Calendar all the way
+  // down (calendar/read.cjs). Registering it on Windows handed the agent a tool
+  // that can only ever fail, which is worse than not having one.
+  if (!servers['calendar'] && process.platform === 'darwin') {
     servers['calendar'] = {
       command: process.execPath,
       args: [CALENDAR_SERVER_SCRIPT_PATH],
@@ -708,7 +739,16 @@ function ensureMcpJsonAgentName() {
   const next = { mcpServers: servers }
   const nextText = JSON.stringify(next, null, 2) + '\n'
   if (nextText !== currentText) {
-    fs.writeFileSync(MCP_JSON_PATH, nextText)
+    // Atomic, for the same reason writeAgentConfig above is: .mcp.json has a
+    // reader in ANOTHER process (the claude CLI at its own spawn) and is
+    // rewritten on every boot and every channel switch. A plain writeFileSync
+    // truncates first, and a crash inside that window leaves a 0-byte or
+    // half-written file -- which is precisely the corrupt-.mcp.json state the
+    // read path above now has to recover from. Do not produce it in the first
+    // place.
+    const tmp = `${MCP_JSON_PATH}.tmp`
+    fs.writeFileSync(tmp, nextText)
+    fs.renameSync(tmp, MCP_JSON_PATH)
     log('.mcp.json AGENT_NAME/command/args/cwd corrected/seeded')
   }
 }
@@ -855,6 +895,14 @@ function readTelegramToken() {
 // later -- see this task's report, wizard.js is out of scope here and does
 // not read this field yet).
 //
+// Node's fetch has NO default timeout. Every validation call below talks to a
+// third party during the onboarding wizard, so a captive portal or a
+// blackholing corporate proxy left the spinner running forever with no error
+// and no cancel, holding the socket for the OS default. 10s is long enough for
+// a slow-but-live API and short enough that a wedged network becomes a visible
+// failure the user can act on. (Found 2026-08-03.)
+const CONNECT_API_TIMEOUT_MS = 10_000
+
 // AbortSignal.timeout() requires no extra dependency (global since Node
 // 17.3; this app's bundled Electron/Node is v24) and keeps a firewalled/
 // hung local port from stalling the validate response; a plain ECONNREFUSED on an unbound
@@ -1118,12 +1166,12 @@ async function validateDiscordToken(token) {
   }
   const headers = { Authorization: `Bot ${token}` }
 
-  const meRes = await fetch(`${DISCORD_API}/users/@me`, { headers })
+  const meRes = await fetch(`${DISCORD_API}/users/@me`, { headers, signal: AbortSignal.timeout(CONNECT_API_TIMEOUT_MS) })
   if (!meRes.ok) {
     return { ok: false, branch: 'invalid_token' }
   }
 
-  const appRes = await fetch(`${DISCORD_API}/oauth2/applications/@me`, { headers })
+  const appRes = await fetch(`${DISCORD_API}/oauth2/applications/@me`, { headers, signal: AbortSignal.timeout(CONNECT_API_TIMEOUT_MS) })
   if (!appRes.ok) {
     // Token authenticated as a user/bot identity but the application
     // lookup failed -- treat as an invalid/unusable token rather than
@@ -1137,7 +1185,7 @@ async function validateDiscordToken(token) {
     return { ok: false, branch: 'intent_off' }
   }
 
-  const guildsRes = await fetch(`${DISCORD_API}/users/@me/guilds`, { headers })
+  const guildsRes = await fetch(`${DISCORD_API}/users/@me/guilds`, { headers, signal: AbortSignal.timeout(CONNECT_API_TIMEOUT_MS) })
   if (!guildsRes.ok) {
     throw new Error(`Discord guilds fetch failed: HTTP ${guildsRes.status}`)
   }
@@ -1153,7 +1201,7 @@ async function validateDiscordToken(token) {
   // server per tutorial step 5, so "first text channel of the first guild"
   // is the only reasonable default for a v0 single-user local install.
   const guild = guilds[0]
-  const channelsRes = await fetch(`${DISCORD_API}/guilds/${guild.id}/channels`, { headers })
+  const channelsRes = await fetch(`${DISCORD_API}/guilds/${guild.id}/channels`, { headers, signal: AbortSignal.timeout(CONNECT_API_TIMEOUT_MS) })
   if (!channelsRes.ok) {
     throw new Error(`Discord channels fetch failed for guild ${guild.id}: HTTP ${channelsRes.status}`)
   }
@@ -1227,6 +1275,7 @@ async function telegramApi(token, method, params, fetchImpl = fetch) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params || {}),
+    signal: AbortSignal.timeout(CONNECT_API_TIMEOUT_MS),
   })
   // Telegram signals auth failures via HTTP status (401/404) and everything
   // else via body.ok -- normalize both into one bag so callers branch once.
@@ -1275,6 +1324,7 @@ async function slackApi(token, method, params, fetchImpl = fetch) {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: `Bearer ${token}` },
     body: form.toString(),
+    signal: AbortSignal.timeout(CONNECT_API_TIMEOUT_MS),
   })
   let body = {}
   try {
@@ -1312,6 +1362,23 @@ async function enumerateSlackChannels(botToken, appToken, fetchImpl = fetch) {
 // HOME_GUILD_NAME on the discord reconnect path.
 function channelBackendReadiness() {
   const cfg = readAgentConfig()
+  // safeStorage.decryptString THROWS when the ciphertext no longer matches this
+  // machine's Safe Storage key -- the Migration Assistant case: the .credentials
+  // blobs come across to the new Mac, the Keychain entry does not. Unguarded,
+  // that threw out of here and 500'd both GET /api/channels/status and POST
+  // /api/channels/switch, so the channels page was dead and the user could not
+  // re-connect the channel that would fix it. computeAvailableProviders() in
+  // this same file already degrades instead of throwing; this is that asymmetry
+  // closed. An unreadable credential is "not configured", which is the truth
+  // the UI needs.
+  const readOrUnconfigured = (fn) => {
+    try {
+      return fn()
+    } catch (err) {
+      log(`channelBackendReadiness: stored credential unreadable (${err.message}) -- reporting NOT configured so the user can re-connect`)
+      return null
+    }
+  }
   return {
     // In-app chat has NOTHING to configure -- the "platform" is the app
     // itself, so it is always switchable. This entry is load-bearing, not
@@ -1322,17 +1389,17 @@ function channelBackendReadiness() {
     // catch, 2026-07-30).
     local: { configured: true, home: '', detail: '' },
     discord: {
-      configured: Boolean(readDiscordToken() && readHomeChannelId()),
+      configured: Boolean(readOrUnconfigured(readDiscordToken) && readHomeChannelId()),
       home: cfg.HOME_CHANNEL_NAME || readHomeChannelId() || '',
       detail: cfg.HOME_GUILD_NAME || '',
     },
     slack: {
-      configured: Boolean(readSlackBotToken() && readSlackAppToken() && cfg.SLACK_HOME_CHANNEL_ID),
+      configured: Boolean(readOrUnconfigured(readSlackBotToken) && readOrUnconfigured(readSlackAppToken) && cfg.SLACK_HOME_CHANNEL_ID),
       home: cfg.SLACK_HOME_CHANNEL_NAME || cfg.SLACK_HOME_CHANNEL_ID || '',
       detail: cfg.SLACK_TEAM_NAME || '',
     },
     telegram: {
-      configured: Boolean(readTelegramToken() && cfg.TELEGRAM_HOME_CHAT_ID),
+      configured: Boolean(readOrUnconfigured(readTelegramToken) && cfg.TELEGRAM_HOME_CHAT_ID),
       home: cfg.TELEGRAM_HOME_CHAT_NAME || cfg.TELEGRAM_HOME_CHAT_ID || '',
       detail: cfg.TELEGRAM_BOT_USERNAME || '',
     },
@@ -1917,7 +1984,7 @@ async function startProviderLoginLocked(provider, { force }) {
     if (getLoginStatus(provider).state !== 'running') return
     setLoginStatus(provider, 'failed', 'timeout', `login did not complete within ${LOGIN_TIMEOUT_MS / 1000}s`)
     try {
-      process.kill(-child.pid, 'SIGTERM')
+      killTree(child.pid, 'SIGTERM')
     } catch (err) {
       log(`login shell-out: timeout SIGTERM to pgid=${child.pid} failed: ${err.message}`)
     }
@@ -1947,7 +2014,7 @@ function cancelProviderLogin(provider) {
   if (!child) return // nothing in flight; DELETE is idempotent
   setLoginStatus(provider, 'failed', 'cancelled', 'cancelled by user')
   try {
-    process.kill(-child.pid, 'SIGTERM')
+    killTree(child.pid, 'SIGTERM')
   } catch (err) {
     log(`login shell-out: cancel SIGTERM to pgid=${child.pid} failed: ${err.message}`)
   }
@@ -1964,7 +2031,7 @@ function killAllLoginChildren(signal = 'SIGTERM') {
     const child = loginChildren[provider]
     if (!child) continue
     try {
-      process.kill(-child.pid, signal)
+      killTree(child.pid, signal)
       log(`killAllLoginChildren: sent ${signal} to ${provider} login pgroup (pgid=${child.pid})`)
     } catch (err) {
       log(`killAllLoginChildren: ${signal} to ${provider} pgid=${child.pid} failed (${err.message}) -- likely already gone`)
@@ -1979,7 +2046,7 @@ function killAllLoginChildren(signal = 'SIGTERM') {
     const child = mcpLoginChildren[name]
     if (!child) continue
     try {
-      process.kill(-child.pid, signal)
+      killTree(child.pid, signal)
       log(`killAllLoginChildren: sent ${signal} to mcp-connector "${name}" pgroup (pgid=${child.pid})`)
     } catch (err) {
       log(`killAllLoginChildren: ${signal} to mcp "${name}" pgid=${child.pid} failed (${err.message}) -- likely already gone`)
@@ -2060,7 +2127,7 @@ function startMcpConnectorLogin(name, binPath) {
     mcpLoginTimers[name] = setTimeout(() => {
       if (getMcpStatus(name).state === 'running') {
         setMcpStatus(name, 'failed', 'timeout', `인증이 ${LOGIN_TIMEOUT_MS / 1000}s 내 시작되지 않았습니다`)
-        try { process.kill(-child.pid, 'SIGTERM') } catch (err) { log(`mcp login timeout SIGTERM (${name}) failed: ${err.message}`) }
+        try { killTree(child.pid, 'SIGTERM') } catch (err) { log(`mcp login timeout SIGTERM (${name}) failed: ${err.message}`) }
       }
     }, LOGIN_TIMEOUT_MS)
 

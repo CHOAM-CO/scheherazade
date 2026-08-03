@@ -98,6 +98,20 @@ function createRoutes(staticCtx) {
           sendJson(res, 400, { error: 'confirm: "DELETE" is required', reason: 'confirm_required' })
           return
         }
+        // darwin only, and fail EARLY. The plan below is macOS top to bottom
+        // (~/Library paths, `security delete-generic-password`, pkill) and it
+        // runs via spawn('/bin/bash') with no 'error' listener -- on Windows
+        // that ENOENT became an unhandled 'error' event, main.cjs's
+        // uncaughtException handler called fatal(), and the app vanished
+        // mid-uninstall: agent already stopped, nothing deleted, no message.
+        // Refusing out loud beats a crash that looks like it worked.
+        if (process.platform !== 'darwin') {
+          sendJson(res, 501, {
+            error: 'in-app uninstall is macOS-only for now; on Windows use Settings > Apps > Scheherazade (the NSIS uninstaller), then delete your data folder',
+            reason: 'unsupported_platform',
+          })
+          return
+        }
         const { agentControls } = callCtx
         try {
           if (agentControls && typeof agentControls.stopAgent === 'function') await agentControls.stopAgent()
@@ -107,7 +121,12 @@ function createRoutes(staticCtx) {
           console.error('[scheherazade/onboarding] uninstall: stopAgent failed (continuing):', err.message)
         }
         const plan = buildUninstallPlan(DATA_HOME)
-        spawn('/bin/bash', ['-c', plan.script], { detached: true, stdio: 'ignore' }).unref()
+        const reaper = spawn('/bin/bash', ['-c', plan.script], { detached: true, stdio: 'ignore' })
+        // A detached spawn with no 'error' listener turns ENOENT into an
+        // unhandled 'error' event, which main.cjs's uncaughtException handler
+        // escalates to app.exit(1). Always attach one.
+        reaper.on('error', (err) => console.error('[scheherazade/onboarding] uninstall: reaper spawn failed:', err.message))
+        reaper.unref()
         sendJson(res, 200, { ok: true })
         // After the response: trash the bundle, then die so the reaper fires.
         setTimeout(() => {
