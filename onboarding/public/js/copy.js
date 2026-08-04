@@ -834,6 +834,33 @@ window.COPY = {
     // shared with the user's own Claude Code). No euphemisms: "deletes the
     // agent's memory" is the sentence a user must read before clicking.
     groupDanger: 'Danger zone',
+    // AUTHORED -- About / manual update check (2026-08-04, Mino "오토
+    // 업데이트 버튼 어딨니?"). The nav banner appears only when an update
+    // exists; this row is the always-there surface. "Check now" honesty:
+    // failure shows the server's detail, up-to-date says so plainly.
+    groupAbout: 'About',
+    aboutLabel: 'App version & updates',
+    aboutVersion: (v) => `Scheherazade v${v}`,
+    updateCheckButton: 'Check for updates',
+    updateChecking: 'Checking…',
+    updateUpToDate: "You're on the latest version.",
+    updateAvailableLine: (latest) => `v${latest} is available.`,
+    updateOpenButton: 'Open download page',
+    updateCheckFailed: (detail) => `Couldn't check: ${detail || 'unknown error'}`,
+    // AUTHORED -- Ollama by-URL model picker (2026-08-04, Mino: paste an
+    // ollama.com/library/{model} URL to run models the dropdown doesn't
+    // list). The model-absent line WARNS instead of blocking: the public
+    // catalog probe is best-effort and can lag a brand-new model.
+    ollamaUrlCatalogLabel: 'Other (ollama.com URL)…',
+    ollamaUrlHint: 'Paste an ollama.com model URL (like https://ollama.com/library/kimi-k3) or a model name.',
+    ollamaUrlPlaceholder: 'https://ollama.com/library/…',
+    ollamaUrlApply: 'Use this model',
+    ollamaUrlParseFailed: "Couldn't read a model name from that — paste an ollama.com/library/... URL or a plain model name.",
+    ollamaUrlNoKey: 'Connect Ollama first (Connectors page) — this needs an ollama.com API key.',
+    ollamaUrlChecking: (m) => `Checking "${m}" against ollama.com…`,
+    ollamaUrlModelWarn: (m) => `ollama.com's catalog doesn't list "${m}" right now — it may still work if it's brand new.`,
+    ollamaUrlApplyFailed: 'Switch failed — the agent kept its previous model.',
+    ollamaUrlApplied: (m) => `Switched to ${m}. The agent is restarting.`,
     dangerLabel: 'Delete the app and everything it made',
     dangerNote: "Removes the agent, its memory and journals, saved credentials, caches, and the app itself — everything, without Terminal. Your personal Claude Code settings (~/.claude.json) are left untouched.",
     dangerButton: 'Delete everything…',

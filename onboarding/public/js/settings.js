@@ -97,6 +97,55 @@
     $('set-group-engine').textContent = C.groupEngine || 'Engine'
     $('set-group-system').textContent = C.groupSystem || 'System'
 
+    // ── about / manual update check (2026-08-04, Mino "오토 업데이트
+    // 버튼 어딨니?" -- the nav banner is silent when you're current, so
+    // this is the always-present surface: version + Check now). ────────
+    $('set-group-about').textContent = C.groupAbout || 'About'
+    $('set-about-label').textContent = C.aboutLabel || 'App'
+    const updStatus = $('set-update-status')
+    const updOpen = $('set-update-open')
+    api('/api/update/check').then((u) => {
+      // cached read on load: paint version + state without spending a
+      // GitHub call (the server serves its 6h cache here)
+      $('set-about-version').textContent = C.aboutVersion(u.current || '?')
+      if (u.ok && u.hasUpdate) {
+        updStatus.textContent = C.updateAvailableLine(u.latest)
+        updOpen.textContent = C.updateOpenButton
+        updOpen.classList.remove('hidden')
+        updOpen.onclick = () => window.open(u.url, '_blank', 'noopener')
+      }
+    }).catch(() => { $('set-about-version').textContent = C.aboutVersion('?') })
+    $('set-update-check').textContent = C.updateCheckButton
+    $('set-update-check').onclick = async () => {
+      const btn = $('set-update-check')
+      btn.disabled = true
+      updStatus.className = 'status-line pending'
+      updStatus.textContent = C.updateChecking
+      try {
+        const u = await api('/api/update/check?force=1')
+        $('set-about-version').textContent = C.aboutVersion(u.current || '?')
+        if (!u.ok) {
+          updStatus.className = 'status-line failure'
+          updStatus.textContent = C.updateCheckFailed(u.detail)
+        } else if (u.hasUpdate) {
+          updStatus.className = 'status-line'
+          updStatus.textContent = C.updateAvailableLine(u.latest)
+          updOpen.textContent = C.updateOpenButton
+          updOpen.classList.remove('hidden')
+          updOpen.onclick = () => window.open(u.url, '_blank', 'noopener')
+        } else {
+          updStatus.className = 'status-line success'
+          updStatus.textContent = C.updateUpToDate
+          updOpen.classList.add('hidden')
+        }
+      } catch (err) {
+        updStatus.className = 'status-line failure'
+        updStatus.textContent = GEN(err.message)
+      } finally {
+        btn.disabled = false
+      }
+    }
+
     // ── danger zone: clean uninstall (v0.0.35) ─────────────────────────
     $('set-group-danger').textContent = C.groupDanger || 'Danger zone'
     $('set-danger-label').textContent = C.dangerLabel
@@ -502,6 +551,9 @@
   // provider addition, 2026-07-25) -- never sent to the server as a real
   // model id (see the onchange handler's early-return branch for it).
   const CUSTOM_MODEL_SENTINEL = '__custom__'
+  // Ollama by-URL picker sentinel (2026-08-04) -- same action-not-state
+  // contract as CUSTOM_MODEL_SENTINEL; never sent to the server.
+  const OLLAMA_URL_SENTINEL = '__ollama_url__'
   const MODEL_CATALOG = [
     { id: 'claude-fable-5', label: 'Claude Fable 5', group: 'Claude', providers: CLAUDE_PROVIDERS },
     { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', group: 'Claude', providers: CLAUDE_PROVIDERS },
@@ -527,27 +579,31 @@
     //     STAYS: it convicts mute agents on real behavior, whatever the model.
     //     (A swap-time smoke test can only acquit falsely -- every probe
     //     passed the model that was mute in production.)
-    // deepseek verified live by Mino (2026-07-13 19:41 "딥시크 정상작동 확인",
-    // same round as glm/sonnet-5/opus-4.8; model-swap continuity also held).
-    { id: 'deepseek-v4-pro:cloud', label: 'DeepSeek V4 Pro', group: 'Ollama', providers: ['ollama'] },
-    // deepseek-v4-flash:0731-cloud — added 2026-08-04 on Mino's ask. Tag taken
-    // VERBATIM from Ollama's own announcement mail (the `ollama launch claude
-    // --model deepseek-v4-flash:0731-cloud` line), not guessed from the model
-    // name: the date segment and the `-cloud` suffix are both part of the id,
-    // and this catalog's ids are passed straight through as MODEL.
-    // UNVERIFIED, deliberately labelled so: unlike the two rows around it,
-    // nobody has run a live tool-use session on it here. This lane has burned
-    // us exactly once before (kimi, 07-13: swapped in, went mute in
-    // production, every pre-swap probe passed). The mute-strike ledger will
-    // convict it on real behaviour if it misbehaves; until someone actually
-    // drives it, the label is the honest state.
-    // "untested here" dropped 2026-08-04: Mino ran a live session on v0.0.40
-    // and it attaches clean ("딥시크 확인 완료, 잘 붙는다", 11:46).
-    { id: 'deepseek-v4-flash:0731-cloud', label: 'DeepSeek V4 Flash (0731)', group: 'Ollama', providers: ['ollama'] },
-    // glm-5.2 tool-use verified live by Mino (2026-07-13 19:32, same ollama
-    // lane as kimi: "glm5.2 << 문제 전혀없음") -- label cleared same day it
-    // was added. sonnet-5 / opus-4.8 verified in the same test round.
-    { id: 'glm-5.2:cloud', label: 'GLM 5.2', group: 'Ollama', providers: ['ollama'] },
+    // Ollama defaults re-picked by Mino 2026-08-04 19:17 ("이거 세개는 기본
+    // 지원하고"): Kimi 2.7 Code / GLM 5.2 / DeepSeek V4 Flash (0731).
+    // DeepSeek V4 Pro row dropped in the same ask. Ids are the LIVE
+    // ollama.com catalog names (all three re-verified against /v1/models
+    // today) -- the signin-era ':cloud' suffixes are gone from new rows;
+    // old stored ids still work via normalizeOllamaCloudModel at spawn.
+    //
+    // Kimi note: kimi-k2 was dropped provider-wide 07-14 after the mute
+    // incident (raw <|tool_call|> leakage on the LOCAL ollama lane; history
+    // in git blame of this block). kimi-k2.7-code is a different model on a
+    // different lane (ollama.com cloud, Anthropic-compat) and comes back on
+    // Mino's explicit ask -- the mute-strike ledger stays as the backstop.
+    { id: 'kimi-k2.7-code', label: 'Kimi 2.7 Code', group: 'Ollama', providers: ['ollama'] },
+    // glm tool-use verified live by Mino (07-13 "glm5.2 << 문제 전혀없음";
+    // re-verified on the cloud key lane today, 0.49 Bearer fix round).
+    { id: 'glm-5.2', label: 'GLM 5.2', group: 'Ollama', providers: ['ollama'] },
+    // deepseek verified live by Mino on v0.0.40 ("딥시크 확인 완료, 잘
+    // 붙는다", 11:46) and the 0731 tag confirmed present in today's catalog.
+    { id: 'deepseek-v4-flash:0731', label: 'DeepSeek V4 Flash (0731)', group: 'Ollama', providers: ['ollama'] },
+    // By-URL picker (Mino 19:17): paste https://ollama.com/library/{name}
+    // to run any catalog model the three rows above don't list. ACTION row
+    // like the Custom sentinel below -- reveals the URL field, never POSTs
+    // its own value. Gated on the ollama provider being authed (unlike
+    // Custom, which opts out of gating entirely).
+    { id: OLLAMA_URL_SENTINEL, label: C.ollamaUrlCatalogLabel, group: 'Ollama', providers: ['ollama'] },
     // (old single 'gpt' Codex entry replaced by the versioned GPT group above)
     // Custom (custom-provider addition, 2026-07-25): NOT a real model id --
     // an ACTION entry, not a switchable state. Selecting it never fires the
@@ -763,6 +819,14 @@
         if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' })
         return
       }
+      // Ollama by-URL picker (Mino 19:17): action row, same contract as
+      // Custom above -- reset the select, reveal the paste field.
+      if (model === OLLAMA_URL_SENTINEL) {
+        e.target.value = currentModel
+        const field = $('set-ollama-url-field')
+        if (field) { field.classList.remove('hidden'); $('set-ollama-url-input').focus() }
+        return
+      }
       if (model === currentModel) return
       const provider = providerForModel(model)
       if (!provider) { e.target.value = currentModel; return } // fail closed: no authed provider serves it
@@ -779,6 +843,79 @@
         e.target.value = prevModel
         return
       }
+      settleApplyState()
+    }
+
+    // ── ollama by-URL apply (Mino 19:17: "URL 입력받아서 ...
+    // /library/{model_name} 파싱해서 드랍다운리스트에 없어도 모델 셀렉
+    // 가능") ────────────────────────────────────────────────────────────
+    $('set-ollama-url-hint').textContent = C.ollamaUrlHint
+    $('set-ollama-url-input').placeholder = C.ollamaUrlPlaceholder
+    $('set-ollama-url-apply').textContent = C.ollamaUrlApply
+    $('set-ollama-url-apply').onclick = async () => {
+      const raw = $('set-ollama-url-input').value.trim()
+      const statusLine = $('set-ollama-url-status')
+      const applyBtn = $('set-ollama-url-apply')
+      if (!raw) return
+      // Accept the library URL (https://ollama.com/library/kimi-k3, with or
+      // without scheme/query/fragment) OR a bare model id (name / name:tag).
+      // The URL form never carries a tag; a pasted bare id may.
+      let parsed = null
+      const urlMatch = raw.match(/ollama\.com\/library\/([A-Za-z0-9._-]+(?::[A-Za-z0-9._-]+)?)/)
+      if (urlMatch) parsed = urlMatch[1]
+      else if (/^[A-Za-z0-9._-]+(?::[A-Za-z0-9._-]+)?$/.test(raw)) parsed = raw
+      if (!parsed) {
+        statusLine.className = 'status-line failure'
+        statusLine.textContent = C.ollamaUrlParseFailed
+        return
+      }
+      if (!availableProviders.includes('ollama')) {
+        statusLine.className = 'status-line failure'
+        statusLine.textContent = C.ollamaUrlNoKey
+        return
+      }
+      applyBtn.disabled = true
+      statusLine.className = 'status-line pending'
+      statusLine.textContent = C.ollamaUrlChecking(parsed)
+      // Pre-flight against ollama.com with the STORED key (keyless validate
+      // falls back to it server-side) -- today's field day was one wrong
+      // model name after another, so the catalog check runs before the
+      // restart, not after. Warn-don't-block on model absence: the catalog
+      // fetch is best-effort and a brand-new model may lag it.
+      let warnLine = ''
+      try {
+        const v = await api('/api/byok/validate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider: 'ollama', model: parsed }),
+        })
+        if (v.ok === false) {
+          statusLine.className = 'status-line failure'
+          statusLine.textContent = GEN(v.reason || 'validation failed')
+          applyBtn.disabled = false
+          return
+        }
+        if (v.modelPresent === false) warnLine = C.ollamaUrlModelWarn(parsed)
+      } catch (err) { /* validate blip: proceed, the turn-error banner backstops */ }
+      const ok = await window.confirmDialog(
+        (warnLine ? warnLine + ' ' : '') + C.switchConfirm(parsed), C.switchOk, C.cancel)
+      if (!ok) { applyBtn.disabled = false; statusLine.textContent = ''; return }
+      const prevModel = currentModel
+      const prevProvider = currentProvider
+      currentModel = parsed
+      currentProvider = 'ollama'
+      const accepted = await fireControl('model', prevProvider !== 'ollama' ? { model: parsed, provider: 'ollama' } : { model: parsed })
+      applyBtn.disabled = false
+      if (!accepted) {
+        currentModel = prevModel
+        currentProvider = prevProvider
+        statusLine.className = 'status-line failure'
+        statusLine.textContent = C.ollamaUrlApplyFailed
+        return
+      }
+      statusLine.className = 'status-line success'
+      statusLine.textContent = C.ollamaUrlApplied(parsed)
+      populateModelSelect(parsed)
       settleApplyState()
     }
 

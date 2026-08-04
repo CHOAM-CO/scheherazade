@@ -113,7 +113,9 @@ function createRoutes(staticCtx) {
       method: 'GET',
       match: (pathname) => pathname === '/api/update/check',
       handler: async (req, res) => {
-        sendJson(res, 200, await checkForUpdate())
+        // ?force=1 = the Settings "Check now" button bypassing the 6h cache.
+        const force = /[?&]force=1(&|$)/.test(String(req.url || ''))
+        sendJson(res, 200, await checkForUpdate(force))
         return
       },
     },

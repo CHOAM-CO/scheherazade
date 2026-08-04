@@ -2668,9 +2668,13 @@ function parseSemverTriple(v) {
   const m = String(v || '').replace(/^v/, '').split('.').map(Number)
   return m.length === 3 && m.every(Number.isFinite) ? m : null
 }
-async function checkForUpdate() {
+async function checkForUpdate(force = false) {
+  // force=true (Settings "Check now" button, Mino 19:14 "오토 업데이트
+  // 버튼 어딨니?") bypasses the read side of the cache but still WRITES it,
+  // so a manual check refreshes the banner's data too. Rate-limit safety
+  // holds: the button is a human click, not a poll loop.
   const now = Date.now()
-  if (updateCheckCache) {
+  if (!force && updateCheckCache) {
     const ttl = updateCheckCache.payload.ok ? 6 * 3600_000 : 10 * 60_000
     if (now - updateCheckCache.at < ttl) return updateCheckCache.payload
   }
