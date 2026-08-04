@@ -60,9 +60,13 @@
           <div class="entry-row">
             <div class="entry-main">
               <div class="entry-value" id="conn-usage-label"></div>
-              <div class="entry-meta" id="conn-usage-line"></div>
-              <div class="entry-meta" id="conn-usage-codex-line"></div>
-              <div class="entry-meta" id="conn-usage-ollama-line"></div>
+              <!-- real gauge bars, not text lines (Mino 2026-08-05 "보기쉽게").
+                   One lane div per provider; connectors.js builds the DOM. -->
+              <div class="usage-lanes" id="conn-usage-gauges">
+                <div class="usage-lane" id="conn-usage-lane-claude"></div>
+                <div class="usage-lane" id="conn-usage-lane-codex"></div>
+                <div class="usage-lane" id="conn-usage-lane-ollama"></div>
+              </div>
             </div>
             <button class="secondary" id="conn-usage-refresh"></button>
           </div>

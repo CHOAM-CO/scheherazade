@@ -1240,9 +1240,17 @@ window.COPY = {
     usageLabel: 'Usage',
     usageRefresh: 'Refresh',
     usageLoading: 'Reading usage…',
-    usageClaudePrefix: 'Claude —',
-    usageCodexPrefix: 'Codex —',
-    usageOllamaPrefix: 'Ollama —',
+    // AUTHORED — gauge-UI lane names (2026-08-05, Mino: 텍스트 말고 진짜
+    // 게이지 "보기쉽게"). Replaced the old one-line text prefixes.
+    usageLaneClaude: 'Claude',
+    usageLaneCodex: 'Codex',
+    usageLaneOllama: 'Ollama',
+    usageLaneSession: 'session',
+    usageOllamaReqs: (n) => `${n} reqs this week`,
+    // Present in the settings section too — connectors.js reads ITS OWN copy
+    // (the old code referenced a key that only existed in settings and
+    // rendered "undefined" on the cli-session branch; latent until 08-05).
+    usageCliSourceNote: "via this machine's Claude CLI login",
     usageNoToken: 'no Claude login on file',
     usageCodexNoLogin: 'no Codex login on this Mac (~/.codex)',
     usageOllamaNoKey: 'no ollama.com API key on file',

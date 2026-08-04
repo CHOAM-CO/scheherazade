@@ -139,41 +139,109 @@
   // null pct renders as 'unreadable', never as 0%. ────────────────────────
   // ── usage gauges, one line per lane (2026-08-04 evening, Mino: "ollama/
   // Codex/Claude 사용량 게이지 ... 이게 킥임") ──────────────────────────
-  const pct = (v) => (v == null ? C.usageUnreadable : `${v}%`)
   const at = (iso, dateToo) => {
     if (!iso) return ''
     try {
       const d = new Date(iso)
       const t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      return dateToo ? ` (resets ${d.toLocaleDateString([], { month: 'numeric', day: 'numeric' })} ${t})` : ` (resets ${t})`
+      return dateToo ? `resets ${d.toLocaleDateString([], { month: 'numeric', day: 'numeric' })} ${t}` : `resets ${t}`
     } catch { return '' }
   }
   const staleNoteOf = (u) => (u.stale && u.asOf
-    ? (() => { try { const d = new Date(u.asOf); return ` · ${C.usageStaleNote(d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}` } catch { return '' } })()
+    ? (() => { try { const d = new Date(u.asOf); return C.usageStaleNote(d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })) } catch { return '' } })()
     : '')
 
+  // ── gauge DOM (2026-08-05, Mino: 텍스트 말고 진짜 게이지 "보기쉽게") ────
+  // Thresholds mirror app.css: <60 ok(green), 60-84 warn(amber), 85+ hot(red).
+  // pctVal == null renders a striped track labeled unreadable — the server's
+  // null-not-zero contract survives the move from text to bars.
+  const GAUGE_WARN = 60
+  const GAUGE_HOT = 85
+  function gaugeSeg({ label, pctVal, meta }) {
+    const seg = document.createElement('div')
+    seg.className = 'usage-seg'
+    const lab = document.createElement('span')
+    lab.className = 'usage-seg-label'
+    lab.textContent = label
+    const bar = document.createElement('div')
+    bar.className = 'usage-bar'
+    const pctSpan = document.createElement('span')
+    pctSpan.className = 'usage-seg-pct'
+    if (pctVal == null) {
+      bar.classList.add('unreadable')
+      pctSpan.textContent = C.usageUnreadable
+    } else {
+      const fill = document.createElement('div')
+      fill.className = 'usage-fill'
+      if (pctVal >= GAUGE_HOT) fill.classList.add('hot')
+      else if (pctVal >= GAUGE_WARN) fill.classList.add('warn')
+      fill.style.width = `${Math.max(0, Math.min(100, pctVal))}%`
+      bar.appendChild(fill)
+      pctSpan.textContent = `${pctVal}%`
+    }
+    seg.appendChild(lab)
+    seg.appendChild(bar)
+    seg.appendChild(pctSpan)
+    if (meta) {
+      const m = document.createElement('span')
+      m.className = 'usage-seg-meta'
+      m.textContent = meta
+      seg.appendChild(m)
+    }
+    return seg
+  }
+  // laneEl(id, name): reset the lane row to name + empty body, return body.
+  function laneBody(id, name) {
+    const lane = $(id)
+    if (!lane) return null
+    lane.textContent = ''
+    const nameEl = document.createElement('span')
+    nameEl.className = 'usage-lane-name'
+    nameEl.textContent = name
+    const body = document.createElement('div')
+    body.className = 'usage-lane-body'
+    lane.appendChild(nameEl)
+    lane.appendChild(body)
+    return body
+  }
+  function laneNote(body, text) {
+    const n = document.createElement('div')
+    n.className = 'usage-lane-note'
+    n.textContent = text
+    body.appendChild(n)
+  }
+
   async function renderClaudeUsageLine() {
-    const line = $('conn-usage-line')
-    line.textContent = C.usageLoading
+    let body = laneBody('conn-usage-lane-claude', C.usageLaneClaude)
+    if (!body) return
+    laneNote(body, C.usageLoading)
     let u
-    try { u = await api('/api/usage/claude') } catch (err) { line.textContent = `${C.usageClaudePrefix} ${GEN(err.message)}`; return }
+    try { u = await api('/api/usage/claude') } catch (err) {
+      body = laneBody('conn-usage-lane-claude', C.usageLaneClaude); laneNote(body, GEN(err.message)); return
+    }
+    body = laneBody('conn-usage-lane-claude', C.usageLaneClaude)
     if (!u.ok) {
-      line.textContent = `${C.usageClaudePrefix} ${u.branch === 'no_token' ? C.usageNoToken : (u.detail || C.usageError)}`
+      laneNote(body, u.branch === 'no_token' ? C.usageNoToken : (u.detail || C.usageError))
       return
     }
+    body.appendChild(gaugeSeg({ label: '5h', pctVal: u.fiveHourPct, meta: at(u.fiveHourResetsAt, false) }))
+    body.appendChild(gaugeSeg({ label: C.usageWinWeekly, pctVal: u.weeklyPct, meta: at(u.weeklyResetsAt, true) }))
     // cli-session fallback (403-scope fix): say whose login the meter reads.
-    const sourceNote = u.source === 'cli-session' ? ` · ${C.usageCliSourceNote}` : ''
-    line.textContent = `${C.usageClaudePrefix} 5h: ${pct(u.fiveHourPct)}${at(u.fiveHourResetsAt, false)} · weekly: ${pct(u.weeklyPct)}${at(u.weeklyResetsAt, true)}${sourceNote}${staleNoteOf(u)}`
+    const notes = [u.source === 'cli-session' ? C.usageCliSourceNote : '', staleNoteOf(u)].filter(Boolean)
+    if (notes.length) laneNote(body, notes.join(' · '))
   }
 
   async function renderCodexUsageLine() {
-    const line = $('conn-usage-codex-line')
-    if (!line) return
-    line.textContent = C.usageLoading
+    let body = laneBody('conn-usage-lane-codex', C.usageLaneCodex)
+    if (!body) return
+    laneNote(body, C.usageLoading)
     let u
-    try { u = await api('/api/usage/codex') } catch (err) { line.textContent = `${C.usageCodexPrefix} ${GEN(err.message)}`; return }
+    try { u = await api('/api/usage/codex') } catch (err) {
+      body = laneBody('conn-usage-lane-codex', C.usageLaneCodex); laneNote(body, GEN(err.message)); return
+    }
+    body = laneBody('conn-usage-lane-codex', C.usageLaneCodex)
     if (!u.ok) {
-      line.textContent = `${C.usageCodexPrefix} ${u.branch === 'no_token' ? C.usageCodexNoLogin : (u.detail || C.usageError)}`
+      laneNote(body, u.branch === 'no_token' ? C.usageCodexNoLogin : (u.detail || C.usageError))
       return
     }
     // Window label from its actual length -- a prolite plan's PRIMARY
@@ -181,31 +249,39 @@
     const winLabel = (w) => (w && w.windowSeconds
       ? (w.windowSeconds >= 6 * 86400 ? C.usageWinWeekly : (w.windowSeconds <= 6 * 3600 ? '5h' : `${Math.round(w.windowSeconds / 3600)}h`))
       : '')
-    const seg = (w) => (w ? `${winLabel(w)}: ${pct(w.usedPct)}${at(w.resetsAt, (w.windowSeconds || 0) >= 86400)}` : null)
-    const parts = [seg(u.primary), seg(u.secondary)].filter(Boolean)
-    const plan = u.planType ? ` (${u.planType})` : ''
-    line.textContent = `${C.usageCodexPrefix} ${parts.length ? parts.join(' · ') : C.usageUnreadable}${plan}${staleNoteOf(u)}`
+    const windows = [u.primary, u.secondary].filter(Boolean)
+    if (!windows.length) { laneNote(body, C.usageUnreadable) }
+    for (const w of windows) {
+      body.appendChild(gaugeSeg({ label: winLabel(w), pctVal: w.usedPct, meta: at(w.resetsAt, (w.windowSeconds || 0) >= 86400) }))
+    }
+    const notes = [u.planType || '', staleNoteOf(u)].filter(Boolean)
+    if (notes.length) laneNote(body, notes.join(' · '))
   }
 
   async function renderOllamaUsageLine() {
-    const line = $('conn-usage-ollama-line')
-    if (!line) return
-    line.textContent = C.usageLoading
+    let body = laneBody('conn-usage-lane-ollama', C.usageLaneOllama)
+    if (!body) return
+    laneNote(body, C.usageLoading)
     let u
-    try { u = await api('/api/usage/ollama') } catch (err) { line.textContent = `${C.usageOllamaPrefix} ${GEN(err.message)}`; return }
+    try { u = await api('/api/usage/ollama') } catch (err) {
+      body = laneBody('conn-usage-lane-ollama', C.usageLaneOllama); laneNote(body, GEN(err.message)); return
+    }
+    body = laneBody('conn-usage-lane-ollama', C.usageLaneOllama)
     if (!u.ok) {
       // unknown_shape carries the endpoint's field names -- the first
       // real-key refresh is the schema receipt (undocumented endpoint).
       const msg = u.branch === 'no_key' ? C.usageOllamaNoKey
         : u.branch === 'unknown_shape' ? C.usageOllamaUnknownShape(u.detail || '')
         : (u.detail || C.usageError)
-      line.textContent = `${C.usageOllamaPrefix} ${msg}`
+      laneNote(body, msg)
       return
     }
     // Shape bound 19:38 (real-key receipt): session/weekly 0-1 fractions
     // served as pct; no reset timestamps in the payload -- none shown.
-    const reqNote = u.weeklyRequests != null ? ` (${u.weeklyRequests} reqs this week)` : ''
-    line.textContent = `${C.usageOllamaPrefix} session: ${pct(u.sessionPct)} · weekly: ${pct(u.weeklyPct)}${reqNote}${staleNoteOf(u)}`
+    body.appendChild(gaugeSeg({ label: C.usageLaneSession, pctVal: u.sessionPct }))
+    body.appendChild(gaugeSeg({ label: C.usageWinWeekly, pctVal: u.weeklyPct, meta: u.weeklyRequests != null ? C.usageOllamaReqs(u.weeklyRequests) : '' }))
+    const stale = staleNoteOf(u)
+    if (stale) laneNote(body, stale)
   }
 
   async function renderUsage() {

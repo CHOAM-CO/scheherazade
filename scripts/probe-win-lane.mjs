@@ -70,8 +70,13 @@ const res = await fetch(`http://127.0.0.1:${e.port}/inbound`, {
   method: 'POST',
   headers: { 'x-ingest-token': e.token, 'content-type': 'application/json' },
   body: JSON.stringify({
-    content: 'This is a one-turn pipeline probe. Reply with exactly the single word: WINPROBE-OK',
-    meta: { sender: 'probe', channelId: 'probe', timestamp: new Date().toISOString() },
+    // PROBE_CONTENT: override the turn content to reproduce a specific
+    // killer message (e.g. the graceful-shutdown [SYSTEM] turn, 129 hunt
+    // 2026-08-05). PROBE_SENDER likewise (SYSTEM vs probe).
+    content: (process.env.PROBE_CONTENT_FILE && fs.readFileSync(process.env.PROBE_CONTENT_FILE, 'utf8')) ||
+      process.env.PROBE_CONTENT ||
+      'This is a one-turn pipeline probe. Reply with exactly the single word: WINPROBE-OK',
+    meta: { sender: process.env.PROBE_SENDER || 'probe', channelId: 'probe', timestamp: new Date().toISOString() },
   }),
 })
 console.log(`probe: ingest POST -> ${res.status}`)
