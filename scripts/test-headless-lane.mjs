@@ -18,7 +18,7 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-headless-'))
@@ -30,8 +30,11 @@ function assert(cond, label) {
   else { fail++; console.log(`  FAIL ${label}`) }
 }
 
-const { renderChannelTag, renderUserEvent } = await import(path.join(ROOT, 'headless-lane.mjs'))
-const { createInboundNotifier } = await import(path.join(ROOT, 'channel-runtime.mjs'))
+// pathToFileURL, not the raw join: a bare absolute path works on POSIX by
+// accident but Windows ESM refuses it (ERR_UNSUPPORTED_ESM_URL_SCHEME 'c:'
+// -- caught by the win suite on magi-win, 2026-08-04 evening exe gate).
+const { renderChannelTag, renderUserEvent } = await import(pathToFileURL(path.join(ROOT, 'headless-lane.mjs')).href)
+const { createInboundNotifier } = await import(pathToFileURL(path.join(ROOT, 'channel-runtime.mjs')).href)
 
 // ── 1. tag byte-contract vs stop-reply-guard ────────────────────────────────
 console.log('\n1. <channel> tag matches stop-reply-guard\'s exact parser')
