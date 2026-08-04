@@ -22,8 +22,50 @@ function createRoutes(staticCtx) {
     getBootstrapStatus, resolveBin, MANAGED_INSTALL_SUPPORTED, MANUAL_INSTALL_PAGES,
     getElectron, startBootstrap,
     fetchClaudeSubscriptionUsage, checkForUpdate,
+    startClaudeCliInstall, getClaudeInstallStatus,
   } = staticCtx
   return [
+    {
+      // Claude CLI install-assist status (2026-08-04, Mino "2로 가자").
+      // `present` is the live artifact truth (agentControls.resolveClaudeBin,
+      // the SAME resolver the agent spawn uses -- never a cached flag), and
+      // the install command/plan/license info rides along so the wizard can
+      // render the manual fallback + the honesty notices from one call.
+      method: 'GET',
+      match: (pathname) => pathname === '/api/onboarding/claude-cli/status',
+      handler: async (req, res, callCtx) => {
+        const info = callCtx.agentControls && typeof callCtx.agentControls.claudeCliInfo === 'function'
+          ? callCtx.agentControls.claudeCliInfo()
+          : { status: 'unknown' }
+        sendJson(res, 200, {
+          ...getClaudeInstallStatus(),
+          present: info.status === 'found',
+          bin: info.status === 'found' ? info.bin : null,
+          installCommand: info.installCommand || null,
+          planRequirement: info.planRequirement || null,
+          licenseUrl: info.licenseUrl || null,
+          docsUrl: info.docsUrl || null,
+          managed: process.platform !== 'win32',
+        })
+        return
+      },
+    },
+    {
+      // Start the managed install (darwin only; POST = mutating, so the
+      // per-launch X-Onboard-Token gate applies automatically). Fixed argv,
+      // detached child, exit-0-plus-artifact success bar -- see
+      // startClaudeCliInstall's own header in http-server.cjs.
+      method: 'POST',
+      match: (pathname) => pathname === '/api/onboarding/claude-cli/install',
+      handler: async (req, res, callCtx) => {
+        const resolveBinFn = callCtx.agentControls && typeof callCtx.agentControls.resolveClaudeBin === 'function'
+          ? () => callCtx.agentControls.resolveClaudeBin()
+          : () => null
+        startClaudeCliInstall({ resolveClaudeBin: resolveBinFn })
+        sendJson(res, 200, getClaudeInstallStatus())
+        return
+      },
+    },
     {
       // Usage gauge (tester request 2026-08-04): claude-subscription only in
       // v1 -- the OAuth usage endpoint is documented-by-practice (MAGI fleet

@@ -300,6 +300,22 @@ window.COPY = {
         stillMissing: (name) => `${name} still not found. Finish installing, then check again.`,
       },
     },
+    // AUTHORED -- Claude CLI preflight (2026-08-04, Mino "2로 가자"): the
+    // truly-clean-machine panel. Honesty requirements baked into the copy:
+    // the app does NOT bundle claude (license), the install agreement is
+    // with Anthropic, and Claude Code needs a PAID plan -- said BEFORE the
+    // user invests in the flow, not after a failed spawn.
+    cliPreflight: {
+      title: 'Claude Code is not on this Mac yet',
+      body: 'Scheherazade runs on top of your own Claude Code — it does not ship one. Install it with the button below (runs Anthropic’s official installer; the agreement is between you and Anthropic).',
+      plan: (req) => (req ? `Note: Claude Code requires a paid plan — ${req}.` : 'Note: Claude Code requires a paid Claude plan.'),
+      installButton: 'Install Claude Code',
+      installing: 'Installing… (downloads from claude.ai, usually under a minute)',
+      done: 'Installed. You can continue below.',
+      failed: (detail) => `Install did not complete${detail ? ` — ${detail}` : ''}. Try again, or run the command below in Terminal.`,
+      manualLead: 'Manual route:',
+      docsLink: 'Setup docs',
+    },
     // AUTHORED -- ollama key-mode strings (2026-08-04 Mino: "ollama ->
     // API키"): the ollama tab is a key-paste + model-name form now, not a
     // login button. Key hint reuses the fallback tab's proven wording.
@@ -585,11 +601,11 @@ window.COPY = {
         // that cannot fix it; if it is theirs, we owe them the specific step.
         cli_missing: {
           cause: () => 'Claude Code is not installed on this machine. Scheherazade runs on top of your own Claude Code -- it does not ship one.',
-          // The install command is in `detail`, which wizard.js does not
-          // render (see the bootstrap-needed note above -- same limitation,
-          // same open decision). Until it does, this sentence has to carry the
-          // shape of the fix without the exact string.
-          action: () => 'Install Claude Code, run `claude` once to sign in, then quit this app and reopen it.',
+          // Install-assist exists now (2026-08-04, Mino "2로 가자"): the
+          // setup screen's preflight panel has a one-click install button,
+          // so the action points there AND carries the manual command for
+          // anyone who prefers Terminal.
+          action: () => 'The setup screen now has an "Install Claude Code" button (one click, official installer). Manual route: curl -fsSL https://claude.ai/install.sh | bash — then reopen this app.',
           buttons: ['openLogs'],
         },
         ollama_unavailable: {

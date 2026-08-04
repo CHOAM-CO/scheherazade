@@ -2163,6 +2163,100 @@ function killAllLoginChildren(signal = 'SIGTERM') {
   // print a 1-year token into a pty whose owner is gone. Rides the same
   // before-quit/fatal wiring in main.cjs rather than adding a second export.
   killSetupTokenChildOnShutdown()
+  // Claude CLI install-assist child: same detached-child class. An orphaned
+  // installer finishing after the app is gone is harmless-ish (it just
+  // installs), but supervision-less children are exactly the pattern this
+  // function exists to not have.
+  if (claudeInstallChild) {
+    try {
+      killTree(claudeInstallChild.pid, signal)
+      log(`killAllLoginChildren: sent ${signal} to claude-cli installer pgroup (pgid=${claudeInstallChild.pid})`)
+    } catch (err) {
+      log(`killAllLoginChildren: ${signal} to claude-cli installer failed (${err.message}) -- likely already gone`)
+    }
+    claudeInstallChild = null
+  }
+  if (claudeInstallTimer) { clearTimeout(claudeInstallTimer); claudeInstallTimer = null }
+}
+
+// ── Claude Code CLI install-assist (2026-08-04, Mino "2로 가자") ───────────
+// A truly clean machine has no claude CLI, and the app deliberately ships
+// none (no redistribution grant in its LICENSE -- see main.cjs's
+// resolveClaudeBin comment). Until now the fix was a curl one-liner the UI
+// didn't even render. This runs Anthropic's OWN official installer on the
+// user's click -- install-assist, not redistribution: the bytes come from
+// claude.ai, the user initiates it, and the license/plan requirements are
+// shown next to the button (wizard copy).
+//
+// Security posture mirrors LOGIN_SPECS: argv is FIXED (no request data ever
+// reaches it), the child is detached (own pgroup) so timeout/cancel/quit can
+// kill the whole tree, and completion is exit 0 AND the artifact check
+// (resolveClaudeBin() actually finding a binary) -- the same
+// exit-0-plus-artifact bar the login flows use. darwin-only, same
+// MANAGED_INSTALL_SUPPORTED precedent as bootstrap.cjs (Mino locked 07-13):
+// Windows stays detection-only with a manual command.
+const CLAUDE_INSTALL_TIMEOUT_MS = 300_000 // installer downloads a real binary; login-flow 180s is too tight on slow links
+const CLAUDE_INSTALL_ARGV = ['-c', 'curl -fsSL https://claude.ai/install.sh | bash'] // FIXED -- the exact command the manual instruction shows
+let claudeInstallChild = null
+let claudeInstallTimer = null
+let claudeInstallStatus = { state: 'idle', code: null, detail: null, since: new Date().toISOString() }
+
+function setClaudeInstallStatus(state, code = null, detail = null) {
+  claudeInstallStatus = { state, code, detail, since: new Date().toISOString() }
+}
+
+function getClaudeInstallStatus() {
+  return claudeInstallStatus
+}
+
+function startClaudeCliInstall({ resolveClaudeBin }) {
+  if (process.platform === 'win32') {
+    setClaudeInstallStatus('failed', 'unsupported_platform', 'managed install is mac-only -- run the PowerShell command manually')
+    return
+  }
+  if (claudeInstallChild) return // already in flight; status route reports it
+  if (resolveClaudeBin && resolveClaudeBin()) {
+    setClaudeInstallStatus('success', null, 'already installed')
+    return
+  }
+  setClaudeInstallStatus('running')
+  let child
+  try {
+    child = spawn('/bin/bash', CLAUDE_INSTALL_ARGV, { detached: true, stdio: ['ignore', 'ignore', 'pipe'] })
+  } catch (err) {
+    setClaudeInstallStatus('failed', 'spawn_failed', err.message)
+    return
+  }
+  claudeInstallChild = child
+  // stderr tail server-log ONLY (login-flow precedent: GET status needs no
+  // token, so child output never rides the status payload).
+  let errTail = ''
+  child.stderr.on('data', (d) => { errTail = (errTail + d.toString()).slice(-2000) })
+  claudeInstallTimer = setTimeout(() => {
+    if (!claudeInstallChild) return
+    try { killTree(claudeInstallChild.pid, 'SIGTERM') } catch { /* already gone */ }
+    setClaudeInstallStatus('failed', 'timeout', '설치가 시간 내에 끝나지 않았습니다. 네트워크를 확인하고 다시 시도해주세요.')
+  }, CLAUDE_INSTALL_TIMEOUT_MS)
+  child.on('error', (err) => {
+    if (claudeInstallTimer) { clearTimeout(claudeInstallTimer); claudeInstallTimer = null }
+    claudeInstallChild = null
+    setClaudeInstallStatus('failed', 'spawn_failed', err.message)
+  })
+  child.on('exit', (code) => {
+    if (claudeInstallTimer) { clearTimeout(claudeInstallTimer); claudeInstallTimer = null }
+    claudeInstallChild = null
+    if (claudeInstallStatus.state !== 'running') return // timeout already ruled
+    const present = Boolean(resolveClaudeBin && resolveClaudeBin())
+    if (code === 0 && present) {
+      setClaudeInstallStatus('success')
+      log('claude-cli install: installer exited 0 and the binary resolves -- success')
+    } else {
+      // exit 0 without an artifact is a FAILURE (same bar as login flows) --
+      // "installer said fine" is not "the app can spawn it".
+      setClaudeInstallStatus('failed', code === 0 ? 'artifact_missing' : 'exit_nonzero', '설치가 완료되지 않았습니다. 다시 시도하거나 터미널에서 직접 설치해주세요.')
+      log(`claude-cli install: exit ${code} present=${present}${errTail ? ` stderr tail: ${errTail.slice(-500)}` : ''}`)
+    }
+  })
 }
 
 // List the account's claude.ai connectors. Read-only, no token needed. Runs
@@ -2616,6 +2710,8 @@ const staticCtx = {
   getSetupTokenSession,
   // usage gauge + update check (2026-08-04 tester requests)
   fetchClaudeSubscriptionUsage, checkForUpdate,
+  // claude CLI install-assist (2026-08-04, Mino "2로 가자")
+  startClaudeCliInstall, getClaudeInstallStatus,
   // agent status / model table
   computeAgentStatus, contextCapForModel,
   // autonomy

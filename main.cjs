@@ -1880,6 +1880,10 @@ const agentControls = {
   proxyHealth,
   spawnInfo: () => lastSpawnInfo,
   resolveClaudeBin: () => { const r = resolveClaudeBin(); return r ? r.bin : null },
+  // Install-assist info (2026-08-04, Mino "2로 가자"): the wizard's CLI
+  // preflight renders install command / plan requirement / license link from
+  // this -- data only, the install itself runs via startClaudeCliInstall.
+  claudeCliInfo: () => ensureClaudeCli(),
 }
 
 // ── boot sequence ────────────────────────────────────────────────────────

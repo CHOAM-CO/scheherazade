@@ -979,6 +979,121 @@
       }
     }
 
+    // ── Claude CLI preflight (2026-08-04, Mino "2로 가자") ──────────────
+    // Every provider mode runs on the user's own claude CLI, and a truly
+    // clean machine used to discover that only at spawn time, from a status
+    // card that didn't even render the install command. This panel says it
+    // up front and (mac) runs Anthropic's official installer on one click --
+    // install-assist, not redistribution: the license/plan facts render next
+    // to the button and the bytes come from claude.ai.
+    // Failure posture mirrors renderFoundLoginCard: a probe that hangs or
+    // errors leaves the panel hidden and the flow exactly as before.
+    let cliPollTimer = null
+    function stopCliPoll() { if (cliPollTimer) { clearInterval(cliPollTimer); cliPollTimer = null } }
+    function renderCliPreflight() {
+      const K = C.step1.cliPreflight
+      const panel = $('s1-cli-preflight')
+      const statusEl = $('s1-cli-status')
+      const installBtn = $('s1-cli-install')
+      const manualEl = $('s1-cli-manual')
+
+      function renderManual(s) {
+        manualEl.innerHTML = ''
+        const lead = document.createElement('span')
+        lead.textContent = K.manualLead
+        manualEl.appendChild(lead)
+        const cmd = document.createElement('code')
+        cmd.textContent = ` ${s.installCommand || ''} `
+        manualEl.appendChild(cmd)
+        const copyBtn = document.createElement('button')
+        copyBtn.type = 'button'
+        copyBtn.className = 'link'
+        copyBtn.textContent = COPY_BUTTON_LABEL
+        copyBtn.onclick = async () => {
+          try {
+            await navigator.clipboard.writeText(s.installCommand || '')
+            copyBtn.textContent = COPY_BUTTON_COPIED_LABEL
+            setTimeout(() => { copyBtn.textContent = COPY_BUTTON_LABEL }, 1500)
+          } catch (err) { console.error('clipboard write failed:', err) }
+        }
+        manualEl.appendChild(copyBtn)
+        if (s.docsUrl) {
+          const docs = document.createElement('a')
+          docs.href = s.docsUrl
+          docs.target = '_blank'
+          docs.rel = 'noopener'
+          docs.textContent = K.docsLink
+          docs.style.marginLeft = '0.6rem'
+          manualEl.appendChild(docs)
+        }
+      }
+
+      function applyCliStatus(s) {
+        if (s.present) {
+          stopCliPoll()
+          // only celebrate if the panel was showing (fresh machines); a
+          // machine that always had the CLI never sees this panel at all.
+          if (!panel.classList.contains('hidden')) {
+            statusEl.className = 'status-line success'
+            statusEl.textContent = K.done
+            installBtn.classList.add('hidden')
+            setTimeout(() => panel.classList.add('hidden'), 4000)
+          }
+          return
+        }
+        panel.classList.remove('hidden')
+        $('s1-cli-title').textContent = K.title
+        $('s1-cli-body').textContent = K.body
+        $('s1-cli-plan').textContent = K.plan(s.planRequirement || '')
+        renderManual(s)
+        installBtn.textContent = K.installButton
+        installBtn.classList.toggle('hidden', s.managed === false)
+        if (s.state === 'running') {
+          statusEl.className = 'status-line pending'
+          statusEl.textContent = K.installing
+          installBtn.disabled = true
+          startCliPoll()
+        } else if (s.state === 'failed') {
+          statusEl.className = 'status-line failure'
+          statusEl.textContent = K.failed(s.detail || s.code || '')
+          installBtn.disabled = false
+        } else {
+          statusEl.className = 'status-line'
+          statusEl.textContent = ''
+          installBtn.disabled = false
+        }
+      }
+
+      function startCliPoll() {
+        if (cliPollTimer) return
+        cliPollTimer = setInterval(async () => {
+          try {
+            const s = await api('/api/onboarding/claude-cli/status')
+            if (s.present || s.state === 'failed') stopCliPoll()
+            applyCliStatus(s)
+          } catch (err) { /* transient poll miss: keep polling */ }
+        }, 2000)
+      }
+
+      installBtn.onclick = async () => {
+        installBtn.disabled = true
+        statusEl.className = 'status-line pending'
+        statusEl.textContent = K.installing
+        try {
+          applyCliStatus({ ...(await api('/api/onboarding/claude-cli/install', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+          })), present: false, managed: true })
+          startCliPoll()
+        } catch (err) {
+          statusEl.className = 'status-line failure'
+          statusEl.textContent = C.genericError(err.message)
+          installBtn.disabled = false
+        }
+      }
+
+      api('/api/onboarding/claude-cli/status').then(applyCliStatus).catch(() => {})
+    }
+
     // Initial render -- MUST stay below validateNextHandler (TDZ; see
     // wireValidateNext's comment).
     renderClaudeArea()
@@ -987,6 +1102,7 @@
     // not this card ever appears, so a probe that hangs or fails degrades to
     // exactly the pre-existing onboarding rather than to a dead step.
     renderFoundLoginCard()
+    renderCliPreflight()
   }
 
   // ── Step 2: name ─────────────────────────────────────────────────────

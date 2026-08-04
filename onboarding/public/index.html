@@ -35,6 +35,18 @@
             <button type="button" id="s1-found-login-use"></button>
             <div class="found-login-alt" id="s1-found-login-alt"></div>
           </div>
+          <!-- Claude CLI preflight (2026-08-04, Mino "2로 가자"): every
+               provider mode runs on the user's own claude CLI. When it is
+               missing this panel offers the managed install (mac) or the
+               manual command (win) BEFORE the user invests in the flow. -->
+          <div class="found-login hidden" id="s1-cli-preflight">
+            <div class="found-login-title" id="s1-cli-title"></div>
+            <div class="found-login-body" id="s1-cli-body"></div>
+            <div class="found-login-cost" id="s1-cli-plan"></div>
+            <div class="status-line" id="s1-cli-status"></div>
+            <button type="button" id="s1-cli-install"></button>
+            <div class="found-login-alt" id="s1-cli-manual"></div>
+          </div>
           <div class="tabs" id="s1-tabs"></div>
           <div class="field-hint hidden" id="s1-router-note"></div>
           <div class="field">
