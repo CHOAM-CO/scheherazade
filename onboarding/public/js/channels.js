@@ -62,23 +62,41 @@
       if (!ok) return
       switchBtn.disabled = true
       try {
-        const result = await api('/api/channels/switch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ backend: key }),
-        })
-        if (!result.ok) {
-          showToast(result.branch === 'not_configured' ? C.notConfiguredYet : GEN(result.error || result.branch || 'switch failed'))
-          return
-        }
-        showToast(C.switched(C.names[key]))
-        await refreshStatus()
-      } catch (err) {
-        showToast(GEN(err.message))
+        await switchTo(key)
       } finally {
         switchBtn.disabled = false
       }
     }
+  }
+
+  async function switchTo(key) {
+    try {
+      const result = await api('/api/channels/switch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ backend: key }),
+      })
+      if (!result.ok) {
+        showToast(result.branch === 'not_configured' ? C.notConfiguredYet : GEN(result.error || result.branch || 'switch failed'))
+        return
+      }
+      showToast(C.switched(C.names[key]))
+      await refreshStatus()
+    } catch (err) {
+      showToast(GEN(err.message))
+    }
+  }
+
+  // connect != switch bit a real user within the hour (Mino, clean-mac
+  // 13:58: Slack "Connected" but the agent still listened on in-app chat).
+  // After a successful connect/apply on a non-active backend, offer the
+  // switch right there instead of relying on the separate button being
+  // noticed. Declining keeps the old behavior exactly.
+  async function offerSwitchAfterConnect(key) {
+    await refreshStatus()
+    if (!lastStatus || lastStatus.active === key) return
+    const ok = await confirmDialog(C.switchAfterConnect(C.names[key]), C.switchOk, window.COPY.nav.cancel)
+    if (ok) await switchTo(key)
   }
 
   async function refreshStatus() {
@@ -215,7 +233,7 @@
         $('ch-reconnect-flow').classList.add('hidden')
         $('ch-discord-reconnect').textContent = baseLabel('discord')
         $('ch-reconnect-token').value = ''
-        await refreshStatus()
+        await offerSwitchAfterConnect('discord')
       } catch (err) {
         statusEl.textContent = GEN(err.message)
       } finally {
@@ -311,7 +329,7 @@
         statusEl.textContent = ''
         showToast(C.telegramApplied(chat.label))
         flowClose('telegram')
-        await refreshStatus()
+        await offerSwitchAfterConnect('telegram')
       } catch (err) {
         statusEl.textContent = GEN(err.message)
       } finally {
@@ -423,7 +441,7 @@
         statusEl.textContent = ''
         showToast(C.slackApplied(result.channelName || chan.name))
         flowClose('slack')
-        await refreshStatus()
+        await offerSwitchAfterConnect('slack')
       } catch (err) {
         statusEl.textContent = GEN(err.message)
       } finally {

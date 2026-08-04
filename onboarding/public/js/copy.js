@@ -1038,6 +1038,7 @@ window.COPY = {
     switchOk: 'Switch',
     switching: 'Switching and restarting the agent…',
     switched: (name) => `Switched to ${name}`,
+    switchAfterConnect: (name) => `${name} is connected. Switch the agent to this channel now?`,
     notConfiguredYet: 'Finish connecting before you can switch',
     names: { local: 'In-app chat', discord: 'Discord', slack: 'Slack', telegram: 'Telegram' },
     connectButton: 'Connect',
