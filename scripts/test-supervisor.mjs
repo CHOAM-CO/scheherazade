@@ -13,7 +13,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn, execFileSync } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import {
   backoffFor,
@@ -82,7 +82,9 @@ console.log('\n-- headless lane parity: both lanes exec headless-lane.mjs')
 // ── 2b. the lane's claude argv (the ONE argv builder) ──────────────────────
 console.log('\n-- headless-lane buildArgs: the one claude argv')
 {
-  const { buildArgs } = await import(path.join(ROOT, 'headless-lane.mjs'))
+  // pathToFileURL, not the raw join: bare absolute paths import on POSIX by
+  // accident but win32 ESM refuses them (protocol 'c:' -- magi-win 0.57 gate).
+  const { buildArgs } = await import(pathToFileURL(path.join(ROOT, 'headless-lane.mjs')).href)
   const base = buildArgs({ model: 'm1', systemPromptFile: null, mcpConfigFile: null, resumeId: null })
   ok('base argv: -p stream-json both ways, verbose, model, skip-permissions',
     base.join(' ') === '-p --input-format stream-json --output-format stream-json --verbose --model m1 --dangerously-skip-permissions',
