@@ -809,6 +809,8 @@ window.COPY = {
     // binding (ollama.com library scrape 2026-08-04), and a false block
     // is worse than a warned attempt.
     attachNoVision: "Heads up: the current model can't view images, so the agent will only know a file was attached.",
+    // Vision stand-in landed (0.0.56): same warning class, better outcome.
+    attachCaptioned: "The current model can't view images, so a helper vision model described it for the agent.",
   },
 
   // AUTHORED (v0.0.20) -- session log viewer (Mino 07-16: 개발 중 앱이

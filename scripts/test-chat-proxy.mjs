@@ -213,6 +213,19 @@ try {
     // gate: upload is a POST, so it sits behind the per-launch token
     const noTok = await fetch(`${base}/api/chat/upload`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ filename: 'x.png', dataBase64: png.toString('base64') }) })
     chk('upload without the onboard token is refused', noTok.status === 403, noTok.status)
+    chk('upload with no agentControls (unknown lane) carries NO caption -- unknown is never guessed', !('caption' in b), JSON.stringify(b))
+  }
+
+  // ── vision stand-in table (0.0.56): pure laneVision pins ──────────────────
+  {
+    const { laneVision } = require_(path.join(ROOT, 'onboarding', 'http-server.cjs'))
+    chk('claude lane -> yes', laneVision({ provider: 'claude-subscription', model: 'claude-fable-5' }) === 'yes')
+    chk('ollama kimi-k2.7-code -> yes (library pill receipt)', laneVision({ provider: 'ollama', model: 'kimi-k2.7-code' }) === 'yes')
+    chk('ollama glm-5.2 -> no', laneVision({ provider: 'ollama', model: 'glm-5.2' }) === 'no')
+    chk('ollama deepseek-v4-flash:0731 -> no (tag stripped)', laneVision({ provider: 'ollama', model: 'deepseek-v4-flash:0731' }) === 'no')
+    chk('ollama unlisted model -> unknown, never guessed', laneVision({ provider: 'ollama', model: 'brand-new-model' }) === 'unknown')
+    chk('no spawn info -> unknown', laneVision(null) === 'unknown')
+    chk('chatgpt proxy lane -> unknown', laneVision({ provider: 'chatgpt', model: 'gpt-5.6' }) === 'unknown')
   }
 } finally {
   srv.server.close()

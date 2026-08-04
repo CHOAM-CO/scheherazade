@@ -35,7 +35,7 @@ const CHAT_PROXY_TIMEOUT_MS = 5_000
 const CHAT_STATUS_TIMEOUT_MS = 1_500
 
 function createRoutes(staticCtx) {
-  const { fs, path, sendJson, readJsonBody, DATA_HOME, activeChannelBackend } = staticCtx
+  const { fs, path, log, sendJson, readJsonBody, DATA_HOME, activeChannelBackend, laneVision, fetchImageCaption } = staticCtx
 
   // null = not running (file absent or unparseable -- an unparseable file is
   // a mid-write race with the channel's atomic rename, or a corrupt leftover;
@@ -172,7 +172,7 @@ function createRoutes(staticCtx) {
     {
       method: 'POST',
       match: (pathname) => pathname === '/api/chat/upload',
-      handler: async (req, res) => {
+      handler: async (req, res, callCtx) => {
         let parsed
         try {
           parsed = await readJsonBody(req, 15_000_000)
@@ -210,7 +210,22 @@ function createRoutes(staticCtx) {
           const name = `${Date.now()}_${stem}${ext[0]}`
           const full = path.join(dir, name)
           fs.writeFileSync(full, buf, { mode: 0o600 })
-          sendJson(res, 200, { ok: true, name, path: full })
+          // Vision stand-in (0.0.56, Mino "작은 비전모델 붙여서"): a lane
+          // that provably cannot see images gets a caption from the small
+          // vision model, folded into the marker client-side. Only the
+          // KNOWN-'no' lane pays the extra call -- 'yes' doesn't need it,
+          // 'unknown' must not pretend. Caption failure degrades to the
+          // honest no-caption marker; the upload itself never fails on it.
+          let caption
+          const spawn = callCtx && callCtx.agentControls && typeof callCtx.agentControls.spawnInfo === 'function'
+            ? callCtx.agentControls.spawnInfo() : null
+          if (laneVision(spawn) === 'no' && typeof fetchImageCaption === 'function') {
+            const type = ext[0] === '.png' ? 'image/png' : ext[0] === '.gif' ? 'image/gif' : ext[0] === '.webp' ? 'image/webp' : 'image/jpeg'
+            const cap = await fetchImageCaption(buf.toString('base64'), type)
+            if (cap.ok) caption = { text: cap.caption, model: cap.model }
+            else log && log(`chat upload: vision stand-in caption failed (${cap.reason}) -- marker degrades to the honest no-vision text`)
+          }
+          sendJson(res, 200, { ok: true, name, path: full, ...(caption ? { caption } : {}) })
         } catch (err) {
           sendJson(res, 500, { error: `could not save the image: ${err.message}`, reason: 'write_failed' })
         }

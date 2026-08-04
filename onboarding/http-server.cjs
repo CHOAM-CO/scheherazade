@@ -2837,6 +2837,77 @@ async function fetchOllamaUsage() {
   return payload
 }
 
+// ── vision stand-in captioning (0.0.56, Mino 2026-08-04 20:03 "비전이
+// 없으면 fallback으로 작은 비전모델 붙여서 같이 지원하면 되는거 아니냐") ──
+// When the LANE model cannot see images, the chat upload route asks a
+// small vision-capable cloud model -- same ollama key, same Messages API
+// the lane itself rides -- to describe the image, and the chat page folds
+// that description into the attachment marker. A text-only lane then gets
+// the CONTENT of the image, not just the fact that a file exists.
+//
+// Vision table bound from live ollama.com/library capability pills
+// (2026-08-04 scrape receipts, session notes idea/2026-08-04):
+//   vision:    kimi-k2.7-code, kimi-k3, kimi-k2.6, gemma4, qwen3.5,
+//              minimax-m3, mistral-large-3
+//   no vision: glm-5.2, glm-5.1, deepseek-v4-flash, deepseek-v4-pro,
+//              gpt-oss, minimax-m2.7, nemotron-3-{nano,super,ultra}
+// Anything else (URL-picked future models, custom proxies) is 'unknown'
+// and is NEVER guessed -- unknown gets the honesty clause, not a caption.
+// chat.js keeps a mirror of this table for its pre-send toast; change both.
+const OLLAMA_VISION_YES = new Set(['kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'gemma4', 'qwen3.5', 'minimax-m3', 'mistral-large-3'])
+const OLLAMA_VISION_NO = new Set(['glm-5.2', 'glm-5.1', 'deepseek-v4-flash', 'deepseek-v4-pro', 'gpt-oss', 'minimax-m2.7', 'nemotron-3-nano', 'nemotron-3-super', 'nemotron-3-ultra'])
+// Smallest vision model in the cloud catalog (31b, vs 397b/675b upward) --
+// caption latency and quota cost scale with this pick.
+const OLLAMA_CAPTION_MODEL = 'gemma4:31b'
+
+function laneVision(spawn) {
+  const provider = String((spawn && spawn.provider) || '')
+  const model = String((spawn && spawn.model) || '')
+  const base = model.replace(/:.*$/, '') // strip :tag (deepseek-v4-flash:0731)
+  if (/^claude/.test(provider) || /^claude/.test(model)) return 'yes'
+  if (provider === 'ollama') {
+    if (OLLAMA_VISION_YES.has(base)) return 'yes'
+    if (OLLAMA_VISION_NO.has(base)) return 'no'
+  }
+  return 'unknown'
+}
+
+async function fetchImageCaption(imageBase64, mediaType) {
+  let key = null
+  try { key = readProviderKey('ollama') } catch { return { ok: false, reason: 'key_unreadable' } }
+  if (!key) return { ok: false, reason: 'no_key' }
+  let res, body
+  try {
+    res = await fetch('https://ollama.com/v1/messages', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'content-type': 'application/json', 'User-Agent': `scheherazade/${APP_VERSION}` },
+      body: JSON.stringify({
+        model: OLLAMA_CAPTION_MODEL,
+        max_tokens: 700,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: mediaType, data: imageBase64 } },
+            { type: 'text', text: 'Describe this image thoroughly for someone who cannot see it: overall layout, ALL readable text verbatim, UI elements and their states, numbers, charts, people or objects, and anything unusual. Plain prose, no preamble.' },
+          ],
+        }],
+      }),
+      // Generous: a cold 31b vision call can take a while; the upload
+      // request that awaits this is a human clicking attach, not a poll.
+      signal: AbortSignal.timeout(45_000),
+    })
+    body = await res.json().catch(() => null)
+  } catch {
+    return { ok: false, reason: 'unreachable' }
+  }
+  if (!res.ok) return { ok: false, reason: `http_${res.status}` }
+  const text = body && Array.isArray(body.content)
+    ? body.content.filter((c) => c && c.type === 'text').map((c) => c.text).join('\n').trim()
+    : ''
+  if (!text) return { ok: false, reason: 'empty_caption' }
+  return { ok: true, caption: text, model: OLLAMA_CAPTION_MODEL }
+}
+
 // Update check against the PUBLIC releases repo (the download surface
 // testers actually use). v1 is notify + one-click download page -- a real
 // in-place auto-update needs a signed app on macOS, deferred with Mino.
@@ -2920,6 +2991,8 @@ const staticCtx = {
   getSetupTokenSession,
   // usage gauge + update check (2026-08-04 tester requests)
   fetchClaudeSubscriptionUsage, fetchCodexUsage, fetchOllamaUsage, checkForUpdate,
+  // vision stand-in captioning (0.0.56)
+  laneVision, fetchImageCaption,
   // claude CLI install-assist (2026-08-04, Mino "2로 가자")
   startClaudeCliInstall, getClaudeInstallStatus,
   // agent status / model table
@@ -2957,6 +3030,8 @@ module.exports = {
   AGENT_NAME,
   DATA_HOME,
   contextCapForModel,
+  // Exported for test pins (vision stand-in table, 0.0.56) -- pure fn.
+  laneVision,
   readAgentConfig,
   readDiscordToken,
   readHomeChannelId,

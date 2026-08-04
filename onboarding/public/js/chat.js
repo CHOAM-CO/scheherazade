@@ -415,7 +415,14 @@
       const model = String((spawn && spawn.model) || '').replace(/:.*$/, '') // strip :tag
       if (/^claude/.test(provider) || /^claude/.test(model)) { visionState = 'yes'; return }
       if (provider === 'ollama') {
-        const OLLAMA_VISION = { 'kimi-k2.7-code': 'yes', 'glm-5.2': 'no', 'deepseek-v4-flash': 'no' }
+        // Mirror of http-server.cjs's laneVision table (library-pill scrape
+        // 2026-08-04) -- change both together.
+        const OLLAMA_VISION = {
+          'kimi-k2.7-code': 'yes', 'kimi-k3': 'yes', 'kimi-k2.6': 'yes', gemma4: 'yes',
+          'qwen3.5': 'yes', 'minimax-m3': 'yes', 'mistral-large-3': 'yes',
+          'glm-5.2': 'no', 'glm-5.1': 'no', 'deepseek-v4-flash': 'no', 'deepseek-v4-pro': 'no',
+          'gpt-oss': 'no', 'minimax-m2.7': 'no', 'nemotron-3-nano': 'no', 'nemotron-3-super': 'no', 'nemotron-3-ultra': 'no',
+        }
         visionState = OLLAMA_VISION[model] || 'unknown'
         return
       }
@@ -424,6 +431,13 @@
   }
 
   function markerFor(att) {
+    if (att.caption) {
+      // Vision stand-in (0.0.56): the server already had a small vision
+      // model describe the image; the text-only lane gets the CONTENT.
+      // Brackets/newlines stripped -- the marker must stay one parseable line.
+      const clean = String(att.caption.text || '').replace(/[\[\]]/g, '').replace(/\s*\n+\s*/g, ' ').slice(0, 2000)
+      return `[image attached: ${att.path} — this model cannot view images directly; a vision model (${att.caption.model}) described it: "${clean}"]`
+    }
     if (visionState === 'no') {
       return `[image attached: ${att.path} — NOTE: this model cannot view images. Do not guess the contents; tell the user honestly that you cannot see images on the current model.]`
     }
@@ -467,12 +481,12 @@
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ filename: file.name || 'pasted.png', dataBase64 }),
       })
-      const att = { name: out.name, path: out.path }
+      const att = { name: out.name, path: out.path, caption: out.caption || null }
       pendingAttachments.push(att)
       renderAttachChip(att)
-      if (visionState === 'no' && !visionWarned) {
+      if (!visionWarned && (att.caption || visionState === 'no')) {
         visionWarned = true // once per page load, not once per image
-        window.showToast(C.attachNoVision)
+        window.showToast(att.caption ? C.attachCaptioned : C.attachNoVision)
       }
     } catch (err) {
       console.error('attachment upload failed:', err)
