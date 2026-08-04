@@ -32,7 +32,7 @@ import {
   installStdoutHygiene, resolveDataHome, localISO, localNow,
   createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer,
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
-  createInboundNotifier,
+  createInboundNotifier, createOutboundDedup,
 } from './channel-runtime.mjs'
 
 // ── stdout hygiene (channel-runtime) ───────────────────────────────────────
@@ -85,15 +85,14 @@ if (!SLACK_APP_TOKEN) {
   )
   process.exit(1)
 }
+// HOME_CHANNEL_ID is OPTIONAL since DM-default mode (2026-08-04, Mino "홈채널
+// 방식 말고 DM 기본 방식으로 바꾸자"): with no home channel the conversation
+// binds to whoever DMs the bot (message.im events; lastInboundChannelId +
+// the persisted last-channel store carry the reply target from there). A
+// configured home channel still works as an ADDITIONAL surface -- the gate
+// in handleInboundMessage accepts home-channel messages AND DMs.
 if (!HOME_CHANNEL_ID) {
-  const reason = 'HOME_CHANNEL_ID not set. Check .env (or the .mcp.json env block).'
-  process.stderr.write(`[${AGENT_NAME}] FATAL: ${reason}\n`)
-  // Not a token problem -- same 'unknown' default channel.mjs uses for its
-  // own missing-HOME_CHANNEL_ID guard.
-  await writeFailureMarker(reason).catch((err) =>
-    process.stderr.write(`[${AGENT_NAME}] also failed to write failure marker: ${err.message}\n`)
-  )
-  process.exit(1)
+  log('HOME_CHANNEL_ID not set -- DM-default mode: the conversation binds to whoever DMs the bot. (A home channel can still be connected later in Channels.)')
 }
 
 // Local-time timestamps (localISO/localNow) come from channel-runtime.mjs.
@@ -155,6 +154,9 @@ const resolveOutboundChannel = createOutboundResolver({
   homeId: HOME_CHANNEL_ID,
   guidance: GUIDANCE,
 })
+
+// GPT-loop guard (2026-08-04, Mino field report) -- see createOutboundDedup.
+const checkOutboundDup = createOutboundDedup({ log })
 
 // ── User display-name resolution (hard constraint #8) ───────────────────────
 // Discord gets a display name for free off the gateway message object
@@ -332,6 +334,12 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
   if (name === 'reply') {
     const { channelId, text } = ReplyArgs.parse(args || {})
+    // GPT-loop guard (2026-08-04): identical text to the same target within
+    // the window is NOT re-posted; the receipt tells the model so. Returned
+    // as a NORMAL result, never isError -- an error result invites exactly
+    // the retry this exists to stop. See createOutboundDedup.
+    const dup = checkOutboundDup(channelId || 'current', text)
+    if (dup.duplicate) return { content: [{ type: 'text', text: dup.receipt }] }
     const resultText = await sendReply({ channelId, text })
     return { content: [{ type: 'text', text: resultText }] }
   }
@@ -381,10 +389,14 @@ async function handleInboundMessage(event, opts = {}) {
   const resolveSender = opts.resolveSender || resolveSenderName
 
   if (isBotEvent(event) || isIgnorableSubtype(event)) return { skipped: true, reason: 'bot_or_subtype' }
-  // Hard constraint #2: home-channel message events only -- unlike
-  // channel.mjs, which also accepts any DM channel, the Slack backend is
-  // scoped to the single home channel per the task's explicit spec.
-  if (event.channel !== HOME_CHANNEL_ID) return { skipped: true, reason: 'not_home_channel' }
+  // DM-default (2026-08-04, Mino): DMs to the bot (channel_type 'im',
+  // message.im event -- needs im:history + the event subscription in the
+  // app manifest) are ALWAYS accepted; a configured home channel is an
+  // additional surface on top. The original home-channel-only scoping
+  // ("hard constraint #2") applies only to non-DM channels: any other
+  // channel/group the bot happens to be in stays ignored.
+  const isDm = event.channel_type === 'im'
+  if (!isDm && event.channel !== HOME_CHANNEL_ID) return { skipped: true, reason: 'not_home_channel_or_dm' }
 
   lastInboundChannelId = event.channel
   lastChannelStore.persist(event.channel)
@@ -454,7 +466,9 @@ function startRoutineTickerOnce() {
       store: routineStore,
       fire: (r) => notifyInbound({
           content: routineInjectContent(r),
-          meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() },
+          // DM-default mode has no HOME_CHANNEL_ID -- stamp the live
+          // conversation channel so the routine's reply lands somewhere real.
+          meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID || lastInboundChannelId || '', authorId: '', timestamp: localNow() },
         }),
       log,
     })

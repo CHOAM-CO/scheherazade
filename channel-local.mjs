@@ -53,7 +53,7 @@ import {
   installStdoutHygiene, resolveDataHome, localNow,
   createMarkerStore, createBootAnnouncer,
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
-  createInboundNotifier,
+  createInboundNotifier, createOutboundDedup,
 } from './channel-runtime.mjs'
 
 const log = installStdoutHygiene()
@@ -345,12 +345,22 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
 
 // Exported so tests exercise the real tool logic without connecting a
 // transport; the MCP handler below is a thin shell around this.
+// GPT-loop guard (2026-08-04, Mino field report) -- see createOutboundDedup
+// (channel-runtime.mjs). Single fixed key: this backend has exactly one
+// conversation surface (the in-app chat page).
+const checkOutboundDup = createOutboundDedup({ log })
+
 export async function handleToolCall(name, args) {
   if (name === 'reply') {
     const text = args && args.text
     if (typeof text !== 'string' || text.trim() === '') {
       return { content: [{ type: 'text', text: 'reply failed: text is required' }], isError: true }
     }
+    // Identical text within the window is NOT re-queued; the receipt tells
+    // the model so. Normal result, never isError -- an error invites exactly
+    // the retry this exists to stop.
+    const dup = checkOutboundDup('local', text)
+    if (dup.duplicate) return { content: [{ type: 'text', text: dup.receipt }] }
     const n = enqueueOutbound(text)
     return { content: [{ type: 'text', text: `sent (#${n})` }] }
   }

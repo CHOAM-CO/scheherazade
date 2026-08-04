@@ -1484,8 +1484,11 @@ function channelBackendReadiness() {
       detail: cfg.HOME_GUILD_NAME || '',
     },
     slack: {
-      configured: Boolean(readOrUnconfigured(readSlackBotToken) && readOrUnconfigured(readSlackAppToken) && cfg.SLACK_HOME_CHANNEL_ID),
-      home: cfg.SLACK_HOME_CHANNEL_NAME || cfg.SLACK_HOME_CHANNEL_ID || '',
+      // Tokens ALONE are a complete slack config since DM-default mode
+      // (2026-08-04, Mino): no home channel means the conversation is the
+      // bot's DM. A picked channel still shows as `home` when present.
+      configured: Boolean(readOrUnconfigured(readSlackBotToken) && readOrUnconfigured(readSlackAppToken)),
+      home: cfg.SLACK_HOME_CHANNEL_NAME || cfg.SLACK_HOME_CHANNEL_ID || 'DM',
       detail: cfg.SLACK_TEAM_NAME || '',
     },
     telegram: {

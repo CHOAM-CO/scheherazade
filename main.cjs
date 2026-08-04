@@ -1144,11 +1144,12 @@ async function spawnRealAgentChildLocked() {
       log('agent spawn skipped: slack backend active but bot/app token missing')
       return null
     }
-    homeChannelId = config.SLACK_HOME_CHANNEL_ID
-    if (!homeChannelId) {
-      log('agent spawn skipped: slack backend active but no SLACK_HOME_CHANNEL_ID yet')
-      return null
-    }
+    // SLACK_HOME_CHANNEL_ID is OPTIONAL since DM-default mode (2026-08-04,
+    // Mino "홈채널 방식 말고 DM 기본"): tokens alone are a complete slack
+    // config -- the conversation binds to whoever DMs the bot. An empty
+    // homeChannelId just means channel-slack.mjs boots without a home
+    // channel (it logs the DM-default line and accepts message.im events).
+    homeChannelId = config.SLACK_HOME_CHANNEL_ID || ''
     channelEnv.SLACK_BOT_TOKEN = slackBot
     channelEnv.SLACK_APP_TOKEN = slackApp
   } else if (channelBackend === 'telegram') {

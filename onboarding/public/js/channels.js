@@ -361,6 +361,8 @@
     $('ch-slack-enum').textContent = C.slackEnumButton
     $('ch-slack-channel-label').textContent = C.slackChannelLabel
     $('ch-slack-apply').textContent = C.slackApplyButton
+    $('ch-slack-dm-note').textContent = C.slackDmNote
+    $('ch-slack-dm-apply').textContent = C.slackDmApplyButton
     const consoleBtn = $('ch-slack-console')
     consoleBtn.textContent = C.slackOpenConsole
     consoleBtn.onclick = () => window.open(C.links.slack, '_blank', 'noopener')
@@ -414,6 +416,40 @@
         statusEl.textContent = GEN(err.message)
       } finally {
         btn.disabled = false
+      }
+    }
+
+    // DM-default connect (2026-08-04, Mino "홈채널 방식 말고 DM 기본"):
+    // tokens-only apply -- no channel pick, no enumerate. The server clears
+    // any previously picked channel ('' write) and the conversation becomes
+    // the bot's DM (message.im).
+    $('ch-slack-dm-apply').onclick = async () => {
+      const applyBtn = $('ch-slack-dm-apply')
+      const statusEl = $('ch-slack-flow-status')
+      applyBtn.disabled = true
+      try {
+        const botToken = $('ch-slack-bot-token').value.trim()
+        const appToken = $('ch-slack-app-token').value.trim()
+        const body = {}
+        if (botToken) body.botToken = botToken
+        if (appToken) body.appToken = appToken
+        const result = await api('/api/slack/connect/apply', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+        if (!result.ok) {
+          statusEl.textContent = slackBranchText(result)
+          return
+        }
+        statusEl.textContent = ''
+        showToast(C.slackAppliedDm)
+        flowClose('slack')
+        await offerSwitchAfterConnect('slack')
+      } catch (err) {
+        statusEl.textContent = GEN(err.message)
+      } finally {
+        applyBtn.disabled = false
       }
     }
 

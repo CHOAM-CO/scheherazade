@@ -111,8 +111,30 @@ console.log('\n(b) bot echo + subtype filter')
 
   const elsewhere = { type: 'message', channel: 'C_SOME_OTHER_CHANNEL', user: 'U1', text: 'hi' }
   const r3 = await handleInboundMessage(elsewhere, { notify: async () => { notifyCalls++ } })
-  check('non-home-channel message is skipped (Slack scope: home channel only)', r3.skipped === true && r3.reason === 'not_home_channel', JSON.stringify(r3))
+  check('non-home non-DM channel message is skipped', r3.skipped === true && r3.reason === 'not_home_channel_or_dm', JSON.stringify(r3))
   check('non-home-channel message never reaches notify()', notifyCalls === 0)
+}
+
+// ── (b2) DM-default mode (2026-08-04, Mino "홈채널 방식 말고 DM 기본") ─────
+console.log('\n(b2) DM acceptance (message.im)')
+{
+  // DMs are accepted even though the im channel is NOT the home channel --
+  // channel_type 'im' bypasses the home gate.
+  let captured = null
+  const dm = { type: 'message', channel: 'D_DM_CHANNEL', channel_type: 'im', user: 'U777', text: 'dm hello', ts: '1700000001.000100' }
+  const r = await handleInboundMessage(dm, {
+    resolveSender: async () => 'DmUser',
+    notify: async (params) => { captured = params },
+  })
+  check('DM (channel_type=im) is NOT skipped', !r.skipped, JSON.stringify(r))
+  check('DM content reaches notify()', captured?.content === 'dm hello', captured?.content)
+  check('DM meta.channelId is the im channel id (reply target)', captured?.meta?.channelId === 'D_DM_CHANNEL', captured?.meta?.channelId)
+
+  // a bot's own DM echo still filters
+  let notifyCalls = 0
+  const dmEcho = { type: 'message', channel: 'D_DM_CHANNEL', channel_type: 'im', bot_id: 'B999', text: 'echo' }
+  const rEcho = await handleInboundMessage(dmEcho, { notify: async () => { notifyCalls++ } })
+  check('bot echo in a DM is still skipped', rEcho.skipped === true && notifyCalls === 0)
 }
 
 // ── (c) reply chunking boundary ─────────────────────────────────────────────

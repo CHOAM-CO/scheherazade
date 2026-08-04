@@ -1105,6 +1105,11 @@ window.COPY = {
     slackApplyButton: 'Connect to this channel',
     slackNotInChannel: (name) => `The bot isn't in #${name}. Invite it with /invite in Slack, then try again.`,
     slackApplied: (name) => `Connected: #${name}`,
+    // DM-default mode (2026-08-04): tokens-only connect, conversation = the
+    // bot's DM. Channel pick stays as the optional secondary path.
+    slackDmNote: 'Default: talk to the agent in a DM with the bot — no channel setup needed. Connecting a channel is optional.',
+    slackDmApplyButton: 'Connect (DM mode)',
+    slackAppliedDm: 'Connected. DM the bot on Slack to start talking.',
     links: {
       telegram: 'https://t.me/botfather',
       slack: 'https://api.slack.com/apps',

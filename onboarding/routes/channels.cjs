@@ -240,20 +240,20 @@ function createRoutes(staticCtx) {
       match: (pathname) => pathname === '/api/slack/connect/apply',
       handler: async (req, res, callCtx) => {
         const { agentControls } = callCtx // per-call value from createOnboardingServer, never staticCtx
+        // channelId is OPTIONAL since DM-default mode (2026-08-04, Mino
+        // "홈채널 방식 말고 DM 기본"): tokens alone are a complete config --
+        // the conversation is the bot's DM (message.im). A picked channel is
+        // the optional extra surface, and keeps its full reachability check.
         const { botToken, appToken, channelId } = await readJsonBody(req)
-        if (!channelId) {
-          sendJson(res, 400, { error: 'channelId is required' })
-          return
-        }
         const effBot = typeof botToken === 'string' && botToken.trim() !== '' ? botToken.trim() : readSlackBotToken()
         const effApp = typeof appToken === 'string' && appToken.trim() !== '' ? appToken.trim() : readSlackAppToken()
         if (!effBot || !effApp) {
           sendJson(res, 200, { ok: false, branch: !effBot ? 'invalid_bot_token' : 'invalid_app_token' })
           return
         }
-        // Apply-time re-verification: both tokens live + picked channel
-        // reachable + bot actually IN it (posting from outside a channel fails
-        // at runtime -- catch it here, where the user can still fix it).
+        // Apply-time re-verification: both tokens live (+ when a channel was
+        // picked: reachable AND bot actually IN it -- posting from outside a
+        // channel fails at runtime, catch it here where the user can fix it).
         const auth = await slackApi(effBot, 'auth.test', {})
         if (!auth.ok) {
           sendJson(res, 200, { ok: false, branch: 'invalid_bot_token', detail: auth.error })
@@ -264,30 +264,37 @@ function createRoutes(staticCtx) {
           sendJson(res, 200, { ok: false, branch: 'invalid_app_token', detail: conn.error })
           return
         }
-        const info = await slackApi(effBot, 'conversations.info', { channel: String(channelId) })
-        if (!info.ok || !info.body.channel) {
-          // Slack's own error code rides along VERBATIM: the first live test hit
-          // this branch and the swallowed code made the failure undiagnosable
-          // from the screen. Never eat the upstream error.
-          sendJson(res, 400, { error: `picked channel is not reachable by this token (slack: ${info.error || 'no_channel_in_response'})` })
-          return
-        }
-        if (info.body.channel.is_member !== true) {
-          sendJson(res, 200, { ok: false, branch: 'not_in_channel', channelName: info.body.channel.name || '' })
-          return
+        let channelName = ''
+        if (channelId) {
+          const info = await slackApi(effBot, 'conversations.info', { channel: String(channelId) })
+          if (!info.ok || !info.body.channel) {
+            // Slack's own error code rides along VERBATIM: the first live test hit
+            // this branch and the swallowed code made the failure undiagnosable
+            // from the screen. Never eat the upstream error.
+            sendJson(res, 400, { error: `picked channel is not reachable by this token (slack: ${info.error || 'no_channel_in_response'})` })
+            return
+          }
+          if (info.body.channel.is_member !== true) {
+            sendJson(res, 200, { ok: false, branch: 'not_in_channel', channelName: info.body.channel.name || '' })
+            return
+          }
+          channelName = info.body.channel.name || ''
         }
         storeSlackBotTokenVerified(effBot)
         storeSlackAppTokenVerified(effApp)
         writeAgentConfig({
-          SLACK_HOME_CHANNEL_ID: String(channelId),
-          SLACK_HOME_CHANNEL_NAME: info.body.channel.name || '',
+          // Written unconditionally ('' in DM mode) so a re-apply WITHOUT a
+          // channel clears a previously picked one instead of silently
+          // keeping it (writeAgentConfig merges; omitted keys survive).
+          SLACK_HOME_CHANNEL_ID: channelId ? String(channelId) : '',
+          SLACK_HOME_CHANNEL_NAME: channelName,
           SLACK_TEAM_NAME: auth.body.team || '',
         })
         const isActive = activeChannelBackend() === 'slack'
         if (isActive && agentControls && typeof agentControls.restartAgent === 'function') {
           agentControls.restartAgent().catch((err) => console.error('[scheherazade/onboarding] slack apply restart threw:', err))
         }
-        sendJson(res, isActive ? 202 : 200, { ok: true, channelId: String(channelId), channelName: info.body.channel.name || '', team: auth.body.team || '', restarted: isActive })
+        sendJson(res, isActive ? 202 : 200, { ok: true, channelId: channelId ? String(channelId) : '', channelName, mode: channelId ? 'channel' : 'dm', team: auth.body.team || '', restarted: isActive })
         return
       },
     },

@@ -22,11 +22,15 @@ SWITCH to that channel — switching is what actually moves you there.
 What the app needs: a **bot token** (`xoxb-…`) with the right scopes,
 and an **app-level token** (`xapp-…`) with Socket Mode on.
 
+**The manifest below is served AS-IS.** The ONLY thing you may change is
+the two name fields (`name:` and `display_name:`) — swap "Scheherazade"
+for the agent's name if your person wants. Never add, remove, or reorder
+scopes/events; never retype it from memory; hand over the whole block.
+
 Steps to give your person:
 
 1. Go to https://api.slack.com/apps → **Create New App** → **From a
-   manifest** → pick the workspace → paste EXACTLY this (YAML tab),
-   changing only the two name fields:
+   manifest** → pick the workspace → paste EXACTLY this (YAML tab):
 
 ```yaml
 display_information:
@@ -43,6 +47,9 @@ oauth_config:
       - groups:read
       - channels:history
       - groups:history
+      - im:history
+      - im:read
+      - im:write
       - users:read
       - files:write
 settings:
@@ -50,6 +57,7 @@ settings:
     bot_events:
       - message.channels
       - message.groups
+      - message.im
   interactivity:
     is_enabled: false
   socket_mode_enabled: true
@@ -60,17 +68,20 @@ settings:
 3. **Basic Information → App-Level Tokens → Generate Token and Scopes**
    → name it anything, add scope `connections:write` → copy the
    `xapp-…` token.
-4. In Slack, invite the bot to the channel it should live in:
-   `/invite @Scheherazade`.
-5. Paste both tokens in Settings → Channels → Slack → Connect, pick the
-   channel, apply, and accept the switch prompt.
+4. Paste both tokens in Settings → Channels → Slack → **Connect (DM
+   mode)**, accept the switch prompt, and just **DM the bot** in Slack —
+   that DM is the conversation. No channel setup needed.
+5. (Optional) To ALSO use a channel: invite the bot
+   (`/invite @Scheherazade`), then use Load channels → pick → connect.
 
 Why each scope (so you can debug, not so you can re-derive):
 `chat:write` send · `channels:read`/`groups:read` list & info (this pair
 missing = "channel list never loads") · `channels:history`/
-`groups:history` read messages incl. the message events subscription ·
-`users:read` sender display names · `files:write` file uploads ·
-app token `connections:write` = Socket Mode transport.
+`groups:history` read channel messages · `im:history` + the `message.im`
+event = receive DMs (missing = the bot ignores DMs, the default surface)
+· `im:read`/`im:write` resolve & open the DM conversation · `users:read`
+sender display names · `files:write` file uploads · app token
+`connections:write` = Socket Mode transport.
 
 If they already made an app by hand and connect fails: the fastest fix
 is App Manifest tab → replace with the YAML above → **Reinstall App**

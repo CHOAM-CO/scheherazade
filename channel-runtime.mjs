@@ -164,6 +164,47 @@ export function createLastChannelStore({ dataHome, log = console.log }) {
 // (Discord channel object / Slack channel id string / Telegram chat object).
 // opts (fetchFn/lastId/homeId) are test seams — production call sites pass
 // only requestedId and get live module state + the real fetch.
+// ── Outbound duplicate suppression (2026-08-04, Mino field report) ─────────
+// GPT-lane models (gpt-5.6-luna/terra via the codex-as-api proxy) were
+// observed re-sending the IDENTICAL message up to ~10x -- the model ignores
+// or never properly sees the tool result's "sent" receipt and re-calls the
+// send tool, sometimes across turns ("멈추라고 해도 10번씩 보냄"). Claude
+// lanes never did this, which points at the proxy's tool-result round-trip,
+// but the proxy is an upstream package -- so the harness enforces sanity at
+// the channel seam instead: an identical (channel, text) within windowMs is
+// NOT posted again, and the tool result says so explicitly. That receipt is
+// the loop-breaker: the model gets told, in words, that the message is
+// already delivered and must not be re-sent.
+//
+// Deliberately EXACT-match on normalized text (whitespace collapsed): a
+// legitimately repeated short ack within the window is rare, and when the
+// agent truly means to repeat itself it can (and should) vary the wording --
+// the receipt says exactly that. Map is pruned on every call, so it never
+// grows beyond the traffic of one window.
+export function createOutboundDedup({ windowMs = 60_000, log = console.log, now = Date.now } = {}) {
+  const recent = new Map() // `${channelId}\0${normalizedText}` -> last-sent ms
+  return function checkOutbound(channelId, text) {
+    const t = now()
+    for (const [k, ts] of recent) {
+      if (t - ts > windowMs) recent.delete(k)
+    }
+    const key = `${channelId}\u0000${String(text).replace(/\s+/g, ' ').trim()}`
+    const prev = recent.get(key)
+    if (prev !== undefined) {
+      const secs = Math.max(1, Math.round((t - prev) / 1000))
+      log(`[outbound-dedup] suppressed identical message to ${channelId} (${secs}s after the previous send)`)
+      return {
+        duplicate: true,
+        receipt:
+          `DUPLICATE SUPPRESSED -- NOT sent again. You already sent this exact message to ${channelId} ${secs}s ago and it WAS delivered. ` +
+          'Do NOT retry it. If you have something new to say, send a differently-worded message.',
+      }
+    }
+    recent.set(key, t)
+    return { duplicate: false }
+  }
+}
+
 export function createOutboundResolver({ fetchTarget, getLastInboundId, homeId, guidance }) {
   return async function resolve(requestedId, opts = {}) {
     const fetchFn = opts.fetchFn || fetchTarget

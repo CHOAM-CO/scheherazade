@@ -25,7 +25,7 @@ import {
   installStdoutHygiene, resolveDataHome, atomicWriteJson, localISO, localNow,
   readAgentConfig, createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer,
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
-  createInboundNotifier,
+  createInboundNotifier, createOutboundDedup,
 } from './channel-runtime.mjs'
 
 // autonomy/*.cjs are CommonJS on purpose: onboarding/http-server.cjs has to
@@ -209,6 +209,9 @@ const resolveOutboundChannel = createOutboundResolver({
   guidance: GUIDANCE,
 })
 
+// GPT-loop guard (2026-08-04, Mino field report) -- see createOutboundDedup.
+const checkOutboundDup = createOutboundDedup({ log })
+
 // ── MCP server ───────────────────────────────────────────────────────────
 const DEFAULT_INSTRUCTIONS = `You are ${AGENT_NAME}.
 Discord messages arrive as: <channel source="${AGENT_NAME}" sender="..." channelId="..." authorId="..." timestamp="...">content</channel>
@@ -292,6 +295,12 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
   if (name === 'reply') {
     const { channelId, text } = ReplyArgs.parse(args || {})
+    // GPT-loop guard (2026-08-04): identical text to the same target within
+    // the window is NOT re-posted; the receipt tells the model so. Normal
+    // result, never isError -- an error invites exactly the retry this
+    // exists to stop. See createOutboundDedup (channel-runtime.mjs).
+    const dup = checkOutboundDup(channelId || 'current', text)
+    if (dup.duplicate) return { content: [{ type: 'text', text: dup.receipt }] }
     const { target, note } = await resolveOutboundChannel(channelId)
     const chunks = []
     for (let i = 0; i < text.length; i += 1900) chunks.push(text.slice(i, i + 1900))

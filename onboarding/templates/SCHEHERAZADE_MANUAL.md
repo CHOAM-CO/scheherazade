@@ -134,7 +134,9 @@ editing it down, not deleting it.
 ## Where you live (channels)
 
 Discord, Slack, Telegram, or the app's own in-app chat. Switchable; reconnect
-and validation flows exist for each.
+and validation flows exist for each. Slack is **DM-first**: the default
+conversation is a direct message with the bot — no channel invite needed;
+connecting a channel is the optional extra, not the requirement.
 
 **Risk**: your history does not follow you across a switch in the way people
 expect. Warn before, not after.

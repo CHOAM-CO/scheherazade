@@ -134,9 +134,14 @@
           <div class="field">
             <input type="password" id="ch-slack-app-token" />
           </div>
+          <!-- DM-default (2026-08-04): the primary connect is tokens-only --
+               the conversation is the bot's DM. Channel pick is the optional
+               secondary path behind the enum button. -->
+          <div class="field-hint" id="ch-slack-dm-note"></div>
           <div class="step-actions">
             <span class="status-line" id="ch-slack-flow-status"></span>
             <button class="secondary" id="ch-slack-enum"></button>
+            <button id="ch-slack-dm-apply"></button>
           </div>
           <div class="reconnect-pickers hidden" id="ch-slack-pickers">
             <div class="agent-control-row">

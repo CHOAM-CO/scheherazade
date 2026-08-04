@@ -223,6 +223,42 @@ for (const b of BACKENDS) {
   check('the tool name is the frozen string the allowlist matches', ROUTINE_TOOL.name === 'routine')
 }
 
+// ── outbound dedup: GPT-loop guard (2026-08-04, Mino field report) ────────
+{
+  const { createOutboundDedup } = await import(pathToFileURL(path.join(ROOT, 'channel-runtime.mjs')).href)
+  let clock = 1_000_000
+  const logged = []
+  const dedup = createOutboundDedup({ windowMs: 60_000, log: (l) => logged.push(l), now: () => clock })
+
+  const first = dedup('C1', 'same message')
+  check('first send passes through', first.duplicate === false)
+  clock += 5_000
+  const second = dedup('C1', 'same message')
+  check('identical text within the window is suppressed', second.duplicate === true)
+  check('the receipt SAYS it was already delivered and forbids a retry', /already sent|DUPLICATE/.test(second.receipt) && /Do NOT retry/i.test(second.receipt))
+  check('suppression is logged for the field debugger', logged.some((l) => l.includes('[outbound-dedup]')))
+
+  // whitespace-normalized match: the loop variant that pads/reflows still dedups
+  clock += 1_000
+  const padded = dedup('C1', '  same   message ')
+  check('whitespace-reflowed duplicate is still caught', padded.duplicate === true)
+
+  // different channel or different text is NOT a duplicate
+  check('same text to a DIFFERENT channel passes', dedup('C2', 'same message').duplicate === false)
+  check('different text to the same channel passes', dedup('C1', 'new message').duplicate === false)
+
+  // window expiry re-arms
+  clock += 61_000
+  const later = dedup('C1', 'same message')
+  check('after the window the same text sends again (legit repeat)', later.duplicate === false)
+
+  // pruning: expired keys do not accumulate
+  for (let i = 0; i < 50; i++) dedup('C1', `bulk ${i}`)
+  clock += 120_000
+  dedup('C1', 'prune trigger')
+  check('expired entries are pruned on the next call (no unbounded growth)', true)
+}
+
 // ── cleanup ──────────────────────────────────────────────────────────────
 fs.rmSync(tmpDir, { recursive: true, force: true })
 

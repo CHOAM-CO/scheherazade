@@ -31,7 +31,7 @@ import {
   installStdoutHygiene, resolveDataHome, localISO, localNow,
   createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer,
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
-  createInboundNotifier,
+  createInboundNotifier, createOutboundDedup,
 } from './channel-runtime.mjs'
 
 // ── stdout hygiene (channel-runtime) ───────────────────────────────────────
@@ -237,6 +237,9 @@ const resolveOutboundChannel = createOutboundResolver({
   guidance: GUIDANCE,
 })
 
+// GPT-loop guard (2026-08-04, Mino field report) -- see createOutboundDedup.
+const checkOutboundDup = createOutboundDedup({ log })
+
 // ── Local history ledger (read_channel_history backing store) ──────────────
 // Telegram's Bot API has no history endpoint -- getUpdates only ever hands
 // you NEW updates, once, and getChat returns metadata, not messages. So
@@ -418,6 +421,12 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
   if (name === 'reply') {
     const { channelId, text } = ReplyArgs.parse(args || {})
+    // GPT-loop guard (2026-08-04): identical text to the same target within
+    // the window is NOT re-posted; the receipt tells the model so. Normal
+    // result, never isError -- an error invites exactly the retry this
+    // exists to stop. See createOutboundDedup (channel-runtime.mjs).
+    const dup = checkOutboundDup(channelId || 'current', text)
+    if (dup.duplicate) return { content: [{ type: 'text', text: dup.receipt }] }
     const { target, note, chunkCount } = await handleReplyCall({ channelId, text })
     // delivered_channel= line: machine-readable delivery receipt for
     // hooks/stop-reply-guard.mjs, same fixed format channel.mjs stamps (that
