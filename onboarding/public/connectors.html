@@ -66,17 +66,25 @@
               <div class="entry-value" id="conn-provider-claude-name"></div>
               <div class="entry-meta" id="conn-provider-claude-status"></div>
             </div>
+            <button class="secondary hidden" id="conn-claude-cancel"></button>
             <button class="secondary" id="conn-provider-claude-btn"></button>
           </div>
         </div>
-        <!-- Claude BYOK re-entry flow (key never rendered back; input only). -->
+        <!-- Claude subscription re-login (2026-08-04, Mino "connectors에서
+             클로드도 re-login 가능하게" -- the BYOK key-paste flow that
+             lived here is gone with the claude API-key mode). Runs the same
+             in-app `claude setup-token` capture the wizard uses; the code
+             field appears only if the CLI actually asks for a paste. -->
         <div class="claude-key-flow hidden" id="conn-claude-flow">
-          <div class="field">
-            <input type="password" id="conn-claude-key" />
+          <div class="field hidden" id="conn-claude-code-field">
+            <div class="field-hint" id="conn-claude-code-hint"></div>
+            <div class="step-actions">
+              <input type="text" autocomplete="off" id="conn-claude-code" />
+              <button class="secondary" id="conn-claude-code-btn"></button>
+            </div>
           </div>
           <div class="step-actions">
             <span class="status-line" id="conn-claude-status-line"></span>
-            <button class="secondary" id="conn-claude-save"></button>
           </div>
         </div>
       </div>

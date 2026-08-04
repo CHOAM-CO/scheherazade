@@ -187,24 +187,22 @@
   }
 
   // ── Step 1: provider connect ─────────────────────────────────────────
-  // v2 (2026-07-04 copy.js §Step 1 redesign): claude's tab has two
-  // sub-modes -- PRIMARY (claude setup-token) and a collapsible BYOK
-  // fallback (sk-ant paste). THIS IS THE FIX FOR CODEX FINDING #3: the two
-  // sub-modes MUST submit under distinct provider ids -- routing a
-  // setup-token as an Anthropic x-api-key fails outright. Contract (verified
-  // in this task's report): primary submits provider:'claude-subscription',
-  // fallback submits provider:'claude'. See renderClaudeArea() below, the
-  // single place state.provider is set for this tab.
+  // The claude tab is setup-token ONLY (2026-08-04, Mino "claude API Key는
+  // 없애버리고" -- the collapsible sk-ant BYOK sub-mode is gone; Claude
+  // connects by web login / setup-token, matching the 16:33 provider map:
+  // ChatGPT/Claude -> 웹로그인, Ollama -> API키). The manual Terminal path
+  // inside the setup-token panel survives -- that pastes a setup-token
+  // (provider:'claude-subscription'), not an API key. The 'claude' BYOK
+  // provider id still exists server-side so a config onboarded before
+  // today keeps booting; there is simply no UI that submits it anymore.
   function renderStep1() {
     $('s1-title').textContent = C.step1.title
     $('s1-body').textContent = C.step1.body
     const tabsEl = $('s1-tabs')
     tabsEl.innerHTML = ''
     let activeTab = EXPOSED_PROVIDERS[0] // 'claude' -- the only v1-exposed tab, so also the only ever-active one
-    let claudeSubMode = 'primary' // 'primary' (setup-token) | 'fallback' (sk-ant BYOK) -- claude tab only
 
     const claudeTab = C.step1.tabs.find((t) => t.id === 'claude')
-    const claudeFallbackHint = C.step1.fallback.tabs.find((t) => t.id === 'claude')
 
     // CHANGE A: tab enable/disable is UI-scope only (EXPOSED_PROVIDERS),
     // never the server's routerWired capability flag (see that const's own
@@ -597,8 +595,8 @@
       }
     }
 
-    // Renders Step 1's lower half for the current activeTab/claudeSubMode.
-    // claude gets the two-submode UI (this is the load-bearing branch);
+    // Renders Step 1's lower half for the current activeTab.
+    // claude gets the setup-token UI (this is the load-bearing branch);
     // chatgpt gets the login-button area (renderLoginArea above); ollama
     // gets the key-paste area (renderOllamaKeyArea above).
     function renderClaudeArea() {
@@ -634,10 +632,11 @@
         renderOllamaKeyArea()
         return
       }
-      // claude tab from here down -- both submodes re-wire the key-validate
-      // next handler (the login area installs its own).
+      // claude tab from here down -- setup-token only (BYOK sub-mode removed
+      // 2026-08-04, see renderStep1's header). The block keeps its braces so
+      // the const declarations inside stay scoped as before.
       wireValidateNext()
-      if (claudeSubMode === 'primary') {
+      {
         const primary = claudeTab.primary
         const A = primary.inApp
         const statusEl = $('s1-status')
@@ -856,16 +855,6 @@
         panel.appendChild(manualPanel)
         extraEl.appendChild(panel)
 
-        const toggleBtn = document.createElement('button')
-        toggleBtn.type = 'button'
-        toggleBtn.className = 'link'
-        toggleBtn.textContent = C.step1.fallback.toggleLabel
-        toggleBtn.onclick = () => {
-          claudeSubMode = 'fallback'
-          renderClaudeArea()
-        }
-        extraEl.appendChild(toggleBtn)
-
         hintEl.textContent = ''
         keyInput.placeholder = 'Paste the token'
         // ACCEPTANCE TEST CONTRACT: primary (setup-token) sub-mode submits
@@ -901,19 +890,10 @@
           // test-setup-token-copy.mjs.
           if (s.state === 'running' || s.state === 'awaiting_code' || s.state === 'validating') startSetupPoll()
         }).catch(() => {})
-      } else {
-        // claude, fallback (BYOK sk-ant) sub-mode
-        const introEl = document.createElement('p')
-        introEl.textContent = C.step1.fallback.body
-        extraEl.appendChild(introEl)
-
-        hintEl.textContent = claudeFallbackHint ? claudeFallbackHint.hint : ''
-        keyInput.placeholder = 'Paste the key'
-        // ACCEPTANCE TEST CONTRACT: fallback (sk-ant BYOK) sub-mode submits
-        // provider:'claude' -- never 'claude-subscription'.
-        nextBtn.textContent = C.step1.button
-        state.provider = 'claude'
       }
+      // (The sk-ant BYOK fallback sub-mode that used to sit here is gone --
+      // 2026-08-04, Mino "claude API Key는 없애버리고". No UI submits
+      // provider:'claude' anymore.)
     }
 
     C.step1.tabs.forEach((tab) => {
@@ -924,7 +904,6 @@
       if (!disabled) {
         el.onclick = () => {
           activeTab = tab.id
-          claudeSubMode = 'primary'
           tabsEl.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'))
           el.classList.add('active')
           renderClaudeArea()

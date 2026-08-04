@@ -193,7 +193,10 @@ if (pollFn) {
 // Exactly one setInterval in this sub-mode: the button path and the resume
 // path must share it. Two copies means the resume one drifts, and it is the
 // copy nobody clicks through by hand.
-const inAppRegion = wizardSrc.slice(wizardSrc.indexOf('const A = primary.inApp'), wizardSrc.indexOf("} else {\n        // claude, fallback"))
+// Region end = the manual-Terminal panel: the BYOK fallback sub-mode that
+// used to terminate this region is gone (2026-08-04, Mino "claude API Key는
+// 없애버리고").
+const inAppRegion = wizardSrc.slice(wizardSrc.indexOf('const A = primary.inApp'), wizardSrc.indexOf('const manualToggle'))
 assert(inAppRegion.length > 500, 'located the in-app sub-mode region')
 assert((inAppRegion.match(/setInterval/g) || []).length === 1,
   'the in-app sub-mode defines the poll interval exactly once')
@@ -211,6 +214,24 @@ if (resumeBlock) {
     assert(resumeBlock[0].includes(`'${st}'`), `the resume path treats "${st}" as in-flight`)
   }
   assert(/state === 'idle'/.test(resumeBlock[0]), 'the resume path still short-circuits on idle')
+}
+
+// The claude API-key (BYOK) sub-mode is REMOVED (2026-08-04, Mino "claude
+// API Key는 없애버리고"): no wizard path may submit provider:'claude' again.
+// The exact-string check does not false-positive on 'claude-subscription'
+// (the closing quote pins it). The connectors page's key-paste row is
+// likewise gone -- its replacement drives /api/setup-token/*, never
+// /api/byok/validate with provider 'claude'.
+assert(!wizardSrc.includes("state.provider = 'claude'\n") && !wizardSrc.includes("state.provider = 'claude' "),
+  'no wizard sub-mode submits provider:\'claude\' (BYOK removed 2026-08-04)')
+const connectorsSrc = fs.readFileSync(new URL('../onboarding/public/js/connectors.js', import.meta.url), 'utf8')
+assert(!/provider: 'claude'[,}]/.test(connectorsSrc), 'connectors page never validates provider:\'claude\' (BYOK row removed)')
+assert(/api\('\/api\/setup-token\/start'/.test(connectorsSrc), 'connectors claude row drives the setup-token capture (re-login)')
+const connResume = connectorsSrc.match(/api\('\/api\/setup-token\/status'\)\.then\(\(s\) => \{[\s\S]*?\}\)\.catch/)
+assert(Boolean(connResume) && /startSetupPoll\(\)/.test(connResume[0]),
+  'connectors claude row resumes an in-flight login poll on load (same rule as the wizard)')
+for (const st of ['running', 'awaiting_code', 'validating']) {
+  assert(connResume && connResume[0].includes(`'${st}'`), `connectors resume path treats "${st}" as in-flight`)
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

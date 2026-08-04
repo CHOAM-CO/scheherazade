@@ -273,52 +273,135 @@
     }
   }
 
-  // ── Claude BYOK key row (status + re-entry; the key itself is never
-  // rendered back) ─────────────────────────────────────────────────────────
-  function initClaudeKeyRow(available) {
-    $('conn-provider-claude-name').textContent = C.claudeKeyName
+  // ── Claude subscription re-login row (2026-08-04, Mino "connectors에서
+  // 클로드도 re-login 가능하게 해야겠는데?" + "claude API Key는 없애버리고")
+  // -- replaces the BYOK key-paste row. Same in-app `claude setup-token`
+  // capture the wizard runs (/api/setup-token/* -- the server session is a
+  // singleton, so wizard and this page can never race two children), with
+  // the same resume-on-load rule: a flow left in flight by another page
+  // restarts its poll here instead of sitting on a dead status line. ──────
+  const SETUP_POLL_MS = 2000
+  let setupPollTimer = null
+  function stopSetupPoll() {
+    if (setupPollTimer) { clearInterval(setupPollTimer); setupPollTimer = null }
+  }
+
+  function initClaudeSubRow(available) {
+    $('conn-provider-claude-name').textContent = C.claudeSubName
     const statusEl = $('conn-provider-claude-status')
-    statusEl.textContent = available.includes('claude') ? C.claudeKeyStored : C.claudeKeyMissing
+    const connected = available.includes('claude-subscription')
+    statusEl.textContent = connected ? C.providerConnected : C.providerNotConnected
     const btn = $('conn-provider-claude-btn')
-    btn.textContent = C.claudeKeyButton
-    btn.classList.remove('hidden')
+    const cancelBtn = $('conn-claude-cancel')
     const flow = $('conn-claude-flow')
-    $('conn-claude-key').placeholder = C.claudeKeyPlaceholder
-    $('conn-claude-save').textContent = C.claudeKeySave
-    btn.onclick = () => {
-      const opening = flow.classList.contains('hidden')
-      flow.classList.toggle('hidden', !opening)
-      btn.textContent = opening ? C.claudeKeyClose : C.claudeKeyButton
-    }
-    $('conn-claude-save').onclick = async () => {
-      const key = $('conn-claude-key').value.trim()
-      if (!key) return
-      const saveBtn = $('conn-claude-save')
-      const lineEl = $('conn-claude-status-line')
-      saveBtn.disabled = true
-      lineEl.textContent = C.claudeKeyValidating
-      try {
-        const result = await api('/api/byok/validate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ provider: 'claude', key }),
-        })
-        if (!result.ok) {
-          lineEl.textContent = GEN(result.reason || 'invalid key')
-          return
-        }
+    const lineEl = $('conn-claude-status-line')
+    const codeField = $('conn-claude-code-field')
+    const codeInput = $('conn-claude-code')
+    const codeBtn = $('conn-claude-code-btn')
+    btn.textContent = connected ? C.claudeSubRelogin : C.claudeSubLogin
+    cancelBtn.textContent = C.claudeSubCancel
+    $('conn-claude-code-hint').textContent = C.claudeSubCodePrompt
+    codeBtn.textContent = C.claudeSubCodeButton
+
+    function applyStatus(s) {
+      const st = s && s.state
+      if (st === 'running' || st === 'awaiting_code') {
+        flow.classList.remove('hidden')
+        lineEl.className = 'status-line pending'
+        lineEl.textContent = C.claudeSubWaiting
+        btn.disabled = true
+        cancelBtn.classList.remove('hidden')
+        // awaiting_code = the paste fallback is AVAILABLE, not required --
+        // on most machines the localhost redirect wins and this stays hidden.
+        if (st === 'awaiting_code') codeField.classList.remove('hidden')
+      } else if (st === 'validating') {
+        lineEl.className = 'status-line pending'
+        lineEl.textContent = C.claudeSubValidating
+        btn.disabled = true
+      } else if (st === 'connected') {
+        stopSetupPoll()
         lineEl.textContent = ''
-        statusEl.textContent = C.claudeKeyStored
-        showToast(C.claudeKeySaved)
         flow.classList.add('hidden')
-        btn.textContent = C.claudeKeyButton
-        $('conn-claude-key').value = ''
-      } catch (err) {
-        lineEl.textContent = GEN(err.message)
-      } finally {
-        saveBtn.disabled = false
+        codeField.classList.add('hidden')
+        cancelBtn.classList.add('hidden')
+        btn.disabled = false
+        btn.textContent = C.claudeSubRelogin
+        statusEl.textContent = C.providerConnected
+        showToast(C.claudeSubSuccess)
+      } else if (st === 'failed' || st === 'cancelled') {
+        stopSetupPoll()
+        lineEl.className = 'status-line failure'
+        lineEl.textContent = C.claudeSubFailure(s.reason)
+        codeField.classList.add('hidden')
+        cancelBtn.classList.add('hidden')
+        btn.disabled = false
       }
     }
+
+    function startSetupPoll() {
+      stopSetupPoll()
+      setupPollTimer = setInterval(async () => {
+        try { applyStatus(await api('/api/setup-token/status')) } catch (err) { /* transient: keep polling */ }
+      }, SETUP_POLL_MS)
+    }
+
+    btn.onclick = async () => {
+      btn.disabled = true
+      flow.classList.remove('hidden')
+      lineEl.className = 'status-line pending'
+      lineEl.textContent = C.claudeSubStarting
+      try {
+        applyStatus(await api('/api/setup-token/start', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+        }))
+      } catch (err) {
+        lineEl.className = 'status-line failure'
+        lineEl.textContent = GEN(err.message)
+        btn.disabled = false
+        return
+      }
+      startSetupPoll()
+    }
+
+    cancelBtn.onclick = async () => {
+      try {
+        applyStatus(await api('/api/setup-token/cancel', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+        }))
+      } catch (err) { stopSetupPoll() }
+    }
+
+    codeBtn.onclick = async () => {
+      const code = codeInput.value.trim()
+      if (!code) return
+      codeBtn.disabled = true
+      try {
+        const s = await api('/api/setup-token/code', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }),
+        })
+        if (s.ok === false && s.reason === 'invalid_code') {
+          lineEl.className = 'status-line failure'
+          lineEl.textContent = C.claudeSubCodeInvalid
+        } else {
+          codeInput.value = ''
+          applyStatus(s)
+        }
+      } catch (err) {
+        lineEl.className = 'status-line failure'
+        lineEl.textContent = GEN(err.message)
+      } finally {
+        codeBtn.disabled = false
+      }
+    }
+
+    // Resume: a login left running by the wizard (or a reload of this page)
+    // must restart its poll -- the server session outlives the page, the
+    // interval does not. Same rule the wizard pins in test-setup-token-copy.
+    api('/api/setup-token/status').then((s) => {
+      if (!s || s.state === 'idle') return
+      applyStatus(s)
+      if (s.state === 'running' || s.state === 'awaiting_code' || s.state === 'validating') startSetupPoll()
+    }).catch(() => {})
   }
 
   // ── claude.ai connector intercept (IA v0.0.9, 춘식3 design) ───────────────
@@ -427,7 +510,7 @@
 
     let cfg = {}
     try { cfg = await api('/api/config') } catch (err) { console.error(err) }
-    initClaudeKeyRow(Array.isArray(cfg.availableProviders) ? cfg.availableProviders : [])
+    initClaudeSubRow(Array.isArray(cfg.availableProviders) ? cfg.availableProviders : [])
     renderChatgptReceipt()
     renderMcpConnectors()
 

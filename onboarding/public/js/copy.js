@@ -1220,18 +1220,24 @@ window.COPY = {
     discordApplyOk: 'Move',
     discordApplying: 'Applying and restarting the agent…',
     discordApplied: (guild, channel) => `Connected: ${guild} / #${channel}`,
-    // AUTHORED -- Claude BYOK key management row (gap-close: post-onboarding
-    // key status/re-entry surface did not exist; the provider block above is
-    // login-capable providers only).
-    claudeKeyName: 'Claude API key',
-    claudeKeyStored: 'Key stored',
-    claudeKeyMissing: 'No key',
-    claudeKeyButton: 'Re-enter key',
-    claudeKeyClose: 'Close',
-    claudeKeyPlaceholder: 'sk-ant-...',
-    claudeKeySave: 'Verify and save',
-    claudeKeyValidating: 'Verifying the key…',
-    claudeKeySaved: 'Key verified and saved',
+    // AUTHORED -- Claude subscription re-login row (2026-08-04, Mino
+    // "connectors에서 클로드도 re-login 가능하게" + "claude API Key는
+    // 없애버리고" -- the claudeKey* BYOK block that lived here is gone with
+    // the API-key mode). Wording mirrors the wizard's setup-token panel;
+    // the failure line carries the server's verbatim reason, same
+    // no-paraphrase rule as the turn-error strip.
+    claudeSubName: 'Claude (web login)',
+    claudeSubLogin: 'Log in',
+    claudeSubRelogin: 'Re-login',
+    claudeSubCancel: 'Cancel',
+    claudeSubStarting: 'Starting the login…',
+    claudeSubWaiting: 'Finish the login in the browser window that opened…',
+    claudeSubValidating: 'Checking the login…',
+    claudeSubSuccess: 'Claude login refreshed',
+    claudeSubFailure: (reason) => `Login didn't complete: ${reason || 'unknown error'}`,
+    claudeSubCodePrompt: 'If the browser showed you a code instead of returning here, paste it:',
+    claudeSubCodeButton: 'Submit code',
+    claudeSubCodeInvalid: "That code didn't work — copy it again from the browser page.",
     // AUTHORED -- chatgpt live serving receipt ("셸은 현실" product form of
     // the 07-14 dropdown-vs-engine model mismatch catch). Shown only when the
     // proxy actually answers; no line when it doesn't run.
