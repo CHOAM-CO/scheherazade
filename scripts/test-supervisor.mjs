@@ -16,9 +16,6 @@ import { spawn, execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 import {
-  AUTO_ANSWER_PATTERNS,
-  AUTO_ANSWER_WINDOW_MS,
-  createAutoAnswerMatcher,
   backoffFor,
   kstDate,
   parseAgentConfig,
@@ -26,7 +23,6 @@ import {
   clearFailureMarker,
   isOurSupervisor,
   classifyPidfileOwner,
-  buildChildArgs,
   ensureNodeShim,
   transcriptDirFor,
   newestTranscript,
@@ -46,91 +42,56 @@ function ok(name, cond, detail = '') {
   else { fail++; console.log(`FAIL  ${name}${detail ? ` -- ${detail}` : ''}`) }
 }
 
-// ── 1. the auto-answer matcher ──────────────────────────────────────────────
-console.log('\n-- matcher: the 5 verbatim prompts (run.sh:338-345)')
+// ── 1+2. headless lane parity (design-0020) ────────────────────────────────
+// The old sections here pinned the expect-dialog matcher and its run.sh
+// twin. Both are GONE with the PTY. What replaces the mirror-contract: both
+// lanes must exec the SAME headless-lane.mjs with the SAME env contract, so
+// argv parity is by construction. These pins scream when one lane moves
+// alone.
+console.log('\n-- headless lane parity: both lanes exec headless-lane.mjs')
 {
-  for (const p of AUTO_ANSWER_PATTERNS) {
-    const sent = []
-    const m = createAutoAnswerMatcher({ send: (r) => sent.push(r), now: () => 0 })
-    m.feed(`noise before ${p.pattern} noise after`)
-    ok(`'${p.pattern}' fires exactly its response`, sent.length === 1 && sent[0] === p.response, JSON.stringify(sent))
+  const runSh = fs.readFileSync(path.join(ROOT, 'run.sh'), 'utf8')
+  const supSrc = fs.readFileSync(path.join(ROOT, 'supervisor.mjs'), 'utf8')
+  ok('run.sh spawns the lane under the timeout ceiling',
+    runSh.includes('"$NODE_BIN" "$SCRIPT_DIR/headless-lane.mjs"'))
+  ok('run.sh carries NO expect script anymore', !runSh.includes('/usr/bin/expect'))
+  ok('run.sh exports the env contract (AGENT_NAME MEM CLAUDE_BIN MODEL)',
+    runSh.includes('export AGENT_NAME MEM CLAUDE_BIN MODEL'))
+  ok('run.sh guards SYSTEM_PROMPT_FILE / MCP_CONFIG_FILE on existence',
+    runSh.includes('export SYSTEM_PROMPT_FILE="$MEM/system_prompt.md"') &&
+    runSh.includes('export MCP_CONFIG_FILE="$MEM/.mcp.json"'))
+  ok('supervisor spawns the SAME lane script on its own runtime',
+    supSrc.includes("new URL('./headless-lane.mjs', import.meta.url)") &&
+    supSrc.includes('cpSpawn(process.execPath, [HEADLESS_LANE_PATH]'))
+  for (const key of ['AGENT_NAME: cfg.agentName', 'MEM: cfg.mem', 'CLAUDE_BIN: cfg.claudeBin', 'MODEL: cfg.model']) {
+    ok(`supervisor child env carries ${key.split(':')[0]}`, supSrc.includes(key))
   }
-}
-{
-  // THE load-bearing quirk (run.sh:331-337, empirical 3/3 vs 2/2): the
-  // API-key answer must be bare "1" -- a CR would independently select the
-  // default "No" and corrupt the approval state.
-  const apiKey = AUTO_ANSWER_PATTERNS.find((p) => p.pattern.includes('API key'))
-  ok('API-key response contains NO carriage return', !apiKey.response.includes('\r'), JSON.stringify(apiKey.response))
-  ok('API-key response is exactly "1"', apiKey.response === '1')
-}
-{
-  const sent = []
-  const m = createAutoAnswerMatcher({ send: (r) => sent.push(r), now: () => 0 })
-  m.feed('tru')
-  m.feed('st')
-  ok('a pattern straddling two pty chunks still fires (buffer accumulates)', sent.length === 1 && sent[0] === '\r')
-}
-{
-  // The one-shot window (verdict 4): a stray "trust" in ordinary session
-  // output, arriving after the 25s window expired, must fire NOTHING -- and
-  // the closure is permanent.
-  let t = 0
-  const sent = []
-  const m = createAutoAnswerMatcher({ send: (r) => sent.push(r), now: () => t })
-  t = AUTO_ANSWER_WINDOW_MS + 1
-  m.feed('please trust this innocuous sentence')
-  ok('pattern arriving AFTER window expiry fires nothing', sent.length === 0, JSON.stringify(sent))
-  ok('matcher reports closed', m.closed === true)
-  t = AUTO_ANSWER_WINDOW_MS + 2
-  m.feed('trust again')
-  ok('closure is permanent (second feed also fires nothing)', sent.length === 0)
-}
-{
-  // A match RESETS the window (expect's exp_continue restarts its timeout).
-  let t = 0
-  const sent = []
-  const m = createAutoAnswerMatcher({ send: (r) => sent.push(r), now: () => t })
-  t = 20_000
-  m.feed('trust')
-  t = 44_000 // 24s after the match -- inside the reset window, 44s after open
-  m.feed('confirm')
-  ok('a match resets the 25s window (second prompt 24s later still fires)', sent.length === 2, JSON.stringify(sent))
-}
-{
-  // exp_continue: multiple prompts in one buffer all get answered, in
-  // stream-order via the discard-through-match rule.
-  const sent = []
-  const m = createAutoAnswerMatcher({ send: (r) => sent.push(r), now: () => 0 })
-  m.feed('trust ... then later Do you want to use this API key')
-  ok('two prompts in one chunk both fire (exp_continue loop)', sent.length === 2 && sent[0] === '\r' && sent[1] === '1', JSON.stringify(sent))
-}
-{
-  // Listed-order priority (expect picks the first LISTED pattern that
-  // matches, and discards the buffer through the END of that match --
-  // 'trust' listed before the API-key pattern swallows an earlier API-key
-  // prompt sitting before it in the same buffer). Replicated, not improved:
-  // in real streams these dialogs never co-occur, and diverging from expect
-  // here would be an untested semantic change.
-  const sent = []
-  const m = createAutoAnswerMatcher({ send: (r) => sent.push(r), now: () => 0 })
-  m.feed('Do you want to use this API key ... trust')
-  ok("listed-order priority: 'trust' (listed first) wins and its discard swallows the earlier prompt", sent.length === 1 && sent[0] === '\r', JSON.stringify(sent))
+  ok('supervisor passes SYSTEM_PROMPT_FILE / MCP_CONFIG_FILE guarded like run.sh',
+    supSrc.includes('SYSTEM_PROMPT_FILE: cfg.systemPromptFile') &&
+    supSrc.includes('MCP_CONFIG_FILE: cfg.mcpConfigFile'))
+  ok('node-pty is fully gone from the supervisor', !supSrc.includes("require_('node-pty')"))
+  // reaper parity: same two patterns on both lanes
+  ok('run.sh reaper patterns: lane script + --mcp-config leaf',
+    runSh.includes('PKILL_PATTERN="headless-lane.mjs"') &&
+    runSh.includes('PKILL_LEAF_PATTERN="--mcp-config ${MEM}/.mcp.json"'))
+  ok('supervisor reaper patterns mirror run.sh',
+    supSrc.includes("pkillPattern: 'headless-lane.mjs'") &&
+    supSrc.includes("pkillLeafPattern: `--mcp-config ${path.join(mem, '.mcp.json')}`"))
 }
 
-// ── 2. contract pin against run.sh (the source of the semantics) ───────────
-console.log('\n-- contract pin: port table == run.sh table')
+// ── 2b. the lane's claude argv (the ONE argv builder) ──────────────────────
+console.log('\n-- headless-lane buildArgs: the one claude argv')
 {
-  // A copy of a rule is not the rule: if someone edits run.sh's expect
-  // block, this section screams that the port's table diverged.
-  const runSh = fs.readFileSync(path.join(ROOT, 'run.sh'), 'utf8')
-  for (const p of AUTO_ANSWER_PATTERNS) {
-    ok(`run.sh still carries pattern '${p.pattern}'`, runSh.includes(`"${p.pattern}"`))
-  }
-  ok('run.sh still answers the API-key prompt with bare send "1" (no \\r)',
-    /-re "Do you want to use this API key" \{ send "1"; exp_continue \}/.test(runSh),
-    'the load-bearing no-CR quirk changed in run.sh -- re-verify and update the port')
-  ok('run.sh still opens a 25s window (set timeout 25)', runSh.includes('set timeout 25'))
+  const { buildArgs } = await import(path.join(ROOT, 'headless-lane.mjs'))
+  const base = buildArgs({ model: 'm1', systemPromptFile: null, mcpConfigFile: null, resumeId: null })
+  ok('base argv: -p stream-json both ways, verbose, model, skip-permissions',
+    base.join(' ') === '-p --input-format stream-json --output-format stream-json --verbose --model m1 --dangerously-skip-permissions',
+    base.join(' '))
+  ok('NO dev-channels flag anywhere (dead in -p, probe 5)', !base.includes('--dangerously-load-development-channels'))
+  const full = buildArgs({ model: 'm1', systemPromptFile: '/mem/system_prompt.md', mcpConfigFile: '/mem/.mcp.json', resumeId: 'sess-9' })
+  ok('prompt rides before strict mcp pair, resume last',
+    full.join(' ') === '-p --input-format stream-json --output-format stream-json --verbose --model m1 --dangerously-skip-permissions --append-system-prompt-file /mem/system_prompt.md --strict-mcp-config --mcp-config /mem/.mcp.json --resume sess-9',
+    full.join(' '))
 }
 
 // ── 3. backoff ladder (run.sh:394-400 verbatim) ─────────────────────────────
@@ -247,36 +208,6 @@ console.log('\n-- main.cjs seam: SUPERVISOR_LANE wiring stays welded')
   ok('supervisor.mjs ships (build.files)', pkg.build.files.includes('supervisor.mjs'))
   ok('supervisor.mjs is a REAL file on disk (asarUnpack) -- plain node cannot read inside app.asar',
     pkg.build.asarUnpack.includes('supervisor.mjs'))
-}
-
-// ── 7. child argv mirrors the expect spawn line ─────────────────────────────
-console.log('\n-- child argv (run.sh:319 order)')
-{
-  const base = { model: 'm1', agentName: 'a1', systemPromptFile: null, mcpConfigFile: null }
-  ok('without system prompt: --model m --name a --dangerously-skip-permissions --dangerously-load-development-channels server:agent-channel',
-    buildChildArgs(base).join(' ') === '--model m1 --name a1 --dangerously-skip-permissions --dangerously-load-development-channels server:agent-channel',
-    buildChildArgs(base).join(' '))
-  const withPrompt = { ...base, systemPromptFile: '/mem/system_prompt.md' }
-  ok('system prompt rides BEFORE the dangerously flags (extra_args position)',
-    buildChildArgs(withPrompt).join(' ') === '--model m1 --name a1 --append-system-prompt-file /mem/system_prompt.md --dangerously-skip-permissions --dangerously-load-development-channels server:agent-channel',
-    buildChildArgs(withPrompt).join(' '))
-  // Context-bleed fix (2026-07-28): strict MCP rides only when MEM/.mcp.json
-  // exists, after the system prompt, before the dangerously flags -- and its
-  // ABSENCE keeps today's argv byte-identical (the two pins above are that
-  // guarantee: a broken seed degrades to open-config behavior, never to an
-  // agent with no channel).
-  const withMcp = { ...withPrompt, mcpConfigFile: '/mem/.mcp.json' }
-  ok('strict mcp-config rides after prompt, before the dangerously flags',
-    buildChildArgs(withMcp).join(' ') === '--model m1 --name a1 --append-system-prompt-file /mem/system_prompt.md --strict-mcp-config --mcp-config /mem/.mcp.json --dangerously-skip-permissions --dangerously-load-development-channels server:agent-channel',
-    buildChildArgs(withMcp).join(' '))
-  ok("pkill discriminator '--name <agent>' is a contiguous substring of the argv",
-    buildChildArgs(withMcp).join(' ').includes('--name a1'))
-  // run.sh must carry the SAME pair in its expect extra_args branch -- the
-  // mirror is the contract, so break loudly when one side moves alone.
-  const runSh = fs.readFileSync(path.join(ROOT, 'run.sh'), 'utf8')
-  ok('run.sh expect line mirrors the strict pair (MCP_CONFIG_FILE branch)',
-    runSh.includes('lappend extra_args --strict-mcp-config --mcp-config $env(MCP_CONFIG_FILE)') &&
-    runSh.includes('export MCP_CONFIG_FILE="$MEM/.mcp.json"'))
 }
 
 // ── 8. runLoop ladder attacks: REAL loop, fake child + fake clock ───────────

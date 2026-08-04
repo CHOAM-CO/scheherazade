@@ -13,11 +13,11 @@
 // AFTER the port proves itself -- see docs/supervisor-design.md for the
 // full verdict rationale.
 //
-// Runtime: plain node OR Electron with ELECTRON_RUN_AS_NODE=1 -- node-pty
-// 1.1.0 is N-API and one prebuilt binding passed scripts/probe-pty.mjs under
-// both ABIs (receipts in docs/supervisor-design.md, Runtime/ABI). node-pty is
-// require()d LAZILY inside the production child spawner so `start`/`stop`
-// modes and unit tests never need a working native module.
+// Runtime: plain node OR Electron with ELECTRON_RUN_AS_NODE=1. node-pty is
+// GONE (design-0020): the child is headless-lane.mjs -> claude -p
+// stream-json over plain pipes, so no native module, no ABI question, no
+// PTY. (The old node-pty receipts live in docs/supervisor-design.md and
+// git history.)
 //
 // run.sh stays the production mac lane until this has run a full real
 // session on both platforms (design: "What run.sh keeps doing"). The seam in
@@ -34,66 +34,16 @@ const SELF_PATH = fileURLToPath(import.meta.url)
 const SCRIPT_DIR = path.dirname(SELF_PATH)
 const IS_WIN = process.platform === 'win32'
 
-// ── auto-answer table (run.sh:338-345, verbatim, case-sensitive) ────────────
-// expect tried these as -re patterns, but all five are literal-only regexes,
-// so plain substring match IS the same matcher. Order matters: expect picks
-// the FIRST LISTED pattern that matches the buffer (not the earliest match
-// position), and we replicate that.
-//
-// The API-key response is bare "1" with NO carriage return -- empirically
-// settled (run.sh:331-337): "1" is a hotkey that fires the confirm handler;
-// a trailing "\r" INDEPENDENTLY selects the default focus (No), so "1\r"
-// writes the key into approved AND rejected at once (corrupt state that
-// re-triggers the freeze). test-supervisor.mjs pins the no-CR fact.
-// (history: docs/HISTORY.md)
-export const AUTO_ANSWER_PATTERNS = [
-  { pattern: 'trust', response: '\r' },
-  { pattern: 'confirm', response: '\r' },
-  { pattern: 'local development', response: '\r' },
-  { pattern: 'text style', response: '\r' },
-  { pattern: 'Do you want to use this API key', response: '1' },
-]
-
-// 25s one-shot window (run.sh:320 `set timeout 25` + :344 `timeout {}`).
-// Design verdict 4: the window is an accidental safety feature -- a stray
-// "trust" in ordinary session output must never fire a CR into a live
-// session. expect's timeout counts from expect-start, resets ONLY on a match
-// (exp_continue), NOT on non-matching data arrival; when it fires, the
-// matcher is permanently done (falls through to `expect eof`). The lazy
-// close below (checked at feed time) is observably identical: the only
-// action a matcher ever takes is sending on a match, and any match attempted
-// after the window would have expired is refused.
-export const AUTO_ANSWER_WINDOW_MS = 25_000
-
-export function createAutoAnswerMatcher({ send, now = () => Date.now(), windowMs = AUTO_ANSWER_WINDOW_MS, patterns = AUTO_ANSWER_PATTERNS }) {
-  let buffer = ''
-  let lastMatchTs = now() // window opens at spawn, same as `set timeout 25`
-  let closed = false
-  const BUFFER_CAP = 4096 // longest pattern is ~35 chars; 4KB keeps straddles safe without unbounded growth
-
-  return {
-    get closed() { return closed },
-    feed(chunk) {
-      if (closed) return
-      if (now() - lastMatchTs > windowMs) { closed = true; buffer = ''; return }
-      buffer += chunk
-      if (buffer.length > BUFFER_CAP) buffer = buffer.slice(-BUFFER_CAP)
-      // exp_continue loop: keep answering as long as a pattern matches.
-      for (;;) {
-        let hit = null
-        for (const p of patterns) { // listed order = expect's priority order
-          const idx = buffer.indexOf(p.pattern)
-          if (idx !== -1) { hit = { ...p, idx }; break }
-        }
-        if (!hit) return
-        send(hit.response)
-        // expect discards the buffer through the end of the match.
-        buffer = buffer.slice(hit.idx + hit.pattern.length)
-        lastMatchTs = now() // a match resets the 25s window (exp_continue)
-      }
-    },
-  }
-}
+// ── auto-answer layer: REMOVED (design-0020, headless topology) ─────────────
+// The expect-parity dialog matcher (trust / confirm / local development /
+// text style / BYOK "1"-no-CR) answered TUI dialogs that `claude -p` never
+// renders. The whole class is gone with the PTY: the child is now
+// headless-lane.mjs -> claude -p stream-json, which has no dialogs to
+// answer. The BYOK first-approval behavior in -p mode is design-0020's open
+// verification item; if it needs handling, it belongs in the key-save flow,
+// not in a resurrected screen-scraper. (history: the full matcher and its
+// keystroke forensics live in git before this commit, and in
+// docs/HISTORY.md.)
 
 // ── backoff ladder (run.sh:394-400, verbatim) ───────────────────────────────
 export function backoffFor(restartCount) {
@@ -174,11 +124,15 @@ export function resolveConfig(env = process.env, scriptDir = SCRIPT_DIR) {
     logfile: path.join(mem, 'logs', 'agent.log'),
     stopflag: path.join(mem, '.stop_requested'),
     failfile: path.join(mem, '.agent-failed.json'),
-    // run.sh:95 -- stop-time PKILL_PATTERN rebuilt on STABLE discriminators
-    // only ("--name X" is a contiguous substring of the leaf argv regardless
-    // of MODEL, which is post-spawn-mutable). Here it only serves the orphan
-    // sweep; live kills go through the child handle.
-    pkillPattern: `--name ${agentName}`,
+    // Stop-time reaper patterns, lane parity with run.sh's
+    // PKILL_PATTERN/PKILL_LEAF_PATTERN (design-0020): the lane script path
+    // matches the `node headless-lane.mjs` process; the leaf pattern
+    // matches an orphaned `claude -p` child via its --mcp-config argv
+    // (stable per-agent path -- never key the reaper to post-spawn-mutable
+    // fields like MODEL, the 2026-07-03 lesson). Here they only serve the
+    // orphan sweep; live kills go through the child handle.
+    pkillPattern: 'headless-lane.mjs',
+    pkillLeafPattern: `--mcp-config ${path.join(mem, '.mcp.json')}`,
     sessionTimeoutSec: Number(merged.SESSION_TIMEOUT) > 0 ? Number(merged.SESSION_TIMEOUT) : 43200,
     // v0.0.15 stall watchdog window (seconds). 0 disables. Default 15 min
     // (see the stall/thrash watchdog block below for why).
@@ -206,18 +160,12 @@ export function resolveConfig(env = process.env, scriptDir = SCRIPT_DIR) {
   }
 }
 
-// Child argv, mirroring the expect spawn line ORDER exactly (run.sh:319):
-// --model M --name N [extra_args] --dangerously-skip-permissions
-// --dangerously-load-development-channels server:agent-channel
-// where extra_args = [--append-system-prompt-file F] [--strict-mcp-config
-// --mcp-config C], both existence-guarded, in that order on both sites.
-export function buildChildArgs(cfg) {
-  const args = ['--model', cfg.model, '--name', cfg.agentName]
-  if (cfg.systemPromptFile) args.push('--append-system-prompt-file', cfg.systemPromptFile)
-  if (cfg.mcpConfigFile) args.push('--strict-mcp-config', '--mcp-config', cfg.mcpConfigFile)
-  args.push('--dangerously-skip-permissions', '--dangerously-load-development-channels', 'server:agent-channel')
-  return args
-}
+// Child argv: OWNED BY headless-lane.mjs (buildArgs) since design-0020.
+// Both lanes (run.sh and this supervisor) now exec the SAME lane script and
+// pass the SAME env contract (AGENT_NAME / MEM / CLAUDE_BIN / MODEL /
+// SYSTEM_PROMPT_FILE? / MCP_CONFIG_FILE? / tuning knobs) -- argv parity is
+// by construction, not by mirrored code. test-supervisor.mjs pins the env
+// contract instead of an argv table.
 
 // ── node shim for the hook lane (v0.0.15 Root A fix) ────────────────────────
 // Claude Code hook commands (ours AND third-party plugins') start with bare
@@ -547,7 +495,7 @@ export function stallVerdict(tail, { userStallMs, syntheticStallMs } = {}) {
 }
 
 // The whole transcript-lane poll as ONE testable closure -- extracted from
-// spawnPtyChild so the era-guard arithmetic is unit-attackable instead of
+// the child spawner so the era-guard arithmetic is unit-attackable instead of
 // verified-by-inspection only (Melchior review focus, 07-15). Returns a
 // bounce-reason string or null; the caller owns the actual kill.
 // Era guard, two layers: file binding (newestTranscript eraStart, gate G1)
@@ -612,15 +560,21 @@ export function createBounceBudget({ ledger = [], budget = 3, windowMs = 6 * 360
   }
 }
 
-// ── production child spawner (replaces run_expect + the expect script) ──────
+// ── production child spawner (design-0020: spawns headless-lane.mjs) ────────
 // Returns { pid, kill, exited } where exited resolves { exitCode, signal }.
-// Session timeout (run.sh:97-109,255-279): ONE timer here replaces both the
+// The child is `<node> headless-lane.mjs` run on OUR OWN runtime
+// (process.execPath + ELECTRON_RUN_AS_NODE=1 -- same trick as the node
+// shim), which in turn owns `claude -p` stream-json. No node-pty, no TUI,
+// no auto-answer matcher: plain pipes.
+// Session timeout (run.sh:114-126): ONE timer here replaces both the
 // gtimeout lane and the manual watchdog subshell -- TERM the child, 10s
 // grace, KILL. A node process with a real handle needs neither of bash's
-// workarounds.
-function spawnPtyChild(cfg, { now = () => Date.now(), log, watchdogBounces = [] }) {
-  const require_ = createRequire(import.meta.url)
-  const pty = require_('node-pty') // lazy: only the __loop lane needs the native module
+// workarounds. The lane forwards TERM to claude and exits with its code,
+// so a timeout recycle is graceful and the next spawn resumes the session
+// (.headless-session.json).
+const HEADLESS_LANE_PATH = fileURLToPath(new URL('./headless-lane.mjs', import.meta.url))
+
+function spawnHeadlessChild(cfg, { now = () => Date.now(), log, watchdogBounces = [] }) {
   // Windows env can carry 'Path'/'path' case-variants; spreading process.env
   // and then setting 'PATH' would leave BOTH keys and the child's resolution
   // becomes nondeterministic -- the shim silently neutered on the exact boxes
@@ -630,28 +584,28 @@ function spawnPtyChild(cfg, { now = () => Date.now(), log, watchdogBounces = [] 
   for (const k of Object.keys(baseEnv)) {
     if (k !== 'PATH' && k.toUpperCase() === 'PATH') delete baseEnv[k]
   }
-  const child = pty.spawn(cfg.claudeBin, buildChildArgs(cfg), {
-    name: 'xterm-256color', // run.sh:313 set env(TERM)
-    cols: 200, rows: 50,    // run.sh:314 stty_init "rows 50 cols 200"
-    cwd: cfg.mem,           // run.sh:285 cd "$MEM"
+  const child = cpSpawn(process.execPath, [HEADLESS_LANE_PATH], {
+    cwd: cfg.mem, // run.sh run_loop `cd "$MEM"` parity
+    // stdin unused by the lane; stdout/stderr flow through to the
+    // supervisor's own stdout (-> logfile), replacing expect's log_user 1.
+    stdio: ['ignore', 'inherit', 'inherit'],
     env: {
       ...baseEnv,
+      ELECTRON_RUN_AS_NODE: '1', // no-op under plain node; makes Electron act as node
       // Hook-lane node shim (see ensureNodeShim): hooks inherit the CLI
       // child's env, so PATH is patched here and nowhere else.
       PATH: ensureNodeShim(cfg, { log }),
-      TERM: 'xterm-256color',
-      // run.sh:297 export AGENT_NAME MEM CLAUDE_BIN MODEL -- each its own
-      // env var (the Bug-3 spaced-path fix is structural here: argv is a
-      // real array, nothing is ever whitespace-joined).
+      // run.sh export parity -- each its own env var (the Bug-3 spaced-path
+      // fix is structural: argv is a real array, nothing whitespace-joined).
       AGENT_NAME: cfg.agentName,
       MEM: cfg.mem,
       CLAUDE_BIN: cfg.claudeBin,
       MODEL: cfg.model,
+      ...(cfg.systemPromptFile ? { SYSTEM_PROMPT_FILE: cfg.systemPromptFile } : {}),
+      ...(cfg.mcpConfigFile ? { MCP_CONFIG_FILE: cfg.mcpConfigFile } : {}),
       ...cfg.childEnvExtra,
     },
   })
-
-  const matcher = createAutoAnswerMatcher({ send: (r) => child.write(r), now })
   // A LIST, not one slot. Two independent paths arm a 10s SIGKILL grace timer
   // (session timeout and the watchdog bounce). With a single variable the
   // second arm orphaned the first: onExit cleared only the surviving handle,
@@ -727,15 +681,21 @@ function spawnPtyChild(cfg, { now = () => Date.now(), log, watchdogBounces = [] 
   }
 
   const exited = new Promise((resolve) => {
-    child.onData((d) => {
-      process.stdout.write(d) // expect log_user 1: child output -> supervisor stdout -> logfile
-      matcher.feed(d)
-    })
-    child.onExit(({ exitCode, signal }) => {
+    // stdout/stderr are stdio-inherited straight to the supervisor's own
+    // streams (expect's log_user 1 equivalent) -- no data handler, no
+    // matcher: there is no TUI to scrape or answer anymore.
+    child.on('exit', (exitCode, signal) => {
       clearTimeout(sessionTimer)
       for (const t of graceTimers) clearTimeout(t)
       if (stallTimer) clearInterval(stallTimer)
-      resolve({ exitCode, signal })
+      resolve({ exitCode: exitCode == null ? -1 : exitCode, signal })
+    })
+    child.on('error', (err) => {
+      log(`lane spawn failed: ${err.message}`)
+      clearTimeout(sessionTimer)
+      for (const t of graceTimers) clearTimeout(t)
+      if (stallTimer) clearInterval(stallTimer)
+      resolve({ exitCode: 127, signal: null })
     })
   })
 
@@ -751,11 +711,17 @@ export async function runLoop(cfg, deps = {}) {
   const log = deps.log || makeLog(now)
   const sleep = deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)))
   // One watchdog-bounce ledger for the SUPERVISOR's lifetime, shared across
-  // respawns -- the budget (see bounce() in spawnPtyChild) is meaningless if
-  // every fresh child starts with a clean slate.
+  // respawns -- the budget (see bounce() in spawnHeadlessChild) is meaningless
+  // if every fresh child starts with a clean slate.
   const watchdogBounces = []
-  const spawnChild = deps.spawnChild || ((c) => spawnPtyChild(c, { now, log, watchdogBounces }))
-  const sweepOrphans = deps.sweepOrphans || (() => sweepOrphansDefault(cfg.pkillPattern, log))
+  const spawnChild = deps.spawnChild || ((c) => spawnHeadlessChild(c, { now, log, watchdogBounces }))
+  const sweepOrphans = deps.sweepOrphans || (() => {
+    sweepOrphansDefault(cfg.pkillPattern, log)
+    // Second pattern (design-0020): an orphaned `claude -p` leaf whose lane
+    // died by SIGKILL before it could TERM its child. Lane parity with
+    // run.sh's PKILL_LEAF_PATTERN sweep.
+    if (cfg.pkillLeafPattern) sweepOrphansDefault(cfg.pkillLeafPattern, log)
+  })
   const installSignalHandler = deps.installSignalHandler || ((h) => {
     for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => h(sig))
   })

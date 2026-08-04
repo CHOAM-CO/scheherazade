@@ -1,10 +1,12 @@
 #!/bin/bash
 # run.sh — launches {AGENT_NAME} headless: nohup + auto-restart with
-# exponential backoff, expect-driven trust-prompt handling, KST-aware
-# backoff reset. `./run.sh stop` shuts it down.
+# exponential backoff, KST-aware backoff reset. `./run.sh stop` shuts it
+# down. Since design-0020 the leaf is `node headless-lane.mjs` (claude -p
+# stream-json) -- no expect, no PTY, no TUI dialog handling.
 #
 # Reference: MAGI's doze-portable/launcher.sh and run-doze-isolated.sh for
-# the restart-loop/expect shape. Backoff numbers here (5/10/20/40/120) are
+# the restart-loop shape (its expect layer is gone since design-0020).
+# Backoff numbers here (5/10/20/40/120) are
 # a simpler ladder than MAGI's production values (3/30/120/300/600) --
 # deliberate simplification for a single lightweight agent, not a copy
 # error. --dangerously-skip-permissions IS used here (REVERSAL, Mino
@@ -49,6 +51,7 @@ AGENT_NAME="${AGENT_NAME:?AGENT_NAME missing from config/env}"
 MEM="${AGENT_DATA_HOME:-$HOME/Documents/$AGENT_NAME}"
 MODEL="${MODEL:-claude-opus-4-6}"
 CLAUDE_BIN="${CLAUDE_BIN:-claude}"
+NODE_BIN="${NODE_BIN:-node}"
 
 # Claude Code tuning knobs carried over from the source launchers -- all
 # overridable via env, all optional (Claude Code defaults these itself if
@@ -71,12 +74,12 @@ FAILFILE="$MEM/.agent-failed.json"
 # killAgentSupervisor() spawns `run.sh stop` with a FRESHLY-read config --
 # if MODEL changed (e.g. a settings edit) after the supervisor/leaf was
 # spawned, the pattern built here at stop-time embeds the NEW model while
-# the live claude leaf's actual argv (from the expect spawn line below)
+# the live claude leaf's actual argv (from the old expect spawn line)
 # still has the OLD `--model` value baked in, so `pkill -f "$PKILL_PATTERN"`
 # silently misses it -- orphaning the Discord-connected CLI on quit/fatal.
 # This matters because it's the FALLBACK reaper for exactly that case: the
 # direct group-SIGTERM path is already known-insufficient here (timeout(1)
-# puts expect/claude in their own process group, see run_expect() below),
+# puts the lane/claude in their own process group, see run_headless() below),
 # so pkill is the only mechanism actually reaching the leaf.
 # Rebuilt on STABLE discriminators only: AGENT_NAME is product-fixed
 # (onboarding/http-server.cjs's AGENT_NAME, or setup.sh's one-time prompt)
@@ -84,21 +87,35 @@ FAILFILE="$MEM/.agent-failed.json"
 # post-spawn-mutable field of the three, so it's the only one dropped.
 # CLAUDE_BIN can't be re-joined onto "--name ${AGENT_NAME}" as a literal
 # substring either: the actual argv is
-# "$CLAUDE_BIN --model $MODEL --name $AGENT_NAME" (see the expect spawn
-# line below), so anything bridging across the now-variable --model
+# "$CLAUDE_BIN --model $MODEL --name $AGENT_NAME" (the old expect spawn
+# line), so anything bridging across the now-variable --model
 # segment would have to be a regex wildcard, not a literal join -- more
 # fragile than just anchoring on the tail. "--name ${AGENT_NAME}" alone is
 # a CONTIGUOUS substring of that argv regardless of MODEL's value, so it
 # always matches the live leaf, and AGENT_NAME is specific enough (a
 # product-fixed or one-time-chosen identifier, not a generic flag value)
 # not to over-match unrelated processes on the same machine.
-PKILL_PATTERN="--name ${AGENT_NAME}"
+# headless-topology (design-0020): the leaf is now `node headless-lane.mjs`
+# with a `claude -p ...` child. Two patterns because there are two processes
+# to reap when the group kill fails:
+#   - the lane: its argv always contains the script path (stable within an
+#     install; two INSTALLS on one machine would cross-match, accepted --
+#     the product is one agent per machine, and the old "--name" pattern
+#     had the same property via a shared AGENT_NAME default)
+#   - an orphaned claude leaf (lane SIGKILLed before it could TERM its
+#     child): its argv carries "--mcp-config $MEM/.mcp.json" once onboarding
+#     has seeded that file -- $MEM embeds AGENT_NAME, so this is per-agent
+#     specific AND model-agnostic (the 2026-07-03 lesson: never key the
+#     reaper to post-spawn-mutable fields like MODEL). Pre-onboarding there
+#     is no channel to orphan, so the gap before .mcp.json exists is moot.
+PKILL_PATTERN="headless-lane.mjs"
+PKILL_LEAF_PATTERN="--mcp-config ${MEM}/.mcp.json"
 
-# Session timeout: forces the expect-wrapped claude process to exit after
+# Session timeout: forces the lane-wrapped claude process to exit after
 # SESSION_TIMEOUT seconds (default 12h) even if the stream is stuck but
 # alive -- the restart loop below then picks it back up. Prefers real
 # timeout(1)/gtimeout(1) (homebrew coreutils); stock macOS ships neither by
-# default, so run_expect() falls back to a manual sleep+kill watchdog.
+# default, so run_headless() falls back to a manual sleep+kill watchdog.
 SESSION_TIMEOUT="${SESSION_TIMEOUT:-43200}"
 if command -v timeout >/dev/null 2>&1; then
   TIMEOUT_BIN="timeout"
@@ -235,29 +252,26 @@ clear_failure() {
   rm -f "$FAILFILE" 2>/dev/null || true
 }
 
-run_expect() {
-  # Runs the expect script at path $1 under the SESSION_TIMEOUT ceiling.
-  # Prefers real timeout(1)/gtimeout(1): it puts its child in its own
-  # process group and signals the whole group on timeout, so expect and
-  # whatever it spawned both go down together. Plain `cmd &` in bash does
-  # NOT get a new process group (verified empirically), so the fallback
-  # below can't safely do a group-wide kill -- that would risk hitting the
-  # supervisor loop itself. Instead it kills known descendants by PID
-  # (pkill -P), and does so *before* killing each parent, since a dead
-  # parent's children are reparented to init almost immediately -- too
-  # fast to reliably find by ppid afterward.
-  #
-  # It also reads the script from a file rather than stdin, because a
-  # plain `expect -f - <<EOF ... &` would have its heredoc stdin silently
-  # replaced with /dev/null the instant it's backgrounded (POSIX rule for
-  # asynchronous lists without an explicit redirect of their own).
-  local script="$1"
+run_headless() {
+  # headless-topology (design-0020): runs `node headless-lane.mjs` (which
+  # spawns and owns `claude -p` stream-json) under the SESSION_TIMEOUT
+  # ceiling. The timeout(1) group-signal and manual-watchdog notes from the
+  # old run_expect() carry over unchanged: timeout puts the lane in its own
+  # process group and signals the whole group; the fallback kills known
+  # descendants by PID before each parent. The lane itself forwards TERM to
+  # its claude child and exits with the child's code, so a session-timeout
+  # recycle is a GRACEFUL handoff -- the next loop iteration resumes the
+  # same conversation via .headless-session.json / --resume.
+  # NODE_BIN: hooks already depend on PATH-node (`node .../hooks/*.mjs` in
+  # settings.local.json), so the lane introduces no new runtime dependency;
+  # supervisor.mjs's node-shim covers the PATH-less-node case on the node
+  # lane, and this bash lane keeps the same PATH assumption it always had.
   if [ -n "$TIMEOUT_BIN" ]; then
-    "$TIMEOUT_BIN" --kill-after=10 --signal=TERM "$SESSION_TIMEOUT" /usr/bin/expect -f "$script"
+    "$TIMEOUT_BIN" --kill-after=10 --signal=TERM "$SESSION_TIMEOUT" "$NODE_BIN" "$SCRIPT_DIR/headless-lane.mjs"
     return $?
   fi
 
-  /usr/bin/expect -f "$script" &
+  "$NODE_BIN" "$SCRIPT_DIR/headless-lane.mjs" &
   local cmd_pid=$!
   (
     sleep "$SESSION_TIMEOUT"
@@ -286,14 +300,11 @@ run_loop() {
   # Bug 3 fix (agent-lifecycle, 2026-07-03, cross-model adversarial
   # review, EMPIRICALLY REPRODUCED): CLAUDE_CMD used to flatten
   # CLAUDE_BIN/MODEL/AGENT_NAME into ONE whitespace-joined string, and the
-  # expect script below Tcl-split it on whitespace via
-  # `{*}$env(CLAUDE_CMD)` -- a bundled CLI installed under any spaced path
-  # (Google Drive, an external volume, "My Apps") splits mid-path, expect's
-  # `spawn` gets a garbage argv[0], and the agent dies in a permanent
-  # restart loop. Export CLAUDE_BIN/MODEL as their OWN env vars (AGENT_NAME
-  # already was) so each stays exactly one Tcl word regardless of embedded
-  # spaces; the spawn line below now references them individually instead
-  # of splitting a flattened string.
+  # old expect script Tcl-split it on whitespace -- a bundled CLI under a
+  # spaced path split mid-path and the agent died in a permanent restart
+  # loop. The Tcl layer is gone, but the lesson stays: CLAUDE_BIN/MODEL
+  # ride as their OWN env vars (headless-lane.mjs reads them individually,
+  # never a flattened command string), so spaced paths stay intact.
   export AGENT_NAME MEM CLAUDE_BIN MODEL
   # Custom personality prompt (2026-07-08): rides ABOVE the Claude Code
   # default system prompt via --append-system-prompt-file. Rendered by
@@ -321,50 +332,13 @@ run_loop() {
     export MCP_CONFIG_FILE="$MEM/.mcp.json"
   fi
 
-  EXPECT_SCRIPT="$(mktemp "${TMPDIR:-/tmp}/agent-portable-expect.XXXXXX")"
-  trap 'rm -f "$EXPECT_SCRIPT"' EXIT
-  cat > "$EXPECT_SCRIPT" <<'EXPECT_EOF'
-    log_user 1
-    set env(TERM) xterm-256color
-    set stty_init "rows 50 cols 200"
-    set extra_args {}
-    if {[info exists env(SYSTEM_PROMPT_FILE)]} {
-      lappend extra_args --append-system-prompt-file $env(SYSTEM_PROMPT_FILE)
-    }
-    if {[info exists env(MCP_CONFIG_FILE)]} {
-      lappend extra_args --strict-mcp-config --mcp-config $env(MCP_CONFIG_FILE)
-    }
-    spawn -noecho $env(CLAUDE_BIN) --model $env(MODEL) --name $env(AGENT_NAME) {*}$extra_args --dangerously-skip-permissions --dangerously-load-development-channels server:agent-channel
-    set timeout 25
-    # 2026-07-05 freeze fix (comment kept OUTSIDE expect{} on purpose: a #
-    # inside an expect body is parsed as a pattern, not a comment). The BYOK
-    # "Do you want to use this API key?" dialog fires whenever
-    # ANTHROPIC_API_KEY is a never-before-approved key (every first launch)
-    # and is NOT suppressed by --dangerously-skip-permissions (empirically
-    # confirmed vs claude-code 2.1.199 -- that flag gates a separate dialog).
-    # The old `-re "Yes, use this"` pattern matched NO string in the binary,
-    # so this dialog sat until the 25s timeout, then defaulted to "No" ->
-    # key rejected -> agent dead. Real dialog is
-    # "Do you want to use this API key? 1. Yes  2. No (recommended)".
-    # KEYSTROKE: send bare "1" with NO trailing \r. Empirically settled
-    # (oracle, 2026-07-05, deterministic re-runs): "1" is a hotkey that fires
-    # the confirm handler -> approved. A trailing "\r" INDEPENDENTLY selects
-    # the default focus (No) -> rejected, so "1\r" fires BOTH handlers and
-    # writes the key into approved AND rejected at once (corrupt state that
-    # re-triggers the freeze). "1" alone lands cleanly in approved (3/3);
-    # "1\r" lands in both (2/2). So: send "1", not "1\r".
-    expect {
-      -re "trust"             { send "\r"; exp_continue }
-      -re "confirm"           { send "\r"; exp_continue }
-      -re "local development" { send "\r"; exp_continue }
-      -re "text style"        { send "\r"; exp_continue }
-      -re "Do you want to use this API key" { send "1"; exp_continue }
-      timeout {}
-    }
-    trap exit {SIGTERM SIGINT}
-    set timeout -1
-    expect eof
-EXPECT_EOF
+  # headless-topology (design-0020): the expect script that used to live
+  # here (trust/theme/dev-channels/BYOK dialog answering, 2026-07-05 "1" vs
+  # "1\r" keystroke forensics and all) is GONE -- `claude -p` renders no TUI
+  # dialogs to answer (probe 1). The BYOK first-approval behavior in -p mode
+  # is an open verification item (design-0020 §open-questions); if headless
+  # rejects a never-approved key outright, the fix belongs in the key-save
+  # flow, not in resurrecting a dialog-answering layer.
 
   RESTART_COUNT=0
   SPAWN_SEQ=0
@@ -389,6 +363,7 @@ EXPECT_EOF
     fi
 
     pkill -f -- "$PKILL_PATTERN" 2>/dev/null || true
+    pkill -f -- "$PKILL_LEAF_PATTERN" 2>/dev/null || true
 
     # Boot-event marker (v0.0.16): channel.mjs's announceBoot() reads this
     # after Discord login to post the deterministic "재기동" line + inject
@@ -409,7 +384,7 @@ EXPECT_EOF
     STARTED="$(date +%s)"
 
     set +e
-    run_expect "$EXPECT_SCRIPT"
+    run_headless
     EXIT_CODE=$?
     set -e
 
@@ -489,6 +464,7 @@ stop_agent() {
   echo "stopping ${AGENT_NAME} (pid ${PID})..."
   touch "$STOPFLAG"
   pkill -f -- "$PKILL_PATTERN" 2>/dev/null || true
+  pkill -f -- "$PKILL_LEAF_PATTERN" 2>/dev/null || true
 
   for _ in $(seq 1 15); do
     is_alive "$PID" || { echo "stopped"; rm -f "$STOPFLAG"; exit 0; }
@@ -509,6 +485,7 @@ stop_agent() {
     echo "pid ${PID} no longer identifies as ${AGENT_NAME} supervisor (exited and recycled?) -- skipping force-kill of an unconfirmed pid"
   fi
   pkill -f -- "$PKILL_PATTERN" 2>/dev/null || true
+  pkill -f -- "$PKILL_LEAF_PATTERN" 2>/dev/null || true
   rm -f "$PIDFILE" "$STOPFLAG"
 }
 

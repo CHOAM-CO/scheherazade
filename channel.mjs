@@ -25,6 +25,7 @@ import {
   installStdoutHygiene, resolveDataHome, atomicWriteJson, localISO, localNow,
   readAgentConfig, createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer,
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
+  createInboundNotifier,
 } from './channel-runtime.mjs'
 
 // autonomy/*.cjs are CommonJS on purpose: onboarding/http-server.cjs has to
@@ -274,6 +275,16 @@ const ReadHistoryArgs = z.object({
   before: z.string().optional(),
 })
 
+// design-0020 (headless topology): ONE inbound seam. Ingest-POST to
+// headless-lane when its endpoint file exists (the -p lane, where the MCP
+// notification below is a black hole -- probe 5); MCP dev-channels
+// notification otherwise (attach topology, interactive claude).
+const notifyInbound = createInboundNotifier({
+  dataHome: DATA_HOME,
+  mcpNotify: (params) => mcp.notification({ method: 'notifications/claude/channel', params }),
+  log,
+})
+
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
 
 mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
@@ -380,13 +391,10 @@ discord.once(Events.ClientReady, (c) => {
   try {
     startRoutineTicker({
       store: routineStore,
-      fire: (r) => mcp.notification({
-        method: 'notifications/claude/channel',
-        params: {
+      fire: (r) => notifyInbound({
           content: routineInjectContent(r),
           meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() },
-        },
-      }),
+        }),
       log,
     })
   } catch (err) {
@@ -434,9 +442,7 @@ function startShutdownRequestWatcher() {
     if (Date.now() - st.mtimeMs > SHUTDOWN_REQUEST_MAX_AGE_MS) return // stale leftover, main.cjs will clean it
     shutdownForwardInFlight = true
     try {
-      await mcp.notification({
-        method: 'notifications/claude/channel',
-        params: {
+      await notifyInbound({
           content:
             '[SYSTEM] 종료 감지됨 -- 사용자가 앱을 종료하는 중이다. 지금 바로: ' +
             '(1) checkpoint.md와 오늘 세션노트를 최신 상태로 덮어써 (다음 부팅의 네가 여기서 이어받는다), ' +
@@ -447,8 +453,7 @@ function startShutdownRequestWatcher() {
             `(4) 끝나면 Bash로 \`touch "${SHUTDOWN_ACK_PATH}"\` 실행. ` +
             '디스코드에 답장하지 마, 파일 작업만 하고 끝내. 최대 60초 안에 마무리해라, 그 뒤엔 앱이 그냥 종료된다.',
           meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() },
-        },
-      })
+        })
       // Dedup marker advances ONLY on successful delivery -- advancing it
       // before the send turned one transient notification failure into
       // "never retried, agent never told, 75s timeout kills anyway"
@@ -547,13 +552,10 @@ function startAutonomyWatcher() {
       if (persistFirst) await writeAutonomyState(decision.nextState)
 
       try {
-        await mcp.notification({
-          method: 'notifications/claude/channel',
-          params: {
+        await notifyInbound({
             content,
             meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() },
-          },
-        })
+          })
       } catch (err) {
         if (persistFirst) {
           // The night was recorded but the agent was never told. Leave the record
@@ -590,7 +592,7 @@ const announceBoot = createBootAnnouncer({
   fetchTarget: fetchTextChannel,
   idOf: (ch) => ch.id,
   sendText: (ch, text) => ch.send({ content: text, allowedMentions: SAFE_MENTIONS }),
-  notify: (params) => mcp.notification({ method: 'notifications/claude/channel', params }),
+  notify: notifyInbound,
   log,
   noun: 'channel',
 })
@@ -630,13 +632,10 @@ function startNoteCadenceWatcher() {
         noteDate,
       })
       if (plan.skip) return
-      await mcp.notification({
-        method: 'notifications/claude/channel',
-        params: {
+      await notifyInbound({
           content: plan.content,
           meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() },
-        },
-      })
+        })
       // Advance ONLY on successful delivery (shutdown-watcher lesson: a
       // marker advanced before the send turns one transient failure into
       // "never retried").
@@ -712,13 +711,10 @@ discord.on(Events.MessageCreate, async (message) => {
 
     const sender = message.member?.displayName || message.author.username
 
-    await mcp.notification({
-      method: 'notifications/claude/channel',
-      params: {
+    await notifyInbound({
         content,
         meta: { sender, channelId: message.channelId, authorId: message.author.id, timestamp: localNow() },
-      },
-    })
+      })
   } catch (err) {
     log('MessageCreate handler error:', err.message)
   }
