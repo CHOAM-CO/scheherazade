@@ -541,7 +541,9 @@
     // production, every pre-swap probe passed). The mute-strike ledger will
     // convict it on real behaviour if it misbehaves; until someone actually
     // drives it, the label is the honest state.
-    { id: 'deepseek-v4-flash:0731-cloud', label: 'DeepSeek V4 Flash (0731, untested here)', group: 'Ollama', providers: ['ollama'] },
+    // "untested here" dropped 2026-08-04: Mino ran a live session on v0.0.40
+    // and it attaches clean ("딥시크 확인 완료, 잘 붙는다", 11:46).
+    { id: 'deepseek-v4-flash:0731-cloud', label: 'DeepSeek V4 Flash (0731)', group: 'Ollama', providers: ['ollama'] },
     // glm-5.2 tool-use verified live by Mino (2026-07-13 19:32, same ollama
     // lane as kimi: "glm5.2 << 문제 전혀없음") -- label cleared same day it
     // was added. sonnet-5 / opus-4.8 verified in the same test round.
