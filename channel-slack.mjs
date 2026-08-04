@@ -32,6 +32,7 @@ import {
   installStdoutHygiene, resolveDataHome, localISO, localNow,
   createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer,
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
+  createInboundNotifier,
 } from './channel-runtime.mjs'
 
 // ── stdout hygiene (channel-runtime) ───────────────────────────────────────
@@ -314,6 +315,16 @@ async function readHistory({ channelId, limit, after, before }, opts = {}) {
   return { channelId, count: result.length, messages: result }
 }
 
+// design-0020 (headless topology): ONE inbound seam. Ingest-POST to
+// headless-lane when its endpoint file exists (the -p lane, where the MCP
+// notification below is a black hole -- probe 5); MCP dev-channels
+// notification otherwise (attach topology, interactive claude).
+const notifyInbound = createInboundNotifier({
+  dataHome: DATA_HOME,
+  mcpNotify: (params) => mcp.notification({ method: 'notifications/claude/channel', params }),
+  log,
+})
+
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
 
 mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
@@ -366,7 +377,7 @@ function isIgnorableSubtype(event) {
 // authorId/timestamp) since that tag format is a property of the MCP client,
 // not of Discord or Slack.
 async function handleInboundMessage(event, opts = {}) {
-  const notify = opts.notify || ((params) => mcp.notification({ method: 'notifications/claude/channel', params }))
+  const notify = opts.notify || (notifyInbound)
   const resolveSender = opts.resolveSender || resolveSenderName
 
   if (isBotEvent(event) || isIgnorableSubtype(event)) return { skipped: true, reason: 'bot_or_subtype' }
@@ -397,7 +408,16 @@ socketModeClient.on('message', async ({ event, ack }) => {
   try {
     await handleInboundMessage(event)
   } catch (err) {
-    log('message handler error:', err.message)
+    // We ack BEFORE handling (Slack punishes slow acks with redelivery
+    // storms), so a failure here means Slack will never redeliver and the
+    // message is GONE for the agent (red-team 2026-08-04 #1). Post a
+    // visible failure receipt so the sender knows to re-send -- best-effort.
+    log('message handler error, inbound message lost for the agent:', err.message)
+    if (event?.channel) {
+      slackWeb.chat
+        .postMessage({ channel: event.channel, text: '메시지 전달에 실패했어요 (에이전트 재시작 중일 수 있어요). 잠시 후 다시 보내주세요.' })
+        .catch((e) => log('failure receipt post failed:', e.message))
+    }
   }
 })
 
@@ -432,13 +452,10 @@ function startRoutineTickerOnce() {
   try {
     startRoutineTicker({
       store: routineStore,
-      fire: (r) => mcp.notification({
-        method: 'notifications/claude/channel',
-        params: {
+      fire: (r) => notifyInbound({
           content: routineInjectContent(r),
           meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() },
-        },
-      }),
+        }),
       log,
     })
   } catch (err) {
@@ -490,7 +507,7 @@ const announceBoot = createBootAnnouncer({
   fetchTarget: fetchSlackChannelId,
   idOf: (channelId) => channelId,
   sendText: (channelId, text) => slackWeb.chat.postMessage({ channel: channelId, text }),
-  notify: (params) => mcp.notification({ method: 'notifications/claude/channel', params }),
+  notify: notifyInbound,
   log,
   noun: 'channel',
 })

@@ -471,3 +471,75 @@ export function routineInjectContent(r) {
   const late = r.lateMinutes > 5 ? ` (예정보다 ${r.lateMinutes}분 늦게 발화 -- 앱이 꺼져 있었다. 내용이 시효를 넘겼으면 그렇게 말하고 조정해라)` : ''
   return `[routine ${r.id}] 사용자가 등록한 루틴 시간이다${late}. 지시: ${r.prompt}`
 }
+
+// ── inbound notifier (design-0020, headless topology) ──────────────────────
+// One seam for how a backend delivers an inbound message to the agent.
+// Two lanes exist because two topologies exist:
+//
+//   headless (spawn, the default): headless-lane.mjs owns claude -p's stdin
+//     and serves a loopback ingest endpoint; its {port, token} live in
+//     DATA_HOME/.ingest-endpoint.json (0600, rewritten every lane boot).
+//     The MCP notification is DEAD in -p mode (design-0020 probe 5), so
+//     when that file exists and answers, POST /inbound is the only lane
+//     that actually reaches the model.
+//
+//   attach (external tmux, interactive claude): no lane process, no
+//     endpoint file -- the dev-channels MCP notification still works there
+//     and remains the fallback.
+//
+// Resolution order per CALL, not per boot: the endpoint file is re-read
+// every time (cheap: one small read) so a backend that outlives an agent
+// recycle follows the lane's NEW port/token without a restart. If the file
+// exists but the POST fails (dead port after a crash, mid-restart window),
+// this THROWS after attempting the MCP fallback -- backends already treat a
+// failed notify as "retry on next poll" (channel.mjs / telegram pollOnce),
+// which is exactly the right behavior while the lane respawns.
+export function createInboundNotifier({ dataHome, mcpNotify, log = console.log, fetchFn = fetch }) {
+  const endpointPath = path.join(dataHome, '.ingest-endpoint.json')
+
+  async function postToLane(params) {
+    let ep
+    try {
+      ep = JSON.parse(await fs.readFile(endpointPath, 'utf8'))
+    } catch {
+      return false // no endpoint file -> not the headless topology (or lane not up yet)
+    }
+    if (!ep || !ep.port || !ep.token) return false
+    // Liveness gate (red-team 2026-08-04 #2 / UX F5): the lane unlinks this
+    // file on exit, but SIGKILL / power loss skips that handler and the stale
+    // file would poison the ATTACH topology forever (POST fails -> throw ->
+    // no MCP fallback -> every message "fails" even though the interactive
+    // session would receive the notification fine). The endpoint file carries
+    // the lane's pid; if that pid is gone, treat the file as absent and take
+    // the MCP-fallback branch. A LIVE-but-hiccuping lane still throws below,
+    // which is the correct no-black-hole behavior for headless.
+    if (ep.pid) {
+      try { process.kill(ep.pid, 0) } catch { return false }
+    }
+    const res = await fetchFn(`http://127.0.0.1:${ep.port}/inbound`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-ingest-token': ep.token },
+      body: JSON.stringify(params),
+    })
+    if (!res.ok) throw new Error(`ingest POST failed: HTTP ${res.status}`)
+    return true
+  }
+
+  return async function notifyInbound(params) {
+    try {
+      if (await postToLane(params)) return
+    } catch (err) {
+      // Endpoint file existed AND its pid is alive, but the POST failed:
+      // headless topology mid-hiccup. Do NOT silently fall back to the MCP
+      // notification -- in -p mode it is a black hole that would swallow the
+      // message while looking delivered. Throw so the CALLER decides what
+      // failure looks like. NOTE the retry reality per backend: telegram
+      // genuinely redelivers (offset not advanced); discord (push) and slack
+      // (acks before delivery) do NOT -- their MessageCreate/event handlers
+      // must catch this and surface a user-visible failure receipt.
+      log(`[inbound-notifier] lane POST failed, message NOT delivered: ${err.message}`)
+      throw err
+    }
+    await mcpNotify(params)
+  }
+}

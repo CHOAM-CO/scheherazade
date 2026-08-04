@@ -31,6 +31,7 @@ import {
   installStdoutHygiene, resolveDataHome, localISO, localNow,
   createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer,
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
+  createInboundNotifier,
 } from './channel-runtime.mjs'
 
 // ── stdout hygiene (channel-runtime) ───────────────────────────────────────
@@ -400,6 +401,16 @@ async function handleReplyCall({ channelId, text }, opts = {}) {
   return { target, note, chunkCount: chunks.length }
 }
 
+// design-0020 (headless topology): ONE inbound seam. Ingest-POST to
+// headless-lane when its endpoint file exists (the -p lane, where the MCP
+// notification below is a black hole -- probe 5); MCP dev-channels
+// notification otherwise (attach topology, interactive claude).
+const notifyInbound = createInboundNotifier({
+  dataHome: DATA_HOME,
+  mcpNotify: (params) => mcp.notification({ method: 'notifications/claude/channel', params }),
+  log,
+})
+
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
 
 mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
@@ -520,7 +531,7 @@ function buildInboundMessage(message, localPaths = []) {
 // defaults to the real mcp.notification() call, downloadFn to the real
 // getFile+download chain, historyAppendFn to the real ledger append.
 async function handleUpdate(update, opts = {}) {
-  const notifyFn = opts.notifyFn || ((params) => mcp.notification({ method: 'notifications/claude/channel', params }))
+  const notifyFn = opts.notifyFn || (notifyInbound)
   const downloadFn = opts.downloadFn || (async (img) => downloadImageToTmp(await resolveTelegramFileUrl(img.fileId, opts), img.mime))
   const historyAppendFn = opts.historyAppendFn || appendHistoryEntry
 
@@ -614,7 +625,7 @@ const announceBoot = createBootAnnouncer({
   fetchTarget: fetchTelegramChat,
   idOf: (chat) => chat.id,
   sendText: (chat, text) => telegramApi('sendMessage', { chat_id: chat.id, text }),
-  notify: (params) => mcp.notification({ method: 'notifications/claude/channel', params }),
+  notify: notifyInbound,
   log,
   noun: 'chat',
 })
@@ -664,13 +675,10 @@ async function boot() {
   try {
     startRoutineTicker({
       store: routineStore,
-      fire: (r) => mcp.notification({
-        method: 'notifications/claude/channel',
-        params: {
+      fire: (r) => notifyInbound({
           content: routineInjectContent(r),
           meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() },
-        },
-      }),
+        }),
       log,
     })
   } catch (err) {
