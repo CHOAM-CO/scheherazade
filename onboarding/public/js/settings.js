@@ -97,6 +97,64 @@
     $('set-group-engine').textContent = C.groupEngine || 'Engine'
     $('set-group-system').textContent = C.groupSystem || 'System'
 
+    // ── import from other agents (design-0022, Mino 20:13 "에이전트가
+    // 싹 다 긁어서 '제가 이제 챙길게요'"). Settings is the always-there
+    // surface; the wizard step reuses the same endpoints later. This UI
+    // is ONLY the consent gate -- the agent performs the sweep itself,
+    // live in chat, after POST /api/migrate/start. ─────────────────────
+    $('set-group-migrate').textContent = C.groupMigrate || 'Import'
+    $('set-migrate-label').textContent = C.migrateLabel || 'Other agents'
+    $('set-migrate-hint').textContent = C.migrateHint || ''
+    const migTools = $('set-migrate-tools')
+    const migStatus = $('set-migrate-status')
+    const migStart = $('set-migrate-start')
+    migStart.textContent = C.migrateStartButton
+    migStart.disabled = true
+    const migChecks = new Map() // id -> checkbox
+    api('/api/migrate/detect').then((d) => {
+      const found = (d.tools || []).filter((t) => t.detected)
+      if (!found.length) {
+        migStatus.textContent = C.migrateNoneFound
+        return
+      }
+      for (const t of found) {
+        const row = document.createElement('label')
+        row.className = 'migrate-tool-row'
+        const cb = document.createElement('input')
+        cb.type = 'checkbox'
+        cb.checked = true
+        cb.onchange = () => { migStart.disabled = ![...migChecks.values()].some((c) => c.checked) }
+        migChecks.set(t.id, cb)
+        row.appendChild(cb)
+        const span = document.createElement('span')
+        span.textContent = C.migrateToolLine(t.label, t.files.length, t.truncated)
+        span.title = t.root
+        row.appendChild(span)
+        migTools.appendChild(row)
+      }
+      migStart.disabled = false
+    }).catch(() => { migStatus.textContent = C.migrateNoneFound })
+    migStart.onclick = async () => {
+      const ids = [...migChecks.entries()].filter(([, cb]) => cb.checked).map(([id]) => id)
+      if (!ids.length) return
+      migStart.disabled = true
+      migStatus.className = 'status-line pending'
+      migStatus.textContent = C.migrateStarting
+      try {
+        const r = await api('/api/migrate/start', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ tools: ids }),
+        })
+        migStatus.className = 'status-line success'
+        migStatus.textContent = r.delivery === 'live' ? C.migrateStartedLive : C.migrateStartedQueued
+      } catch (err) {
+        migStatus.className = 'status-line failure'
+        migStatus.textContent = GEN(err.message)
+        migStart.disabled = false
+      }
+    }
+
     // ── about / manual update check (2026-08-04, Mino "오토 업데이트
     // 버튼 어딨니?" -- the nav banner is silent when you're current, so
     // this is the always-present surface: version + Check now). ────────

@@ -3023,6 +3023,7 @@ const API_ROUTES = [
   ...require('./routes/settings.cjs').createRoutes(staticCtx), // G9
   ...require('./routes/setup-token.cjs').createRoutes(staticCtx), // G10
   ...require('./routes/chat.cjs').createRoutes(staticCtx), // G11
+  ...require('./routes/migrate.cjs').createRoutes(staticCtx), // G12 (design-0022)
 ]
 
 module.exports = {

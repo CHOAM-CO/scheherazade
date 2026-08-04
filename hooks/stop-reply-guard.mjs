@@ -161,12 +161,16 @@ async function main() {
   // answer one -- this only removes the obligation.
   if (/^\s*\[reaction\]/.test(triggerBody)) process.exit(0)
 
-  // A [SYSTEM] housekeeping turn (context-pressure rotation handoff,
-  // shutdown flush) is the LANE talking, not the user: there is no one on
-  // the other end of channelId="system" to answer, and demanding a reply
-  // tool call here would nudge-loop the very turn whose only job is to
-  // write checkpoint.md and exit quietly.
-  if (/^\s*\[SYSTEM\]/.test(triggerBody)) process.exit(0)
+  // A housekeeping turn addressed to channelId="system" (the headless
+  // lane's context-pressure rotation handoff) is the LANE talking, not the
+  // user: nobody is on the other end to answer, and demanding a reply here
+  // would nudge-loop the very turn whose only job is to write checkpoint.md
+  // and exit quietly. Matched on the CHANNEL, not the [SYSTEM] text prefix,
+  // on purpose: autonomy's morning brief also starts with "[SYSTEM]" but
+  // rides the HOME channel and deliberately RELIES on this guard to force
+  // the brief into Discord -- a prefix match would silently un-enforce it
+  // (caught same-day, 2026-08-04).
+  if (triggerChannelId === 'system') process.exit(0)
 
   // Walk forward looking for a reply-class call that ANSWERED the trigger
   // channel. Two layers, receipt first (2026-07-15 Melchior chain review):

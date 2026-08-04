@@ -70,6 +70,19 @@
           {
             "type": "command",
             "command": "node {AGENT_DIR}/hooks/pre-tool-activity.mjs"
+          },
+          {
+            "type": "command",
+            "command": "node {AGENT_DIR}/hooks/pre-tool-credential-guard.mjs"
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Glob|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node {AGENT_DIR}/hooks/pre-tool-credential-guard.mjs"
           }
         ]
       },

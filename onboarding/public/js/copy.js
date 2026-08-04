@@ -852,6 +852,20 @@ window.COPY = {
     // 업데이트 버튼 어딨니?"). The nav banner appears only when an update
     // exists; this row is the always-there surface. "Check now" honesty:
     // failure shows the server's detail, up-to-date says so plainly.
+    // Import from other agents (design-0022). The hint is honest about
+    // the mechanism: the AGENT reads the files, live, after consent --
+    // this panel never copies anything itself. Credential stores are
+    // excluded by name at three layers; the copy may say "never touched"
+    // because the pre-tool guard actually enforces it.
+    groupMigrate: 'Import',
+    migrateLabel: 'Bring over another agent',
+    migrateHint: 'Found data from other AI agent tools on this computer. Pick which ones your agent may read — it will go through them in chat, keep what matters to its own memory, and offer to take over recurring jobs. Credential and token files are never touched.',
+    migrateStartButton: 'Hand it over',
+    migrateNoneFound: 'No other agent tools were found on this computer.',
+    migrateToolLine: (label, n, truncated) => `${label} — ${n}${truncated ? '+' : ''} files`,
+    migrateStarting: 'Asking the agent to take over…',
+    migrateStartedLive: 'The agent is on it — watch the chat.',
+    migrateStartedQueued: "Queued. The agent will start the import next time it's running.",
     groupAbout: 'About',
     aboutLabel: 'App version & updates',
     aboutVersion: (v) => `Scheherazade v${v}`,

@@ -41,9 +41,9 @@ needs before it can pick up work.
 
 ## Hook System
 
-Fourteen hook commands across four lifecycle stages, wired in
+Sixteen hook commands across four lifecycle stages, wired in
 `.claude/settings.local.json` (shipped as
-`onboarding/templates/claude-settings.local.json`). **Four of them can
+`onboarding/templates/claude-settings.local.json`). **Five of them can
 block.** This section used to say "three hooks, all advisory"; that was true
 of the original spec and stopped being true as hooks were added, which is the
 failure `scripts/test-hook-lifecycle-doc.mjs` now exists to prevent -- it
@@ -64,6 +64,7 @@ end.
 | `pre-ask-user-question-redirect.mjs` | `PreToolUse` | `AskUserQuestion` | the interactive CLI picker, always — it renders in a terminal the person never sees, so the agent stalls silently; the deny reason hands the question back with instructions to re-ask it through the reply tool as numbered plain text |
 | `pre-reply-negation-check.mjs` | `PreToolUse` | `mcp__agent-channel__reply` | a reply whose denial/negation reads as unsupported |
 | `stop-reply-guard.mjs` | `Stop` | all | ending a turn that owed a channel reply and never sent one |
+| `pre-tool-credential-guard.mjs` | `PreToolUse` | `Bash`, `Read\|Glob\|Grep` | any read of another agent tool's credential store (`.credentials.json`, `auth.json`, `~/.claude.json`, OpenClaw `credentials/`, Hermes `.env`/`state.db`) or the macOS keychain — always on, not just during migration sweeps (design-0022 layer 3) |
 
 ### Advisory hooks
 
@@ -85,8 +86,10 @@ blocker by accident.
 | `pre-reply-time-adverb-guard.mjs` | `PreToolUse` | `mcp__agent-channel__reply` | flag unverified time expressions ("yesterday", "an hour ago") |
 | `checkpoint-nudge.mjs` | `Stop` | all | warn when `checkpoint.md` is 30+ minutes stale, throttled to once per 30 min |
 
-`context-gauge.mjs` is registered at both `SessionStart` and `Stop`, so the
-fourteen commands cover thirteen distinct hook files. (Two former Stop hooks,
+`context-gauge.mjs` is registered at both `SessionStart` and `Stop`, and
+the credential guard at two `PreToolUse` matchers (`Bash` and
+`Read|Glob|Grep`), so the sixteen commands cover fourteen distinct hook
+files. (Two former Stop hooks,
 felt-check and stop-skill-extraction-nudge, were cut in the 2026-07-28
 boot-context diet -- advisory nags whose disciplines live on in CLAUDE.md
 §2; existing installs converge via the removal migration in

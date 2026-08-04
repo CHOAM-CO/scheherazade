@@ -664,6 +664,16 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   color: var(--fg-faint);
 }
 
+/* ── Import from other agents (design-0022) ──────────────────────────── */
+.migrate-tool-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+  cursor: pointer;
+}
+.migrate-tool-row input[type='checkbox'] { flex: 0 0 auto; }
+
 /* ── DM interaction states (v0.0.34) ─────────────────────────────────────
    Reaction chips overlap the bubble's bottom edge (iMessage tapback shape);
    the bubble gets extra bottom margin only when it actually carries one. */
