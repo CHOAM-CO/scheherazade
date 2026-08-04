@@ -553,6 +553,7 @@ const PROVIDER_ROWS = [
     env: ({ key }) => ({
       ANTHROPIC_API_KEY: key,
       ANTHROPIC_BASE_URL: undefined, // clear any stale base_url from a prior chatgpt/ollama session
+      ANTHROPIC_AUTH_TOKEN: undefined, // 4th auth-shaped field since the ollama Bearer swap (2026-08-04): a stale Bearer would out-rank this row's key
       CLAUDE_CODE_OAUTH_TOKEN: undefined, // clear any stale subscription token
       CLAUDE_CONFIG_DIR: undefined, // see the claude-cli row: cleared on EVERY row so one inherited value cannot relocate ~/.claude.json under the harness seeding
     }),
@@ -571,6 +572,7 @@ const PROVIDER_ROWS = [
       CLAUDE_CODE_OAUTH_TOKEN: key,
       ANTHROPIC_API_KEY: undefined, // do NOT inject an API key alongside the OAuth token (LOCKED design, mode 1)
       ANTHROPIC_BASE_URL: undefined, // clear any stale base_url from a prior chatgpt/ollama session
+      ANTHROPIC_AUTH_TOKEN: undefined, // a stale Bearer (ollama key-mode) would out-rank the OAuth token -- same clear-on-every-row rule as the other auth fields
       CLAUDE_CONFIG_DIR: undefined, // see the claude-cli row: cleared on EVERY row so one inherited value cannot relocate ~/.claude.json under the harness seeding
     }),
   },
@@ -624,6 +626,7 @@ const PROVIDER_ROWS = [
     env: () => ({
       ANTHROPIC_API_KEY: undefined,
       ANTHROPIC_BASE_URL: undefined,
+      ANTHROPIC_AUTH_TOKEN: undefined, // 4th auth-shaped field (ollama Bearer swap 2026-08-04) -- a stale Bearer would hijack the CLI away from the OAuth session this mode exists to reuse
       CLAUDE_CODE_OAUTH_TOKEN: undefined,
       // Cleared for the same reason as the three above, against a different
       // leak: main.cjs spreads ...process.env into the child, so a
@@ -667,6 +670,7 @@ const PROVIDER_ROWS = [
     env: ({ values }) => ({
       ANTHROPIC_BASE_URL: `http://localhost:${values.port}`,
       ANTHROPIC_API_KEY: CHATGPT_PLACEHOLDER_KEY,
+      ANTHROPIC_AUTH_TOKEN: undefined, // 4th auth-shaped field (ollama Bearer swap 2026-08-04) -- cleared on every row
       CLAUDE_CODE_OAUTH_TOKEN: undefined, // force api-key auth precedence -- see sirin ground-truth comment
       CLAUDE_CONFIG_DIR: undefined, // see the claude-cli row: cleared on EVERY row (harness-render seeds ~/.claude.json for all modes)
     }),
@@ -702,7 +706,15 @@ const PROVIDER_ROWS = [
     },
     env: ({ key, values }) => ({
       ANTHROPIC_BASE_URL: OLLAMA_CLOUD_BASE_URL,
-      ANTHROPIC_API_KEY: key,
+      // Bearer, NOT x-api-key (field receipt 2026-08-04 18:14, Mino's
+      // machine): ANTHROPIC_API_KEY made the CLI send x-api-key, and
+      // ollama.com answered "Failed to authenticate. API Error: 401
+      // Unauthorized" on a key that validate had ACCEPTED minutes earlier
+      // -- validate sent both header forms, so it couldn't discriminate.
+      // ollama.com honors only `authorization: Bearer` (its docs' form);
+      // ANTHROPIC_AUTH_TOKEN is the CLI's documented Bearer-header env.
+      ANTHROPIC_AUTH_TOKEN: key,
+      ANTHROPIC_API_KEY: undefined, // never alongside AUTH_TOKEN -- a stale Anthropic key riding as x-api-key must not shadow the Bearer auth
       MODEL: values.model,
       SKIP_MODEL_GUARD: '1', // matches run-agent.sh:205's shape; NOTE run.sh has no such guard today -- see task report gaps
       CLAUDE_CODE_OAUTH_TOKEN: undefined, // force api-key auth precedence -- see sirin ground-truth comment
@@ -775,6 +787,7 @@ const PROVIDER_ROWS = [
     env: ({ key, values }) => ({
       ANTHROPIC_BASE_URL: values.url,
       ANTHROPIC_API_KEY: key || CUSTOM_PLACEHOLDER_KEY,
+      ANTHROPIC_AUTH_TOKEN: undefined, // 4th auth-shaped field (ollama Bearer swap 2026-08-04) -- cleared on every row
       MODEL: values.model,
       SKIP_MODEL_GUARD: '1', // same reasoning as 'ollama' above -- not an Anthropic model id
       CLAUDE_CODE_OAUTH_TOKEN: undefined, // force api-key auth precedence -- see sirin ground-truth comment

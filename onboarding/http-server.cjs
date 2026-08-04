@@ -1032,11 +1032,14 @@ async function validateProviderKey(provider, key, opts = {}) {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          // Both header forms: ollama.com's Anthropic-compat surface follows
-          // Anthropic's x-api-key convention, its own docs use Bearer.
-          // Sending both is harmless and covers whichever is honored.
+          // Bearer ONLY -- mirror exactly what the runtime lane sends.
+          // This used to send both header forms "to cover whichever is
+          // honored", and that hedge cost a live failure (2026-08-04
+          // 18:14): validate passed on the Bearer half while the spawned
+          // CLI (then on ANTHROPIC_API_KEY -> x-api-key) got 401 from the
+          // same key. A validator that authenticates differently from the
+          // runtime vouches for a lane it never tested.
           authorization: `Bearer ${effectiveKey}`,
-          'x-api-key': effectiveKey,
         },
         body: JSON.stringify({ model: probeModel, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }),
         signal: AbortSignal.timeout(OLLAMA_CLOUD_TIMEOUT_MS),

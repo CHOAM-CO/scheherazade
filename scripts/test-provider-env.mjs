@@ -190,7 +190,8 @@ function fakeReadProviderKey(store) {
   const result = buildProviderEnv('ollama', { MODEL: 'glm-5.2:cloud' }, { readProviderKey: fakeReadProviderKey({ ollama: 'ol-key' }) })
   assert(!result.error, 'ollama: no error with a model + stored key configured')
   assert(result.env.ANTHROPIC_BASE_URL === OLLAMA_CLOUD_BASE_URL, `ollama: ANTHROPIC_BASE_URL == ${OLLAMA_CLOUD_BASE_URL} (ollama.com speaks the Anthropic Messages API -- receipt in provider-env.cjs)`)
-  assert(result.env.ANTHROPIC_API_KEY === 'ol-key', 'ollama: ANTHROPIC_API_KEY == the stored ollama.com API key (key-mode, 2026-08-04)')
+  assert(result.env.ANTHROPIC_AUTH_TOKEN === 'ol-key', 'ollama: ANTHROPIC_AUTH_TOKEN == the stored key (Bearer header -- field receipt 2026-08-04 18:14: x-api-key form got 401 from ollama.com on a key validate had accepted)')
+  assert(result.env.ANTHROPIC_API_KEY === undefined && 'ANTHROPIC_API_KEY' in result.env, 'ollama: ANTHROPIC_API_KEY explicitly cleared (a stale Anthropic key as x-api-key must not shadow the Bearer auth)')
   assert(result.env.MODEL === 'glm-5.2', 'ollama: signin-era ":cloud" tag stripped at spawn -- ollama.com has no such names (Mino field receipt 2026-08-04 17:37)')
   assert(result.env.SKIP_MODEL_GUARD === '1', 'ollama: SKIP_MODEL_GUARD == "1" (matches run-agent.sh:205 shape; NOTE run.sh has no such guard today -- see task report gaps)')
   assert(result.env.CLAUDE_CODE_OAUTH_TOKEN === undefined && 'CLAUDE_CODE_OAUTH_TOKEN' in result.env, 'ollama: CLAUDE_CODE_OAUTH_TOKEN explicitly cleared (force api-key auth precedence)')
@@ -265,7 +266,7 @@ function fakeReadProviderKey(store) {
 //    in provider-env.cjs's header describes.
 // ─────────────────────────────────────────────────────────────────────────
 {
-  const AUTH_FIELDS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_OAUTH_TOKEN']
+  const AUTH_FIELDS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN']
   const cases = [
     ['claude', { readProviderKey: fakeReadProviderKey({ claude: 'k' }) }, {}],
     ['claude-subscription', { readProviderKey: fakeReadProviderKey({ 'claude-subscription': 't' }) }, {}],
