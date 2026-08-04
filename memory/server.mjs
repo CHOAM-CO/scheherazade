@@ -23,6 +23,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import * as service from './service.mjs'
 
 // ── stdout hygiene ─────────────────────────────────────────────────────────
@@ -208,7 +209,9 @@ async function main() {
 // Only boot the MCP stdio server when run directly (`node server.mjs`), not
 // when imported by the smoke test — importing must not open a stdio
 // transport or it hangs waiting for a JSON-RPC client.
-const isMain = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)
+// fileURLToPath, NOT new URL().pathname — win32 pathname is '/C:/...' and the
+// guard never matches (headless-lane had the same bug; 0.57 win probe).
+const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 if (isMain) {
   main().catch((err) => {
     log(`Fatal: ${err.message}`)

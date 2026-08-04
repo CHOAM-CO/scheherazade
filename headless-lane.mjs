@@ -41,6 +41,7 @@ import { createInterface } from 'node:readline'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const MEM = process.env.MEM
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude'
@@ -542,6 +543,10 @@ function main() {
 
 // Importable for tests (renderChannelTag / renderUserEvent are pure); the
 // lane only runs when executed directly.
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)) {
+// fileURLToPath, NOT new URL().pathname: on win32 pathname is '/C:/...' and
+// path.resolve turns it into garbage, so this guard NEVER matched and the
+// lane silently exited 0 without booting — caught by the 0.57 win real-spawn
+// probe (lane exited code=0, no endpoint file, zero log lines).
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main()
 }

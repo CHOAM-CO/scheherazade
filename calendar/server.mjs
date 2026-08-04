@@ -14,6 +14,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
@@ -113,7 +114,9 @@ async function main() {
   log('MCP server up')
 }
 
-const isMain = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)
+// fileURLToPath, NOT new URL().pathname — win32 pathname is '/C:/...' and the
+// guard never matches (headless-lane had the same bug; 0.57 win probe).
+const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 if (isMain) {
   main().catch((err) => {
     log(`Fatal: ${err.message}`)
