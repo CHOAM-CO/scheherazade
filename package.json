@@ -1,6 +1,6 @@
 {
   "name": "scheherazade",
-  "version": "0.0.40",
+  "version": "0.0.41",
   "private": true,
   "type": "module",
   "description": "Mac-native local AI agent. Forked from agent-portable (Claude Code single-agent harness); P0 spike layers an Electron packaging shell on top.",
