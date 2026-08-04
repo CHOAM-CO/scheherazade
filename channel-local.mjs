@@ -50,6 +50,7 @@ import { fileURLToPath } from 'node:url'
 import {
   installStdoutHygiene, resolveDataHome, localNow,
   createMarkerStore, createBootAnnouncer,
+  createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
 } from './channel-runtime.mjs'
 
 const log = installStdoutHygiene()
@@ -57,6 +58,9 @@ const log = installStdoutHygiene()
 const AGENT_NAME = process.env.AGENT_NAME || 'agent'
 const DATA_HOME = resolveDataHome(AGENT_NAME)
 const markers = createMarkerStore({ dataHome: DATA_HOME })
+// User-requested scheduled prompts, shared logic in channel-runtime.
+// Ticker starts in boot(); tool surface is wired into handleToolCall.
+const routineStore = createRoutineStore({ dataHome: DATA_HOME, log })
 
 // The one conversation this backend has. Discord/Slack/Telegram carry real
 // platform ids here; there is exactly one local chat, so the id is a constant
@@ -306,6 +310,7 @@ const TOOLS = [
       required: ['emoji'],
     },
   },
+  ROUTINE_TOOL,
 ]
 
 // Explicit targetSeq may point at any retained MESSAGE (reacting to a
@@ -367,6 +372,7 @@ export async function handleToolCall(name, args) {
     const n = enqueueReaction('agent', emoji, target.seq)
     return { content: [{ type: 'text', text: `reacted ${emoji} to #${target.seq} (#${n})` }] }
   }
+  if (name === 'routine') return handleRoutineTool(routineStore, args)
   return { content: [{ type: 'text', text: `unknown tool: ${name}` }], isError: true }
 }
 
@@ -567,6 +573,24 @@ async function boot() {
 
   markers.writeLiveness()
   setInterval(() => markers.writeLiveness(), markers.LIVENESS_HEARTBEAT_MS).unref()
+
+  // Routines: optional-feature contract (same as the other backends) -- a
+  // broken ticker degrades to a log line, never takes the channel down.
+  try {
+    startRoutineTicker({
+      store: routineStore,
+      fire: (r) => mcp.notification({
+        method: 'notifications/claude/channel',
+        params: {
+          content: routineInjectContent(r),
+          meta: { sender: 'SYSTEM', channelId: LOCAL_CHANNEL_ID, authorId: '', timestamp: localNow() },
+        },
+      }),
+      log,
+    })
+  } catch (err) {
+    log(`routine ticker failed to start (feature disabled this session): ${err.message}`)
+  }
 
   // Boot announce, same unit as the other backends (channel-runtime): direct
   // line into the queue -> ts advance -> greeting inject to the model. For a

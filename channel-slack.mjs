@@ -31,6 +31,7 @@ import { fileURLToPath } from 'node:url'
 import {
   installStdoutHygiene, resolveDataHome, localISO, localNow,
   createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer,
+  createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
 } from './channel-runtime.mjs'
 
 // ── stdout hygiene (channel-runtime) ───────────────────────────────────────
@@ -54,6 +55,7 @@ const HOME_CHANNEL_ID = process.env.HOME_CHANNEL_ID
 // regardless of which transport is live.
 const DATA_HOME = resolveDataHome(AGENT_NAME)
 const markers = createMarkerStore({ dataHome: DATA_HOME })
+const routineStore = createRoutineStore({ dataHome: DATA_HOME, log: (...a) => log(...a) })
 const { LIVENESS_MARKER_PATH, FAILURE_MARKER_PATH, LIVENESS_HEARTBEAT_MS } = markers
 const writeLivenessMarker = () => markers.writeLiveness()
 
@@ -232,6 +234,7 @@ const TOOLS = [
       required: ['channelId'],
     },
   },
+  ROUTINE_TOOL,
 ]
 
 const ReplyArgs = z.object({ channelId: z.string().min(1).optional(), text: z.string().min(1) })
@@ -334,6 +337,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     return { content: [{ type: 'text', text: JSON.stringify(r, null, 2) }] }
   }
 
+  if (name === 'routine') return handleRoutineTool(routineStore, args)
+
   throw new Error(`unknown tool: ${name}`)
 })
 
@@ -417,6 +422,30 @@ function createLivenessGate() {
 }
 const livenessGate = createLivenessGate()
 
+// Routines: 'connected' refires on every Socket Mode reconnect, so the
+// ticker takes the same once-guard as the heartbeat. Optional-feature
+// contract: a broken ticker degrades to a log line.
+let routineTickerStarted = false
+function startRoutineTickerOnce() {
+  if (routineTickerStarted) return
+  routineTickerStarted = true
+  try {
+    startRoutineTicker({
+      store: routineStore,
+      fire: (r) => mcp.notification({
+        method: 'notifications/claude/channel',
+        params: {
+          content: routineInjectContent(r),
+          meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() },
+        },
+      }),
+      log,
+    })
+  } catch (err) {
+    log(`routine ticker failed to start (feature disabled this session): ${err.message}`)
+  }
+}
+
 let heartbeatStarted = false
 function startLivenessHeartbeatOnce() {
   if (heartbeatStarted) return
@@ -437,6 +466,7 @@ socketModeClient.on('connected', () => {
   livenessGate.onConnected()
   writeLivenessMarker().catch((err) => log(`liveness marker write failed: ${err.message}`))
   startLivenessHeartbeatOnce()
+  startRoutineTickerOnce()
   announceBoot().catch((err) => log(`boot announce failed: ${err.message}`))
 })
 socketModeClient.on('disconnected', () => {

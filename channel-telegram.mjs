@@ -30,6 +30,7 @@ import { fileURLToPath } from 'node:url'
 import {
   installStdoutHygiene, resolveDataHome, localISO, localNow,
   createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer,
+  createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
 } from './channel-runtime.mjs'
 
 // ── stdout hygiene (channel-runtime) ───────────────────────────────────────
@@ -47,6 +48,7 @@ const HOME_CHANNEL_ID = process.env.HOME_CHANNEL_ID // Telegram chat id (string)
 // regardless of which channel backend is running.
 const DATA_HOME = resolveDataHome(AGENT_NAME)
 const markers = createMarkerStore({ dataHome: DATA_HOME })
+const routineStore = createRoutineStore({ dataHome: DATA_HOME, log: (...a) => log(...a) })
 const { LIVENESS_MARKER_PATH, FAILURE_MARKER_PATH, LIVENESS_HEARTBEAT_MS } = markers
 const writeLivenessMarker = () => markers.writeLiveness()
 const writeFailureMarker = (reason, code = 'unknown') => markers.writeFailure(reason, code)
@@ -349,6 +351,7 @@ const TOOLS = [
       required: ['channelId'],
     },
   },
+  ROUTINE_TOOL,
 ]
 
 const ReplyArgs = z.object({ channelId: z.string().min(1).optional(), text: z.string().min(1) })
@@ -452,6 +455,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     const messages = await readHistoryEntries({ channelId, limit: limit || 50, after, before })
     return { content: [{ type: 'text', text: JSON.stringify({ channelId, count: messages.length, messages }, null, 2) }] }
   }
+
+  if (name === 'routine') return handleRoutineTool(routineStore, args)
 
   throw new Error(`unknown tool: ${name}`)
 })
@@ -653,6 +658,24 @@ async function boot() {
   setInterval(() => {
     writeLivenessMarker().catch((err) => log(`liveness heartbeat write failed: ${err.message}`))
   }, LIVENESS_HEARTBEAT_MS).unref()
+
+  // Routines: optional-feature contract -- a broken ticker degrades to a
+  // log line, never takes the channel down.
+  try {
+    startRoutineTicker({
+      store: routineStore,
+      fire: (r) => mcp.notification({
+        method: 'notifications/claude/channel',
+        params: {
+          content: routineInjectContent(r),
+          meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() },
+        },
+      }),
+      log,
+    })
+  } catch (err) {
+    log(`routine ticker failed to start (feature disabled this session): ${err.message}`)
+  }
 
   announceBoot().catch((err) => log(`boot announce failed: ${err.message}`))
 

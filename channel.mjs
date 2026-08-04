@@ -24,6 +24,7 @@ import { createRequire } from 'node:module'
 import {
   installStdoutHygiene, resolveDataHome, atomicWriteJson, localISO, localNow,
   readAgentConfig, createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer,
+  createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
 } from './channel-runtime.mjs'
 
 // autonomy/*.cjs are CommonJS on purpose: onboarding/http-server.cjs has to
@@ -56,6 +57,9 @@ const HOME_CHANNEL_ID = process.env.HOME_CHANNEL_ID
 // regardless of which layer detected the problem first. (history: docs/HISTORY.md)
 const DATA_HOME = resolveDataHome(AGENT_NAME)
 const markers = createMarkerStore({ dataHome: DATA_HOME })
+// User-requested scheduled prompts ("매일 아침 메일 브리핑"), shared logic in
+// channel-runtime. Ticker starts on ClientReady below.
+const routineStore = createRoutineStore({ dataHome: DATA_HOME, log: (...a) => log(...a) })
 const { LIVENESS_MARKER_PATH, FAILURE_MARKER_PATH, LIVENESS_HEARTBEAT_MS } = markers
 const writeLivenessMarker = () => markers.writeLiveness()
 
@@ -258,6 +262,7 @@ const TOOLS = [
       required: ['channelId'],
     },
   },
+  ROUTINE_TOOL,
 ]
 
 const ReplyArgs = z.object({ channelId: z.string().min(1).optional(), text: z.string().min(1) })
@@ -340,6 +345,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     return { content: [{ type: 'text', text: JSON.stringify({ channelId, count: result.length, messages: result }, null, 2) }] }
   }
 
+  if (name === 'routine') return handleRoutineTool(routineStore, args)
+
   throw new Error(`unknown tool: ${name}`)
 })
 
@@ -367,6 +374,23 @@ discord.once(Events.ClientReady, (c) => {
     startNoteCadenceWatcher()
   } catch (err) {
     log(`note-cadence watcher failed to start (feature disabled this session): ${err.message}`)
+  }
+  // Routines: same optional-feature contract as the note cadence -- a broken
+  // ticker degrades to a log line, never takes Discord down.
+  try {
+    startRoutineTicker({
+      store: routineStore,
+      fire: (r) => mcp.notification({
+        method: 'notifications/claude/channel',
+        params: {
+          content: routineInjectContent(r),
+          meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() },
+        },
+      }),
+      log,
+    })
+  } catch (err) {
+    log(`routine ticker failed to start (feature disabled this session): ${err.message}`)
   }
   announceBoot().catch((err) => log(`boot announce failed: ${err.message}`))
 })

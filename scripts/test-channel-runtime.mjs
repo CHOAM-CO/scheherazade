@@ -146,6 +146,83 @@ for (const b of BACKENDS) {
   check('no extension field leaked to the top level', !('token' in marker))
 }
 
+// ── routines: store, schedule math, ticker (v0.0.41, Mino 2026-08-04) ─────
+{
+  const { createRoutineStore, handleRoutineTool, startRoutineTicker, routineInjectContent, ROUTINE_TOOL } =
+    await import(pathToFileURL(path.join(ROOT, 'channel-runtime.mjs')).href)
+  const dir = path.join(tmpDir, 'routines-home')
+  const store = createRoutineStore({ dataHome: dir, log: () => {} })
+
+  // add + validation
+  const r = await store.add({ time: '08:30', days: 'weekdays', prompt: '메일 브리핑' })
+  check('add returns a routine with an id and normalized days', r.id.startsWith('r-') && r.days.join(',') === '1,2,3,4,5')
+  await store.add({ time: '22:00', days: [0, 6], prompt: 'weekend thing' })
+  let threw = false
+  try { await store.add({ time: '25:99', days: 'daily', prompt: 'x' }) } catch { threw = true }
+  check('a nonsense time is refused loudly', threw)
+  threw = false
+  try { await store.add({ time: '09:00', days: 'sometimes', prompt: 'x' }) } catch { threw = true }
+  check('a nonsense day set is refused loudly', threw)
+
+  // due math: Mon 2026-08-03 09:00 -- weekday routine due (30min late), weekend one not
+  const mon9 = new Date(2026, 7, 3, 9, 0, 0)
+  check('fixture day really is a Monday', mon9.getDay() === 1)
+  let due = await store.dueNow(mon9)
+  check('the weekday routine is due on Monday morning', due.length === 1 && due[0].id === r.id, JSON.stringify(due.map((d) => d.id)))
+  check('lateMinutes says how stale the trigger is', due[0].lateMinutes === 30, due[0].lateMinutes)
+
+  // fired -> not due again the same day; due again the NEXT matching day
+  await store.markFired(r.id, mon9)
+  due = await store.dueNow(new Date(2026, 7, 3, 15, 0, 0))
+  check('at-most-once per day: fired routine is not due again today', due.length === 0, JSON.stringify(due))
+  due = await store.dueNow(new Date(2026, 7, 4, 8, 31, 0))
+  check('it is due again the next matching day', due.length === 1)
+
+  // before the scheduled minute -> not due
+  due = await store.dueNow(new Date(2026, 7, 5, 8, 29, 0))
+  check('not due before its minute arrives', due.length === 0)
+
+  // persistence: a fresh store over the same dir sees the same routines
+  const store2 = createRoutineStore({ dataHome: dir, log: () => {} })
+  const listed = await store2.list()
+  check('routines survive a process restart (fresh store, same dir)', listed.length === 2, listed.length)
+  check('lastFiredDay persisted too (no double fire across restart)', listed.find((x) => x.id === r.id).lastFiredDay === '2026-08-03')
+
+  // tool surface
+  const addRes = await handleRoutineTool(store2, { action: 'add', time: '12:00', days: 'daily', prompt: 'lunch' })
+  check('tool add answers with the id and the only-while-running caveat', addRes.content[0].text.includes('r-') && addRes.content[0].text.includes('running'))
+  const listRes = await handleRoutineTool(store2, { action: 'list' })
+  check('tool list returns the registry', listRes.content[0].text.includes('lunch'))
+  const rmRes = await handleRoutineTool(store2, { action: 'remove', id: 'nope' })
+  check('tool remove on a dead id is an error, not a silent 200', rmRes.isError === true)
+  const badRes = await handleRoutineTool(store2, { action: 'add', time: 'noon', days: 'daily', prompt: 'x' })
+  check('tool add surfaces validation errors instead of throwing', badRes.isError === true && badRes.content[0].text.includes('HH:MM'))
+
+  // ticker: markFired BEFORE fire (at-most-once), fire failure skips the day
+  const store3 = createRoutineStore({ dataHome: path.join(tmpDir, 'routines-tick'), log: () => {} })
+  await store3.add({ time: '07:00', days: 'daily', prompt: 'tick me' })
+  const fired = []
+  const clock = new Date(2026, 7, 3, 7, 5, 0)
+  const { tick } = startRoutineTicker({ store: store3, fire: async (x) => { fired.push(x.id) }, log: () => {}, now: () => clock })
+  await tick()
+  check('ticker fires a due routine exactly once', fired.length === 1)
+  await tick()
+  check('a second tick the same day fires nothing', fired.length === 1)
+  const store4 = createRoutineStore({ dataHome: path.join(tmpDir, 'routines-tick2'), log: () => {} })
+  const bad = await store4.add({ time: '07:00', days: 'daily', prompt: 'will fail' })
+  const { tick: tick2 } = startRoutineTicker({ store: store4, fire: async () => { throw new Error('boom') }, log: () => {}, now: () => clock })
+  await tick2()
+  const after = (await store4.list()).find((x) => x.id === bad.id)
+  check('fire failure still consumed the day (at-most-once beats double-spend)', after.lastFiredDay === '2026-08-03')
+
+  // inject line shape
+  const line = routineInjectContent({ id: 'r-x', prompt: 'do it', lateMinutes: 0 })
+  check('inject line carries the [routine] marker and the prompt', line.startsWith('[routine r-x]') && line.includes('do it'))
+  const lateLine = routineInjectContent({ id: 'r-x', prompt: 'do it', lateMinutes: 90 })
+  check('a late fire says HOW late', lateLine.includes('90분'))
+  check('the tool name is the frozen string the allowlist matches', ROUTINE_TOOL.name === 'routine')
+}
+
 // ── cleanup ──────────────────────────────────────────────────────────────
 fs.rmSync(tmpDir, { recursive: true, force: true })
 

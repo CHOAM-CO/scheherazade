@@ -279,3 +279,195 @@ export function createBootAnnouncer({ dataHome, homeId, lastChannelStore, fetchT
     }
   }
 }
+
+// ── routines: user-requested scheduled prompts ─────────────────────────────
+// "매일 아침 메일 브리핑해줘" -> the agent registers a routine with the
+// `routine` tool -> the channel process fires the prompt back into the agent
+// at the scheduled time, and the result lands in the conversation like any
+// other turn (Mino, 2026-08-04).
+//
+// DELIBERATELY NOT the autonomy cycle: that lane is unattended night work
+// behind its own consent gate (AUTONOMY=yes). A routine is something the
+// user asked for out loud, in conversation, per item -- the consent IS the
+// request. The two must not share a switch (cycle.cjs's consent-laundering
+// note is the same principle in the other direction).
+//
+// FIRING IS AT-MOST-ONCE PER LOCAL DAY, and only while a channel process is
+// running: markFired lands BEFORE the inject, so a crash mid-fire skips that
+// day rather than double-spending; an app closed across the scheduled time
+// fires LATE (same day, lateMinutes attached) rather than never, and an app
+// closed past midnight misses that day honestly. No catch-up queue -- a
+// Monday briefing delivered Thursday is noise wearing punctuality's clothes.
+
+function routineParseHM(s) {
+  if (typeof s !== 'string') return null
+  const m = s.trim().match(/^(\d{1,2}):(\d{2})$/)
+  if (!m) return null
+  const h = Number(m[1]); const min = Number(m[2])
+  if (h < 0 || h > 23 || min < 0 || min > 59) return null
+  return h * 60 + min
+}
+
+function routineLocalDay(d) {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+const ROUTINE_DAY_WORDS = { daily: [0, 1, 2, 3, 4, 5, 6], weekdays: [1, 2, 3, 4, 5], weekends: [0, 6] }
+
+function routineNormalizeDays(days) {
+  if (typeof days === 'string' && ROUTINE_DAY_WORDS[days]) return ROUTINE_DAY_WORDS[days]
+  if (Array.isArray(days) && days.length && days.every((d) => Number.isInteger(d) && d >= 0 && d <= 6)) {
+    return [...new Set(days)].sort()
+  }
+  return null
+}
+
+export function createRoutineStore({ dataHome, log = console.log }) {
+  const file = path.join(dataHome, 'routines.json')
+  let routines = null // lazy; null = not yet loaded
+
+  async function load() {
+    if (routines) return routines
+    try {
+      const raw = JSON.parse(await fs.readFile(file, 'utf8'))
+      routines = Array.isArray(raw.routines)
+        ? raw.routines.filter((r) => r && typeof r.id === 'string' && routineParseHM(r.time) !== null &&
+            routineNormalizeDays(r.days) && typeof r.prompt === 'string' && r.prompt.trim())
+        : []
+    } catch {
+      routines = [] // first run or corrupt: empty list beats a dead channel
+    }
+    return routines
+  }
+
+  async function persist() {
+    await fs.mkdir(dataHome, { recursive: true })
+    await atomicWriteJson(file, { routines })
+  }
+
+  async function add({ time, days, prompt }) {
+    await load()
+    if (routineParseHM(time) === null) throw new Error(`time must be "HH:MM" (24h), got ${JSON.stringify(time)}`)
+    const normDays = routineNormalizeDays(days)
+    if (!normDays) throw new Error('days must be "daily", "weekdays", "weekends", or an array of weekday numbers (0=Sun..6=Sat)')
+    const text = String(prompt || '').trim()
+    if (!text) throw new Error('prompt is required')
+    if (text.length > 2000) throw new Error('prompt too long (2000 chars max)')
+    const id = `r-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+    const routine = { id, time: time.trim(), days: normDays, prompt: text, createdAt: new Date().toISOString(), lastFiredDay: null }
+    routines.push(routine)
+    await persist()
+    return routine
+  }
+
+  async function list() { return [...await load()] }
+
+  async function remove(id) {
+    await load()
+    const before = routines.length
+    routines = routines.filter((r) => r.id !== id)
+    if (routines.length === before) return false
+    await persist()
+    return true
+  }
+
+  // Due = scheduled earlier today, today matches the day set, not yet fired
+  // today. Late fires included by design (see header); lateMinutes tells the
+  // agent how stale the trigger is so IT can decide what "morning briefing
+  // at 15:00" should become.
+  async function dueNow(now = new Date()) {
+    await load()
+    const today = routineLocalDay(now)
+    const nowMin = now.getHours() * 60 + now.getMinutes()
+    return routines
+      .filter((r) => r.days.includes(now.getDay()) && routineParseHM(r.time) <= nowMin && r.lastFiredDay !== today)
+      .map((r) => ({ ...r, lateMinutes: nowMin - routineParseHM(r.time) }))
+  }
+
+  async function markFired(id, now = new Date()) {
+    await load()
+    const r = routines.find((x) => x.id === id)
+    if (!r) return
+    r.lastFiredDay = routineLocalDay(now)
+    await persist()
+  }
+
+  return { load, add, list, remove, dueNow, markFired, file }
+}
+
+// Tool surface, shared verbatim by every backend so the model sees ONE
+// contract. The tool name rides the same frozen-name rule as reply/
+// send_file_to_discord: allowlisted as an exact string.
+export const ROUTINE_TOOL = {
+  name: 'routine',
+  description: 'Manage scheduled routines -- recurring prompts the user asked for ("매일 아침 메일 브리핑해줘"). action:"add" registers one (time + days + the prompt YOU should receive at that time, written as an instruction to yourself); "list" shows all; "remove" deletes by id. Routines fire only while the app is running: a missed day is skipped, a late start fires late with the delay noted.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['add', 'list', 'remove'], description: 'What to do' },
+      time: { type: 'string', description: 'add: fire time as 24h "HH:MM" local' },
+      days: { description: 'add: "daily", "weekdays", "weekends", or an array of weekday numbers (0=Sun..6=Sat)' },
+      prompt: { type: 'string', description: 'add: the instruction to inject at fire time, e.g. "메일함을 확인하고 오늘 브리핑을 보내라"' },
+      id: { type: 'string', description: 'remove: the routine id from list' },
+    },
+    required: ['action'],
+  },
+}
+
+export async function handleRoutineTool(store, args) {
+  const action = args && args.action
+  try {
+    if (action === 'add') {
+      const r = await store.add({ time: args.time, days: args.days, prompt: args.prompt })
+      return { content: [{ type: 'text', text: `routine added: ${r.id} at ${r.time} days=[${r.days}]\nIt fires only while the app is running.` }] }
+    }
+    if (action === 'list') {
+      const all = await store.list()
+      if (!all.length) return { content: [{ type: 'text', text: 'no routines registered' }] }
+      return { content: [{ type: 'text', text: JSON.stringify(all, null, 1) }] }
+    }
+    if (action === 'remove') {
+      const ok = await store.remove(String(args && args.id || ''))
+      return ok
+        ? { content: [{ type: 'text', text: 'removed' }] }
+        : { content: [{ type: 'text', text: 'no routine with that id' }], isError: true }
+    }
+    return { content: [{ type: 'text', text: `unknown action: ${action}` }], isError: true }
+  } catch (err) {
+    return { content: [{ type: 'text', text: `routine ${action} failed: ${err.message}` }], isError: true }
+  }
+}
+
+// One ticker per channel process. markFired BEFORE notify: at-most-once.
+export function startRoutineTicker({ store, fire, log = console.log, intervalMs = 30_000, now = () => new Date() }) {
+  const tick = async () => {
+    try {
+      const due = await store.dueNow(now())
+      for (const r of due) {
+        await store.markFired(r.id, now())
+        try {
+          await fire(r)
+          log(`routine fired: ${r.id} (${r.lateMinutes}min late)`)
+        } catch (err) {
+          log(`routine fire failed for ${r.id} (skipped today, will retry tomorrow): ${err.message}`)
+        }
+      }
+    } catch (err) {
+      log(`routine tick failed: ${err.message}`)
+    }
+  }
+  const timer = setInterval(tick, intervalMs)
+  timer.unref()
+  return { timer, tick } // tick exported for tests
+}
+
+// The line the agent receives at fire time -- shared so every backend
+// injects the identical shape. [routine] prefix mirrors [reaction]'s role:
+// a marker downstream consumers can match on.
+export function routineInjectContent(r) {
+  const late = r.lateMinutes > 5 ? ` (예정보다 ${r.lateMinutes}분 늦게 발화 -- 앱이 꺼져 있었다. 내용이 시효를 넘겼으면 그렇게 말하고 조정해라)` : ''
+  return `[routine ${r.id}] 사용자가 등록한 루틴 시간이다${late}. 지시: ${r.prompt}`
+}

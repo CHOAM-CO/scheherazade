@@ -196,6 +196,12 @@ function createHarnessRender(ctx) {
     const REACT_PERM = 'mcp__agent-channel__react'
     if (!settings.permissions.allow.includes(REACT_PERM)) settings.permissions.allow.push(REACT_PERM)
 
+    // v0.0.41: the routine tool (user-requested scheduled prompts) --
+    // allowlist entry only. The consent for each routine is the user's own
+    // request in conversation; no hook needed on registration.
+    const ROUTINE_PERM = 'mcp__agent-channel__routine'
+    if (!settings.permissions.allow.includes(ROUTINE_PERM)) settings.permissions.allow.push(ROUTINE_PERM)
+
     if (!settings.hooks || typeof settings.hooks !== 'object') settings.hooks = {}
     if (!Array.isArray(settings.hooks.Stop)) settings.hooks.Stop = []
     if (settings.hooks.Stop.length === 0) settings.hooks.Stop.push({ hooks: [] })
