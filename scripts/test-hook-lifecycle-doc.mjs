@@ -61,14 +61,18 @@ for (const [stage, entries] of Object.entries(settings.hooks || {})) {
 }
 
 // ── ground truth: what can refuse ───────────────────────────────────────────
-// exit(2) is the refusal signal. Reading the source is the only honest way to
-// know; a hook's own header comment claiming "advisory only" is prose too, and
-// prose is exactly what this file exists to distrust.
+// TWO refusal signals exist: exit(2), and an emitted permissionDecision
+// 'deny' (exit 0 + hookSpecificOutput JSON -- how the rumination gate's
+// normal path and the AskUserQuestion redirect actually refuse). Reading the
+// source is the only honest way to know; a hook's own header comment
+// claiming "advisory only" is prose too, and prose is exactly what this file
+// exists to distrust.
 const canBlock = new Set()
 for (const file of registered.keys()) {
   let src = ''
   try { src = readFileSync(path.join(ROOT, 'hooks', file), 'utf8') } catch { continue }
   if (/process\.exit\(2\)/.test(src)) canBlock.add(file)
+  if (/permissionDecision/.test(src) && /(['"])deny\1/.test(src)) canBlock.add(file)
 }
 
 // ── the doc's two tables ────────────────────────────────────────────────────
@@ -112,15 +116,15 @@ for (const [file, stages] of [...registered.entries()].sort()) {
   }
 }
 
-console.log('\n4. blocking status matches exit(2)')
+console.log('\n4. blocking status matches the refusal signals (exit(2) / permissionDecision deny)')
 for (const file of [...registered.keys()].sort()) {
   const inBlocking = blockingSection.includes(file)
   const inAdvisory = advisorySection.includes(file)
   assert(inBlocking !== inAdvisory, `${file} is in exactly one of the two tables`)
   if (canBlock.has(file)) {
-    assert(inBlocking, `${file} calls process.exit(2), so it must be listed as blocking`)
+    assert(inBlocking, `${file} can refuse (exit(2) or permissionDecision deny), so it must be listed as blocking`)
   } else {
-    assert(inAdvisory, `${file} never exits 2, so it must be listed as advisory`)
+    assert(inAdvisory, `${file} carries no refusal signal, so it must be listed as advisory`)
   }
 }
 

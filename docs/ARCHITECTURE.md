@@ -41,9 +41,9 @@ needs before it can pick up work.
 
 ## Hook System
 
-Thirteen hook commands across four lifecycle stages, wired in
+Fourteen hook commands across four lifecycle stages, wired in
 `.claude/settings.local.json` (shipped as
-`onboarding/templates/claude-settings.local.json`). **Three of them can
+`onboarding/templates/claude-settings.local.json`). **Four of them can
 block.** This section used to say "three hooks, all advisory"; that was true
 of the original spec and stopped being true as hooks were added, which is the
 failure `scripts/test-hook-lifecycle-doc.mjs` now exists to prevent -- it
@@ -52,12 +52,16 @@ when a hook's blocking status here disagrees with whether it can `exit(2)`.
 
 ### Blocking hooks
 
-`exit(2)` is how a hook refuses the action. On `PreToolUse` that means the
-tool call does not happen; on `Stop` it means the turn does not end.
+A hook refuses the action via `exit(2)` or by emitting a
+`permissionDecision: 'deny'` (exit 0 + hookSpecificOutput JSON — the
+rumination gate's normal deny path uses this too). On `PreToolUse` that
+means the tool call does not happen; on `Stop` it means the turn does not
+end.
 
 | Hook | Stage | Matcher | What it refuses |
 |---|---|---|---|
 | `pre-reply-rumination-gate.mjs` | `PreToolUse` | `mcp__agent-channel__reply` | a reply containing a completion or verification claim, until it has been re-sent unchanged once (a 10-minute re-fire window) |
+| `pre-ask-user-question-redirect.mjs` | `PreToolUse` | `AskUserQuestion` | the interactive CLI picker, always — it renders in a terminal the person never sees, so the agent stalls silently; the deny reason hands the question back with instructions to re-ask it through the reply tool as numbered plain text |
 | `pre-reply-negation-check.mjs` | `PreToolUse` | `mcp__agent-channel__reply` | a reply whose denial/negation reads as unsupported |
 | `stop-reply-guard.mjs` | `Stop` | all | ending a turn that owed a channel reply and never sent one |
 
@@ -82,7 +86,7 @@ blocker by accident.
 | `checkpoint-nudge.mjs` | `Stop` | all | warn when `checkpoint.md` is 30+ minutes stale, throttled to once per 30 min |
 
 `context-gauge.mjs` is registered at both `SessionStart` and `Stop`, so the
-thirteen commands cover twelve distinct hook files. (Two former Stop hooks,
+fourteen commands cover thirteen distinct hook files. (Two former Stop hooks,
 felt-check and stop-skill-extraction-nudge, were cut in the 2026-07-28
 boot-context diet -- advisory nags whose disciplines live on in CLAUDE.md
 §2; existing installs converge via the removal migration in

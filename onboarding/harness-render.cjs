@@ -297,6 +297,28 @@ function createHarnessRender(ctx) {
       })
     }
 
+    // v0.0.41: AskUserQuestion redirect (Mino live repro 2026-08-04) -- the
+    // interactive picker renders in a terminal the person never sees, so the
+    // agent stalls silently mid-task waiting for an Enter that never comes.
+    // The hook denies with a redirect: re-ask the same question through the
+    // reply tool as numbered plain text. Blocking-by-decision but fail-open
+    // on internal error; same additive-only contract as the blocks above.
+    const ASK_REDIRECT_HOOK = 'pre-ask-user-question-redirect.mjs'
+    const hasAskRedirect = settings.hooks.PreToolUse.some((group) =>
+      Array.isArray(group.hooks) && group.hooks.some((h) => typeof h.command === 'string' && h.command.includes(ASK_REDIRECT_HOOK)))
+    if (!hasAskRedirect) {
+      let askGroup = settings.hooks.PreToolUse.find((g) => g && g.matcher === 'AskUserQuestion')
+      if (!askGroup) {
+        askGroup = { matcher: 'AskUserQuestion', hooks: [] }
+        settings.hooks.PreToolUse.push(askGroup)
+      }
+      if (!Array.isArray(askGroup.hooks)) askGroup.hooks = []
+      askGroup.hooks.push({
+        type: 'command',
+        command: `node ${path.join(toUnpackedPath(REPO_ROOT), 'hooks', ASK_REDIRECT_HOOK)}`,
+      })
+    }
+
     // v0.0.22: context-gauge tap on Stop + SessionStart -- advisory
     // instrument, additive-only, both event groups checked independently so
     // a hand-edited config missing only one still converges. See the hook's

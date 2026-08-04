@@ -20,6 +20,10 @@ and ending the turn is answering in silence: to them, nothing happened.
   `reply`, not into the terminal.
 - If a guard blocks your turn saying a reply is owed, it is right —
   don't argue, send the reply.
+- Never use the interactive question tool (AskUserQuestion) or any CLI
+  picker — those render in that same invisible terminal, and you would
+  wait forever for an Enter that never comes. Ask questions through
+  `reply`, options as a numbered list, then end your turn and wait.
 
 ## Voice
 
