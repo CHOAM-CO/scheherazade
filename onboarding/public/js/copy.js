@@ -921,7 +921,7 @@ window.COPY = {
     // work to the user's terminal explicitly. No "안전합니다"-class promises
     // -- the why-line states the mechanism (attribution), not a guarantee.
     topologyLabel: 'How the agent runs',
-    topologyNote: 'Either the app launches it directly (spawn), or it attaches to a tmux session you started in Terminal (attach). Attach keeps macOS permissions across app updates, and the agent keeps running even if you quit the app.',
+    topologyNote: 'Spawn: the app launches the agent. Attach: it joins a tmux session you started — permissions survive updates, and the agent outlives the app.',
     topologySelectLabel: 'Mode',
     topologySpawnOption: 'Spawn — the app runs it directly (default)',
     topologyAttachOption: 'Attach — connect to a tmux session in Terminal',
@@ -968,7 +968,7 @@ window.COPY = {
     // TO custom and editing an already-custom install's fields share this
     // one form.
     customLabel: 'Custom proxy',
-    customNote: 'Connect to any proxy that provides an OpenAI-compatible API. Requires a Base URL and model ID; enter an API key only if the proxy requires one.',
+    customNote: 'Any OpenAI-compatible endpoint. Base URL + model ID; key only if the proxy needs one.',
     customCatalogLabel: 'Custom (any model ID)',
     customPresetLabel: 'Common proxies',
     customPresetPlaceholder: 'Enter manually',
@@ -1045,23 +1045,22 @@ window.COPY = {
     //      and "nothing was spent" is not the same sentence as "I cannot tell
     //      you what was spent."
     autonomyLabel: 'Work on its own',
+    // Copy diet (대공사 2026-08-05): the cost fact stays — unattended spend
+    // is the one thing this note must say — everything else went.
     autonomyNote:
-      "While you sleep, the agent picks its own work and carries it out. " +
-      "This spends your Claude subscription usage, and nobody is watching while it happens. " +
-      "It's off by default, and even once on, it stops itself if it exceeds the cap below.",
+      'Picks its own work while you sleep — spending your subscription unattended. Off by default; hard-stopped by the cap below.',
     // Just 'Enabled': the category heading directly above already says WORK
     // ON ITS OWN, so repeating it here only made the label wrap to two lines
     // and pushed the checkbox off the shared control baseline.
     autonomyEnableLabel: 'Enabled',
     autonomyWindowLabel: 'Working hours',
-    autonomyWindowNote: 'Only starts within this window. Can cross midnight (e.g. 23:00 - 05:00).',
+    autonomyWindowNote: 'Starts only inside this window (may cross midnight).',
     // "하룻밤" and not "하루": the cap is enforced per CYCLE, from the moment the
     // window opens until it closes. A 23:00-05:00 night is one night, and
     // measuring it per calendar day handed it a second budget at midnight.
     autonomyCapLabel: 'Per-night token cap',
     autonomyCapNote:
-      'The most tokens it can use in one night (including cache reuse). It stops itself if it goes over, and the same number appears in the morning brief. ' +
-      'Set to 0 to disable working on its own (there is no unlimited option).',
+      'Nightly ceiling, cache included — the morning brief reports against it. 0 disables; there is no unlimited.',
     // Deliberately a DIFFERENT label from the cap: this is everything spent
     // today including your own conversations, and it is not what the cap is
     // measured against. One label over two measurements is how a number starts
@@ -1089,8 +1088,7 @@ window.COPY = {
     // cannot fix the problem is the misroute this feature exists to kill.
     permsLabel: 'Permission status',
     permsNote:
-      'macOS permission walls the agent may run into on this computer. ' +
-      'You always grant access yourself in System Settings. This page only checks status and opens Settings for you.',
+      'What macOS currently allows. Granting always happens in System Settings — this page only checks and points.',
     permsLoading: 'Checking…',
     permsLoadFailed: "Couldn't check permission status",
     permsGranted: 'Granted',
@@ -1214,8 +1212,8 @@ window.COPY = {
     slackNote: 'Support coming later',
     // AUTHORED -- post-onboarding provider auth (Mino 07-13 click-test:
     // "온보딩 끝낸 이후에 ollama cloud 인증 추가 / chatGPT인증 추가").
-    providersLabel: 'Additional auth',
-    providersNote: 'Once authenticated, you can pick that model from the model select in Settings',
+    providersLabel: 'Providers',
+    // providersNote removed (대공사 — subtitle row retired; the label carries it)
     // custom (custom-provider addition, 2026-07-25): NOT in AUTH_PROVIDERS
     // (connectors.js), so this key is never actually looked up there today --
     // added for display-name consistency with the other two entries and any
@@ -1328,7 +1326,7 @@ window.COPY = {
     // lane an authorized connector is inert, so we SAY so instead of shipping
     // a dead button.
     mcpLabel: 'Claude connectors',
-    mcpNote: 'Authenticate Claude integrations like Gmail, Google Calendar, and Atlassian from this app',
+    // mcpNote removed (대공사 — subtitle row retired; the label carries it)
     mcpLaneWarning: (lane) => `The agent is currently running on the ${lane} lane, so authenticating here won't let it use connectors. This only works on the Claude subscription login lane.`,
     mcpLoading: 'Loading connector list…',
     mcpCliMissing: "Can't check connectors because the claude executable was not found",

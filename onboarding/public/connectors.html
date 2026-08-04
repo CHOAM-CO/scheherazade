@@ -14,100 +14,96 @@
         <h1 id="conn-title"></h1>
       </div>
 
-      <!-- Messenger group (Discord reconnect + Slack/Telegram) MOVED to
-           /channels (multichannel v0.0.18) -- this page's axis narrowed to
-           LLM-side connections only. -->
-      <div class="category" id="conn-providers">
-        <div class="category-label" id="conn-providers-label"></div>
-        <p class="subtitle" id="conn-providers-note"></p>
-        <div class="entries">
-          <div class="entry-row">
-            <div class="entry-main">
-              <div class="entry-value" id="conn-provider-chatgpt-name"></div>
-              <div class="entry-meta" id="conn-provider-chatgpt-status"></div>
-              <!-- Live serving receipt: the proxy's own /health model, only
-                   when something actually answers. 셸은 현실. -->
-              <div class="entry-meta" id="conn-provider-chatgpt-receipt"></div>
+      <!-- 대공사 2026-08-05: two-column page grid — LLM auth card and the
+           usage card sit side by side when the window is wide; the claude.ai
+           connectors card spans both columns below. Messenger group lives
+           on /channels since v0.0.18. -->
+      <div class="page-grid">
+        <div class="category" id="conn-providers">
+          <div class="category-label" id="conn-providers-label"></div>
+          <div class="entries">
+            <div class="entry-row">
+              <div class="entry-main">
+                <div class="entry-value" id="conn-provider-chatgpt-name"></div>
+                <div class="entry-meta" id="conn-provider-chatgpt-status"></div>
+                <!-- Live serving receipt: the proxy's own /health model, only
+                     when something actually answers. 셸은 현실. -->
+                <div class="entry-meta" id="conn-provider-chatgpt-receipt"></div>
+              </div>
+              <button class="secondary hidden" id="conn-provider-chatgpt-test"></button>
+              <button class="secondary hidden" id="conn-provider-chatgpt-relogin"></button>
+              <button class="secondary" id="conn-provider-chatgpt-btn"></button>
             </div>
-            <button class="secondary hidden" id="conn-provider-chatgpt-test"></button>
-            <button class="secondary hidden" id="conn-provider-chatgpt-relogin"></button>
-            <button class="secondary" id="conn-provider-chatgpt-btn"></button>
-          </div>
-          <div class="entry-row">
-            <div class="entry-main">
-              <div class="entry-value" id="conn-provider-ollama-name"></div>
-              <div class="entry-meta" id="conn-provider-ollama-status"></div>
+            <div class="entry-row">
+              <div class="entry-main">
+                <div class="entry-value" id="conn-provider-ollama-name"></div>
+                <div class="entry-meta" id="conn-provider-ollama-status"></div>
+              </div>
+              <button class="secondary hidden" id="conn-provider-ollama-test"></button>
+              <button class="secondary hidden" id="conn-provider-ollama-relogin"></button>
+              <button class="secondary" id="conn-provider-ollama-btn"></button>
             </div>
-            <button class="secondary hidden" id="conn-provider-ollama-test"></button>
-            <button class="secondary hidden" id="conn-provider-ollama-relogin"></button>
-            <button class="secondary" id="conn-provider-ollama-btn"></button>
-          </div>
-          <!-- ollama key-mode (2026-08-04): connect/replace-key open this
-               paste flow -- same write-only input pattern as the Claude API
-               key flow below (key never rendered back). -->
-          <div class="claude-key-flow hidden" id="conn-ollama-flow">
-            <div class="field">
-              <input type="password" id="conn-ollama-key" />
-            </div>
-            <div class="step-actions">
-              <span class="status-line" id="conn-ollama-status-line"></span>
-              <button class="secondary" id="conn-ollama-save"></button>
-            </div>
-          </div>
-          <!-- Usage gauges, one line per lane (2026-08-04 evening: "이게
-               킥임"). claude = OAuth endpoint w/ CLI-session fallback;
-               codex = wham/usage; ollama = undocumented /api/usage probe. -->
-          <div class="entry-row">
-            <div class="entry-main">
-              <div class="entry-value" id="conn-usage-label"></div>
-              <!-- real gauge bars, not text lines (Mino 2026-08-05 "보기쉽게").
-                   One lane div per provider; connectors.js builds the DOM. -->
-              <div class="usage-lanes" id="conn-usage-gauges">
-                <div class="usage-lane" id="conn-usage-lane-claude"></div>
-                <div class="usage-lane" id="conn-usage-lane-codex"></div>
-                <div class="usage-lane" id="conn-usage-lane-ollama"></div>
+            <!-- ollama key-mode (2026-08-04): connect/replace-key open this
+                 paste flow -- same write-only input pattern as the Claude API
+                 key flow below (key never rendered back). -->
+            <div class="claude-key-flow hidden" id="conn-ollama-flow">
+              <div class="field">
+                <input type="password" id="conn-ollama-key" />
+              </div>
+              <div class="step-actions">
+                <span class="status-line" id="conn-ollama-status-line"></span>
+                <button class="secondary" id="conn-ollama-save"></button>
               </div>
             </div>
+            <div class="entry-row">
+              <div class="entry-main">
+                <div class="entry-value" id="conn-provider-claude-name"></div>
+                <div class="entry-meta" id="conn-provider-claude-status"></div>
+              </div>
+              <button class="secondary hidden" id="conn-claude-cancel"></button>
+              <button class="secondary" id="conn-provider-claude-btn"></button>
+            </div>
+          </div>
+          <!-- Claude subscription re-login (2026-08-04): same in-app
+               `claude setup-token` capture the wizard uses; the code field
+               appears only if the CLI actually asks for a paste. -->
+          <div class="claude-key-flow hidden" id="conn-claude-flow">
+            <div class="field hidden" id="conn-claude-code-field">
+              <div class="field-hint" id="conn-claude-code-hint"></div>
+              <div class="step-actions">
+                <input type="text" autocomplete="off" id="conn-claude-code" />
+                <button class="secondary" id="conn-claude-code-btn"></button>
+              </div>
+            </div>
+            <div class="step-actions">
+              <span class="status-line" id="conn-claude-status-line"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Usage gauges: its own card (2026-08-04 "이게 킥임" → 2026-08-05
+             gauge bars). connectors.js builds the lane DOM. -->
+        <div class="category" id="conn-usage-card">
+          <div class="category-header">
+            <div class="category-label" id="conn-usage-label"></div>
             <button class="secondary" id="conn-usage-refresh"></button>
           </div>
-          <div class="entry-row">
-            <div class="entry-main">
-              <div class="entry-value" id="conn-provider-claude-name"></div>
-              <div class="entry-meta" id="conn-provider-claude-status"></div>
-            </div>
-            <button class="secondary hidden" id="conn-claude-cancel"></button>
-            <button class="secondary" id="conn-provider-claude-btn"></button>
+          <div class="usage-lanes" id="conn-usage-gauges">
+            <div class="usage-lane" id="conn-usage-lane-claude"></div>
+            <div class="usage-lane" id="conn-usage-lane-codex"></div>
+            <div class="usage-lane" id="conn-usage-lane-ollama"></div>
           </div>
         </div>
-        <!-- Claude subscription re-login (2026-08-04, Mino "connectors에서
-             클로드도 re-login 가능하게" -- the BYOK key-paste flow that
-             lived here is gone with the claude API-key mode). Runs the same
-             in-app `claude setup-token` capture the wizard uses; the code
-             field appears only if the CLI actually asks for a paste. -->
-        <div class="claude-key-flow hidden" id="conn-claude-flow">
-          <div class="field hidden" id="conn-claude-code-field">
-            <div class="field-hint" id="conn-claude-code-hint"></div>
-            <div class="step-actions">
-              <input type="text" autocomplete="off" id="conn-claude-code" />
-              <button class="secondary" id="conn-claude-code-btn"></button>
-            </div>
-          </div>
-          <div class="step-actions">
-            <span class="status-line" id="conn-claude-status-line"></span>
-          </div>
-        </div>
-      </div>
 
-      <!-- claude.ai connectors (Gmail/Calendar/Atlassian/…). In-app OAuth
-           intercept: authorize button -> URL from `claude mcp login` ->
-           user opens it in the browser. Lane warning shows first when the
-           running lane can't actually USE connectors even once authorized. -->
-      <div class="category" style="margin-top: 2.5rem" id="conn-mcp">
-        <div class="category-label" id="conn-mcp-label"></div>
-        <p class="subtitle" id="conn-mcp-note"></p>
-        <div class="field-hint hidden" id="conn-mcp-lane-warning"></div>
-        <div class="status-line" id="conn-mcp-status"></div>
-        <div class="entries" id="conn-mcp-entries"></div>
+        <!-- claude.ai connectors (Gmail/Calendar/…). In-app OAuth intercept.
+             Lane warning shows first when the running lane can't actually
+             USE connectors even once authorized. -->
+        <div class="category span-2" id="conn-mcp">
+          <div class="category-label" id="conn-mcp-label"></div>
+          <div class="field-hint hidden" id="conn-mcp-lane-warning"></div>
+          <div class="status-line" id="conn-mcp-status"></div>
+          <div class="entries" id="conn-mcp-entries"></div>
+        </div>
       </div>
 
     </div>

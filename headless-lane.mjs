@@ -380,7 +380,14 @@ function main() {
       }
       log(`init: model=${e.model} session=${e.session_id} mcp=${JSON.stringify((e.mcp_servers || []).map((s) => `${s.name}:${s.status}`))}`)
     } else if (e.type === 'result') {
-      log(`turn result: ${e.subtype}${e.is_error ? ' (error)' : ''} turns=${e.num_turns}`)
+      // Durations exposed for the latency receipts (Mino 2026-08-05 02:47
+      // "답변 추론에 비해 너무 늦는데"): dur = whole turn wall-clock, api =
+      // time inside model calls. dur >> api means harness/tool overhead;
+      // api >> expectation with high turns= means sub-turn churn (each
+      // sub-turn re-evaluates the full prompt on providers with no
+      // server-side cache — the ollama lane's known tax).
+      const durNote = Number(e.duration_ms) ? ` dur=${(e.duration_ms / 1000).toFixed(1)}s${Number(e.duration_api_ms) ? ` api=${(e.duration_api_ms / 1000).toFixed(1)}s` : ''}` : ''
+      log(`turn result: ${e.subtype}${e.is_error ? ' (error)' : ''} turns=${e.num_turns}${durNote}`)
       // Error turns used to die as one quiet log line while the user saw
       // nothing at all (2026-08-04 field: subscription lane rate-limited /
       // auth-dead -> "클로드도 동작안함", zero receipts anywhere). Loud
@@ -492,6 +499,10 @@ function main() {
       try {
         child.stdin.write(renderUserEvent({ content, meta: payload.meta || {} }))
         noteStdinWrite()
+        // Latency receipt (2026-08-05): this line + the result's dur=/api=
+        // bracket a turn in the log, so "model was fast, app was slow"
+        // becomes measurable instead of vibes.
+        log(`inbound -> stdin (${content.length} chars, sender=${(payload.meta && payload.meta.sender) || '?'})`)
       } catch (err) {
         log(`stdin write failed: ${err.message}`)
         return send(503, { error: 'stdin write failed' })

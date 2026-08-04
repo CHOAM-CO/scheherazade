@@ -15,6 +15,19 @@
 
   function $(id) { return document.getElementById(id) }
 
+  // Status chip: a colored dot + short word instead of a status sentence
+  // (대공사 2026-08-05 — 도형/인디케이터 우선). Transient flow messages
+  // still overwrite with plain textContent, which simply drops the dot.
+  function setChip(el, state, text) {
+    if (!el) return
+    el.textContent = ''
+    el.classList.add('status-chip')
+    const d = document.createElement('span')
+    d.className = state ? `dot ${state}` : 'dot'
+    el.appendChild(d)
+    el.appendChild(document.createTextNode(text))
+  }
+
   // ── post-onboarding provider auth ────────────────────────────────────────
   // Reuses the SAME server login lane the onboarding wizard uses
   // (POST /api/onboarding/login/:provider spawns `codex login` /
@@ -30,7 +43,7 @@
 
   async function renderProviderAuth() {
     $('conn-providers-label').textContent = C.providersLabel
-    $('conn-providers-note').textContent = C.providersNote
+    // (subtitle removed in the 대공사 — the section label carries it now)
 
     let available = []
     try {
@@ -45,7 +58,7 @@
       const connected = available.includes(provider)
       const statusEl = $(`conn-provider-${provider}-status`)
       const btn = $(`conn-provider-${provider}-btn`)
-      statusEl.textContent = connected ? C.providerConnected : C.providerNotConnected
+      setChip(statusEl, connected ? 'ok' : '', connected ? C.providerConnected : C.providerNotConnected)
       btn.textContent = C.providerAuthButton
       btn.classList.toggle('hidden', connected)
       btn.onclick = () => startAuth(provider, statusEl, btn)
@@ -414,7 +427,7 @@
     $('conn-provider-claude-name').textContent = C.claudeSubName
     const statusEl = $('conn-provider-claude-status')
     const connected = available.includes('claude-subscription')
-    statusEl.textContent = connected ? C.providerConnected : C.providerNotConnected
+    setChip(statusEl, connected ? 'ok' : '', connected ? C.providerConnected : C.providerNotConnected)
     const btn = $('conn-provider-claude-btn')
     const cancelBtn = $('conn-claude-cancel')
     const flow = $('conn-claude-flow')
@@ -536,7 +549,7 @@
 
   async function renderMcpConnectors() {
     $('conn-mcp-label').textContent = C.mcpLabel
-    $('conn-mcp-note').textContent = C.mcpNote
+    // (subtitle removed in the 대공사 — the section label carries it now)
     const statusEl = $('conn-mcp-status')
     const entriesEl = $('conn-mcp-entries')
     const warnEl = $('conn-mcp-lane-warning')

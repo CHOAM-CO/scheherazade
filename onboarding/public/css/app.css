@@ -1,6 +1,17 @@
 /* app.css — shared styling for wizard, memory pane, settings, waiting room.
    Dark theme matching the P0 placeholder's palette (bg #111, fg #eee,
-   accent #5b8dee), extended into a real design system. */
+   accent #5b8dee), extended into a real design system.
+
+   가시성 대공사 (Mino 2026-08-05 02:42 "밤에 가시성 작업좀"):
+   - spacing scale tokens (--s1..--s6) — every margin/padding snaps to the
+     scale, no more ad-hoc rem soup
+   - frosted glass: body carries a translucent bg; main.cjs sets mac
+     vibrancy / win acrylic behind it. No effect support = the window's own
+     solid backgroundColor shows through = identical to the old look.
+   - status DOTS (.dot) replace status words wherever a shape can carry it
+   - compact type/controls: 13.5px base, smaller buttons, tighter rows
+   - fluid width: .page-shell flows to 1100px; .page-grid reflows to two
+     columns when the window is wide (요구 ⑧ "리액티브하게") */
 
 :root {
   --bg: #111214;
@@ -15,8 +26,20 @@
   --danger: #d9695f;
   --danger-hover: #c25850;
   --success: #5fae7c;
+  --warn: #d9a15f;
   --radius: 10px;
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  /* spacing scale — the ONLY spacing values new rules should use */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  /* frosted: how much of the OS blur shows through the page background.
+     0.82 = subtle; the window's solid fallback color makes this a no-op
+     when the platform effect is unavailable. */
+  --frost-alpha: 0.82;
   /* One label column width for every settings row on every page. Defined
      once so the control column can never drift apart again (alignment pass
      2026-07-25). */
@@ -29,11 +52,12 @@ html, body {
   margin: 0;
   padding: 0;
   height: 100%;
-  background: var(--bg);
+  /* translucent over the window's vibrancy/acrylic layer (see :root note) */
+  background: rgba(17, 18, 20, var(--frost-alpha));
   color: var(--fg);
   font-family: var(--font);
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: 13.5px;
+  line-height: 1.55;
 }
 
 body {
@@ -47,9 +71,9 @@ p { margin: 0 0 0.75em; color: var(--fg-dim); }
 
 button {
   font-family: inherit;
-  font-size: 0.95rem;
-  padding: 0.6rem 1.4rem;
-  border-radius: 8px;
+  font-size: 0.85rem;
+  padding: 0.42rem 0.95rem;
+  border-radius: 7px;
   border: none;
   cursor: pointer;
   background: var(--accent);
@@ -80,8 +104,8 @@ button.danger:hover:not(:disabled) { background: var(--danger-hover); }
 
 input[type="text"], input[type="password"], input[type="time"], textarea {
   font-family: inherit;
-  font-size: 0.95rem;
-  padding: 0.6rem 0.75rem;
+  font-size: 0.9rem;
+  padding: 0.45rem 0.65rem;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--panel-raised);
@@ -204,16 +228,62 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .page-shell {
   flex: 1;
   width: 100%;
-  max-width: 760px;
+  /* fluid up to 1100px (요구 ⑧): the old 760px cap forced everything into
+     one long vertical scroll regardless of window size */
+  max-width: 1100px;
   margin: 0 auto;
-  padding: 2.5rem 1.5rem 4rem;
+  padding: var(--s5) var(--s5) var(--s6);
 }
 
 .page-header {
   display: flex;
-  justify-content: space-between;
+  /* h1 is visually hidden (below) — actions keep to the right edge */
+  justify-content: flex-end;
   align-items: baseline;
-  margin-bottom: 0.4rem;
+  margin-bottom: var(--s2);
+}
+/* The active nav tab already names the page — a repeated h1 was pure
+   vertical spend (대공사: 말 줄이기). Kept in the DOM for assistive tech. */
+.page-header h1 {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* two-column reflow for pages made of independent sections (settings,
+   connectors): sections keep their own height, the grid packs them. */
+.page-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--s5) var(--s6);
+  align-items: start;
+}
+@media (min-width: 940px) {
+  .page-grid { grid-template-columns: 1fr 1fr; }
+  .page-grid > .span-2 { grid-column: 1 / -1; }
+}
+
+/* ── status dots: a shape instead of a status word wherever possible ────── */
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-faint);
+  flex: none;
+}
+.dot.ok { background: var(--success); }
+.dot.warn { background: var(--warn); }
+.dot.err { background: var(--danger); }
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: 0.78rem;
+  color: var(--fg-dim);
 }
 
 .page-nav { display: flex; gap: 1rem; }
@@ -222,8 +292,14 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 
 .subtitle { color: var(--fg-dim); font-size: 0.88rem; margin-bottom: 2rem; }
 
+/* Sections read as CARDS now (대공사): a faint glass panel with its own
+   padding, so the page is big blocks first, rows second, controls third. */
 .category {
-  margin-bottom: 2rem;
+  margin-bottom: var(--s5);
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--s4) var(--s5);
 }
 /* clean-uninstall block (v0.0.35): visually fenced off from settings that
    are safe to poke at */
@@ -233,6 +309,16 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   padding: 1rem;
 }
 .danger-zone .category-label { color: var(--danger); }
+/* card header row: label left, one compact action right (usage Refresh) */
+.category-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--s2);
+}
+.category-header .category-label { margin-bottom: 0; }
+.category-header button { font-size: 0.78rem; padding: 0.3rem 0.7rem; }
+
 .category-label {
   font-size: 0.78rem;
   text-transform: uppercase;
@@ -247,16 +333,10 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
    group boundary -- categories inside a group sit closer together than the
    groups do, which is the whole point: spacing has to carry the grouping or
    the headings are decoration. */
-.settings-group {
-  margin-top: 2.75rem;
-  padding-top: 1.5rem;
-  border-top: 1px solid var(--border);
-}
-.settings-group:first-of-type {
-  margin-top: 1.5rem;
-  padding-top: 0;
-  border-top: none;
-}
+/* Groups sit in the page grid now (대공사) — the grid gap does the
+   separating, the old top-border/margin ladder is gone. Categories inside a
+   group are cards, so the group is just a label + card stack. */
+.settings-group { margin-top: var(--s3); min-width: 0; }
 .settings-group-label {
   font-size: 1rem;
   font-weight: 600;
@@ -408,9 +488,9 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .entry-row {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  gap: 1rem;
-  padding: 0.85rem 0;
+  align-items: center;
+  gap: var(--s4);
+  padding: var(--s3) 0;
   border-bottom: 1px solid var(--border);
 }
 .entry-row:last-child { border-bottom: none; }
@@ -439,7 +519,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   background: repeating-linear-gradient(45deg, var(--panel-raised), var(--panel-raised) 4px, var(--panel) 4px, var(--panel) 8px);
 }
 .usage-fill { height: 100%; background: var(--success); transition: width 0.3s ease; }
-.usage-fill.warn { background: #d9a15f; }
+.usage-fill.warn { background: var(--warn); }
 .usage-fill.hot { background: var(--danger); }
 .usage-seg-pct { width: 4.6rem; flex: none; font-size: 0.72rem; color: var(--fg); font-variant-numeric: tabular-nums; }
 .usage-seg-meta { flex: none; font-size: 0.7rem; color: var(--fg-faint); white-space: nowrap; }
@@ -581,10 +661,11 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  background: var(--panel);
+  /* same glass as .category cards (대공사) */
+  background: rgba(255, 255, 255, 0.025);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 1rem;
+  padding: var(--s4);
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
