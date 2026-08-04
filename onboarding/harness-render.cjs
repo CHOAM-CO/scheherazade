@@ -270,6 +270,27 @@ function createHarnessRender(ctx) {
       })
     }
 
+    // v0.0.41: activity feed on Bash starts (PreToolUse) -- pushes "what is
+    // about to run" into the local channel transcript so the chat page can
+    // show work instead of silence. Advisory, fail-open, local backend only
+    // (the hook itself no-ops when no port file exists). Same additive-only
+    // contract as the blocks above.
+    const ACTIVITY_HOOK = 'pre-tool-activity.mjs'
+    const hasActivity = settings.hooks.PreToolUse.some((group) =>
+      Array.isArray(group.hooks) && group.hooks.some((h) => typeof h.command === 'string' && h.command.includes(ACTIVITY_HOOK)))
+    if (!hasActivity) {
+      let preBashGroup = settings.hooks.PreToolUse.find((g) => g && g.matcher === 'Bash')
+      if (!preBashGroup) {
+        preBashGroup = { matcher: 'Bash', hooks: [] }
+        settings.hooks.PreToolUse.push(preBashGroup)
+      }
+      if (!Array.isArray(preBashGroup.hooks)) preBashGroup.hooks = []
+      preBashGroup.hooks.push({
+        type: 'command',
+        command: `node ${path.join(toUnpackedPath(REPO_ROOT), 'hooks', ACTIVITY_HOOK)}`,
+      })
+    }
+
     // v0.0.22: context-gauge tap on Stop + SessionStart -- advisory
     // instrument, additive-only, both event groups checked independently so
     // a hand-edited config missing only one still converges. See the hook's

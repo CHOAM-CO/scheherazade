@@ -754,6 +754,10 @@ window.COPY = {
     // into the agent process, so the label never claims more than that.
     read: 'Read',
     typingAria: 'The agent is typing…',
+    // Activity feed (v0.0.41): what the agent is doing right now, from the
+    // PreToolUse hook. One line, latest wins.
+    activity: (label) => `⚙ ${label}`,
+    activityAria: 'What the agent is working on right now',
     reactAria: (emoji) => `React with ${emoji}`,
     reactFailed: "Couldn't react — try again.",
   },

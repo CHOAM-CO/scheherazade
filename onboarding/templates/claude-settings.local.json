@@ -55,6 +55,15 @@
     ],
     "PreToolUse": [
       {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node {AGENT_DIR}/hooks/pre-tool-activity.mjs"
+          }
+        ]
+      },
+      {
         "matcher": "mcp__agent-channel__reply",
         "hooks": [
           {

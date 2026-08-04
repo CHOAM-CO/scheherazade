@@ -41,7 +41,7 @@ needs before it can pick up work.
 
 ## Hook System
 
-Twelve hook commands across four lifecycle stages, wired in
+Thirteen hook commands across four lifecycle stages, wired in
 `.claude/settings.local.json` (shipped as
 `onboarding/templates/claude-settings.local.json`). **Three of them can
 block.** This section used to say "three hooks, all advisory"; that was true
@@ -74,6 +74,7 @@ blocker by accident.
 | `session-start.mjs` | `SessionStart` | all | restore continuity at boot: create today's note if missing, surface a restore summary, flag pending compression |
 | `session-start-reflux-card.mjs` | `SessionStart` | all | surface pending persona-reflux proposals |
 | `context-gauge.mjs` | `SessionStart`, `Stop` | all | context-occupancy tap (registered at two stages) |
+| `pre-tool-activity.mjs` | `PreToolUse` | `Bash` | push what is about to run into the local channel's transcript (kind:'activity'), so the chat page shows work instead of silence; no-ops on non-local backends |
 | `post-bash-permission-translator.mjs` | `PostToolUse` | `Bash` | turn a raw permission denial into an actionable message |
 | `post-bash-receipt-ledger.mjs` | `PostToolUse` | `Bash` | record one JSONL row per Bash result, so the rumination gate can hold a reply against what the turn actually ran (design 0017) |
 | `pre-reply-corrections-context.mjs` | `PreToolUse` | `mcp__agent-channel__reply` | surface prior corrections relevant to the reply being sent |
@@ -81,7 +82,7 @@ blocker by accident.
 | `checkpoint-nudge.mjs` | `Stop` | all | warn when `checkpoint.md` is 30+ minutes stale, throttled to once per 30 min |
 
 `context-gauge.mjs` is registered at both `SessionStart` and `Stop`, so the
-twelve commands cover eleven distinct hook files. (Two former Stop hooks,
+thirteen commands cover twelve distinct hook files. (Two former Stop hooks,
 felt-check and stop-skill-extraction-nudge, were cut in the 2026-07-28
 boot-context diet -- advisory nags whose disciplines live on in CLAUDE.md
 §2; existing installs converge via the removal migration in

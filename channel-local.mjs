@@ -119,7 +119,12 @@ async function writeTranscriptOnce() {
   // reader landing mid-write must never parse a truncated file. 0600 like
   // the port file -- this is the full conversation content.
   const tmp = `${file}.${process.pid}.tmp`
-  await fs.writeFile(tmp, JSON.stringify({ seq, queue }, null, 1), { mode: 0o600 })
+  // Activity items are NOT persisted: "running npm test" is presence, not
+  // conversation -- replaying yesterday's command chatter into a fresh boot
+  // would be noise wearing a transcript costume. seq stays as-is; the
+  // cursor contract already tolerates gaps.
+  const durable = queue.filter((m) => m.kind !== 'activity')
+  await fs.writeFile(tmp, JSON.stringify({ seq, queue: durable }, null, 1), { mode: 0o600 })
   await fs.rename(tmp, file)
 }
 
@@ -191,6 +196,17 @@ export function enqueueReaction(role, emoji, targetSeq, { now = () => Date.now()
   return push({ kind: 'reaction', role, emoji: String(emoji), targetSeq, text: String(emoji), ts: now() })
 }
 
+// An activity item is what the agent is DOING right now ("Install package
+// dependencies"), pushed by the PreToolUse hook via POST /activity. Stolen
+// from Codex's item/started (docs/codex-architecture-review-2026-08-04.md
+// §7): the delta stream is worth little on non-streaming surfaces, but
+// "started" alone kills the silent-minutes problem. Rides the existing
+// queue -- no transport change, the page's cursor drain picks it up like
+// any other item.
+export function enqueueActivity(label, { now = () => Date.now() } = {}) {
+  return push({ kind: 'activity', role: 'agent', text: String(label), ts: now() })
+}
+
 // The one presence value (see header). Asymmetric on purpose (live catch,
 // 07-30 dev-harness screenshot): a USER reaction is skipped -- a tap is not
 // a question awaiting an answer -- but an AGENT reaction counts as the agent
@@ -202,6 +218,11 @@ export function transcriptState() {
   for (let i = queue.length - 1; i >= 0; i--) {
     const m = queue[i]
     if (m.kind === 'reaction' && m.role === 'user') continue
+    // An activity item is evidence of WORK, not an answer: "running npm
+    // test" must not clear the awaiting state the way a reply does, or the
+    // read/typing affordances would claim the user's question was handled
+    // by a command starting.
+    if (m.kind === 'activity') continue
     if (m.role !== 'user') break
     since = m.ts
   }
@@ -437,6 +458,24 @@ export function createRequestHandler({ notify, token, onInbound = () => {} }) {
         // the transcript never claims a delivery that didn't happen.
         enqueueInbound(delivered)
         onInbound(delivered)
+        return send(202, { ok: true })
+      }
+      if (url.pathname === '/activity' && req.method === 'POST') {
+        let body = ''
+        for await (const chunk of req) {
+          body += chunk
+          if (body.length > 10_000) return send(413, { error: 'too large' })
+        }
+        let parsed
+        try { parsed = JSON.parse(body || '{}') } catch { return send(400, { error: 'bad json' }) }
+        const label = typeof (parsed && parsed.label) === 'string' ? parsed.label.trim() : ''
+        if (!label) return send(400, { error: 'label required' })
+        // Length cap: this is a status line, not a second message lane. The
+        // sender (pre-tool-activity.mjs) already truncates; enforcing here
+        // keeps a crafted request honest too.
+        enqueueActivity(label.slice(0, 160))
+        // No notification: activity is FOR the page. The agent already
+        // knows what it is doing.
         return send(202, { ok: true })
       }
       if (url.pathname === '/react' && req.method === 'POST') {

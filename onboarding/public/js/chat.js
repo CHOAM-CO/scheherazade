@@ -58,6 +58,7 @@
   let channelUp = false // freshest signal: did the last /out poll succeed
   let typingEl = null
   let readEl = null
+  let activityEl = null // "⚙ running: ..." status line; latest activity wins
 
   function setStatics() {
     $('ct-title').textContent = C.title
@@ -100,6 +101,7 @@
     el.className = `chat-msg chat-${role}`
     el.dataset.seq = m.seq
     renderMarkdown(el, m.text)
+    if (role === 'agent') clearActivity() // a reply supersedes the status line
     if (role === 'agent') attachReactBar(el, m.seq)
     else lastUserBubble = el
     pane.appendChild(el)
@@ -149,8 +151,31 @@
     badge.textContent = m.emoji
   }
 
+  // One status line, not a bubble stream: a turn with thirty Bash calls
+  // must not bury the conversation under thirty rows. Latest label wins;
+  // an agent MESSAGE landing retires the line (the work spoke for itself),
+  // and updatePresence retires it when the awaiting state clears.
+  function showActivity(m) {
+    const stick = atBottom()
+    if (!activityEl) {
+      activityEl = document.createElement('div')
+      activityEl.className = 'chat-activity'
+      activityEl.setAttribute('aria-label', C.activityAria)
+    }
+    activityEl.textContent = C.activity(m.text)
+    pane.appendChild(activityEl) // appendChild moves it back to the end
+    if (stick) pane.scrollTop = pane.scrollHeight
+  }
+
+  function clearActivity() {
+    if (!activityEl) return
+    activityEl.remove()
+    activityEl = null
+  }
+
   function renderItem(m) {
     if (m.kind === 'reaction') applyReaction(m)
+    else if (m.kind === 'activity') showActivity(m)
     else appendMsg(m)
   }
 
@@ -173,6 +198,10 @@
   // dots when the channel dies mid-wait.
   function updatePresence() {
     const waiting = awaitingSince !== null && channelUp
+    // The activity line only makes sense while work is owed: once nothing
+    // is awaited (or the channel died), a lingering "running X" would be
+    // the same dressed-up-silence the typing cap exists to prevent.
+    if (!waiting) clearActivity()
     const typing = waiting && (Date.now() - awaitingSince) < TYPING_SHOW_MAX_MS
     if (typing) {
       if (!typingEl) {

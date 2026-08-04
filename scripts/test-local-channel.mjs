@@ -14,7 +14,7 @@
 // Mirrors scripts/test-provider-env.mjs's assert()/pass/fail convention.
 
 import {
-  enqueueOutbound, enqueueInbound, enqueueReaction, readOutbound, resetQueueForTest,
+  enqueueOutbound, enqueueInbound, enqueueReaction, enqueueActivity, readOutbound, resetQueueForTest,
   deliverInbound, deliverReaction, transcriptState, handleToolCall,
   createRequestHandler, LOCAL_CHANNEL_ID, MAX_QUEUE, USER_REACTIONS,
   enableTranscriptPersistence, flushTranscript,
@@ -377,6 +377,46 @@ console.log('\n10. boot announce: the greeting is the first thing the chat pane 
   fs.rmSync(tmp, { recursive: true, force: true })
 }
 
+// ── activity items: presence of WORK, not an answer (Codex §7 steal) ───────
+{
+  resetQueueForTest()
+  enqueueInbound('do the thing')
+  const before = transcriptState()
+  assert(before.awaitingReplySince !== null, 'user message opens the awaiting state')
+
+  enqueueActivity('Install package dependencies')
+  const during = transcriptState()
+  assert(during.awaitingReplySince === before.awaitingReplySince,
+    'an activity item does NOT clear awaiting (running a command is not answering)')
+
+  const drained = readOutbound(0)
+  assert(drained.items.some((m) => m.kind === 'activity' && m.text === 'Install package dependencies'),
+    'the activity item rides the same queue the page already drains')
+
+  enqueueOutbound('done')
+  assert(transcriptState().awaitingReplySince === null, 'a real reply still clears awaiting')
+
+  // over the wire: auth required, label required, cap enforced
+  const handler = createRequestHandler({ notify: async () => {}, token: TOKEN })
+  {
+    const res = makeRes()
+    await handler(makeReq({ method: 'POST', url: '/activity', token: null, body: JSON.stringify({ label: 'x' }) }), res)
+    assert(res.code === 401, 'POST /activity without the bearer token is refused')
+  }
+  {
+    const res = makeRes()
+    await handler(makeReq({ method: 'POST', url: '/activity', body: JSON.stringify({}) }), res)
+    assert(res.code === 400, 'POST /activity without a label is refused')
+  }
+  {
+    const res = makeRes()
+    await handler(makeReq({ method: 'POST', url: '/activity', body: JSON.stringify({ label: 'z'.repeat(500) }) }), res)
+    assert(res.code === 202, 'POST /activity with a label lands')
+    const tail = readOutbound(0).items.at(-1)
+    assert(tail.kind === 'activity' && tail.text.length === 160, 'oversized labels are truncated to 160, not rejected')
+  }
+}
+
 // ── transcript persistence: the app-relaunch path (Mino, 2026-08-04) ───────
 // Before this existed, the queue died with the process and reopening the app
 // showed an empty chat. Persistence is OPT-IN (boot() enables it) precisely
@@ -392,6 +432,7 @@ console.log('\n10. boot announce: the greeting is the first thing the chat pane 
   enqueueInbound('remember me')
   enqueueOutbound('I will')
   enqueueReaction('agent', '👍', 1)
+  enqueueActivity('running npm test') // must NOT survive the restart below
   await flushTranscript()
 
   const file = path.join(tmp, 'chat-transcript.json')
@@ -406,15 +447,16 @@ console.log('\n10. boot announce: the greeting is the first thing the chat pane 
   resetQueueForTest()
   assert(readOutbound(0).items.length === 0, 'reset really emptied the queue (restart simulated)')
   const { restored } = await enableTranscriptPersistence({ dataHome: tmp })
-  assert(restored === 3, `restore reports 3 items, got ${restored}`)
+  assert(restored === 3, `restore reports 3 items (activity excluded), got ${restored}`)
   const replay = readOutbound(0)
   assert(replay.items.length === 3, 'a cursor-0 drain replays the whole restored conversation')
   assert(replay.items[0].text === 'remember me' && replay.items[0].role === 'user', 'user half survives the restart')
   assert(replay.items[1].text === 'I will' && replay.items[1].role === 'agent', 'agent half survives the restart')
   assert(replay.items[2].kind === 'reaction' && replay.items[2].targetSeq === 1, 'reactions keep pointing at their bubble')
-  assert(replay.latest === 3, 'seq is restored monotonic (page cursors stay valid)')
+  assert(!replay.items.some((m) => m.kind === 'activity'), 'activity items are presence, not conversation: NOT persisted')
+  assert(replay.latest === 4, 'seq is restored monotonic INCLUDING the dropped activity slot (page cursors stay valid)')
   const next = enqueueOutbound('and new messages continue the sequence')
-  assert(next === 4, `post-restore enqueue continues at seq 4, got ${next}`)
+  assert(next === 5, `post-restore enqueue continues at seq 5, got ${next}`)
 
   // corrupt file: fail-soft to an empty transcript, never a dead channel.
   resetQueueForTest()
