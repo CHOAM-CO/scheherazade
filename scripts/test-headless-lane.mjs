@@ -33,7 +33,7 @@ function assert(cond, label) {
 // pathToFileURL, not the raw join: a bare absolute path works on POSIX by
 // accident but Windows ESM refuses it (ERR_UNSUPPORTED_ESM_URL_SCHEME 'c:'
 // -- caught by the win suite on magi-win, 2026-08-04 evening exe gate).
-const { renderChannelTag, renderUserEvent } = await import(pathToFileURL(path.join(ROOT, 'headless-lane.mjs')).href)
+const { renderChannelTag, renderUserEvent, contextTokensOf } = await import(pathToFileURL(path.join(ROOT, 'headless-lane.mjs')).href)
 const { createInboundNotifier } = await import(pathToFileURL(path.join(ROOT, 'channel-runtime.mjs')).href)
 
 // ── 1. tag byte-contract vs stop-reply-guard ────────────────────────────────
@@ -296,19 +296,111 @@ process.exit(0)
   assert(JSON.parse(fs.readFileSync(sessPath, 'utf8')).bornTs === youngBorn,
     'bornTs preserved across a resume (conversation birth, not process start)')
 
-  // old conversation -> rotated to fresh
-  fs.writeFileSync(sessPath, JSON.stringify({ sessionId: 'old-id', ts: Date.now(), bornTs: Date.now() - 25 * 3600_000 }))
+  // old conversation -> rotated to fresh (default ceiling now 72h -- age is
+  // the BACKSTOP since context-pressure rotation landed, 2026-08-04)
+  fs.writeFileSync(sessPath, JSON.stringify({ sessionId: 'old-id', ts: Date.now(), bornTs: Date.now() - 73 * 3600_000 }))
   await runLane()
   const argv2 = JSON.parse(fs.readFileSync(sink, 'utf8').trim().split('\n').at(-1))
-  assert(!argv2.includes('--resume'), 'conversation past the 24h ceiling is NOT resumed')
-  const rotated = JSON.parse(fs.readFileSync(sessPath, 'utf8'))
-  assert(rotated.bornTs > Date.now() - 60_000, 'rotation restarts the bornTs clock')
-
+  assert(!argv2.includes('--resume'), 'conversation past the 72h backstop ceiling is NOT resumed')
+  const rotatedByAge = JSON.parse(fs.readFileSync(sessPath, 'utf8'))
+  assert(rotatedByAge.bornTs > Date.now() - 60_000, 'rotation restarts the bornTs clock')
+  // 25h-old conversation is fine now -- v1 would have cut it here
+  fs.writeFileSync(sessPath, JSON.stringify({ sessionId: 'day-old-id', ts: Date.now(), bornTs: Date.now() - 25 * 3600_000 }))
+  await runLane()
+  const argv2b = JSON.parse(fs.readFileSync(sink, 'utf8').trim().split('\n').at(-1))
+  assert(argv2b.includes('--resume') && argv2b.includes('day-old-id'),
+    'a 25h conversation IS resumed under the backstop (time no longer the primary cut)')
   // ceiling is env-tunable
   fs.writeFileSync(sessPath, JSON.stringify({ sessionId: 'tuned-id', ts: Date.now(), bornTs: Date.now() - 3 * 3600_000 }))
   await runLane({ SCHEHERAZADE_MAX_CONVO_HOURS: '2' })
   const argv3 = JSON.parse(fs.readFileSync(sink, 'utf8').trim().split('\n').at(-1))
   assert(!argv3.includes('--resume'), 'SCHEHERAZADE_MAX_CONVO_HOURS overrides the ceiling')
+}
+
+// ── 5b. context-pressure rotation (Mino 2026-08-04 "시간으로 끊지말고") ────
+console.log('\n5b. context-pressure rotation (schedule -> idle boundary -> handoff -> fresh boot)')
+{
+  // pure helper first: what counts as standing context weight
+  assert(contextTokensOf({ input_tokens: 1000, cache_read_input_tokens: 150_000, cache_creation_input_tokens: 2000, output_tokens: 999_999 }) === 153_000,
+    'contextTokensOf sums input + both cache flavors and EXCLUDES output_tokens')
+  assert(contextTokensOf(undefined) === 0 && contextTokensOf({}) === 0,
+    'a result with no usage reads as zero pressure (never a rotation trigger)')
+
+  const MEM = path.join(TMP, 'mem-pressure')
+  fs.mkdirSync(MEM, { recursive: true })
+  // fake claude: records argv, echoes stdin to sink; 'light-turn' -> small
+  // usage, 'big-turn' -> near-full context, '[SYSTEM]' handoff -> result
+  const fake = path.join(TMP, 'fake-pressure.mjs')
+  fs.writeFileSync(fake, `
+import fs from 'node:fs'
+import { createInterface } from 'node:readline'
+fs.appendFileSync(process.env.FAKE_ARGV, JSON.stringify(process.argv.slice(2)) + '\\n')
+process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'press-sess', model: 'fake', mcp_servers: [] }) + '\\n')
+const result = (usage) => JSON.stringify({ type: 'result', subtype: 'success', num_turns: 1, usage }) + '\\n'
+const rl = createInterface({ input: process.stdin })
+rl.on('line', (l) => {
+  fs.appendFileSync(process.env.FAKE_SINK, l + '\\n')
+  if (l.includes('SYSTEM')) process.stdout.write(result({ input_tokens: 2000, cache_read_input_tokens: 180_000 }))
+  else if (l.includes('big-turn')) process.stdout.write(result({ input_tokens: 1500, cache_read_input_tokens: 179_000 }))
+  else if (l.includes('light-turn')) process.stdout.write(result({ input_tokens: 500, cache_read_input_tokens: 30_000 }))
+})
+process.on('SIGTERM', () => process.exit(0))
+`)
+  const shim = path.join(TMP, 'pressure-shim.sh')
+  fs.writeFileSync(shim, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fake)} "$@"\n`, { mode: 0o755 })
+  const sink = path.join(TMP, 'pressure-sink.jsonl')
+  const argvSink = path.join(TMP, 'pressure-argv.jsonl')
+  const rotatePath = path.join(MEM, '.headless-rotate-pending.json')
+  const env = {
+    ...process.env, MEM, MODEL: 'fake-model', CLAUDE_BIN: shim,
+    FAKE_SINK: sink, FAKE_ARGV: argvSink,
+    // idle boundary at 600ms so the probe runs in seconds, not minutes
+    SCHEHERAZADE_ROTATE_IDLE_MINUTES: '0.01',
+  }
+  const bootLane = () => spawn(process.execPath, [path.join(ROOT, 'headless-lane.mjs')], { env, stdio: ['ignore', 'ignore', 'pipe'] })
+  const epPath = path.join(MEM, '.ingest-endpoint.json')
+  const waitFor = async (fn, ms = 8000) => {
+    const d = Date.now() + ms
+    while (Date.now() < d) { if (fn()) return true; await new Promise((r) => setTimeout(r, 50)) }
+    return fn()
+  }
+  const sinkLines = () => (fs.existsSync(sink) ? fs.readFileSync(sink, 'utf8').trim().split('\n').filter(Boolean) : [])
+
+  const lane = bootLane()
+  const laneExited = new Promise((r) => lane.on('exit', r))
+  assert(await waitFor(() => fs.existsSync(epPath)), 'pressure lane boots (endpoint file up)')
+  const ep = JSON.parse(fs.readFileSync(epPath, 'utf8'))
+  const post = (content) => fetch(`http://127.0.0.1:${ep.port}/inbound`, {
+    method: 'POST',
+    headers: { 'x-ingest-token': ep.token, 'content-type': 'application/json' },
+    body: JSON.stringify({ content, meta: { channelId: 'in-app' } }),
+  })
+
+  // a light turn schedules nothing
+  await post('light-turn 질문')
+  await waitFor(() => sinkLines().length >= 1)
+  await new Promise((r) => setTimeout(r, 900)) // past the idle window
+  assert(!fs.existsSync(rotatePath), 'light turn (~30k) never schedules a rotation')
+  assert(sinkLines().every((l) => !l.includes('[SYSTEM]')), '...and no handoff turn was sent')
+
+  // a heavy turn schedules; the cut waits for the idle boundary, then the
+  // handoff turn fires, its result recycles the lane
+  await post('big-turn 질문')
+  assert(await waitFor(() => fs.existsSync(rotatePath)), 'heavy turn (~180k > 70% of 200k) schedules the rotation marker')
+  assert(await waitFor(() => sinkLines().some((l) => l.includes('SYSTEM') && l.includes('checkpoint.md'))),
+    'after the idle boundary, ONE [SYSTEM] handoff turn asks for a checkpoint flush')
+  assert(await waitFor(() => lane.exitCode !== null || lane.signalCode !== null, 12_000) && (await laneExited, true),
+    'the handoff result recycles the lane process')
+
+  // fresh boot consumes the marker and does NOT resume
+  fs.rmSync(argvSink, { force: true })
+  const lane2 = bootLane()
+  assert(await waitFor(() => fs.existsSync(argvSink)), 'second lane boots')
+  const argv = JSON.parse(fs.readFileSync(argvSink, 'utf8').trim().split('\n').at(-1))
+  assert(!argv.includes('--resume'), 'post-rotation boot starts FRESH (no --resume)')
+  assert(await waitFor(() => !fs.existsSync(rotatePath)), 'rotation marker is consumed by the boot')
+  lane2.kill('SIGTERM')
+  await new Promise((r) => lane2.on('exit', r))
 }
 
 // ── 6. stranded-message redelivery (pending FIFO) ──────────────────────────

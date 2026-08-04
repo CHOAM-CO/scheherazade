@@ -71,15 +71,39 @@ const endpointFile = () => path.join(MEM, '.ingest-endpoint.json')
 const strikesFile = () => path.join(MEM, '.headless-resume-strikes.json')
 const pendingFile = () => path.join(MEM, '.headless-pending.json')
 
-// Conversation rotation (UX red-team 2026-08-04 F3): --resume on every
-// recycle means the conversation would otherwise grow forever -- slower
-// replies, slower boots, climbing cost, and a 12h boot-greeting turn
-// accumulating in one endless thread. `bornTs` is the CONVERSATION's birth
-// (preserved across resumes; `ts` is just the last process start and
-// refreshes every boot, so it cannot express age). Past the ceiling we
-// rotate to a fresh session -- checkpoint files are the continuity bridge,
-// exactly as they were for the pre-headless 12h recycle.
-const MAX_CONVO_AGE_MS = (Number(process.env.SCHEHERAZADE_MAX_CONVO_HOURS) || 24) * 3600 * 1000
+// Conversation rotation. v1 (UX red-team 2026-08-04 F3) cut purely by AGE;
+// v2 (Mino 2026-08-04 19:44 "시간으로 끊지말고 더 좋은 방법 있나?") cuts by
+// CONTEXT PRESSURE, which is the thing age was a proxy for: what actually
+// degrades a long resume is the context the next turn must carry, and every
+// `result` event reports exactly that (usage.input + cache read/creation).
+// The rules:
+//   1. pressure over threshold -> SCHEDULE a rotation (marker on disk, so
+//      the decision survives recycles) -- never cut immediately;
+//   2. cut only at an IDLE BOUNDARY (no open turn, quiet for a few
+//      minutes) -- a conversation is never beheaded mid-thread;
+//   3. before cutting, ONE [SYSTEM] handoff turn asks the agent to flush
+//      checkpoint.md -- the same continuity bridge the graceful-quit path
+//      uses -- and the fresh session boots reading it (MEM CLAUDE.md §1).
+// A light conversation can now live for days; a heavy one rotates the same
+// evening. AGE stays only as a backstop (default raised 24h -> 72h) for a
+// lane whose provider never reports usage.
+const MAX_CONVO_AGE_MS = (Number(process.env.SCHEHERAZADE_MAX_CONVO_HOURS) || 72) * 3600 * 1000
+const ROTATE_CONTEXT_TOKENS = Math.max(20_000, Number(process.env.SCHEHERAZADE_CONTEXT_TOKENS) || 200_000)
+const ROTATE_AT = Math.min(0.95, Math.max(0.3, Number(process.env.SCHEHERAZADE_ROTATE_AT) || 0.7))
+const ROTATE_IDLE_MS = Math.max(0.005, Number(process.env.SCHEHERAZADE_ROTATE_IDLE_MINUTES) || 5) * 60_000
+// Check cadence follows the idle window down so tests (and aggressive
+// configs) are not stuck behind a 30s tick.
+const ROTATE_CHECK_MS = Math.min(30_000, Math.max(250, Math.floor(ROTATE_IDLE_MS / 2)))
+const rotateFile = () => path.join(MEM, '.headless-rotate-pending.json')
+
+// What the NEXT turn must carry ≈ what this turn carried: input + both
+// cache flavors. output_tokens is excluded on purpose -- it is this turn's
+// spend, not the conversation's standing weight (it shows up as next
+// turn's input anyway). Exported pure for tests.
+export function contextTokensOf(usage) {
+  const u = usage || {}
+  return (Number(u.input_tokens) || 0) + (Number(u.cache_read_input_tokens) || 0) + (Number(u.cache_creation_input_tokens) || 0)
+}
 
 // Turn watchdog (2026-08-04, field case: deepseek/glm via ollama.com wedging
 // a turn forever -- process alive, init clean, model call never returns,
@@ -219,9 +243,18 @@ function main() {
   const prior = readPriorSession()
   let resumeId = prior ? prior.sessionId : null
   const priorBornTs = prior && Number(prior.bornTs) ? Number(prior.bornTs) : null
+  // Scheduled rotation from the previous run (context pressure crossed the
+  // threshold). Consumed HERE, whatever path ended that run -- the clean
+  // post-flush recycle, a watchdog kill during the flush turn, or a crash:
+  // once pressure was seen, resuming would only re-see it.
+  if (fs.existsSync(rotateFile())) {
+    if (resumeId) log('context-pressure rotation was scheduled -- starting a FRESH session; checkpoint.md carries continuity')
+    resumeId = null
+    try { fs.unlinkSync(rotateFile()) } catch { /* consumed best-effort */ }
+  }
   if (resumeId && priorBornTs && Date.now() - priorBornTs > MAX_CONVO_AGE_MS) {
     const ageH = Math.round((Date.now() - priorBornTs) / 3600_000)
-    log(`conversation is ~${ageH}h old (ceiling ${Math.round(MAX_CONVO_AGE_MS / 3600_000)}h) -- rotating to a FRESH session; checkpoint files carry continuity`)
+    log(`conversation is ~${ageH}h old (backstop ceiling ${Math.round(MAX_CONVO_AGE_MS / 3600_000)}h) -- rotating to a FRESH session; checkpoint files carry continuity`)
     resumeId = null
   }
   const args = buildArgs({
@@ -249,6 +282,13 @@ function main() {
   let openTurn = false
   let lastActivityTs = Date.now()
   const noteStdinWrite = () => { openTurn = true; lastActivityTs = Date.now() }
+
+  // Context-pressure rotation state (see the constants' header). rotatePending
+  // mirrors the on-disk marker; lastTurnEndTs anchors the idle boundary to
+  // the END of the last turn, not to arbitrary child chatter.
+  let rotatePending = fs.existsSync(rotateFile())
+  let rotateFlushSent = false
+  let lastTurnEndTs = Date.now()
 
   // Redeliver messages stranded by a mid-turn recycle (F4). Runs before the
   // ingest server exists, so these precede any new inbound POST in stdin
@@ -330,8 +370,33 @@ function main() {
       // costs a redelivery skip, never a double reply.
       const resultTs = Date.now()
       openTurn = false // the watchdog stands down until the next stdin write
+      lastTurnEndTs = resultTs
       const p = readPending()
       if (p.length) writePending(p.filter((ev) => (Number(ev.ts) || 0) > resultTs))
+      // Context-pressure check (rotation rule 1: schedule, never cut here).
+      const ctxTokens = contextTokensOf(e.usage)
+      if (!rotatePending && ctxTokens >= ROTATE_CONTEXT_TOKENS * ROTATE_AT) {
+        rotatePending = true
+        log(
+          `context pressure: last turn carried ~${ctxTokens} tokens ` +
+          `(threshold ${Math.round(ROTATE_CONTEXT_TOKENS * ROTATE_AT)} = ${Math.round(ROTATE_AT * 100)}% of ${ROTATE_CONTEXT_TOKENS}; ` +
+          'SCHEHERAZADE_CONTEXT_TOKENS / SCHEHERAZADE_ROTATE_AT to tune) -- rotation scheduled for the next idle boundary'
+        )
+        try {
+          writeJsonAtomic(rotateFile(), { ts: resultTs, contextTokens: ctxTokens }, 0o600)
+        } catch (err) {
+          log(`rotate marker write failed (rotation degrades to the age backstop): ${err.message}`)
+        }
+      }
+      // The handoff flush turn just finished (rotation rule 3): checkpoint
+      // is as fresh as it will ever be. Recycle now; boot consumes the
+      // marker and starts fresh.
+      if (rotateFlushSent) {
+        log('handoff flush turn finished -- recycling into a FRESH session (context-pressure rotation)')
+        try { child.stdin.end() } catch { /* already gone */ }
+        child.kill('SIGTERM')
+        setTimeout(() => { if (!childExited) child.kill('SIGKILL') }, 10_000).unref()
+      }
     } else if (e.type === 'assistant') {
       for (const c of (e.message && e.message.content) || []) {
         if (c.type === 'tool_use') debugLog(`tool: ${c.name}`)
@@ -427,6 +492,32 @@ function main() {
     setTimeout(() => { if (!childExited) child.kill('SIGKILL') }, 10_000).unref()
   }, 30_000)
   stallTimer.unref()
+
+  // ── rotation timer (rule 2: cut only at an idle boundary) ────────────────
+  // Fires the ONE handoff flush turn once the scheduled rotation meets a
+  // quiet conversation. No separate wedge timeout: the flush turn is a turn,
+  // so the stall watchdog above is its backstop, and the on-disk marker
+  // makes even a watchdog-kill land as a fresh boot.
+  const rotateTimer = setInterval(() => {
+    if (childExited || !rotatePending || rotateFlushSent || openTurn) return
+    if (Date.now() - lastTurnEndTs < ROTATE_IDLE_MS) return
+    rotateFlushSent = true
+    log(`idle boundary reached (quiet ${Math.round((Date.now() - lastTurnEndTs) / 1000)}s) -- sending the checkpoint handoff turn before rotating`)
+    try {
+      child.stdin.write(renderUserEvent({
+        content:
+          '[SYSTEM] This conversation is about to be rotated to a fresh session because its context is nearly full. ' +
+          'Update checkpoint.md NOW with everything the next session needs to continue seamlessly: open threads, promises made to the user, in-progress work and its exact state. ' +
+          'Do not message the user about this housekeeping. Reply with a single short line when the checkpoint is written.',
+        meta: { source: 'system', sender: 'system', channelId: 'system' },
+      }))
+      noteStdinWrite()
+    } catch (err) {
+      // stdin gone = child dying anyway; the marker survives and boot rotates.
+      log(`handoff turn write failed (rotation still lands on next boot): ${err.message}`)
+    }
+  }, ROTATE_CHECK_MS)
+  rotateTimer.unref()
 
   // ── lifecycle ────────────────────────────────────────────────────────────
   const shutdown = (sig) => {

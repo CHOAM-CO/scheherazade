@@ -805,6 +805,10 @@ window.COPY = {
     attachTooLarge: 'That image is over 10MB — too big to attach.',
     attachFailed: (msg) => `Couldn't upload the image: ${msg}`,
     attachMissing: (name) => `🖼 ${name} (file no longer available)`,
+    // Soft warning, never a block: the vision table is a best-effort
+    // binding (ollama.com library scrape 2026-08-04), and a false block
+    // is worse than a warned attempt.
+    attachNoVision: "Heads up: the current model can't view images, so the agent will only know a file was attached.",
   },
 
   // AUTHORED (v0.0.20) -- session log viewer (Mino 07-16: 개발 중 앱이

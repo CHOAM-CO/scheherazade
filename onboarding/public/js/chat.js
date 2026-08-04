@@ -100,7 +100,9 @@
   // of raw paths. The blob fetch goes through fetch-with-token, not
   // <img src> -- every /api GET is X-Onboard-Token-gated, so a bare src
   // would 403.
-  const IMG_MARKER_RE = /^\[image attached: (.+?) — read it with the Read tool\]$/
+  // Tolerant of every markerFor() variant (and 0.0.54's original text):
+  // path up to the first " — ", then any guidance clause.
+  const IMG_MARKER_RE = /^\[image attached: (.+?) — [^\]]*\]$/
   function splitImageMarkers(text) {
     const images = []
     const kept = []
@@ -392,6 +394,45 @@
   // live in DATA_HOME/chat_uploads/.
   let pendingAttachments = [] // { name, path, chip }
 
+  // Vision capability of the CURRENT lane (Mino 2026-08-04 19:56 "비전없는
+  // 모델 fallback은 생각해놓고 개발한거 맞지?" -- honest answer was no, this
+  // is the fix). Three states, never a guess:
+  //   'yes'     -> normal marker (agent Reads the image)
+  //   'no'      -> soft warning toast on attach + marker tells the agent to
+  //                SAY it cannot see images instead of hallucinating contents
+  //   'unknown' -> marker carries the conditional honesty clause
+  // The ollama rows are bound from live ollama.com/library scrapes
+  // (2026-08-04): kimi-k2.7-code carries the vision capability pill
+  // ("image and video input via MoonViT"); glm-5.2 and deepseek-v4-flash
+  // have no vision badge. Attaching is never BLOCKED -- the model table
+  // could be stale, and a false block is worse than a soft warning.
+  let visionState = 'unknown'
+  let visionWarned = false
+  async function resolveVisionState() {
+    try {
+      const spawn = (await window.api('/api/agent/spawn-info')).spawn
+      const provider = String((spawn && spawn.provider) || '')
+      const model = String((spawn && spawn.model) || '').replace(/:.*$/, '') // strip :tag
+      if (/^claude/.test(provider) || /^claude/.test(model)) { visionState = 'yes'; return }
+      if (provider === 'ollama') {
+        const OLLAMA_VISION = { 'kimi-k2.7-code': 'yes', 'glm-5.2': 'no', 'deepseek-v4-flash': 'no' }
+        visionState = OLLAMA_VISION[model] || 'unknown'
+        return
+      }
+      visionState = 'unknown' // chatgpt proxy / custom: not verified either way
+    } catch { visionState = 'unknown' }
+  }
+
+  function markerFor(att) {
+    if (visionState === 'no') {
+      return `[image attached: ${att.path} — NOTE: this model cannot view images. Do not guess the contents; tell the user honestly that you cannot see images on the current model.]`
+    }
+    if (visionState === 'unknown') {
+      return `[image attached: ${att.path} — read it with the Read tool; if this model cannot view images, say so honestly instead of guessing]`
+    }
+    return `[image attached: ${att.path} — read it with the Read tool]`
+  }
+
   function renderAttachChip(att) {
     const box = $('ct-attach-chips')
     if (!box) return
@@ -429,6 +470,10 @@
       const att = { name: out.name, path: out.path }
       pendingAttachments.push(att)
       renderAttachChip(att)
+      if (visionState === 'no' && !visionWarned) {
+        visionWarned = true // once per page load, not once per image
+        window.showToast(C.attachNoVision)
+      }
     } catch (err) {
       console.error('attachment upload failed:', err)
       window.showToast(C.attachFailed(err.message))
@@ -441,9 +486,7 @@
     // One marker line per attachment, appended AFTER the user's text --
     // the path is what the agent Reads; the UI re-detects the marker to
     // render the image in the bubble (see appendMsg's image pass).
-    const markers = pendingAttachments
-      .map((a) => `[image attached: ${a.path} — read it with the Read tool]`)
-      .join('\n')
+    const markers = pendingAttachments.map(markerFor).join('\n')
     const outText = markers ? (text.trim() ? `${text}\n${markers}` : markers) : text
     sendBtn.disabled = true
     try {
@@ -492,6 +535,7 @@
     // sequential on purpose -- each one is a chip the user can still remove.
     const attachBtn = $('ct-attach')
     const fileInput = $('ct-file')
+    resolveVisionState() // async, best-effort; 'unknown' until it lands
     if (attachBtn && fileInput) {
       attachBtn.title = C.attachTitle
       attachBtn.onclick = () => fileInput.click()

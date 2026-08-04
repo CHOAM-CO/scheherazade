@@ -161,6 +161,13 @@ async function main() {
   // answer one -- this only removes the obligation.
   if (/^\s*\[reaction\]/.test(triggerBody)) process.exit(0)
 
+  // A [SYSTEM] housekeeping turn (context-pressure rotation handoff,
+  // shutdown flush) is the LANE talking, not the user: there is no one on
+  // the other end of channelId="system" to answer, and demanding a reply
+  // tool call here would nudge-loop the very turn whose only job is to
+  // write checkpoint.md and exit quietly.
+  if (/^\s*\[SYSTEM\]/.test(triggerBody)) process.exit(0)
+
   // Walk forward looking for a reply-class call that ANSWERED the trigger
   // channel. Two layers, receipt first (2026-07-15 Melchior chain review):
   //
