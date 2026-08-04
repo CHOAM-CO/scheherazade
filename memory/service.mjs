@@ -737,9 +737,52 @@ function memoryRecallMaterial(db, args) {
 // boots the HTTP server (which must get a live connection of its own);
 // memory/smoke.mjs closes its connection at teardown. Folding this into the
 // singleton would hand later callers a closed handle.
+// Owner-only, applied on EVERY open, not just on create (2026-08-04).
+//
+// memory.db shipped as 0644 in a 0755 directory. Everything this file does to
+// protect the contents -- `PRAGMA secure_delete = ON` to zero freed pages, the
+// wal_checkpoint(TRUNCATE) after a delete so the -wal does not keep the bytes
+// -- guards a file any process on the machine could open and read whole. The
+// care and the mode contradicted each other, and the mode was the one that
+// decided.
+//
+// This is not the same class as the credential blobs: those are
+// safeStorage-encrypted before they are written, so their mode is defence in
+// depth. This DB is plaintext SQLite. For it the mode IS the protection.
+//
+// Re-applied on every open because the fix has to reach EXISTING installs.
+// A create-time mode would leave every file already on disk at 0644 forever,
+// which is exactly the population that needs it.
+//
+// -wal and -shm get the same treatment: SQLite creates them itself, and the
+// -wal holds recently written rows verbatim, so a 0600 main file beside a
+// 0644 -wal protects nothing.
+//
+// FAIL-SOFT, deliberately. chmod is a no-op on Windows (it maps only the
+// read-only bit -- there the profile ACL is what bounds access), and a
+// hardened or exotic filesystem may refuse. Losing the tightening must never
+// cost the user their memory service, so this logs and continues. It is
+// hardening, not a gate.
+function hardenDbFiles(dbPath) {
+  if (process.platform === 'win32') return
+  const dir = path.dirname(dbPath)
+  try {
+    fs.chmodSync(dir, 0o700)
+  } catch (err) {
+    log(`could not restrict ${dir} to 0700 (${err.message}) -- continuing`)
+  }
+  for (const f of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+    try {
+      if (fs.existsSync(f)) fs.chmodSync(f, 0o600)
+    } catch (err) {
+      log(`could not restrict ${f} to 0600 (${err.message}) -- continuing`)
+    }
+  }
+}
+
 function initDb() {
   const dbDir = path.dirname(DB_PATH)
-  if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true })
+  if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true, mode: 0o700 })
 
   const db = new DatabaseSync(DB_PATH)
   db.exec('PRAGMA journal_mode = WAL')
@@ -754,6 +797,10 @@ function initDb() {
   // alone does not clean the -wal file).
   db.exec('PRAGMA secure_delete = ON')
   db.exec(DDL)
+  // AFTER the DDL, not before: journal_mode=WAL and the first write are what
+  // create the -wal/-shm siblings, so hardening earlier would find nothing to
+  // chmod and silently leave them world-readable.
+  hardenDbFiles(DB_PATH)
   log(`DB ready at ${DB_PATH}`)
   return db
 }

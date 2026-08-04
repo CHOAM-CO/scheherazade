@@ -222,3 +222,64 @@ deliberately made it impossible for an agent to star on a user's behalf. So:
 a project that thought hard about agent consent, and then wrote a nag protocol
 into the README anyway. The star request exists. It is Mino's to answer or
 ignore, once, not something to be asked twice.
+
+---
+
+## Correction to finding #1, same file, next morning
+
+Finding #1 above is factually right and **wrongly ranked**. I verified the
+route list this morning (patterns nudge → `coordinate_precision_fabrication`,
+promoted 2026-08-03: counts and route names are precision-shaped slots, and I
+had opened two of the twenty-four lines I was citing).
+
+The claim survived verification and is in fact understated — the reachable GET
+set includes `/api/memory/session-events`, `/api/memory/pointers`,
+`/api/memory/:table` (user_facts, open_threads, corrections, preferences) and
+`/api/journal`, which I did not name.
+
+But the same check found what the API gap sits next to:
+
+```
+-rw-r--r--  narr  staff  53248  memory.db
+```
+
+**The database is 0644 in a 0755 directory.** Every byte those routes serve is
+readable straight off disk by any local process — no port scan, no Host
+header, no timing. The API gate was never the weakest link in front of this
+data, and closing it while the file stayed world-readable would have been
+security theatre: real work, no change in what an attacker can read.
+
+This is the same error I made yesterday about the credential blobs, in the
+opposite direction. There I named a mechanism as the protection without
+checking what actually protected the data (DPAPI did). Here I named a
+mechanism as the exposure without checking what else already exposed it. Both
+times the fix was to look at the artifact instead of reasoning about the
+control.
+
+**Fixed** in `memory/service.mjs`: 0600 on the DB and its `-wal`/`-shm`
+siblings, 0700 on the directory, re-applied on every open so existing installs
+— every install made before today — get it on next launch rather than only new
+ones. Fail-soft: chmod is a no-op on Windows and can refuse on odd
+filesystems, and losing the tightening must never cost a user their memory
+service.
+
+Worth naming, because it is the part that stings: this file already ran
+`PRAGMA secure_delete = ON` to zero freed pages, and `wal_checkpoint(TRUNCATE)`
+after deletes so the `-wal` could not keep the bytes. Careful residue handling,
+on a file anyone on the machine could open and read whole.
+
+### Revised ranking
+
+1. **memory.db at rest** — done.
+2. **Injection journal** (was #2) — unchanged, still the biggest structural
+   gap.
+3. **GET /api/\* token** — still worth doing, now correctly sized as defence in
+   depth rather than the headline. The client sweep it was waiting on is done
+   and the answer is small: there are exactly **three** `fetch()` call sites in
+   the whole client (`nav.js:32`, `wizard.js:72`, `waiting.js:9`), all three
+   inside `api()` helpers; **no `EventSource`/SSE anywhere** (that would have
+   been the real blocker, since it cannot set headers); and no `/api/` in any
+   `<img src>`, `<a href>` or `<form action>`. So the change is four files:
+   drop `isMutating` server-side, drop the `!== 'GET'` condition in `nav.js`
+   and `wizard.js`, and give `waiting.js` a token — it currently has no token
+   logic at all. Still Mino's call, but no longer an unbounded one.
