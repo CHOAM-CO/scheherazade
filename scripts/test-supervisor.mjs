@@ -272,6 +272,30 @@ const NOON_KST = Date.UTC(2026, 6, 14, 3, 0, 0) // 12:00 KST -- far from rollove
   h.cleanup()
 }
 {
+  // Attack: a fresh .shutdown-request HOLDS the spawn loop instead of feeding
+  // children into the quit shredder (live 2026-08-05 02:01: every respawn
+  // during the 75s grace window re-processed the shutdown turn and died,
+  // reading as "무한부팅"). Freshness-capped: once the marker is older than
+  // 5min on the loop's own clock, spawning resumes (crash-leftover marker
+  // must not freeze a boot).
+  const h = makeLoopHarness({
+    baseMs: NOON_KST,
+    script: [{ runSec: 400 }, { runSec: 400, thenStop: true }],
+  })
+  const req = path.join(h.cfg.mem, '.shutdown-request')
+  fs.writeFileSync(req, '{"requested_at":"test"}')
+  fs.utimesSync(req, NOON_KST / 1000, NOON_KST / 1000) // fresh on the FAKE clock
+  await runLoop(h.cfg, h.deps)
+  const holds = h.sleeps.filter((ms) => ms === 500).length
+  ok('spawn loop held in 500ms polls while the request was fresh, then resumed at the 5min cap',
+    holds >= 595 && holds <= 605, `holds=${holds}`)
+  // exactly one backoff sleep = child1 exited AND the loop went around to
+  // spawn child2 (whose thenStop ends the loop BEFORE its own backoff) —
+  // proves the hold released into a live loop, not an abort.
+  ok('both scripted children still ran after the hold (loop resumed, not aborted)', h.sleeps.length === holds + 1, String(h.sleeps.length))
+  h.cleanup()
+}
+{
   // Attack: a 301s run RESETS the ladder and clears the marker; the next
   // quick crash starts back at 5s (without the reset it would be 40s).
   const h = makeLoopHarness({

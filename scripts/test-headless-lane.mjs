@@ -417,6 +417,65 @@ process.on('SIGTERM', () => process.exit(0))
   await new Promise((r) => lane2.on('exit', r))
 }
 
+// ── 5c. pressure reads the LAST assistant usage, not the result event ──────
+// The result event's usage is CUMULATIVE across sub-turn API calls (live
+// receipts 2026-08-05: turns=35 read "932k", turns=10 read "190k") — reading
+// it over-rotated by ~num_turns×. Standing context = the newest assistant
+// event's usage; result usage is only the fallback when no assistant usage
+// ever arrived.
+console.log('\n5c. context pressure source (assistant usage beats cumulative result usage)')
+if (WIN) skipWin('context pressure source')
+else {
+  const MEM = path.join(TMP, 'mem-ctxsrc')
+  fs.mkdirSync(MEM, { recursive: true })
+  // fake claude: every stdin line -> one assistant event (standing usage from
+  // FAKE_STANDING) then one result with a HUGE cumulative usage
+  const fake = path.join(TMP, 'fake-ctxsrc.mjs')
+  fs.writeFileSync(fake, `
+import { createInterface } from 'node:readline'
+process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'ctx-sess', model: 'fake', mcp_servers: [] }) + '\\n')
+const rl = createInterface({ input: process.stdin })
+rl.on('line', () => {
+  const standing = Number(process.env.FAKE_STANDING || 3000)
+  process.stdout.write(JSON.stringify({ type: 'assistant', message: { usage: { input_tokens: standing, cache_read_input_tokens: 0, output_tokens: 5 } } }) + '\\n')
+  process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', num_turns: 35, usage: { input_tokens: 900000, cache_read_input_tokens: 0 } }) + '\\n')
+})
+process.on('SIGTERM', () => process.exit(0))
+`)
+  const shim = path.join(TMP, 'ctxsrc-shim.sh')
+  fs.writeFileSync(shim, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fake)} "$@"\n`, { mode: 0o755 })
+  const rotateMarker = path.join(MEM, '.headless-rotate-pending.json')
+
+  const runOnce = async (standing) => {
+    const lane = spawn(process.execPath, [path.join(ROOT, 'headless-lane.mjs')], {
+      env: { ...process.env, MEM, MODEL: 'fake-model', CLAUDE_BIN: shim, FAKE_STANDING: String(standing) },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    })
+    const epPath = path.join(MEM, '.ingest-endpoint.json')
+    let deadline = Date.now() + 8000
+    while (!fs.existsSync(epPath) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
+    const ep = JSON.parse(fs.readFileSync(epPath, 'utf8'))
+    await fetch(`http://127.0.0.1:${ep.port}/inbound`, {
+      method: 'POST',
+      headers: { 'x-ingest-token': ep.token, 'content-type': 'application/json' },
+      body: JSON.stringify({ content: 'go', meta: { channelId: 'in-app' } }),
+    })
+    // give the result event time to land whether or not it schedules a rotate
+    deadline = Date.now() + 3000
+    while (!fs.existsSync(rotateMarker) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
+    const scheduled = fs.existsSync(rotateMarker)
+    lane.kill('SIGTERM')
+    await new Promise((r) => lane.on('exit', r))
+    return scheduled
+  }
+
+  assert((await runOnce(3000)) === false,
+    'small standing usage + huge cumulative result usage -> NO rotation (assistant usage wins)')
+  assert((await runOnce(150000)) === true,
+    'standing usage over the threshold DOES schedule a rotation')
+  try { fs.unlinkSync(rotateMarker) } catch { /* leave MEM clean for no one -- TMP dies with the test */ }
+}
+
 // ── 6. stranded-message redelivery (pending FIFO) ──────────────────────────
 console.log('\n6. stranded-message redelivery')
 if (WIN) skipWin('stranded-message redelivery')
@@ -442,8 +501,14 @@ process.on('SIGTERM', () => process.exit(0))
   const pendPath = path.join(MEM, '.headless-pending.json')
   const sink = path.join(TMP, 'pending-sink.jsonl')
 
-  // seed a stranded message from a "previous" recycle
-  fs.writeFileSync(pendPath, JSON.stringify([{ content: '유실된 질문이야', meta: { channelId: 'in-app' }, ts: Date.now() }]))
+  // seed a stranded message from a "previous" recycle — plus a stranded
+  // SYSTEM turn, which must NOT redeliver (moment-bound runtime signal;
+  // live bite 2026-08-05 02:01: a replayed shutdown-flush turn re-killed
+  // each fresh boot during the quit window)
+  fs.writeFileSync(pendPath, JSON.stringify([
+    { content: '유실된 질문이야', meta: { channelId: 'in-app' }, ts: Date.now() },
+    { content: '[SYSTEM] 종료 감지됨 -- moment-bound, must not replay', meta: { sender: 'SYSTEM', channelId: 'in-app' }, ts: Date.now() },
+  ]))
 
   const lane = spawn(process.execPath, [path.join(ROOT, 'headless-lane.mjs')], {
     env: { ...process.env, MEM, MODEL: 'fake-model', CLAUDE_BIN: shim, FAKE_SINK: sink },
@@ -467,6 +532,13 @@ process.on('SIGTERM', () => process.exit(0))
     'stranded message re-injected at boot with the redelivery note')
   assert(fs.existsSync(pendPath) && JSON.parse(fs.readFileSync(pendPath, 'utf8'))[0].redelivered === true,
     'redelivered entry marked (will never be re-sent a second time)')
+  await new Promise((r) => setTimeout(r, 300)) // settle: a wrongly-redelivered SYSTEM line would land right behind
+  {
+    const sunk = fs.readFileSync(sink, 'utf8')
+    assert(!sunk.includes('종료 감지됨'), 'stranded SYSTEM turn is NOT redelivered (moment-bound)')
+    const pend = JSON.parse(fs.readFileSync(pendPath, 'utf8'))
+    assert(pend.length === 1, 'SYSTEM entry purged from the pending file, user entry kept')
+  }
 
   // a result pays off EVERYTHING written before it (probe 6: mid-turn
   // events merge into the live turn -- one result covers all of them)

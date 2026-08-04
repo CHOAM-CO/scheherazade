@@ -75,8 +75,16 @@ const pendingFile = () => path.join(MEM, '.headless-pending.json')
 // Conversation rotation. v1 (UX red-team 2026-08-04 F3) cut purely by AGE;
 // v2 (Mino 2026-08-04 19:44 "시간으로 끊지말고 더 좋은 방법 있나?") cuts by
 // CONTEXT PRESSURE, which is the thing age was a proxy for: what actually
-// degrades a long resume is the context the next turn must carry, and every
-// `result` event reports exactly that (usage.input + cache read/creation).
+// degrades a long resume is the context the next turn must carry.
+// v2.1 (2026-08-05 live receipts): the `result` event's usage turns out to be
+// CUMULATIVE across the turn's sub-turn API calls, not standing context —
+// Mino's box read "932,698 tokens" after a turns=35 turn (≈26.6k × 35), the
+// opus probe "190,368" after turns=10 (≈19k × 10). Reading it over-rotated
+// by roughly a factor of num_turns. The LAST `assistant` event's
+// message.usage is the actual standing weight of the newest API call, so
+// that is what pressure now reads; the result usage stays only as a
+// fallback for providers whose stream never carries assistant usage —
+// deliberately the over-counting direction (rotating too often beats never).
 // The rules:
 //   1. pressure over threshold -> SCHEDULE a rotation (marker on disk, so
 //      the decision survives recycles) -- never cut immediately;
@@ -267,10 +275,26 @@ function main() {
   log(`spawning: ${CLAUDE_BIN} ${args.join(' ')}`)
   if (resumeId) log(`resuming session ${resumeId}`)
 
+  // Crash instrumentation (129 hunt, 2026-08-05): claude dies sporadically
+  // on the ollama lane with exit 129 and NOTHING on stderr — unreproducible
+  // on demand, so the lane self-instruments instead. Flipped by env or by
+  // touching MEM/.claude-debug (no Electron env plumbing needed). Debug goes
+  // to stderr + a log FILE; ANTHROPIC_LOG=debug is deliberately NOT used —
+  // it writes to stdout and corrupts the stream-json protocol
+  // (anthropics/claude-agent-sdk-typescript#157).
+  const childEnv = { ...process.env }
+  if (process.env.SCHEHERAZADE_CLAUDE_DEBUG || fs.existsSync(path.join(MEM, '.claude-debug'))) {
+    childEnv.CLAUDE_CODE_DEBUG = '1'
+    childEnv.CLAUDE_CODE_DEBUG_LOG_LEVEL = 'debug'
+    childEnv.CLAUDE_CODE_LOG_FILE = path.join(MEM, 'logs', 'claude-debug.log')
+    try { fs.mkdirSync(path.join(MEM, 'logs'), { recursive: true }) } catch { /* logs dir best-effort */ }
+    log(`claude debug instrumentation ON -- ${childEnv.CLAUDE_CODE_LOG_FILE}`)
+  }
+
   const child = spawn(CLAUDE_BIN, args, {
     cwd: MEM,
     stdio: ['pipe', 'pipe', 'inherit'],
-    env: process.env,
+    env: childEnv,
   })
 
   let childExited = false
@@ -290,13 +314,21 @@ function main() {
   let rotatePending = fs.existsSync(rotateFile())
   let rotateFlushSent = false
   let lastTurnEndTs = Date.now()
+  let lastAssistantUsage = null // newest assistant event's usage = standing context (v2.1)
 
   // Redeliver messages stranded by a mid-turn recycle (F4). Runs before the
   // ingest server exists, so these precede any new inbound POST in stdin
   // order. Entries already redelivered once are dropped (no retry loops),
   // as is anything older than 48h (stale beyond usefulness).
   {
-    const stranded = readPending().filter((ev) => !ev.redelivered && Date.now() - (Number(ev.ts) || 0) < 48 * 3600_000)
+    // sender=SYSTEM turns are runtime-generated moment-bound signals (boot
+    // announce, shutdown flush, autonomy start/stop/brief) — replaying one
+    // after a recycle re-runs a moment that is over (live bite 2026-08-05
+    // 02:01: the stranded shutdown-flush turn was redelivered into the next
+    // boot and killed it again, extending the quit loop Mino watched).
+    // User messages still redeliver exactly as before.
+    const stranded = readPending().filter((ev) => !ev.redelivered && Date.now() - (Number(ev.ts) || 0) < 48 * 3600_000
+      && !(ev.meta && ev.meta.sender === 'SYSTEM'))
     writePending(stranded.map((ev) => ({ ...ev, redelivered: true })))
     if (stranded.length) {
       log(`re-delivering ${stranded.length} message(s) stranded by the previous recycle`)
@@ -328,7 +360,13 @@ function main() {
       if (line.trim()) log(`non-json stdout: ${line.slice(0, 200)}`)
       return
     }
-    if (e.type === 'system' && e.subtype === 'init') {
+    if (e.type === 'assistant') {
+      // Standing-context sample: the newest API call's usage (see the v2.1
+      // note atop the rotation constants). Guarded so a provider that omits
+      // usage keeps the previous sample instead of zeroing pressure.
+      const u = e.message && e.message.usage
+      if (u && (u.input_tokens != null || u.cache_read_input_tokens != null)) lastAssistantUsage = u
+    } else if (e.type === 'system' && e.subtype === 'init') {
       sawInit = true
       if (typeof e.session_id === 'string' && e.session_id) {
         try {
@@ -375,7 +413,9 @@ function main() {
       const p = readPending()
       if (p.length) writePending(p.filter((ev) => (Number(ev.ts) || 0) > resultTs))
       // Context-pressure check (rotation rule 1: schedule, never cut here).
-      const ctxTokens = contextTokensOf(e.usage)
+      // Last assistant usage = standing context; result usage = cumulative
+      // fallback only (v2.1 note atop the rotation constants).
+      const ctxTokens = contextTokensOf(lastAssistantUsage || e.usage)
       if (!rotatePending && ctxTokens >= ROTATE_CONTEXT_TOKENS * ROTATE_AT) {
         rotatePending = true
         log(

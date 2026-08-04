@@ -763,8 +763,31 @@ export async function runLoop(cfg, deps = {}) {
     log('stop requested, exiting')
   }
 
+  // Graceful-quit hold (129 loop, Mino live 2026-08-05 02:01): while
+  // main.cjs's .shutdown-request marker sits in MEM, the app is inside its
+  // quit grace window — respawning a child here just gets it killed at grace
+  // expiry, and each respawn re-processes the shutdown turn (the "무한부팅"
+  // Mino watched). Hold instead of spawning until the marker clears; main
+  // always unlinks it (ack or timeout) and then stops this supervisor, so
+  // the hold cannot outlive the quit. Freshness-capped like channel.mjs's
+  // watcher so a crash-leftover marker cannot freeze a fresh boot forever.
+  const SHUTDOWN_REQ = path.join(cfg.mem, '.shutdown-request')
+  const shutdownRequestFresh = () => {
+    try {
+      const st = fs.statSync(SHUTDOWN_REQ)
+      return now() - st.mtimeMs < 5 * 60 * 1000
+    } catch { return false }
+  }
+
   for (;;) {
     if (stopRequested()) { exitOnStop(); return 0 }
+
+    if (shutdownRequestFresh()) {
+      log('quit in progress (.shutdown-request present) -- holding respawn until it clears')
+      while (shutdownRequestFresh() && !stopRequested()) await sleep(500)
+      if (stopRequested()) { exitOnStop(); return 0 }
+      log('shutdown-request cleared -- resuming spawn loop')
+    }
 
     const curKst = kstDate(now())
     if (curKst !== lastKstDate) {
