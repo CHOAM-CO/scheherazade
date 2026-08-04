@@ -30,6 +30,16 @@ function assert(cond, label) {
   else { fail++; console.log(`  FAIL ${label}`) }
 }
 
+// The lane-spawn E2E sections drive headless-lane.mjs as a real child with a
+// FAKE claude behind a `#!/bin/sh` shim. Windows cannot exec a shebang script
+// (and node >=20 refuses .cmd via shell-less spawn -- the exact reason
+// resolveClaudeBin accepts ONLY claude.exe there), so those sections skip on
+// win32. The lane logic itself is platform-generic and stays covered by the
+// POSIX run; the win-specific spawn reality is covered by the real claude.exe
+// spawn probe in the release pipeline. NOT a pass -- a coverage boundary.
+const WIN = process.platform === 'win32'
+const skipWin = (label) => console.log(`  SKIP ${label} -- win32: /bin/sh shim cannot exec; POSIX suite covers the logic, the real-spawn probe covers the platform; NOT a pass`)
+
 // pathToFileURL, not the raw join: a bare absolute path works on POSIX by
 // accident but Windows ESM refuses it (ERR_UNSUPPORTED_ESM_URL_SCHEME 'c:'
 // -- caught by the win suite on magi-win, 2026-08-04 evening exe gate).
@@ -70,7 +80,8 @@ console.log('\n1. <channel> tag matches stop-reply-guard\'s exact parser')
 
 // ── 2. lane E2E with a fake claude ─────────────────────────────────────────
 console.log('\n2. lane ingest server E2E (fake claude child)')
-{
+if (WIN) skipWin('lane ingest E2E')
+else {
   const MEM = path.join(TMP, 'mem')
   fs.mkdirSync(MEM, { recursive: true })
   // fake claude: emits an init event, then echoes every stdin line to a file
@@ -217,7 +228,8 @@ console.log('\n3. createInboundNotifier routes by topology')
 
 // ── 4. resume-strikes: a poisoned --resume id self-heals ────────────────────
 console.log('\n4. resume-strikes lifecycle (poisoned resume id abandoned after 2 no-init exits)')
-{
+if (WIN) skipWin('resume-strikes lifecycle')
+else {
   const MEM = path.join(TMP, 'mem-strikes')
   fs.mkdirSync(MEM, { recursive: true })
   // fake claude: with --resume -> die BEFORE init (poisoned transcript);
@@ -263,7 +275,8 @@ process.exit(0)
 
 // ── 5. conversation rotation by bornTs ──────────────────────────────────────
 console.log('\n5. conversation rotation (bornTs ceiling)')
-{
+if (WIN) skipWin('conversation rotation')
+else {
   const MEM = path.join(TMP, 'mem-rotate')
   fs.mkdirSync(MEM, { recursive: true })
   // fake claude: writes its argv to FAKE_SINK, emits init, exits
@@ -319,7 +332,8 @@ process.exit(0)
 
 // ── 5b. context-pressure rotation (Mino 2026-08-04 "시간으로 끊지말고") ────
 console.log('\n5b. context-pressure rotation (schedule -> idle boundary -> handoff -> fresh boot)')
-{
+if (WIN) skipWin('context-pressure rotation')
+else {
   // pure helper first: what counts as standing context weight
   assert(contextTokensOf({ input_tokens: 1000, cache_read_input_tokens: 150_000, cache_creation_input_tokens: 2000, output_tokens: 999_999 }) === 153_000,
     'contextTokensOf sums input + both cache flavors and EXCLUDES output_tokens')
@@ -405,7 +419,8 @@ process.on('SIGTERM', () => process.exit(0))
 
 // ── 6. stranded-message redelivery (pending FIFO) ──────────────────────────
 console.log('\n6. stranded-message redelivery')
-{
+if (WIN) skipWin('stranded-message redelivery')
+else {
   const MEM = path.join(TMP, 'mem-pending')
   fs.mkdirSync(MEM, { recursive: true })
   // fake claude: init, echo stdin lines to sink; a line containing

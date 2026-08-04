@@ -14,8 +14,8 @@
 //   - the credential-guard hook blocks Read/Bash aimed at credential
 //     stores and passes ordinary files (pure process-level pins).
 //
-// Hermetic: HOME is redirected BEFORE the server module loads (os.homedir()
-// honors $HOME on darwin/linux).
+// Hermetic: HOME (and USERPROFILE on win32) is redirected BEFORE the server
+// module loads (os.homedir() honors $HOME on darwin/linux, USERPROFILE on win).
 //
 // Run: node scripts/test-migrate-routes.mjs
 
@@ -33,6 +33,10 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-migrate-'))
 const fixtureHome = path.join(TMP, 'home')
 fs.mkdirSync(fixtureHome, { recursive: true })
 process.env.HOME = fixtureHome
+// os.homedir() reads USERPROFILE on win32 and IGNORES $HOME -- without this
+// the detector escapes the fixture and scans the REAL profile (caught on
+// magi-win 2026-08-04: real .claude/.codex detected, three assertions red).
+if (process.platform === 'win32') process.env.USERPROFILE = fixtureHome
 delete process.env.CODEX_HOME
 process.env.AGENT_DATA_HOME = path.join(TMP, 'data')
 fs.mkdirSync(process.env.AGENT_DATA_HOME, { recursive: true })
