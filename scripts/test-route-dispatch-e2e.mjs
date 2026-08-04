@@ -63,8 +63,11 @@ const base = `http://127.0.0.1:${port}`
 
 // One helper: assert an exact wire status AND that no route 500s -- a missed
 // staticCtx binding surfaces as exactly that 500.
+// Every /api request needs the onboard token since 2026-08-04 (GETs
+// included) -- hit() attaches it by default once the scrape below fills it.
+let defaultAuth = {}
 async function hit(name, url, expect, init) {
-  const r = await fetch(`${base}${url}`, init)
+  const r = await fetch(`${base}${url}`, { ...init, headers: { ...defaultAuth, ...(init && init.headers) } })
   chk(`${name} -> ${expect}`, r.status === expect, `got ${r.status}`)
   chk(`${name} never 500s (staticCtx binding intact)`, r.status < 500, `got ${r.status}`)
   return r
@@ -77,6 +80,12 @@ try {
   chk('the page carries an onboard token', Boolean(m), page.slice(0, 120))
   const token = m ? m[1] : ''
   const auth = { 'x-onboard-token': token, 'content-type': 'application/json' }
+  defaultAuth = { 'x-onboard-token': token }
+
+  // The 2026-08-04 boundary: reads are gated too, and the gate fires BEFORE
+  // route dispatch (no route-existence oracle for tokenless callers).
+  const noTokGet = await fetch(`${base}/api/config`)
+  chk('GET /api/* without the onboard token is REFUSED (reads gated since 2026-08-04)', noTokGet.status === 403, noTokGet.status)
 
   // ── G1 onboarding-meta ────────────────────────────────────────────────────
   const cfg = await hit('G1 GET /api/config', '/api/config', 200)
@@ -286,7 +295,7 @@ try {
   // not running), so hit()'s blanket never-≥500 check would fail the correct
   // answer. "Exactly 503, not 500" is itself the binding-intact proof -- a
   // missed staticCtx binding surfaces as 500, never as this named 503.
-  const chOut = await fetch(`${base}/api/chat/out`)
+  const chOut = await fetch(`${base}/api/chat/out`, { headers: defaultAuth })
   chk('G11 GET /api/chat/out (no channel) -> exactly 503, not a binding 500', chOut.status === 503, chOut.status)
   const chIn = await fetch(`${base}/api/chat/in`, { method: 'POST', headers: auth, body: JSON.stringify({ text: 'x' }) })
   chk('G11 POST /api/chat/in (no channel) -> exactly 503, not a binding 500', chIn.status === 503, chIn.status)
@@ -297,10 +306,10 @@ try {
   // 'chatgpt' IS in LOGIN_PROVIDERS (login-status.cjs), so the allowlist
   // passes and PUT hits none of the GET/POST/DELETE branches -- the old
   // chain fell through to the 404; the dispatch loop must do the same.
-  const put = await fetch(`${base}/api/onboarding/login/chatgpt`, { method: 'PUT' })
+  const put = await fetch(`${base}/api/onboarding/login/chatgpt`, { method: 'PUT', headers: defaultAuth })
   chk('login regex + unsupported verb (PUT) falls through to the 404, not a hang',
     put.status === 404, put.status)
-  const nf = await fetch(`${base}/api/no/such/route`)
+  const nf = await fetch(`${base}/api/no/such/route`, { headers: defaultAuth })
   chk('unmatched path gets the verbatim 404 line', nf.status === 404, nf.status)
   chk("...with today's error shape", (await nf.json()).error === 'no such API route: GET /api/no/such/route')
 } finally {

@@ -66,15 +66,28 @@ const port = srv.server.address().port
 const base = `http://127.0.0.1:${port}`
 
 try {
+  // The token the way the browser gets it: injected into the page head.
+  // Scraped FIRST since 2026-08-04 -- the memory tables are exactly why
+  // reads are token-gated now.
+  const page = await (await fetch(`${base}/memory`)).text()
+  const m = page.match(/name="onboard-token" content="([a-f0-9]+)"/)
+  chk('the page carries an onboard token', Boolean(m), page.slice(0, 120))
+  const token = m ? m[1] : ''
+  const auth = { 'x-onboard-token': token }
+
+  // ── the 2026-08-04 boundary: reads are gated too ──────────────────────────
+  const noTokRead = await fetch(`${base}/api/memory/user_facts`)
+  chk('GET /api/memory/user_facts without a token is REFUSED (the whole point of the 08-04 gate)', noTokRead.status === 403, noTokRead.status)
+
   // ── category-table GET + the not-a-category-table refusal ────────────────
-  const g1 = await fetch(`${base}/api/memory/user_facts`)
+  const g1 = await fetch(`${base}/api/memory/user_facts`, { headers: auth })
   chk('GET /api/memory/user_facts is 200', g1.status === 200, g1.status)
   const facts = await g1.json()
   chk('returns the seeded row', facts.table === 'user_facts' && Array.isArray(facts.rows) && facts.rows.some((r) => r.id === seeded.id && r.value === 'e2e-probe'), JSON.stringify(facts))
 
-  const g2 = await fetch(`${base}/api/memory/imported_pointers`)
+  const g2 = await fetch(`${base}/api/memory/imported_pointers`, { headers: auth })
   chk('GET /api/memory/imported_pointers is 400 (pointers must never render as a memory category)', g2.status === 400, g2.status)
-  const g3 = await fetch(`${base}/api/memory/journal_entries`)
+  const g3 = await fetch(`${base}/api/memory/journal_entries`, { headers: auth })
   chk('GET /api/memory/journal_entries is 400 (a day is not a memory table row)', g3.status === 400, g3.status)
 
   // ── auth gate on every mutating route in the group ───────────────────────
@@ -85,13 +98,6 @@ try {
   const noTok3 = await fetch(`${base}/api/memory/pointers`, { method: 'DELETE' })
   chk('DELETE /api/memory/pointers without a token is REFUSED', noTok3.status === 403, noTok3.status)
 
-  // The token the way the browser gets it: injected into the page head.
-  const page = await (await fetch(`${base}/memory`)).text()
-  const m = page.match(/name="onboard-token" content="([a-f0-9]+)"/)
-  chk('the page carries an onboard token', Boolean(m), page.slice(0, 120))
-  const token = m ? m[1] : ''
-  const auth = { 'x-onboard-token': token }
-
   // ── pointer scan: import -> list -> clear, all over the wire ─────────────
   const imp = await fetch(`${base}/api/memory/import`, { method: 'POST', headers: auth })
   chk('POST /api/memory/import with the token is 200', imp.status === 200, imp.status)
@@ -99,7 +105,7 @@ try {
   chk('import found the fixture CLAUDE.md (hermetic HOME, deterministic scan)', impBody.ok === true && impBody.written === 1, JSON.stringify(impBody))
   chk('import returns coverage for every configured source (found-nothing included)', Array.isArray(impBody.coverage) && impBody.coverage.length >= 3, JSON.stringify(impBody.coverage))
 
-  const pl = await fetch(`${base}/api/memory/pointers`)
+  const pl = await fetch(`${base}/api/memory/pointers`, { headers: auth })
   chk('GET /api/memory/pointers is 200', pl.status === 200, pl.status)
   const plBody = await pl.json()
   chk('the pointer row is there, with provenance and the real path', plBody.rows.length === 1 && plBody.rows[0].source_tool === 'claude-code' && plBody.rows[0].path.endsWith('CLAUDE.md'), JSON.stringify(plBody.rows))
@@ -107,13 +113,13 @@ try {
 
   const clr = await fetch(`${base}/api/memory/pointers`, { method: 'DELETE', headers: auth })
   chk('DELETE /api/memory/pointers with the token is 200', clr.status === 200, clr.status)
-  const plAfter = await (await fetch(`${base}/api/memory/pointers`)).json()
+  const plAfter = await (await fetch(`${base}/api/memory/pointers`, { headers: auth })).json()
   chk('the index is really gone (undoable privacy is not privacy)', plAfter.rows.length === 0, JSON.stringify(plAfter.rows))
 
   // ── row delete: wire success, audit trail, and fail-loud on a dead id ────
   const del = await fetch(`${base}/api/memory/user_facts/${seeded.id}`, { method: 'DELETE', headers: auth })
   chk('DELETE row with the token is 200', del.status === 200, del.status)
-  const afterDel = await (await fetch(`${base}/api/memory/user_facts`)).json()
+  const afterDel = await (await fetch(`${base}/api/memory/user_facts`, { headers: auth })).json()
   chk('the row is really gone', !afterDel.rows.some((r) => r.id === seeded.id), JSON.stringify(afterDel.rows))
   const audit = service.query({ table: 'memory_events', filter: { event: 'delete', row_id: seeded.id } })
   chk('the delete left its audit row (action auditable, content gone)', audit.count === 1, JSON.stringify(audit))
@@ -122,7 +128,7 @@ try {
   chk('deleting a nonexistent id fails LOUD over the wire (no silent 200)', del404.status >= 400, del404.status)
 
   // ── session events: shape over the real wire ─────────────────────────────
-  const se = await fetch(`${base}/api/memory/session-events`)
+  const se = await fetch(`${base}/api/memory/session-events`, { headers: auth })
   chk('GET /api/memory/session-events is 200', se.status === 200, se.status)
   const seBody = await se.json()
   chk('session-events has the {date, events[]} shape (collapse semantics are test-session-feed.mjs\'s pin, not this one)', Array.isArray(seBody.events) && ('date' in seBody), JSON.stringify(seBody).slice(0, 200))

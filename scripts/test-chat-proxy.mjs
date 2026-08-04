@@ -80,13 +80,13 @@ try {
 
   // ── not running: no port file ─────────────────────────────────────────────
   {
-    const r = await fetch(`${base}/api/chat/status`)
+    const r = await fetch(`${base}/api/chat/status`, { headers: auth })
     const b = await r.json()
     chk('status with no port file: 200 up:false not_running', r.status === 200 && b.up === false && b.reason === 'not_running', JSON.stringify(b))
     chk('status names the active backend (wizard reads this)', b.backend === 'discord', JSON.stringify(b))
   }
   {
-    const r = await fetch(`${base}/api/chat/out`)
+    const r = await fetch(`${base}/api/chat/out`, { headers: auth })
     chk('out with no port file: 503 not_running', r.status === 503 && (await r.json()).reason === 'not_running')
   }
   {
@@ -106,7 +106,7 @@ try {
   // ── live round trip through the fake channel ──────────────────────────────
   writePortFile({ port: channelPort, token: CHANNEL_TOKEN, pid: 1, startedAt: 'x' })
   {
-    const r = await fetch(`${base}/api/chat/status`)
+    const r = await fetch(`${base}/api/chat/status`, { headers: auth })
     const b = await r.json()
     chk('status with a live channel: up:true + agent name passthrough', r.status === 200 && b.up === true && b.agent === 'fake-agent', JSON.stringify(b))
   }
@@ -120,21 +120,21 @@ try {
   }
   {
     lastChannelReq = null
-    const r = await fetch(`${base}/api/chat/out?since=3`)
+    const r = await fetch(`${base}/api/chat/out?since=3`, { headers: auth })
     const b = await r.json()
     chk('out proxies the channel body through', r.status === 200 && b.latest === 4 && b.items[0].text === 'hi from agent' && b.missed === false, JSON.stringify(b))
     chk('since rides upstream as the number it parsed to', lastChannelReq && lastChannelReq.url === '/out?since=3', lastChannelReq && lastChannelReq.url)
   }
   {
     lastChannelReq = null
-    await fetch(`${base}/api/chat/out?since=abc"><script>`)
+    await fetch(`${base}/api/chat/out?since=abc"><script>`, { headers: auth })
     chk('a non-numeric since is coerced to 0, never forwarded as a string', lastChannelReq && lastChannelReq.url === '/out?since=0', lastChannelReq && lastChannelReq.url)
   }
 
   // ── token containment: the channel token is in NO browser-visible body ────
   {
     const bodies = []
-    for (const url of ['/api/chat/status', '/api/chat/out?since=0']) bodies.push(await (await fetch(`${base}${url}`)).text())
+    for (const url of ['/api/chat/status', '/api/chat/out?since=0']) bodies.push(await (await fetch(`${base}${url}`, { headers: auth })).text())
     bodies.push(await (await fetch(`${base}/api/chat/in`, { method: 'POST', headers: auth, body: JSON.stringify({ text: 'y' }) })).text())
     chk('no response body carries the channel bearer token', bodies.every((b) => !b.includes(CHANNEL_TOKEN)), bodies.map((b) => b.slice(0, 60)).join(' | '))
   }
@@ -142,7 +142,7 @@ try {
   // ── wrong token in the file: upstream 401 -> upstream_refused ─────────────
   writePortFile({ port: channelPort, token: 'b'.repeat(64) })
   {
-    const r = await fetch(`${base}/api/chat/out`)
+    const r = await fetch(`${base}/api/chat/out`, { headers: auth })
     chk('upstream 401 maps to 502 upstream_refused (stale-token restart race)', r.status === 502 && (await r.json()).reason === 'upstream_refused')
     const r2 = await fetch(`${base}/api/chat/in`, { method: 'POST', headers: auth, body: JSON.stringify({ text: 'z' }) })
     chk('in against a refusing channel: 502 upstream_refused', r2.status === 502 && (await r2.json()).reason === 'upstream_refused')
@@ -155,19 +155,19 @@ try {
   await new Promise((r) => dead.close(r))
   writePortFile({ port: deadPort, token: CHANNEL_TOKEN })
   {
-    const r = await fetch(`${base}/api/chat/out`)
+    const r = await fetch(`${base}/api/chat/out`, { headers: auth })
     chk('dead port maps to 502 unreachable (stale file from a dead agent)', r.status === 502 && (await r.json()).reason === 'unreachable')
-    const s = await (await fetch(`${base}/api/chat/status`)).json()
+    const s = await (await fetch(`${base}/api/chat/status`, { headers: auth })).json()
     chk('status probes live, so a stale file still reads as down', s.up === false && s.reason === 'unreachable', JSON.stringify(s))
   }
 
   // ── file damage reads as "not up right now", never a 500 ──────────────────
   writePortFile('{ this is not json')
-  chk('garbage port file: out reads not_running (mid-write race self-heals)', (await (await fetch(`${base}/api/chat/out`)).json()).reason === 'not_running')
+  chk('garbage port file: out reads not_running (mid-write race self-heals)', (await (await fetch(`${base}/api/chat/out`, { headers: auth })).json()).reason === 'not_running')
   writePortFile({ port: 99999999, token: CHANNEL_TOKEN })
-  chk('out-of-range port in the file: not_running, no fetch attempted', (await (await fetch(`${base}/api/chat/out`)).json()).reason === 'not_running')
+  chk('out-of-range port in the file: not_running, no fetch attempted', (await (await fetch(`${base}/api/chat/out`, { headers: auth })).json()).reason === 'not_running')
   writePortFile({ port: channelPort, token: '' })
-  chk('empty token in the file: not_running, no unauthenticated call goes out', (await (await fetch(`${base}/api/chat/out`)).json()).reason === 'not_running')
+  chk('empty token in the file: not_running, no unauthenticated call goes out', (await (await fetch(`${base}/api/chat/out`, { headers: auth })).json()).reason === 'not_running')
 
   // ── bad input at the proxy, before anything goes upstream ─────────────────
   writePortFile({ port: channelPort, token: CHANNEL_TOKEN })

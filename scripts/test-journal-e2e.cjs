@@ -19,7 +19,17 @@ process.env.SCHEHERAZADE_MEMORY_DB = path.join(tmp, 'memory.db')
   let pass = 0, fail = 0
   const chk = (n, c, d) => { if (c) { pass++; console.log('  ok  ', n) } else { fail++; console.log('  FAIL', n, d === undefined ? '' : d) } }
 
-  const g = await fetch(`${base}/api/journal`)
+  // The token the way the browser gets it: injected into the page head.
+  // Scraped FIRST since 2026-08-04 -- reads are token-gated too now.
+  const page0 = await (await fetch(`${base}/memory`)).text()
+  const m0 = page0.match(/name="onboard-token" content="([a-f0-9]+)"/)
+  const tok = m0 ? m0[1] : ''
+  const getAuth = { 'x-onboard-token': tok }
+
+  const gNoTok = await fetch(`${base}/api/journal`)
+  chk('GET /api/journal without a token is REFUSED (reads gated since 2026-08-04)', gNoTok.status === 403, gNoTok.status)
+
+  const g = await fetch(`${base}/api/journal`, { headers: getAuth })
   chk('GET /api/journal is 200 (not swallowed by the :table matcher)', g.status === 200, g.status)
   const data = await g.json()
   chk('returns rows', Array.isArray(data.rows) && data.rows.length === 2)
@@ -39,7 +49,7 @@ process.env.SCHEHERAZADE_MEMORY_DB = path.join(tmp, 'memory.db')
   const d2 = await fetch(`${base}/api/journal/2026-07-12`, { method: 'DELETE', headers: { 'x-onboard-token': token } })
   chk('DELETE with the token succeeds', d2.status === 200, d2.status)
 
-  const after = await (await fetch(`${base}/api/journal`)).json()
+  const after = await (await fetch(`${base}/api/journal`, { headers: getAuth })).json()
   chk('the day is really gone', after.rows.length === 1 && after.rows[0].date === '2026-07-13', JSON.stringify(after.rows.map(r => r.date)))
 
   const bad = await fetch(`${base}/api/journal/not-a-date`, { method: 'DELETE', headers: { 'x-onboard-token': token } })

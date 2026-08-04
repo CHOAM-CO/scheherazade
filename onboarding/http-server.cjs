@@ -2273,8 +2273,17 @@ function createOnboardingServer(onOnboardingComplete, agentControls) {
           return
         }
 
+        // Token required on ALL /api/* requests, not just mutations
+        // (opencodex review, 2026-08-04: the GET set includes
+        // /api/memory/* and /api/journal -- everything the agent knows
+        // about the user. The Host allowlist defeats browsers, but any
+        // other local process could read it with one header. That is the
+        // exact threat the comment above cites; reads were left out of
+        // the remedy). Static pages stay Host-gated only -- the browser
+        // cannot attach a header to a navigation, and the token rides
+        // INTO the page via serveStatic's <meta> injection.
         const isMutating = req.method === 'POST' || req.method === 'DELETE'
-        if (isMutating) {
+        if (isMutating || pathname.startsWith('/api/')) {
           const origin = req.headers.origin
           if (origin) {
             const originHost = safeOriginHost(origin)

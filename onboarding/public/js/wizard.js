@@ -63,12 +63,10 @@
 
   async function api(path, options) {
     const opts = options ? { ...options } : {}
-    // localhost-auth gate (security review, 2026-07-03): every mutating
-    // (non-GET) request must carry the per-launch token the server
-    // injected into this page's <head> -- see copy.js's getOnboardToken().
-    if (opts.method && opts.method !== 'GET') {
-      opts.headers = { ...(opts.headers || {}), 'X-Onboard-Token': window.getOnboardToken() || '' }
-    }
+    // localhost-auth gate (security review 2026-07-03; widened to ALL
+    // requests 2026-08-04): every /api request must carry the per-launch
+    // token -- GETs included, the server rejects tokenless reads too.
+    opts.headers = { ...(opts.headers || {}), 'X-Onboard-Token': window.getOnboardToken() || '' }
     const res = await fetch(path, opts)
     let body
     try {

@@ -6,7 +6,13 @@
   function $(id) { return document.getElementById(id) }
 
   async function api(path) {
-    const res = await fetch(path)
+    // This page had NO token logic at all (it only ever issued GETs, and
+    // GETs used to ride free). The server now requires the token on every
+    // /api request -- copy.js loads first here too, so the same helper
+    // the other pages use is available.
+    const res = await fetch(path, {
+      headers: { 'X-Onboard-Token': window.getOnboardToken() || '' },
+    })
     const body = await res.json()
     if (!res.ok) throw new Error(body.error || `HTTP ${res.status} from ${path}`)
     return body
