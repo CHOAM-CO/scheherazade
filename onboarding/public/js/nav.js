@@ -159,6 +159,12 @@
         '<div class="mute-banner-text" id="nav-mute-text"></div>' +
         '<button type="button" id="nav-mute-revert"></button>' +
       '</div>' +
+      // update banner reuses .mute-banner styling on purpose -- same
+      // "attention strip under the status row" slot, different concern
+      '<div class="mute-banner" id="nav-update-banner" hidden>' +
+        '<div class="mute-banner-text" id="nav-update-text"></div>' +
+        '<button type="button" id="nav-update-open"></button>' +
+      '</div>' +
       '<div class="nav-tabs"></div>'
     $('nav-agent-label').textContent = NAV.label
     const tabsEl = root.querySelector('.nav-tabs')
@@ -330,6 +336,26 @@
     }
   }
 
+  // ── update-available banner (tester #5 v1, 2026-08-04): notify + open the
+  // public release page. One-shot per page load; the server caches the
+  // GitHub check (6h ok / 10min fail) so this costs nothing to call. ──────
+  async function renderUpdateBanner() {
+    const banner = $('nav-update-banner')
+    if (!banner) return
+    let u
+    try {
+      u = await window.api('/api/update/check')
+    } catch (err) {
+      return // no update info is a non-event; never nag on a failed check
+    }
+    if (!u || !u.ok || !u.hasUpdate) { banner.hidden = true; return }
+    $('nav-update-text').textContent = NAV.updateAvailable(u.latest, u.current)
+    const btn = $('nav-update-open')
+    btn.textContent = NAV.updateOpen
+    btn.onclick = () => window.open(u.url, '_blank', 'noopener')
+    banner.hidden = false
+  }
+
   // ── mute/revert banner, extracted from memory.js's renderMuteBanner ──────
   async function renderMuteBanner() {
     const banner = $('nav-mute-banner')
@@ -447,6 +473,7 @@
     await refreshSpawnInfo()
     pollAgentStatusOnce()
     pollContextStatusOnce()
+    renderUpdateBanner() // one-shot; server caches the GitHub check
   }
 
   document.addEventListener('DOMContentLoaded', initShell)

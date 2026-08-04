@@ -2457,6 +2457,97 @@ function contextCapForModel(model) {
 // them an incomplete exports snapshot); everything flows through here.
 // (That rule is also spelled without the call syntax on purpose --
 // test-packaging.mjs's require-graph regex reads comments too.)
+// ── BYOS usage gauge + update check (tester requests, 2026-08-04) ─────────
+// Usage: the same Anthropic OAuth usage endpoint MAGI's own fleet gauges
+// poll. Contract discipline inherited from that script: a failed read is
+// null/branch, NEVER 0 -- 0 means "window just reset" and must stay
+// distinguishable from "could not read".
+const APP_VERSION = (() => {
+  try { return require('../package.json').version } catch { return '0.0.0' }
+})()
+
+async function fetchClaudeSubscriptionUsage() {
+  let token = null
+  try {
+    token = readProviderKey('claude-subscription')
+  } catch (err) {
+    return { ok: false, branch: 'token_unreadable', detail: err.message }
+  }
+  if (!token) return { ok: false, branch: 'no_token' }
+  let res, body
+  try {
+    res = await fetch('https://api.anthropic.com/api/oauth/usage', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'anthropic-beta': 'oauth-2025-04-20',
+        'User-Agent': `scheherazade/${APP_VERSION}`,
+      },
+      signal: AbortSignal.timeout(8000),
+    })
+    body = await res.json()
+  } catch (err) {
+    return { ok: false, branch: 'unreachable', detail: err.message }
+  }
+  if (!res.ok) return { ok: false, branch: 'http_error', detail: `HTTP ${res.status}` }
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+  return {
+    ok: true,
+    fiveHourPct: num(body.five_hour && body.five_hour.utilization),
+    weeklyPct: num(body.seven_day && body.seven_day.utilization),
+    fiveHourResetsAt: (body.five_hour && body.five_hour.resets_at) || null,
+    weeklyResetsAt: (body.seven_day && body.seven_day.resets_at) || null,
+  }
+}
+
+// Update check against the PUBLIC releases repo (the download surface
+// testers actually use). v1 is notify + one-click download page -- a real
+// in-place auto-update needs a signed app on macOS, deferred with Mino.
+// Cache: GitHub unauthenticated API allows 60 req/h/IP; 6h on success,
+// 10min on failure so a rate-limit blip cannot wedge the check until
+// restart.
+const UPDATE_RELEASES_REPO = 'Mino-is-me/scheherazade-releases'
+let updateCheckCache = null // { at, payload }
+function parseSemverTriple(v) {
+  const m = String(v || '').replace(/^v/, '').split('.').map(Number)
+  return m.length === 3 && m.every(Number.isFinite) ? m : null
+}
+async function checkForUpdate() {
+  const now = Date.now()
+  if (updateCheckCache) {
+    const ttl = updateCheckCache.payload.ok ? 6 * 3600_000 : 10 * 60_000
+    if (now - updateCheckCache.at < ttl) return updateCheckCache.payload
+  }
+  let payload
+  try {
+    const res = await fetch(`https://api.github.com/repos/${UPDATE_RELEASES_REPO}/releases/latest`, {
+      headers: { 'User-Agent': `scheherazade/${APP_VERSION}`, Accept: 'application/vnd.github+json' },
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const body = await res.json()
+    const latestTag = String(body.tag_name || '')
+    const latest = parseSemverTriple(latestTag)
+    const current = parseSemverTriple(APP_VERSION)
+    let hasUpdate = false
+    if (latest && current) {
+      for (let i = 0; i < 3; i++) {
+        if (latest[i] !== current[i]) { hasUpdate = latest[i] > current[i]; break }
+      }
+    }
+    payload = {
+      ok: true,
+      current: APP_VERSION,
+      latest: latestTag.replace(/^v/, ''),
+      hasUpdate,
+      url: body.html_url || `https://github.com/${UPDATE_RELEASES_REPO}/releases/latest`,
+    }
+  } catch (err) {
+    payload = { ok: false, current: APP_VERSION, hasUpdate: false, detail: err.message }
+  }
+  updateCheckCache = { at: now, payload }
+  return payload
+}
+
 const staticCtx = {
   // plumbing + shared config I/O
   fs, path, log, sendJson, readJsonBody, readAgentConfig, writeAgentConfig,
@@ -2485,6 +2576,8 @@ const staticCtx = {
   startMcpConnectorLogin, MCP_CONNECTOR_SPEC,
   // in-app setup-token capture (claude-subscription)
   getSetupTokenSession,
+  // usage gauge + update check (2026-08-04 tester requests)
+  fetchClaudeSubscriptionUsage, checkForUpdate,
   // agent status / model table
   computeAgentStatus, contextCapForModel,
   // autonomy

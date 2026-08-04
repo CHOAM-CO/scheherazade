@@ -717,6 +717,8 @@ window.COPY = {
     stopOk: 'Stop',
     cancel: 'Cancel',
     switchOk: 'Switch',
+    updateAvailable: (latest, current) => `Update available: v${latest} (you're on v${current}).`,
+    updateOpen: 'Download',
     muteWarn: (n, m) => `${m} was asked to reply ${n}× and didn't. The agent may be unable to send messages.`,
     muteRevert: (m) => `Go back to ${m}`,
     // context gauge (v0.0.22): occupancy is exact (from the transcript's own
@@ -1130,6 +1132,12 @@ window.COPY = {
     providerTestRunning: 'Testing the connection…',
     providerTestOk: 'Responded — connection looks alive.',
     providerTestFail: 'No usable response — try Re-login.',
+    usageLabel: 'Claude subscription usage',
+    usageRefresh: 'Refresh',
+    usageLoading: 'Reading usage…',
+    usageNoToken: 'No Claude subscription login on file — usage gauges only exist for the subscription lane (Codex/Ollama expose no usage API).',
+    usageError: 'Could not read usage.',
+    usageUnreadable: 'unreadable',
     providerAuthRunning: 'A login window opened. This updates once you finish logging in in the browser.',
     providerAuthSuccess: 'Connected',
     providerAuthFailures: {

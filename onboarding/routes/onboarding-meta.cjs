@@ -21,8 +21,32 @@ function createRoutes(staticCtx) {
     LOGIN_PROVIDERS, getLoginStatus, startProviderLogin, cancelProviderLogin, BOOTSTRAP_DEPS,
     getBootstrapStatus, resolveBin, MANAGED_INSTALL_SUPPORTED, MANUAL_INSTALL_PAGES,
     getElectron, startBootstrap,
+    fetchClaudeSubscriptionUsage, checkForUpdate,
   } = staticCtx
   return [
+    {
+      // Usage gauge (tester request 2026-08-04): claude-subscription only in
+      // v1 -- the OAuth usage endpoint is documented-by-practice (MAGI fleet
+      // polls it). codex/ollama expose no usage API we could find; the UI
+      // says so instead of faking a bar.
+      method: 'GET',
+      match: (pathname) => pathname === '/api/usage/claude',
+      handler: async (req, res) => {
+        sendJson(res, 200, await fetchClaudeSubscriptionUsage())
+        return
+      },
+    },
+    {
+      // Update check (tester request 2026-08-04): notify + download link.
+      // In-place auto-update needs a signed mac app -- deferred (Mino 16:16,
+      // then re-scoped 16:21 to "check + one-click download page" v1).
+      method: 'GET',
+      match: (pathname) => pathname === '/api/update/check',
+      handler: async (req, res) => {
+        sendJson(res, 200, await checkForUpdate())
+        return
+      },
+    },
     {
       method: 'GET',
       match: (pathname) => pathname === '/api/config',

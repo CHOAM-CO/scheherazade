@@ -67,6 +67,41 @@
     }
   }
 
+  // ── usage gauge (tester request 2026-08-04): claude subscription only in
+  // v1. The server's null-not-zero contract is honored verbatim here: a
+  // null pct renders as 'unreadable', never as 0%. ────────────────────────
+  async function renderUsage() {
+    const label = $('conn-usage-label')
+    const line = $('conn-usage-line')
+    const btn = $('conn-usage-refresh')
+    if (!label || !line || !btn) return
+    label.textContent = C.usageLabel
+    btn.textContent = C.usageRefresh
+    btn.onclick = () => renderUsage()
+    line.textContent = C.usageLoading
+    let u
+    try {
+      u = await api('/api/usage/claude')
+    } catch (err) {
+      line.textContent = GEN(err.message)
+      return
+    }
+    if (!u.ok) {
+      line.textContent = u.branch === 'no_token' ? C.usageNoToken : (u.detail || C.usageError)
+      return
+    }
+    const pct = (v) => (v == null ? C.usageUnreadable : `${v}%`)
+    const at = (iso, dateToo) => {
+      if (!iso) return ''
+      try {
+        const d = new Date(iso)
+        const t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        return dateToo ? ` (resets ${d.toLocaleDateString([], { month: 'numeric', day: 'numeric' })} ${t})` : ` (resets ${t})`
+      } catch { return '' }
+    }
+    line.textContent = `5h: ${pct(u.fiveHourPct)}${at(u.fiveHourResetsAt, false)} · weekly: ${pct(u.weeklyPct)}${at(u.weeklyResetsAt, true)}`
+  }
+
   async function runProviderTest(provider, statusEl, btn) {
     btn.disabled = true
     statusEl.textContent = C.providerTestRunning
@@ -321,6 +356,7 @@
     renderMcpConnectors()
 
     await renderProviderAuth()
+    renderUsage()
   }
 
   init()
