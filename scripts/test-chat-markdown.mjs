@@ -59,5 +59,18 @@ t('javascript: scheme is NOT a link', '[click](javascript:alert(1))', ['click'],
 t('html is inert text', '<img src=x onerror=alert(1)>', ['<img src=x onerror=alert(1)>'.replace('<','<')], [])
 t('bold inside list item', '- **a** b', ['<li><strong>a</strong> b</li>'])
 t('plain text unchanged', 'hello there', ['hello there'])
+
+// CSS regression pin, not a renderer test: the markdown renderer wraps plain
+// message text in real <p> nodes, and app.css's global `p` rule dims document
+// prose to --fg-dim. Without `color: inherit` on .chat-msg p, plain chat text
+// silently renders dim while li/strong keep the bubble color (Mino,
+// 2026-08-04: "평문 너무 어둡게 나옴, 불릿포인트나 볼드처리된건 흰색인데").
+{
+  const css = fs.readFileSync(new URL('../onboarding/public/css/app.css', import.meta.url), 'utf8')
+  const rule = css.match(/\.chat-msg p \{[^}]*\}/)
+  const pass = rule && /color:\s*inherit/.test(rule[0])
+  if (pass) { ok++; console.log('  ok   .chat-msg p keeps color: inherit (global p rule dims prose)') }
+  else { bad++; console.log('  FAIL .chat-msg p lost color: inherit -- plain chat text goes dim again') }
+}
 console.log(`\n${ok} passed, ${bad} failed`)
 process.exit(bad ? 1 : 0)

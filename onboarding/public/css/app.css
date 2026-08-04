@@ -741,7 +741,13 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
    Tight on purpose: this is a chat message, not a document. First and last
    child lose their outer margin so a formatted bubble is the same height as a
    plain one -- otherwise every bold-only reply gains padding nobody asked for. */
-.chat-msg p { margin: 0 0 0.5rem; }
+/* color: the global `p` rule (line ~46) dims document prose to --fg-dim.
+   Chat bubbles are NOT document prose -- the markdown renderer wraps plain
+   message text in real <p> nodes, which silently picked up that dim color
+   while li/strong siblings kept the bubble's own --fg (Mino, 2026-08-04:
+   plain text dark, bullets/bold white). Inherit restores one color per
+   bubble, and works for BOTH sides -- agent (--fg) and user (white). */
+.chat-msg p { margin: 0 0 0.5rem; color: inherit; }
 .chat-msg > :first-child { margin-top: 0; }
 .chat-msg > :last-child { margin-bottom: 0; }
 .chat-msg h3, .chat-msg h4, .chat-msg h5, .chat-msg h6 {
