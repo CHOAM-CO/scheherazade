@@ -355,29 +355,33 @@ process.on('SIGTERM', () => process.exit(0))
   assert(fs.existsSync(pendPath) && JSON.parse(fs.readFileSync(pendPath, 'utf8'))[0].redelivered === true,
     'redelivered entry marked (will never be re-sent a second time)')
 
-  // a live POST joins the FIFO; its result pays off the OLDEST entry
+  // a result pays off EVERYTHING written before it (probe 6: mid-turn
+  // events merge into the live turn -- one result covers all of them)
   const ep = JSON.parse(fs.readFileSync(epPath, 'utf8'))
-  await fetch(`http://127.0.0.1:${ep.port}/inbound`, {
+  const post = (content) => fetch(`http://127.0.0.1:${ep.port}/inbound`, {
     method: 'POST',
     headers: { 'x-ingest-token': ep.token, 'content-type': 'application/json' },
-    body: JSON.stringify({ content: 'emit-result 부탁', meta: { channelId: 'in-app' } }),
+    body: JSON.stringify({ content, meta: { channelId: 'in-app' } }),
   })
+  await post('emit-result 부탁')
   await waitSinkLines(2)
   const settled = Date.now() + 4000
   while (Date.now() < settled) {
-    const p = fs.existsSync(pendPath) ? JSON.parse(fs.readFileSync(pendPath, 'utf8')) : []
-    if (p.length === 1 && !p[0].redelivered) break
+    if (!fs.existsSync(pendPath)) break
     await new Promise((r) => setTimeout(r, 50))
   }
-  const afterResult = fs.existsSync(pendPath) ? JSON.parse(fs.readFileSync(pendPath, 'utf8')) : []
-  assert(afterResult.length === 1 && afterResult[0].content === 'emit-result 부탁',
-    'result event pays off the oldest pending entry (FIFO)')
+  assert(!fs.existsSync(pendPath),
+    'result pays off ALL entries written before it (merge semantics, probe 6)')
 
+  // a message that never gets a result stays pending across the kill
+  await post('답 없는 질문')
+  const pendBack = Date.now() + 4000
+  while (!fs.existsSync(pendPath) && Date.now() < pendBack) await new Promise((r) => setTimeout(r, 50))
   lane.kill('SIGTERM')
   await new Promise((r) => lane.on('exit', r))
 
-  // second boot: the still-pending live POST gets redelivered; then kill and
-  // boot a third time -> a redelivered:true entry is dropped, not looped
+  // second boot: the unpaid POST gets redelivered; then kill and boot a
+  // third time -> a redelivered:true entry is dropped, not looped
   fs.rmSync(sink, { force: true })
   const lane2 = spawn(process.execPath, [path.join(ROOT, 'headless-lane.mjs')], {
     env: { ...process.env, MEM, MODEL: 'fake-model', CLAUDE_BIN: shim, FAKE_SINK: sink },
@@ -385,7 +389,7 @@ process.on('SIGTERM', () => process.exit(0))
   })
   const lines2 = await waitSinkLines(1)
   const second = lines2[0] ? JSON.parse(lines2[0]).message.content[0].text : ''
-  assert(second.includes('emit-result 부탁') && second.includes('redelivered'),
+  assert(second.includes('답 없는 질문') && second.includes('redelivered'),
     'unpaid message from the previous boot is redelivered once')
   lane2.kill('SIGTERM')
   await new Promise((r) => lane2.on('exit', r))
@@ -397,7 +401,7 @@ process.on('SIGTERM', () => process.exit(0))
   const ep3Deadline = Date.now() + 8000
   while (!fs.existsSync(epPath) && Date.now() < ep3Deadline) await new Promise((r) => setTimeout(r, 50))
   await new Promise((r) => setTimeout(r, 300)) // give a wrong redelivery time to appear
-  assert(!fs.existsSync(sink) || !fs.readFileSync(sink, 'utf8').includes('emit-result 부탁'),
+  assert(!fs.existsSync(sink) || !fs.readFileSync(sink, 'utf8').includes('답 없는 질문'),
     'redelivered:true entry is dropped at next boot (one retry, no loops)')
   assert(!fs.existsSync(pendPath), 'pending file cleared once nothing redeliverable remains')
   lane3.kill('SIGTERM')

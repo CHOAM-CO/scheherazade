@@ -265,13 +265,16 @@ function main() {
       log(`init: model=${e.model} session=${e.session_id} mcp=${JSON.stringify((e.mcp_servers || []).map((s) => `${s.name}:${s.status}`))}`)
     } else if (e.type === 'result') {
       log(`turn result: ${e.subtype}${e.is_error ? ' (error)' : ''} turns=${e.num_turns}`)
-      // One result pays for the oldest pending user event (FIFO). If -p
-      // ever batches queued messages into one turn instead, leftovers get
-      // one guarded redelivery at next boot -- the redelivery note tells
-      // the agent not to answer twice, so the failure mode is a nudge, not
-      // a double reply. (Queued-turn semantics are design-0020 open q.1.)
+      // A result pays for EVERY pending event written before it: probe 6
+      // (2026-08-04, /tmp/sch-probe6.log) pinned -p's queue semantics --
+      // user events arriving mid-turn MERGE into the live turn (3 queued
+      // messages -> one result, same as the old dev-channels injection),
+      // so anything in stdin before the turn ended has been seen. The
+      // race window (a POST landing between turn-end and this line) only
+      // costs a redelivery skip, never a double reply.
+      const resultTs = Date.now()
       const p = readPending()
-      if (p.length) writePending(p.slice(1))
+      if (p.length) writePending(p.filter((ev) => (Number(ev.ts) || 0) > resultTs))
     } else if (e.type === 'assistant') {
       for (const c of (e.message && e.message.content) || []) {
         if (c.type === 'tool_use') log(`tool: ${c.name}`)

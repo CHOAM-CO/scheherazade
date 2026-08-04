@@ -90,10 +90,15 @@ main.cjs ──spawns──> claude -p --input-format stream-json
 
 ## Open questions (to resolve during implementation)
 
-1. Interrupts: user message arriving mid-turn — stream-json input queues it
-   (observed informally in probe 4's back-to-back sends); confirm ordering
-   under a long tool call, and whether control_request interrupt is worth
-   wiring now or later.
+1. ~~Interrupts: user message arriving mid-turn~~ RESOLVED — probe 6
+   (2026-08-04, `tmp_scratch/headless-spike/probe6-queued.mjs`, receipt
+   `/tmp/sch-probe6.log`): user events written mid-turn **merge into the
+   live turn** — 3 messages queued during a `sleep 8` tool call produced
+   ONE result (`num_turns=2`), one reply. Same semantics as the old
+   dev-channels live-turn injection, so no UX regression; the lane's
+   pending-payoff rule is "a result pays everything written before it",
+   pinned in test-headless-lane §6. control_request interrupt: still
+   later-if-ever.
 2. run.sh's other duties (env resolution, MEM/DATA_HOME, backoff loop,
    heartbeat markers) — port as a thin sh (no expect) or fold into main.cjs.
    Leaning: keep run.sh as the env/backoff layer, replace only the expect
