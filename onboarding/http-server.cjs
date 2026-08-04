@@ -41,7 +41,7 @@ const { pathToFileURL } = require('node:url')
 // liveness pings below, so neither can drift out of sync with
 // provider-env.cjs's buildProviderEnv(). Zero Electron dependency, safe to
 // require from here. (history: docs/HISTORY.md)
-const { PROVIDERS_REQUIRING_STORED_CREDENTIAL, resolveChatgptProxyPort, resolveCustomBaseUrl, parseCustomProviderJson, OLLAMA_CLOUD_BASE_URL } = require('../provider-env.cjs')
+const { PROVIDERS_REQUIRING_STORED_CREDENTIAL, resolveChatgptProxyPort, resolveCustomBaseUrl, parseCustomProviderJson, OLLAMA_CLOUD_BASE_URL, normalizeOllamaCloudModel } = require('../provider-env.cjs')
 // External-network validation cap for the ollama.com key check -- a real
 // 1-token generation over the internet, so LOCAL_LIVENESS_TIMEOUT_MS's
 // loopback-scale value would false-negative on any slow link.
@@ -1016,7 +1016,13 @@ async function validateProviderKey(provider, key, opts = {}) {
       const body = await res.json()
       names = Array.isArray(body.models) ? body.models.map((m) => m.name) : []
     } catch (err) { /* catalog unavailable: key verdict below still stands, modelPresent degrades to undefined */ }
-    const wanted = typeof opts.model === 'string' && opts.model.trim() ? opts.model.trim() : ''
+    const wantedRaw = typeof opts.model === 'string' && opts.model.trim() ? opts.model.trim() : ''
+    // Same signin-era ':cloud' tag normalization the spawn env applies
+    // (provider-env.cjs) -- validate must judge the NAME THE LANE WILL SEND,
+    // not the raw config string, or an old config reads as broken when the
+    // runtime would actually work (Mino field receipt 2026-08-04 17:37).
+    const wanted = normalizeOllamaCloudModel(wantedRaw)
+    const normNote = wantedRaw && wanted !== wantedRaw ? ` (checked as "${wanted}" -- the local ':cloud' tag suffix does not exist on ollama.com and is stripped at spawn too)` : ''
     // Probe with a model the catalog vouches for whenever the wanted one
     // isn't in it -- the auth verdict must never be blocked on a typo'd
     // model name.
@@ -1052,9 +1058,9 @@ async function validateProviderKey(provider, key, opts = {}) {
       }
       const modelPresent = wanted ? names.length ? names.includes(wanted) : probeModel === wanted : undefined
       if (wanted && modelPresent === false) {
-        return { ok: true, reachable: true, modelPresent: false, detail: `ollama.com accepted the key, but model "${wanted}" is not in its model list (${names.slice(0, 8).join(', ')}). Check the name on ollama.com.` }
+        return { ok: true, reachable: true, modelPresent: false, detail: `ollama.com accepted the key, but model "${wanted}" is not in its model list (${names.slice(0, 8).join(', ')}). Check the name on ollama.com.${normNote}` }
       }
-      return { ok: true, reachable: true, modelPresent, detail: wanted ? `ollama.com accepted the key and model "${wanted}" answered.` : 'ollama.com accepted the key.' }
+      return { ok: true, reachable: true, modelPresent, detail: (wanted ? `ollama.com accepted the key and model "${wanted}" answered.` : 'ollama.com accepted the key.') + normNote }
     } catch (err) {
       return { ok: false, reason: `could not reach ollama.com (${err.message}) -- check your network and try again` }
     }

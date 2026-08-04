@@ -696,7 +696,9 @@ const PROVIDER_ROWS = [
           },
         }
       }
-      return { values: { model } }
+      // signin-era ':cloud' tags normalized here so old configs keep
+      // working -- see normalizeOllamaCloudModel's own comment.
+      return { values: { model: normalizeOllamaCloudModel(model) } }
     },
     env: ({ key, values }) => ({
       ANTHROPIC_BASE_URL: OLLAMA_CLOUD_BASE_URL,
@@ -780,6 +782,24 @@ const PROVIDER_ROWS = [
     }),
   },
 ]
+
+// Local-daemon-era cloud tags do not exist on ollama.com (field receipt:
+// Mino 2026-08-04 17:37 -- every ollama model dead right after the key-mode
+// swap; validate said `deepseek-v4-flash:0731-cloud` is not in the catalog,
+// whose actual name is `deepseek-v4-flash`). The local ollama convention
+// marked cloud-proxied models with a ':cloud' / ':0731-cloud' style tag;
+// ollama.com's own names never carry it, while REAL cloud tags with colons
+// (nemotron-3-nano:30b, gpt-oss:120b) never contain the word 'cloud'. So the
+// deterministic rule: when the tag segment contains 'cloud', strip the whole
+// ':...' suffix; otherwise leave the name alone. Applied at BOTH ends --
+// spawn env (here) and key validation (http-server) -- so a config written
+// in the signin era keeps working without the user retyping the model.
+function normalizeOllamaCloudModel(model) {
+  const m = String(model || '').trim()
+  const idx = m.indexOf(':')
+  if (idx === -1) return m
+  return /cloud/i.test(m.slice(idx + 1)) ? m.slice(0, idx) : m
+}
 
 // Shared by the ollama/custom rows: a MODEL that is missing or whitespace-only
 // is "not configured", never a silent fallback to config.MODEL's Anthropic
@@ -907,4 +927,5 @@ module.exports = {
   CUSTOM_PLACEHOLDER_KEY,
   OLLAMA_BASE_URL,
   OLLAMA_CLOUD_BASE_URL,
+  normalizeOllamaCloudModel,
 }

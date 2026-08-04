@@ -22,7 +22,7 @@
 // convention.
 
 import { spawnSync } from 'node:child_process'
-import { buildProviderEnv, parseCustomProviderJson, PROVIDERS_REQUIRING_STORED_CREDENTIAL, CHATGPT_PROXY_DEFAULT_PORT, CHATGPT_PLACEHOLDER_KEY, OLLAMA_CLOUD_BASE_URL } from '../provider-env.cjs'
+import { buildProviderEnv, parseCustomProviderJson, PROVIDERS_REQUIRING_STORED_CREDENTIAL, CHATGPT_PROXY_DEFAULT_PORT, CHATGPT_PLACEHOLDER_KEY, OLLAMA_CLOUD_BASE_URL, normalizeOllamaCloudModel } from '../provider-env.cjs'
 
 let pass = 0
 let fail = 0
@@ -191,7 +191,7 @@ function fakeReadProviderKey(store) {
   assert(!result.error, 'ollama: no error with a model + stored key configured')
   assert(result.env.ANTHROPIC_BASE_URL === OLLAMA_CLOUD_BASE_URL, `ollama: ANTHROPIC_BASE_URL == ${OLLAMA_CLOUD_BASE_URL} (ollama.com speaks the Anthropic Messages API -- receipt in provider-env.cjs)`)
   assert(result.env.ANTHROPIC_API_KEY === 'ol-key', 'ollama: ANTHROPIC_API_KEY == the stored ollama.com API key (key-mode, 2026-08-04)')
-  assert(result.env.MODEL === 'glm-5.2:cloud', 'ollama: MODEL == config model tag (overrides the generic claude-model default)')
+  assert(result.env.MODEL === 'glm-5.2', 'ollama: signin-era ":cloud" tag stripped at spawn -- ollama.com has no such names (Mino field receipt 2026-08-04 17:37)')
   assert(result.env.SKIP_MODEL_GUARD === '1', 'ollama: SKIP_MODEL_GUARD == "1" (matches run-agent.sh:205 shape; NOTE run.sh has no such guard today -- see task report gaps)')
   assert(result.env.CLAUDE_CODE_OAUTH_TOKEN === undefined && 'CLAUDE_CODE_OAUTH_TOKEN' in result.env, 'ollama: CLAUDE_CODE_OAUTH_TOKEN explicitly cleared (force api-key auth precedence)')
 }
@@ -220,6 +220,19 @@ function fakeReadProviderKey(store) {
   // Keychain read THROWS (model ok) -> key_error, mirroring the claude rows.
   const result = buildProviderEnv('ollama', { MODEL: 'glm-5.2:cloud' }, { readProviderKey: () => { throw new Error('keychain sealed') } })
   assert(result.error && result.error.kind === 'key_error', 'ollama: throwing readProviderKey -> error.kind === "key_error"')
+}
+{
+  // normalizeOllamaCloudModel: the deterministic signin-era tag strip.
+  // Rule: a ':...' tag segment CONTAINING 'cloud' marks the local-daemon
+  // convention and the whole suffix goes; real cloud tags with colons
+  // (nemotron-3-nano:30b) never contain the word and stay whole.
+  assert(normalizeOllamaCloudModel('deepseek-v4-flash:0731-cloud') === 'deepseek-v4-flash', 'normalize: ":0731-cloud" suffix stripped (the exact field case)')
+  assert(normalizeOllamaCloudModel('glm-5.2:cloud') === 'glm-5.2', 'normalize: bare ":cloud" suffix stripped')
+  assert(normalizeOllamaCloudModel('nemotron-3-nano:30b') === 'nemotron-3-nano:30b', 'normalize: a real size tag is NOT touched')
+  assert(normalizeOllamaCloudModel('gpt-oss:120b') === 'gpt-oss:120b', 'normalize: colon tags without "cloud" pass through')
+  assert(normalizeOllamaCloudModel('deepseek-v4-flash') === 'deepseek-v4-flash', 'normalize: untagged name passes through')
+  assert(normalizeOllamaCloudModel('  glm-5.2:cloud  ') === 'glm-5.2', 'normalize: trims whitespace before judging')
+  assert(normalizeOllamaCloudModel('') === '', 'normalize: empty stays empty (caller still fails not_ready)')
 }
 
 // ─────────────────────────────────────────────────────────────────────────
