@@ -17,6 +17,7 @@ import {
   enqueueOutbound, enqueueInbound, enqueueReaction, readOutbound, resetQueueForTest,
   deliverInbound, deliverReaction, transcriptState, handleToolCall,
   createRequestHandler, LOCAL_CHANNEL_ID, MAX_QUEUE, USER_REACTIONS,
+  enableTranscriptPersistence, flushTranscript,
 } from '../channel-local.mjs'
 
 let pass = 0
@@ -373,6 +374,59 @@ console.log('\n10. boot announce: the greeting is the first thing the chat pane 
   child.stdin.end()
   const code = await Promise.race([exited, new Promise((r) => setTimeout(() => r('TIMEOUT'), 5_000))])
   if (code === 'TIMEOUT') child.kill('SIGKILL')
+  fs.rmSync(tmp, { recursive: true, force: true })
+}
+
+// ── transcript persistence: the app-relaunch path (Mino, 2026-08-04) ───────
+// Before this existed, the queue died with the process and reopening the app
+// showed an empty chat. Persistence is OPT-IN (boot() enables it) precisely
+// so THIS file's other sections -- which import the module and enqueue
+// fixture chatter -- never write into a real user's DATA_HOME.
+{
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-localchan-transcript-'))
+  resetQueueForTest()
+  await enableTranscriptPersistence({ dataHome: tmp })
+  enqueueInbound('remember me')
+  enqueueOutbound('I will')
+  enqueueReaction('agent', '👍', 1)
+  await flushTranscript()
+
+  const file = path.join(tmp, 'chat-transcript.json')
+  assert(fs.existsSync(file), 'the transcript file exists after a flush')
+  if (process.platform !== 'win32') {
+    const mode = fs.statSync(file).mode & 0o777
+    assert(mode === 0o600, `transcript file is 0600 (conversation content), got ${mode.toString(8)}`)
+  }
+
+  // "restart": wipe the in-memory queue the way a dead process does, then
+  // restore the way boot() does.
+  resetQueueForTest()
+  assert(readOutbound(0).items.length === 0, 'reset really emptied the queue (restart simulated)')
+  const { restored } = await enableTranscriptPersistence({ dataHome: tmp })
+  assert(restored === 3, `restore reports 3 items, got ${restored}`)
+  const replay = readOutbound(0)
+  assert(replay.items.length === 3, 'a cursor-0 drain replays the whole restored conversation')
+  assert(replay.items[0].text === 'remember me' && replay.items[0].role === 'user', 'user half survives the restart')
+  assert(replay.items[1].text === 'I will' && replay.items[1].role === 'agent', 'agent half survives the restart')
+  assert(replay.items[2].kind === 'reaction' && replay.items[2].targetSeq === 1, 'reactions keep pointing at their bubble')
+  assert(replay.latest === 3, 'seq is restored monotonic (page cursors stay valid)')
+  const next = enqueueOutbound('and new messages continue the sequence')
+  assert(next === 4, `post-restore enqueue continues at seq 4, got ${next}`)
+
+  // corrupt file: fail-soft to an empty transcript, never a dead channel.
+  resetQueueForTest()
+  fs.writeFileSync(file, '{"seq": 4, "queue": [truncated-mid-wr')
+  const corrupt = await enableTranscriptPersistence({ dataHome: tmp })
+  assert(corrupt.restored === 0, 'a corrupt transcript restores as empty instead of throwing')
+
+  // Drain any fire-and-forget flush BEFORE tearing the directory down --
+  // otherwise the pending write races rmSync and logs a (harmless, fail-soft)
+  // ENOENT after the summary line.
+  await flushTranscript()
+  resetQueueForTest()
   fs.rmSync(tmp, { recursive: true, force: true })
 }
 

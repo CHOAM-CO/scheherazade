@@ -85,10 +85,88 @@ export const MAX_QUEUE = 500
 let seq = 0
 let queue = []
 
+// ── transcript persistence ────────────────────────────────────────────────
+// The queue IS the conversation record (see header) -- but until 2026-08-04
+// it lived only in this process, so every app relaunch erased the whole chat
+// (Mino: "앱 닫았다가 열면 인앱챗 대화내용 날아감"). Persisted to one JSON
+// file in DATA_HOME, restored once at boot, rewritten after every push.
+//
+// OPT-IN, not automatic: tests import this module to exercise the queue, and
+// a module-level side effect would write their fixture chatter into the real
+// user's DATA_HOME. boot() enables it; imports get the old in-memory-only
+// behavior unchanged.
+//
+// seq is restored monotonic ON PURPOSE: a page holding a cursor across an app
+// restart must keep the same "nothing new" / "you fell behind" semantics it
+// had within one process lifetime.
+//
+// Fail-soft both ways: a missing/corrupt file starts an empty transcript, a
+// failed write logs and keeps the chat alive. Losing persistence must never
+// cost the user the live conversation.
+const TRANSCRIPT_BASENAME = 'chat-transcript.json'
+let transcriptFile = null
+let transcriptWritePromise = null
+let transcriptDirty = false
+
+async function writeTranscriptOnce() {
+  // Captured once: resetQueueForTest() can null transcriptFile while a write
+  // is in flight, and a half-made write must finish against the path it
+  // started with (or not at all), never against null.
+  const file = transcriptFile
+  if (!file) return
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  // temp + rename, same reason as atomicWriteJson (channel-runtime): a
+  // reader landing mid-write must never parse a truncated file. 0600 like
+  // the port file -- this is the full conversation content.
+  const tmp = `${file}.${process.pid}.tmp`
+  await fs.writeFile(tmp, JSON.stringify({ seq, queue }, null, 1), { mode: 0o600 })
+  await fs.rename(tmp, file)
+}
+
+// Returns a promise that resolves only once the CURRENT queue state is on
+// disk -- callers arriving mid-write mark it dirty and share the same
+// promise, whose drain loop rewrites until nothing changed underneath it.
+// (First draft returned early on the in-flight write; the test's await then
+// raced the rename and stat'd a file that wasn't there yet.)
+export function flushTranscript() {
+  if (!transcriptFile) return Promise.resolve()
+  if (transcriptWritePromise) { transcriptDirty = true; return transcriptWritePromise }
+  transcriptWritePromise = (async () => {
+    do {
+      transcriptDirty = false
+      try {
+        await writeTranscriptOnce()
+      } catch (err) {
+        log(`transcript persist failed (chat stays live, history at risk): ${err.message}`)
+      }
+    } while (transcriptDirty)
+    transcriptWritePromise = null
+  })()
+  return transcriptWritePromise
+}
+
+export async function enableTranscriptPersistence({ dataHome = DATA_HOME } = {}) {
+  transcriptFile = path.join(dataHome, TRANSCRIPT_BASENAME)
+  try {
+    const raw = JSON.parse(await fs.readFile(transcriptFile, 'utf8'))
+    if (Number.isFinite(raw.seq) && Array.isArray(raw.queue)) {
+      queue = raw.queue.filter((m) => m && Number.isFinite(m.seq)).slice(-MAX_QUEUE)
+      // max() over both: raw.seq is the truth, but a file from a crashed
+      // mid-write generation may carry seq older than its own tail item.
+      seq = Math.max(raw.seq, ...queue.map((m) => m.seq), 0)
+      return { restored: queue.length }
+    }
+  } catch { /* first run, or corrupt: empty transcript beats a dead channel */ }
+  return { restored: 0 }
+}
+
 function push(item) {
   seq += 1
   queue.push({ seq, ...item })
   if (queue.length > MAX_QUEUE) queue = queue.slice(-MAX_QUEUE)
+  // fire-and-forget: enqueue stays synchronous (its callers and tests treat
+  // it that way), and flushTranscript() self-serializes concurrent calls.
+  flushTranscript()
   return seq
 }
 
@@ -141,7 +219,7 @@ export function readOutbound(since = 0) {
   return { items, latest: seq, missed: from > 0 && from < oldestRetained - 1, state: transcriptState() }
 }
 
-export function resetQueueForTest() { seq = 0; queue = [] }
+export function resetQueueForTest() { seq = 0; queue = []; transcriptFile = null }
 
 // ── MCP server ────────────────────────────────────────────────────────────
 const INSTRUCTIONS = `You are ${AGENT_NAME}. The user talks to you in the app's own chat window.
@@ -406,6 +484,12 @@ export async function writePortFile(dataHome, payload) {
 const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])
 
 async function boot() {
+  // Restore the conversation BEFORE anything can enqueue (boot announce
+  // appends a greeting below; it must land after yesterday's messages, not
+  // instead of them).
+  const { restored } = await enableTranscriptPersistence()
+  log(`transcript restored: ${restored} item(s)`)
+
   await mcp.connect(new StdioServerTransport())
   log(`MCP server up (${AGENT_NAME})`)
 
