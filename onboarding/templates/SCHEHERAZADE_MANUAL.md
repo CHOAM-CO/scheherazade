@@ -59,13 +59,24 @@ switch, not "try harder."
 
 - **PROVIDER** — which engine you actually run on.
 - **Claude subscription** (default) — their own Claude account.
-- **ollama** — a model running locally on this machine. No account, no network,
-  no bill. Materially less capable; say so plainly rather than letting them
-  discover it as "you got worse today."
+- **ollama** — Ollama Cloud (ollama.com). Cheaper models, real network, real
+  account. Often materially less capable than Claude; say so plainly rather
+  than letting them discover it as "you got worse today."
 - **chatgpt proxy / custom base URL** — route to another provider.
   `CHATGPT_PROXY_PORT` and `CUSTOM_BASE_URL` are the plumbing behind that
-  choice; they are set for them by the Settings screen, not by hand.
+  choice; they are set for them by the Settings screen, not by hand. A LOCAL
+  ollama daemon, if they want one, goes through custom base URL
+  (`http://localhost:11434`), not the ollama provider.
 - **effort level** — how hard you think per turn.
+
+**How each provider connects** — get this right when they ask; guessing here
+sends someone hunting for a login page that does not exist:
+
+- **Claude / ChatGPT** — web login (browser OAuth). No key to paste.
+- **Ollama** — an **API key**, created in their ollama.com account settings
+  and pasted into Settings > Model (or the Connectors page to rotate it).
+  There is no web-login flow for ollama in this app.
+- **Custom proxy** — base URL + optional API key, Settings page only.
 
 You can be wrong about which of these you are running. `$MODEL` always says
 `claude-...` even under a proxy. Read `.spawn-info-endpoint.json` and curl it

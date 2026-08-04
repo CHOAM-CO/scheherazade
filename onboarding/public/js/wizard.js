@@ -435,30 +435,12 @@
       reloginBtn.textContent = L.reloginLabel
       panel.appendChild(reloginBtn)
 
-      let modelInput = null
-      if (provider === 'ollama') {
-        const field = document.createElement('div')
-        field.className = 'field'
-        const label = document.createElement('label')
-        label.textContent = P.modelLabel
-        modelInput = document.createElement('input')
-        modelInput.type = 'text'
-        modelInput.placeholder = P.modelPlaceholder
-        modelInput.value = state.model || ''
-        const hint = document.createElement('div')
-        hint.className = 'field-hint'
-        hint.textContent = P.modelHint
-        field.appendChild(label)
-        field.appendChild(modelInput)
-        field.appendChild(hint)
-        panel.appendChild(field)
-        modelInput.oninput = updateNextGate
-      }
-
+      // (the ollama model field + its warn-once gate left with ollama itself
+      // -- key-mode 2026-08-04, see renderOllamaKeyArea; this area is
+      // chatgpt-only now)
       let loginState = 'idle'
       function updateNextGate() {
-        const modelOk = provider !== 'ollama' || Boolean(modelInput && modelInput.value.trim())
-        nextBtn.disabled = !(loginState === 'success' && modelOk)
+        nextBtn.disabled = loginState !== 'success'
       }
 
       function applyStatus(s) {
@@ -515,41 +497,12 @@
       loginBtn.onclick = () => startLogin(false)
       reloginBtn.onclick = () => startLogin(true)
 
-      // warn-once gate (2026-08-04 tester #1): "connected" used to mean only
-      // "signin worked" -- the typed model was never checked, so a missing/
-      // unpulled cloud model sailed through and died at runtime. First Next
-      // click checks the model against the daemon's list; if absent, the
-      // server's actionable detail renders here and the click does NOT
-      // advance. Fixing the name re-arms the check; pressing Next again on
-      // the same name proceeds anyway (pull-it-later is legitimate).
-      let warnedModel = null
-      nextBtn.onclick = async () => {
-        if (provider === 'ollama') {
-          const m = modelInput.value.trim()
-          if (m !== warnedModel) {
-            nextBtn.disabled = true
-            try {
-              const v = await api('/api/agent/validate-key', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ provider: 'ollama', model: m }),
-              })
-              if (v && v.modelPresent === false) {
-                warnedModel = m
-                statusEl.className = 'status-line failure'
-                statusEl.textContent = `${v.detail || ''} ${P.modelMissingProceed}`.trim()
-                return
-              }
-            } catch (err) {
-              // validation unreachable -> fall through to the old behavior;
-              // blocking setup on a broken checker would be worse than the bug
-            } finally {
-              nextBtn.disabled = false
-              updateNextGate()
-            }
-          }
-          state.model = m
-        }
+      // (the signin-era ollama warn-once gate that lived here is gone with
+      // ollama's move to key-mode -- renderOllamaKeyArea owns that check now,
+      // through /api/byok/validate. It also had a latent bug worth naming:
+      // it POSTed /api/agent/validate-key, a route that never existed, and
+      // its catch silently waved the model through.)
+      nextBtn.onclick = () => {
         state.provider = provider
         showStep('2')
       }
@@ -561,9 +514,93 @@
       } // end buildLoginUI
     }
 
+    // ollama = API-key paste (2026-08-04 Mino: "ollama -> API키" -- the
+    // `ollama signin` login flow shipped a false "connected" a real external
+    // tester paid for; ChatGPT/Claude stay web-login). Reuses the shared key
+    // field + the same /api/byok/validate lane as claude BYOK -- the server's
+    // ollama branch makes a real authenticated 1-token call to ollama.com
+    // and stores the key on success (PROVIDERS_REQUIRING_STORED_CREDENTIAL).
+    function renderOllamaKeyArea() {
+      const K = C.step1.ollamaKey
+      const keyInput = $('s1-key')
+      const hintEl = $('s1-hint')
+      const nextBtn = $('s1-next')
+      const statusEl = $('s1-status')
+      state.provider = 'ollama'
+      hintEl.textContent = K.keyHint
+      keyInput.placeholder = K.keyPlaceholder
+      nextBtn.textContent = C.step1.button
+
+      const field = document.createElement('div')
+      field.className = 'field'
+      const label = document.createElement('label')
+      label.textContent = K.modelLabel
+      const modelInput = document.createElement('input')
+      modelInput.type = 'text'
+      modelInput.placeholder = K.modelPlaceholder
+      modelInput.value = state.model || ''
+      const modelHintEl = document.createElement('div')
+      modelHintEl.className = 'field-hint'
+      modelHintEl.textContent = K.modelHint
+      field.appendChild(label)
+      field.appendChild(modelInput)
+      field.appendChild(modelHintEl)
+      extraEl.appendChild(field)
+
+      const updateGate = () => { nextBtn.disabled = !(keyInput.value.trim() && modelInput.value.trim()) }
+      // renderClaudeArea's reset clears keyInput.oninput on every tab switch,
+      // so this gate can never leak into the claude tab's key field.
+      keyInput.oninput = updateGate
+      modelInput.oninput = updateGate
+      updateGate()
+
+      // warn-once gate, carried over from the signin-era flow: a model name
+      // the ollama.com catalog doesn't vouch for warns on the first Next and
+      // proceeds on the second identical click (the KEY itself was already
+      // accepted and stored by then -- only the model hint is soft).
+      let warnedModel = null
+      nextBtn.onclick = async () => {
+        const keyVal = keyInput.value.trim()
+        const m = modelInput.value.trim()
+        if (!keyVal || !m) return
+        nextBtn.disabled = true
+        statusEl.className = 'status-line pending'
+        statusEl.textContent = C.step1.fallback.validating
+        try {
+          const v = await api('/api/byok/validate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider: 'ollama', key: keyVal, model: m }),
+          })
+          if (!v.ok) {
+            statusEl.className = 'status-line failure'
+            statusEl.textContent = C.step1.fallback.failure(v.reason || 'unknown error')
+            return
+          }
+          if (v.modelPresent === false && m !== warnedModel) {
+            warnedModel = m
+            statusEl.className = 'status-line failure'
+            statusEl.textContent = `${v.detail || ''} ${K.modelMissingProceed}`.trim()
+            return
+          }
+          statusEl.className = 'status-line success'
+          statusEl.textContent = C.step1.fallback.success
+          state.model = m
+          showStep('2')
+        } catch (err) {
+          statusEl.className = 'status-line failure'
+          statusEl.textContent = C.genericError(err.message)
+        } finally {
+          nextBtn.disabled = false
+          updateGate()
+        }
+      }
+    }
+
     // Renders Step 1's lower half for the current activeTab/claudeSubMode.
     // claude gets the two-submode UI (this is the load-bearing branch);
-    // chatgpt/ollama get the login-button area (renderLoginArea above).
+    // chatgpt gets the login-button area (renderLoginArea above); ollama
+    // gets the key-paste area (renderOllamaKeyArea above).
     function renderClaudeArea() {
       const keyInput = $('s1-key')
       const hintEl = $('s1-hint')
@@ -581,11 +618,20 @@
       keyFieldWrap.classList.remove('hidden')
       nextBtn.disabled = false
       keyInput.value = ''
+      // the ollama key area installs an oninput gate on this SHARED input --
+      // clear it here so it can never disable Next on another tab.
+      keyInput.oninput = null
       $('s1-status').textContent = ''
       $('s1-status').className = 'status-line'
 
-      if (activeTab === 'chatgpt' || activeTab === 'ollama') {
+      if (activeTab === 'chatgpt') {
         renderLoginArea(activeTab)
+        return
+      }
+      if (activeTab === 'ollama') {
+        // ollama left the login-shell-out family 2026-08-04 (Mino: "ollama
+        // -> API키") -- its connect method is an ollama.com API-key paste.
+        renderOllamaKeyArea()
         return
       }
       // claude tab from here down -- both submodes re-wire the key-validate

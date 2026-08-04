@@ -55,7 +55,7 @@ const {
   DATA_HOME,
 } = require('./onboarding/http-server.cjs')
 const { setAgentStatus } = require('./onboarding/agent-status.cjs')
-const { ensureOllamaDaemon, killOllamaDaemon } = require('./onboarding/ollama-daemon.cjs')
+const { killOllamaDaemon } = require('./onboarding/ollama-daemon.cjs') // ensureOllamaDaemon unused since cloud key-mode (2026-08-04) -- kill stays for pre-cloud-session cleanup
 // Log viewer tap (v0.0.20): every line log()/fatal() and the agent child's
 // stdout/stderr emit is mirrored into this ring buffer + DATA_HOME/logs/
 // app.log, so GET /api/logs (-> /logs page) can show a live session log.
@@ -1108,23 +1108,15 @@ async function spawnRealAgentChildLocked() {
     }
   }
 
-  // ollama provider: same gate shape as chatgpt above -- a trusted daemon
-  // must be CONFIRMED up before the agent spawns (a bootstrap-installed
-  // Ollama.app has no launched GUI, so nothing else ever starts one; see
-  // onboarding/ollama-daemon.cjs's header for the full rules). Awaited,
-  // fail-closed, reported as 'ollama_unavailable' (2026-08-04; was 'unknown').
-  if (provider === 'ollama') {
-    let daemonOk = false
-    try {
-      daemonOk = await ensureOllamaDaemon()
-    } catch (err) {
-      console.error('[scheherazade/main] ensureOllamaDaemon threw unexpectedly:', err)
-    }
-    if (!daemonOk) {
-      setAgentStatus('failed', 'ollama_unavailable', 'no trusted ollama daemon is available (see app log) -- agent not spawned')
-      return null
-    }
-  }
+  // ollama provider: NO local gate anymore (2026-08-04, Mino "ollama ->
+  // API키"). The lane is ollama.com CLOUD via ANTHROPIC_BASE_URL + a stored
+  // API key (provider-env.cjs's ollama row) -- there is no local daemon to
+  // confirm, and gating the spawn on ensureOllamaDaemon() here would block
+  // a perfectly valid cloud config on any machine without Ollama.app
+  // installed. Missing key/model still fail closed via buildProviderEnv's
+  // not_ready path below, same as every credentialed lane. killOllamaDaemon
+  // in the quit path stays -- it only cleans up a daemon WE spawned in a
+  // pre-cloud session, and is a no-op otherwise.
 
   // Multichannel (v0.0.18): resolve the ACTIVE backend's credentials + home
   // id at spawn time. Same seam discipline as the original Discord-only

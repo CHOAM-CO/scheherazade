@@ -67,6 +67,15 @@
 
 const CHATGPT_PROXY_DEFAULT_PORT = '18080'
 const OLLAMA_BASE_URL = 'http://localhost:11434'
+// Ollama CLOUD (2026-08-04 Mino: "ollama -> API키" -- the connect method for
+// ollama is an ollama.com API key, not web-login/`ollama signin`; the signin
+// flow shipped a false "connected" a real external tester paid for the same
+// day). ollama.com speaks the Anthropic Messages API directly -- receipt:
+// unauthenticated POST https://ollama.com/v1/messages returns an
+// Anthropic-SHAPED 401 ({"type":"error","error":{"type":"authentication_
+// error",...}}); api.ollama.com 301s here. So the runtime lane is just
+// base-url + Bearer key, no proxy, no local daemon.
+const OLLAMA_CLOUD_BASE_URL = 'https://ollama.com'
 
 // Clearly-labeled placeholder -- never a real Anthropic key, never sent
 // anywhere the codex-as-api proxy doesn't itself receive it. Shaped loosely
@@ -663,15 +672,19 @@ const PROVIDER_ROWS = [
     }),
   },
   {
-    // Local Ollama daemon. No user secret required, but a real local model
-    // tag IS required -- unlike codex-as-api (which, per run-agent.sh's
-    // sirin comment, "force-ignores body.model"), Ollama's OpenAI-compatible
-    // surface needs an actual model name it can resolve. Falling back to
-    // config.MODEL's generic default ('claude-opus-4-6') would silently send
-    // an Anthropic model id to an Ollama daemon that has no such model --
-    // fail loud instead.
+    // Ollama CLOUD via API key (2026-08-04, Mino "ollama -> API키" -- see
+    // OLLAMA_CLOUD_BASE_URL's comment for the receipt and the history; the
+    // previous local-daemon/`ollama signin` mode is gone from this lane.
+    // A local daemon is still reachable through the 'custom' row with
+    // http://localhost:11434 as the base URL). A real model tag is still
+    // required -- same reasoning as before: falling back to config.MODEL's
+    // generic default ('claude-opus-4-6') would silently send an Anthropic
+    // model id to ollama.com, which has no such model -- fail loud instead.
     id: 'ollama',
-    credential: 'none',
+    credential: 'required',
+    keyName: 'ollama',
+    notReady: 'onboarding says PROVIDER=ollama but no ollama.com API key is on file yet',
+    notReadyFix: 'Open Settings > Model, pick Ollama, and paste an API key from ollama.com (account settings > API keys). It is checked against ollama.com before it is stored.',
     pre: (config) => {
       const model = requiredModel(config)
       if (!model) {
@@ -679,15 +692,15 @@ const PROVIDER_ROWS = [
           error: {
             kind: 'not_ready',
             reason: 'onboarding says PROVIDER=ollama but no MODEL (ollama model tag) is on file yet',
-            fix: 'Pick an Ollama model in Settings > Model. It has to be a tag the local daemon can actually resolve -- `ollama list` shows what is pulled.',
+            fix: 'Pick an Ollama model in Settings > Model. It has to be a name from the ollama.com model list.',
           },
         }
       }
       return { values: { model } }
     },
-    env: ({ values }) => ({
-      ANTHROPIC_BASE_URL: OLLAMA_BASE_URL,
-      ANTHROPIC_API_KEY: 'ollama', // exact match, run-agent.sh:204 (skia-ollama), proven-live
+    env: ({ key, values }) => ({
+      ANTHROPIC_BASE_URL: OLLAMA_CLOUD_BASE_URL,
+      ANTHROPIC_API_KEY: key,
       MODEL: values.model,
       SKIP_MODEL_GUARD: '1', // matches run-agent.sh:205's shape; NOTE run.sh has no such guard today -- see task report gaps
       CLAUDE_CODE_OAUTH_TOKEN: undefined, // force api-key auth precedence -- see sirin ground-truth comment
@@ -838,12 +851,13 @@ function buildProviderEnv(provider, config, deps) {
 // Which PROVIDERS values require a stored credential before onboarding can
 // complete (single source of truth shared with onboarding/http-server.cjs's
 // /api/onboarding/complete gate, so the "does this provider need a secret"
-// fact lives in exactly one place). chatgpt/ollama route to a local
-// proxy/daemon and need no user secret at all -- see buildProviderEnv above.
-// 'custom' also needs none: its API key is OPTIONAL, not required (a stored
-// key is used when present, a placeholder otherwise -- see buildProviderEnv's
-// 'custom' branch), so it is never added here either.
-const PROVIDERS_REQUIRING_STORED_CREDENTIAL = ['claude', 'claude-subscription']
+// fact lives in exactly one place). chatgpt routes to a local proxy and
+// needs no user secret at all -- see buildProviderEnv above. 'ollama' joined
+// this list 2026-08-04 (cloud API-key mode; see the ollama row). 'custom'
+// needs none: its API key is OPTIONAL, not required (a stored key is used
+// when present, a placeholder otherwise -- see buildProviderEnv's 'custom'
+// branch), so it is never added here either.
+const PROVIDERS_REQUIRING_STORED_CREDENTIAL = ['claude', 'claude-subscription', 'ollama']
 
 // Table invariant, checked at module load rather than trusted: a row that
 // requires a credential MUST carry the user-visible reason shown when one is
@@ -892,4 +906,5 @@ module.exports = {
   CHATGPT_PLACEHOLDER_KEY,
   CUSTOM_PLACEHOLDER_KEY,
   OLLAMA_BASE_URL,
+  OLLAMA_CLOUD_BASE_URL,
 }

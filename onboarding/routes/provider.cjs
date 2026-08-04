@@ -64,7 +64,14 @@ function createRoutes(staticCtx) {
         // 'custom' branch) -- so a non-empty key here is worth storing, just
         // never REQUIRED the way PROVIDERS_REQUIRING_STORED_CREDENTIAL entries
         // are.
-        if (PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes(provider) || (provider === 'custom' && key && key.trim())) {
+        // `key && key.trim()` now guards the stored-credential arm too
+        // (ollama key-mode, 2026-08-04): validateProviderKey's ollama branch
+        // falls back to the STORED key when the body carries none (the
+        // connectors Test path), and an ok verdict from that fallback must
+        // never overwrite a good stored key with the empty string it rode in
+        // on. claude/claude-subscription are unaffected -- their branches
+        // already fail validation outright on an empty key.
+        if ((PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes(provider) || provider === 'custom') && key && key.trim()) {
           storeProviderKeyVerified(provider, key) // throws (fail loud) on storage failure -> caught by outer handler -> 500
         }
         // Spread `result` rather than a hardcoded `{ ok: true }` (server-side

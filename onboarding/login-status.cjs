@@ -38,7 +38,11 @@
 //                      unenumerated path (never guess a more specific code)
 // `detail` is free-form prose for logs/UI, mirroring agent-status.cjs.
 
-const LOGIN_PROVIDERS = ['chatgpt', 'ollama']
+// 'ollama' removed 2026-08-04 (Mino: "ollama -> API키") -- ollama's connect
+// method is now an ollama.com API-key paste (see provider-env.cjs's ollama
+// row), so it has no login shell-out flow anymore. Only chatgpt remains a
+// login-flow provider (`codex login`).
+const LOGIN_PROVIDERS = ['chatgpt']
 
 const statuses = {}
 for (const p of LOGIN_PROVIDERS) {

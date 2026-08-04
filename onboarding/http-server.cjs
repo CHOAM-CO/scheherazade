@@ -41,7 +41,11 @@ const { pathToFileURL } = require('node:url')
 // liveness pings below, so neither can drift out of sync with
 // provider-env.cjs's buildProviderEnv(). Zero Electron dependency, safe to
 // require from here. (history: docs/HISTORY.md)
-const { PROVIDERS_REQUIRING_STORED_CREDENTIAL, resolveChatgptProxyPort, resolveCustomBaseUrl, parseCustomProviderJson, OLLAMA_BASE_URL } = require('../provider-env.cjs')
+const { PROVIDERS_REQUIRING_STORED_CREDENTIAL, resolveChatgptProxyPort, resolveCustomBaseUrl, parseCustomProviderJson, OLLAMA_CLOUD_BASE_URL } = require('../provider-env.cjs')
+// External-network validation cap for the ollama.com key check -- a real
+// 1-token generation over the internet, so LOCAL_LIVENESS_TIMEOUT_MS's
+// loopback-scale value would false-negative on any slow link.
+const OLLAMA_CLOUD_TIMEOUT_MS = 15_000
 // Login shell-out (2026-07-07): spawn/execFile for `codex login` /
 // `ollama signin` children -- the ONLY non-claude binary spawn sites in
 // this codebase (verified by repo-wide grep at design time; the chatgpt
@@ -985,43 +989,74 @@ async function validateProviderKey(provider, key, opts = {}) {
     return checkLocalLiveness(`http://localhost:${portResult.port}`, 'codex-as-api proxy')
   }
   if (provider === 'ollama') {
-    // Port-answers-so-"connected" was a lie a real tester paid for
-    // (2026-08-04 external tester #1: install said connected, runtime was
-    // dead, they detoured to a custom proxy). A listening port proves the
-    // daemon, not a usable model: cloud models (":cloud"/"-cloud" tags)
-    // additionally need an ollama.com sign-in. /api/tags is the cheapest
-    // call that separates the three states -- daemon down / daemon up but
-    // model missing / genuinely ready. Still ok:true throughout: like the
-    // rest of this branch family the verdict is informational (the user
-    // may install the model after setup), but the DETAIL now tells the
-    // truth instead of blessing a dead lane.
-    const live = await checkLocalLiveness(OLLAMA_BASE_URL, 'Ollama daemon')
-    if (!live.reachable) return live
+    // Ollama CLOUD API-key mode (2026-08-04, Mino "ollama -> API키"; the
+    // previous local-daemon check lived here -- see git history. The daemon's
+    // port-answers-so-"connected" lie is what a real external tester paid
+    // for the same day). Verdict = one authenticated 1-token POST to
+    // /v1/messages, which is the only endpoint that actually proves the key:
+    // ollama.com's /api/tags and /v1/models answer 200 WITHOUT auth (probed
+    // 2026-08-04), so they can never validate anything.
+    //
+    // Keyless calls fall back to the STORED key so the connectors page's
+    // Test button can re-verify without re-pasting (the /api/byok/validate
+    // route only persists when the body carried a non-empty key -- see
+    // provider.cjs -- so this fallback can never store an empty key).
+    let effectiveKey = typeof key === 'string' && key.trim() ? key.trim() : ''
+    if (!effectiveKey) {
+      try { effectiveKey = readProviderKey('ollama') || '' } catch (err) { /* fall through to the required error */ }
+    }
+    if (!effectiveKey) {
+      return { ok: false, reason: 'ollama.com API key required -- create one in your ollama.com account settings and paste it here' }
+    }
+    // Public catalog for the model-name check (200 without auth -- fine,
+    // it is only used for the modelPresent hint, never as the key verdict).
+    let names = []
     try {
-      const res = await fetch(`${OLLAMA_BASE_URL}/api/tags`, { signal: AbortSignal.timeout(LOCAL_LIVENESS_TIMEOUT_MS) })
+      const res = await fetch(`${OLLAMA_CLOUD_BASE_URL}/api/tags`, { signal: AbortSignal.timeout(OLLAMA_CLOUD_TIMEOUT_MS) })
       const body = await res.json()
-      const names = Array.isArray(body.models) ? body.models.map((m) => m.name) : []
-      const wanted = typeof opts.model === 'string' && opts.model.trim() ? opts.model.trim() : ''
-      if (wanted && !names.includes(wanted)) {
-        return {
-          ok: true,
-          reachable: true,
-          modelPresent: false,
-          detail: `Ollama daemon is up, but model "${wanted}" is not in its local list (${names.length ? names.slice(0, 8).join(', ') : 'no models yet'}). Run \`ollama pull ${wanted}\` first${/cloud/.test(wanted) ? ', and note cloud models also need `ollama signin`' : ''}.`,
+      names = Array.isArray(body.models) ? body.models.map((m) => m.name) : []
+    } catch (err) { /* catalog unavailable: key verdict below still stands, modelPresent degrades to undefined */ }
+    const wanted = typeof opts.model === 'string' && opts.model.trim() ? opts.model.trim() : ''
+    // Probe with a model the catalog vouches for whenever the wanted one
+    // isn't in it -- the auth verdict must never be blocked on a typo'd
+    // model name.
+    const probeModel = wanted && names.includes(wanted) ? wanted : names[0] || wanted || 'glm-5.2'
+    try {
+      const res = await fetch(`${OLLAMA_CLOUD_BASE_URL}/v1/messages`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          // Both header forms: ollama.com's Anthropic-compat surface follows
+          // Anthropic's x-api-key convention, its own docs use Bearer.
+          // Sending both is harmless and covers whichever is honored.
+          authorization: `Bearer ${effectiveKey}`,
+          'x-api-key': effectiveKey,
+        },
+        body: JSON.stringify({ model: probeModel, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }),
+        signal: AbortSignal.timeout(OLLAMA_CLOUD_TIMEOUT_MS),
+      })
+      if (res.status === 401 || res.status === 403) {
+        return { ok: false, reason: `ollama.com rejected the API key (HTTP ${res.status}). Check the key in your ollama.com account settings.` }
+      }
+      if (!res.ok) {
+        // Non-auth failure with a live key attempt: read the error body for
+        // the receipt. A model error here still proves the KEY (auth passed),
+        // so it reports ok:true + modelPresent:false, mirroring the old
+        // daemon branch's warn-don't-block contract.
+        let errBody = ''
+        try { errBody = JSON.stringify(await res.json()).slice(0, 300) } catch (err) { /* keep '' */ }
+        if (/not.?found|invalid.?model|no such model/i.test(errBody) || res.status === 404) {
+          return { ok: true, reachable: true, modelPresent: false, detail: `ollama.com accepted the key, but model "${probeModel}" was refused (HTTP ${res.status}). Pick a name from the ollama.com model list${names.length ? ` (e.g. ${names.slice(0, 8).join(', ')})` : ''}.` }
         }
+        return { ok: false, reason: `ollama.com answered HTTP ${res.status}: ${errBody || 'no body'}` }
       }
-      return {
-        ok: true,
-        reachable: true,
-        modelPresent: wanted ? true : undefined,
-        detail: wanted
-          ? `Ollama daemon is up and model "${wanted}" is available.`
-          : `Ollama daemon is up (${names.length} model${names.length === 1 ? '' : 's'} installed).`,
+      const modelPresent = wanted ? names.length ? names.includes(wanted) : probeModel === wanted : undefined
+      if (wanted && modelPresent === false) {
+        return { ok: true, reachable: true, modelPresent: false, detail: `ollama.com accepted the key, but model "${wanted}" is not in its model list (${names.slice(0, 8).join(', ')}). Check the name on ollama.com.` }
       }
+      return { ok: true, reachable: true, modelPresent, detail: wanted ? `ollama.com accepted the key and model "${wanted}" answered.` : 'ollama.com accepted the key.' }
     } catch (err) {
-      // Port answered but /api/tags did not parse -- something is listening
-      // that is not (a healthy) ollama. Say that instead of "connected".
-      return { ok: true, reachable: true, modelPresent: false, detail: `something answers at ${OLLAMA_BASE_URL} but it does not speak the Ollama API (${err.message}) -- is that port really ollama?` }
+      return { ok: false, reason: `could not reach ollama.com (${err.message}) -- check your network and try again` }
     }
   }
   if (provider === 'custom') {
@@ -1687,18 +1722,14 @@ const LOGIN_SPECS = {
     artifact: () => path.join(os.homedir(), '.codex', 'auth.json'),
     installHint: 'codex CLI가 없습니다. https://github.com/openai/codex 에서 설치 후 다시 시도해주세요.',
   },
-  ollama: {
-    bin: 'ollama',
-    argv: ['signin'],
-    // No `ollama login status` equivalent exists (verified against the CLI
-    // 2026-07-07: subcommands are signin/signout only) -- the identity-key
-    // heuristic below is the honest best available. It can false-positive
-    // on a key that was never linked to an account; the wizard copy keeps
-    // the existing "터미널에서 ollama signin" fallback wording for that case.
-    probe: null,
-    artifact: () => path.join(os.homedir(), '.ollama', 'id_ed25519'),
-    installHint: 'Ollama 앱이 설치되어 있지 않습니다. https://ollama.com 에서 설치 후 다시 시도해주세요.',
-  },
+  // 'ollama' REMOVED 2026-08-04 (Mino: "ollama -> API키"): its connect method
+  // is now an ollama.com API-key paste stored via the same credential plumbing
+  // as claude BYOK (see provider-env.cjs's ollama row + validateProviderKey's
+  // ollama branch). No spec here means the login routes reject it and the
+  // onboarding-complete artifact gate skips it -- the stored-credential gate
+  // (PROVIDERS_REQUIRING_STORED_CREDENTIAL) covers ollama instead. The old
+  // entry's identity-key heuristic (~/.ollama/id_ed25519) was exactly the
+  // false-"connected" a real external tester hit the same day.
 }
 
 // ── MCP connector OAuth intercept (IA v0.0.9, 춘식3 design + Idea review) ──
@@ -1839,7 +1870,11 @@ function parseMcpConnectorList(text) {
 // but degrades to "not available" rather than 500ing the whole config bag.
 function computeAvailableProviders() {
   const out = []
-  for (const provider of ['claude', 'claude-subscription']) {
+  // PROVIDERS_REQUIRING_STORED_CREDENTIAL rather than a literal list, so a
+  // provider moving to key-mode (ollama, 2026-08-04) is available exactly
+  // when its stored credential exists -- same single source of truth as the
+  // validate/complete gates.
+  for (const provider of PROVIDERS_REQUIRING_STORED_CREDENTIAL) {
     try {
       if (readProviderKey(provider)) out.push(provider)
     } catch (err) {

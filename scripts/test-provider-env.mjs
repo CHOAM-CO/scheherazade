@@ -22,7 +22,7 @@
 // convention.
 
 import { spawnSync } from 'node:child_process'
-import { buildProviderEnv, parseCustomProviderJson, PROVIDERS_REQUIRING_STORED_CREDENTIAL, CHATGPT_PROXY_DEFAULT_PORT, CHATGPT_PLACEHOLDER_KEY, OLLAMA_BASE_URL } from '../provider-env.cjs'
+import { buildProviderEnv, parseCustomProviderJson, PROVIDERS_REQUIRING_STORED_CREDENTIAL, CHATGPT_PROXY_DEFAULT_PORT, CHATGPT_PLACEHOLDER_KEY, OLLAMA_CLOUD_BASE_URL } from '../provider-env.cjs'
 
 let pass = 0
 let fail = 0
@@ -176,23 +176,21 @@ function fakeReadProviderKey(store) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 4. provider === 'ollama' (NEW: local daemon, no user secret, real model
-//    tag required)
+// 4. provider === 'ollama' (key-mode 2026-08-04, Mino "ollama -> API키":
+//    ollama.com CLOUD via a stored API key -- the local-daemon/no-secret
+//    era is git history. Real model tag still required.)
 // ─────────────────────────────────────────────────────────────────────────
 {
-  const angryReadProviderKey = () => {
-    throw new Error('buildProviderEnv should never call readProviderKey() for ollama')
-  }
   // Fixture model tag: glm (a live catalog model). Was kimi-k2.7-code:cloud
   // until kimi was dropped from the catalog (Mino 2026-07-14) -- this test is
   // a generic passthrough check and a dropped model as its fixture reads as
   // "still supported". test-mute-ledger.mjs deliberately KEEPS the kimi tag:
   // that suite memorializes the exact production incident the ledger was
   // built for, and the ledger is model-agnostic anyway.
-  const result = buildProviderEnv('ollama', { MODEL: 'glm-5.2:cloud' }, { readProviderKey: angryReadProviderKey })
-  assert(!result.error, 'ollama: no error with a model configured (no secret required)')
-  assert(result.env.ANTHROPIC_BASE_URL === OLLAMA_BASE_URL, `ollama: ANTHROPIC_BASE_URL == ${OLLAMA_BASE_URL} (matches run-agent.sh:203 exactly)`)
-  assert(result.env.ANTHROPIC_API_KEY === 'ollama', 'ollama: ANTHROPIC_API_KEY == "ollama" (matches run-agent.sh:204 exactly)')
+  const result = buildProviderEnv('ollama', { MODEL: 'glm-5.2:cloud' }, { readProviderKey: fakeReadProviderKey({ ollama: 'ol-key' }) })
+  assert(!result.error, 'ollama: no error with a model + stored key configured')
+  assert(result.env.ANTHROPIC_BASE_URL === OLLAMA_CLOUD_BASE_URL, `ollama: ANTHROPIC_BASE_URL == ${OLLAMA_CLOUD_BASE_URL} (ollama.com speaks the Anthropic Messages API -- receipt in provider-env.cjs)`)
+  assert(result.env.ANTHROPIC_API_KEY === 'ol-key', 'ollama: ANTHROPIC_API_KEY == the stored ollama.com API key (key-mode, 2026-08-04)')
   assert(result.env.MODEL === 'glm-5.2:cloud', 'ollama: MODEL == config model tag (overrides the generic claude-model default)')
   assert(result.env.SKIP_MODEL_GUARD === '1', 'ollama: SKIP_MODEL_GUARD == "1" (matches run-agent.sh:205 shape; NOTE run.sh has no such guard today -- see task report gaps)')
   assert(result.env.CLAUDE_CODE_OAUTH_TOKEN === undefined && 'CLAUDE_CODE_OAUTH_TOKEN' in result.env, 'ollama: CLAUDE_CODE_OAUTH_TOKEN explicitly cleared (force api-key auth precedence)')
@@ -200,13 +198,28 @@ function fakeReadProviderKey(store) {
 {
   // no MODEL configured yet -- must fail loud (not_ready), NEVER silently
   // fall back to the generic 'claude-opus-4-6' default (that would send an
-  // Anthropic model id to an Ollama daemon that has no such model).
+  // Anthropic model id to ollama.com, which has no such model).
   const result = buildProviderEnv('ollama', {}, { readProviderKey: () => null })
   assert(result.error && result.error.kind === 'not_ready', 'ollama: no MODEL configured -> error.kind === "not_ready" (never silently defaults to claude-opus-4-6)')
 }
 {
   const result = buildProviderEnv('ollama', { MODEL: '   ' }, { readProviderKey: () => null })
   assert(result.error && result.error.kind === 'not_ready', 'ollama: whitespace-only MODEL -> error.kind === "not_ready"')
+}
+{
+  // model configured but NO stored key -- not_ready, same contract as
+  // claude/claude-subscription (ollama joined
+  // PROVIDERS_REQUIRING_STORED_CREDENTIAL in key-mode). Order pin: the
+  // model precheck (pre) runs BEFORE the credential read, so the missing
+  // key is only reported once the model is in place.
+  const result = buildProviderEnv('ollama', { MODEL: 'glm-5.2:cloud' }, { readProviderKey: () => null })
+  assert(result.error && result.error.kind === 'not_ready', 'ollama: model ok but no stored key -> error.kind === "not_ready"')
+  assert(/API key/.test(result.error.reason), 'ollama: missing-key reason names the API key')
+}
+{
+  // Keychain read THROWS (model ok) -> key_error, mirroring the claude rows.
+  const result = buildProviderEnv('ollama', { MODEL: 'glm-5.2:cloud' }, { readProviderKey: () => { throw new Error('keychain sealed') } })
+  assert(result.error && result.error.kind === 'key_error', 'ollama: throwing readProviderKey -> error.kind === "key_error"')
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -244,7 +257,7 @@ function fakeReadProviderKey(store) {
     ['claude', { readProviderKey: fakeReadProviderKey({ claude: 'k' }) }, {}],
     ['claude-subscription', { readProviderKey: fakeReadProviderKey({ 'claude-subscription': 't' }) }, {}],
     ['chatgpt', { readProviderKey: () => null }, {}],
-    ['ollama', { readProviderKey: () => null }, { MODEL: 'm' }],
+    ['ollama', { readProviderKey: fakeReadProviderKey({ ollama: 'ol-key' }) }, { MODEL: 'm' }],
   ]
   for (const [provider, deps, config] of cases) {
     const result = buildProviderEnv(provider, config, deps)
@@ -262,7 +275,7 @@ assert(Array.isArray(PROVIDERS_REQUIRING_STORED_CREDENTIAL), 'PROVIDERS_REQUIRIN
 assert(PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes('claude'), 'PROVIDERS_REQUIRING_STORED_CREDENTIAL includes "claude"')
 assert(PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes('claude-subscription'), 'PROVIDERS_REQUIRING_STORED_CREDENTIAL includes "claude-subscription"')
 assert(!PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes('chatgpt'), 'PROVIDERS_REQUIRING_STORED_CREDENTIAL excludes "chatgpt" (no user secret)')
-assert(!PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes('ollama'), 'PROVIDERS_REQUIRING_STORED_CREDENTIAL excludes "ollama" (no user secret)')
+assert(PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes('ollama'), 'PROVIDERS_REQUIRING_STORED_CREDENTIAL includes "ollama" (key-mode, 2026-08-04)')
 
 // ─────────────────────────────────────────────────────────────────────────
 // 8. EVERY row actively clears CLAUDE_CONFIG_DIR (2026-07-29)
@@ -292,7 +305,7 @@ assert(!PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes('ollama'), 'PROVIDERS_REQ
     ['claude-subscription', { readProviderKey: fakeReadProviderKey({ 'claude-subscription': 't' }) }, {}],
     ['claude-cli', { readProviderKey: () => null }, {}],
     ['chatgpt', { readProviderKey: () => null }, {}],
-    ['ollama', { readProviderKey: () => null }, { MODEL: 'm' }],
+    ['ollama', { readProviderKey: fakeReadProviderKey({ ollama: 'ol-key' }) }, { MODEL: 'm' }],
     ['custom', { readProviderKey: () => null }, { CUSTOM_BASE_URL: 'http://127.0.0.1:1', MODEL: 'm' }],
   ]
   for (const [provider, deps, config] of cases) {

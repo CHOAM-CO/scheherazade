@@ -300,6 +300,17 @@ window.COPY = {
         stillMissing: (name) => `${name} still not found. Finish installing, then check again.`,
       },
     },
+    // AUTHORED -- ollama key-mode strings (2026-08-04 Mino: "ollama ->
+    // API키"): the ollama tab is a key-paste + model-name form now, not a
+    // login button. Key hint reuses the fallback tab's proven wording.
+    ollamaKey: {
+      keyHint: 'Issued in your account settings at ollama.com (API keys).',
+      keyPlaceholder: 'Paste the key',
+      modelLabel: 'Cloud model to use',
+      modelPlaceholder: 'Enter a model name',
+      modelHint: 'Copy a name from the model list on ollama.com.',
+      modelMissingProceed: 'Fix the name, or press Next again to continue anyway.',
+    },
     // Folded-away fallback path. Field-level hint text is unchanged from
     // the pre-v2 copy (still accurate -- only its position in the flow
     // moved from primary to fallback).
@@ -1132,6 +1143,13 @@ window.COPY = {
     providerTestRunning: 'Testing the connection…',
     providerTestOk: 'Responded — connection looks alive.',
     providerTestFail: 'No usable response — try Re-login.',
+    // ollama key-mode (2026-08-04): connect/rotate = paste an ollama.com API
+    // key. Replaces the login shell-out strings for this provider.
+    ollamaKeyReplace: 'Replace key',
+    ollamaKeyPlaceholder: 'Paste an ollama.com API key',
+    ollamaKeySave: 'Save',
+    ollamaKeyValidating: 'Checking the key against ollama.com…',
+    ollamaKeySaved: 'Ollama API key saved.',
     usageLabel: 'Claude subscription usage',
     usageRefresh: 'Refresh',
     usageLoading: 'Reading usage…',

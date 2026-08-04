@@ -42,6 +42,18 @@
             <button class="secondary hidden" id="conn-provider-ollama-relogin"></button>
             <button class="secondary" id="conn-provider-ollama-btn"></button>
           </div>
+          <!-- ollama key-mode (2026-08-04): connect/replace-key open this
+               paste flow -- same write-only input pattern as the Claude API
+               key flow below (key never rendered back). -->
+          <div class="claude-key-flow hidden" id="conn-ollama-flow">
+            <div class="field">
+              <input type="password" id="conn-ollama-key" />
+            </div>
+            <div class="step-actions">
+              <span class="status-line" id="conn-ollama-status-line"></span>
+              <button class="secondary" id="conn-ollama-save"></button>
+            </div>
+          </div>
           <div class="entry-row">
             <div class="entry-main">
               <div class="entry-value" id="conn-usage-label"></div>

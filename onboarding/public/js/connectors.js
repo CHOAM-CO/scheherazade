@@ -64,6 +64,73 @@
         testBtn.onclick = () => runProviderTest(provider, statusEl, testBtn)
         reloginBtn.onclick = () => startAuth(provider, statusEl, reloginBtn, true)
       }
+      if (provider === 'ollama') {
+        // key-mode (2026-08-04, Mino "ollama -> API키"): there is no login
+        // shell-out for ollama anymore -- POSTing one would just 400 against
+        // the server's LOGIN_PROVIDERS allowlist. Connect and Re-login both
+        // open the key-paste flow instead (which is ALSO the rotation
+        // surface tester 2-1 asked for).
+        btn.onclick = () => toggleOllamaKeyFlow(btn)
+        if (reloginBtn) {
+          reloginBtn.textContent = C.ollamaKeyReplace
+          reloginBtn.onclick = () => toggleOllamaKeyFlow(reloginBtn)
+        }
+        wireOllamaKeyFlow(statusEl)
+      }
+    }
+  }
+
+  // ── ollama key flow (key-mode, 2026-08-04): same write-only paste pattern
+  // as initClaudeKeyRow below -- the key is never rendered back; validation
+  // is the server's real authenticated call against ollama.com and storage
+  // happens there on success. ──────────────────────────────────────────────
+  function toggleOllamaKeyFlow(btn) {
+    const flow = $('conn-ollama-flow')
+    if (!flow) return
+    const opening = flow.classList.contains('hidden')
+    flow.classList.toggle('hidden', !opening)
+    if (btn) btn.blur()
+  }
+
+  function wireOllamaKeyFlow(statusEl) {
+    const input = $('conn-ollama-key')
+    const saveBtn = $('conn-ollama-save')
+    const lineEl = $('conn-ollama-status-line')
+    if (!input || !saveBtn || !lineEl) return
+    input.placeholder = C.ollamaKeyPlaceholder
+    saveBtn.textContent = C.ollamaKeySave
+    saveBtn.onclick = async () => {
+      const key = input.value.trim()
+      if (!key) return
+      saveBtn.disabled = true
+      lineEl.textContent = C.ollamaKeyValidating
+      try {
+        const body = { provider: 'ollama', key }
+        try {
+          const cfg = await api('/api/config')
+          if (cfg.MODEL) body.model = cfg.MODEL // model verdict rides along when one is configured
+        } catch (err) { /* key check still runs without the model hint */ }
+        const result = await api('/api/byok/validate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+        if (!result.ok) {
+          lineEl.textContent = GEN(result.reason || 'invalid key')
+          return
+        }
+        // detail is the server's verbatim receipt (includes the soft
+        // model-missing warning when modelPresent === false)
+        lineEl.textContent = ''
+        statusEl.textContent = result.detail || C.providerConnected
+        showToast(C.ollamaKeySaved)
+        $('conn-ollama-flow').classList.add('hidden')
+        input.value = ''
+      } catch (err) {
+        lineEl.textContent = GEN(err.message)
+      } finally {
+        saveBtn.disabled = false
+      }
     }
   }
 
@@ -109,13 +176,17 @@
       const body = { provider }
       if (provider === 'ollama') {
         // include the live MODEL so the ollama branch checks the model the
-        // agent will actually spawn with, not just the daemon port
+        // agent will actually spawn with, not just the key. No key in the
+        // body: the server falls back to the STORED key for exactly this
+        // Test path (and the route never persists an empty key).
         try {
           const cfg = await api('/api/config')
           if (cfg.MODEL) body.model = cfg.MODEL
-        } catch (err) { /* model check degrades to daemon check */ }
+        } catch (err) { /* model check degrades to key-only check */ }
       }
-      const r = await api('/api/agent/validate-key', {
+      // path fix (2026-08-04): this used to POST /api/agent/validate-key,
+      // a route that never existed -- the 404 surfaced as a generic error.
+      const r = await api('/api/byok/validate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
