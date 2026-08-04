@@ -797,6 +797,14 @@ window.COPY = {
     activityAria: 'What the agent is working on right now',
     reactAria: (emoji) => `React with ${emoji}`,
     reactFailed: "Couldn't react — try again.",
+    // Image attachments (2026-08-04, Mino "인앱챗에 이미지 업로드할수있는
+    // 방법이 없음"). The 10MB number matches the server's hard cap in
+    // routes/chat.cjs -- if that changes, change both.
+    attachTitle: 'Attach an image (or paste one into the box)',
+    attachBadType: 'Only PNG, JPG, GIF, or WebP images can be attached.',
+    attachTooLarge: 'That image is over 10MB — too big to attach.',
+    attachFailed: (msg) => `Couldn't upload the image: ${msg}`,
+    attachMissing: (name) => `🖼 ${name} (file no longer available)`,
   },
 
   // AUTHORED (v0.0.20) -- session log viewer (Mino 07-16: 개발 중 앱이

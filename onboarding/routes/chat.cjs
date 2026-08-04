@@ -160,6 +160,90 @@ function createRoutes(staticCtx) {
         return
       },
     },
+    // POST upload: chat image attachment (2026-08-04, Mino "인앱챗에
+    // 이미지 업로드할수있는 방법이 없음 >> 수정해놔야겠지?"). JSON
+    // {filename, dataBase64} rather than multipart -- readJsonBody is the
+    // one body reader this server has, and a 15MB cap covers a 10MB image
+    // in base64. The file lands in DATA_HOME/chat_uploads/ and the SEND
+    // path (chat.js) appends "[image attached: <path>]" to the message so
+    // the agent opens it with its Read tool -- the same local-path
+    // convention the Discord channel already uses for inbound images.
+    // Mutating -> token-gated automatically.
+    {
+      method: 'POST',
+      match: (pathname) => pathname === '/api/chat/upload',
+      handler: async (req, res) => {
+        let parsed
+        try {
+          parsed = await readJsonBody(req, 15_000_000)
+        } catch (err) {
+          sendJson(res, 413, { error: 'image too large (10MB max)', reason: 'too_large' })
+          return
+        }
+        const { filename, dataBase64 } = parsed
+        const ext = String(filename || '').toLowerCase().match(/\.(png|jpe?g|gif|webp)$/)
+        if (!ext) {
+          sendJson(res, 400, { error: 'only png/jpg/gif/webp images', reason: 'bad_type' })
+          return
+        }
+        if (typeof dataBase64 !== 'string' || !dataBase64) {
+          sendJson(res, 400, { error: 'dataBase64 is required', reason: 'no_data' })
+          return
+        }
+        let buf
+        try { buf = Buffer.from(dataBase64, 'base64') } catch { buf = null }
+        if (!buf || buf.length === 0) {
+          sendJson(res, 400, { error: 'could not decode image data', reason: 'bad_data' })
+          return
+        }
+        if (buf.length > 10_000_000) {
+          sendJson(res, 413, { error: 'image too large (10MB max)', reason: 'too_large' })
+          return
+        }
+        const dir = path.join(DATA_HOME, 'chat_uploads')
+        try {
+          fs.mkdirSync(dir, { recursive: true })
+          // Server-minted name: timestamp + sanitized stem + whitelisted
+          // ext. The client's filename never becomes a path component
+          // beyond this sanitation.
+          const stem = String(filename).replace(/\.[^.]+$/, '').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 40) || 'image'
+          const name = `${Date.now()}_${stem}${ext[0]}`
+          const full = path.join(dir, name)
+          fs.writeFileSync(full, buf, { mode: 0o600 })
+          sendJson(res, 200, { ok: true, name, path: full })
+        } catch (err) {
+          sendJson(res, 500, { error: `could not save the image: ${err.message}`, reason: 'write_failed' })
+        }
+        return
+      },
+    },
+    // GET upload/<name>: serve a saved attachment back for bubble display.
+    // Basename-only lookup inside chat_uploads -- a name with a separator
+    // or dot-dot never reaches the filesystem.
+    {
+      method: 'GET',
+      match: (pathname) => pathname.startsWith('/api/chat/upload/'),
+      handler: async (req, res) => {
+        const name = decodeURIComponent(String(req.url || '').split('/api/chat/upload/')[1] || '').split('?')[0]
+        if (!name || name.includes('/') || name.includes('\\') || name.includes('..')) {
+          sendJson(res, 400, { error: 'bad name' })
+          return
+        }
+        const full = path.join(DATA_HOME, 'chat_uploads', name)
+        let buf
+        try { buf = fs.readFileSync(full) } catch {
+          sendJson(res, 404, { error: 'not found' })
+          return
+        }
+        const type = /\.png$/i.test(name) ? 'image/png'
+          : /\.jpe?g$/i.test(name) ? 'image/jpeg'
+          : /\.gif$/i.test(name) ? 'image/gif'
+          : /\.webp$/i.test(name) ? 'image/webp' : 'application/octet-stream'
+        res.writeHead(200, { 'content-type': type, 'content-length': buf.length, 'cache-control': 'private, max-age=86400' })
+        res.end(buf)
+        return
+      },
+    },
     // POST react: an emoji tap on an agent bubble (DM interactions, v0.0.34).
     // Mutating -> token-gated like /in. Validation here is shape-only
     // (string, positive int); the channel owns the real rules (emoji enum,

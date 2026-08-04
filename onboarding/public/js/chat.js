@@ -93,6 +93,48 @@
   // (markdown.js header has the reasoning). Message text is still written
   // BEFORE any child node (react bar, badge) is attached: renderMarkdown
   // clears the element first, so calling it later would wipe them.
+  // Image-attachment markers (2026-08-04): the send path appends
+  // "[image attached: <path> — read it with the Read tool]" lines so the
+  // AGENT gets a Read-able local path (Discord-inbound convention). For
+  // DISPLAY those lines are lifted out and rendered as thumbnails instead
+  // of raw paths. The blob fetch goes through fetch-with-token, not
+  // <img src> -- every /api GET is X-Onboard-Token-gated, so a bare src
+  // would 403.
+  const IMG_MARKER_RE = /^\[image attached: (.+?) — read it with the Read tool\]$/
+  function splitImageMarkers(text) {
+    const images = []
+    const kept = []
+    for (const line of String(text || '').split('\n')) {
+      const m = line.match(IMG_MARKER_RE)
+      if (m) images.push(m[1].split(/[\\/]/).pop())
+      else kept.push(line)
+    }
+    return { shown: kept.join('\n'), images }
+  }
+
+  async function appendAttachmentImage(el, name, wantScroll) {
+    try {
+      const res = await fetch(`/api/chat/upload/${encodeURIComponent(name)}`, {
+        headers: { 'X-Onboard-Token': window.getOnboardToken() || '' },
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const blob = await res.blob()
+      const img = document.createElement('img')
+      img.className = 'chat-attach-img'
+      img.alt = name
+      img.onload = () => { if (wantScroll) pane.scrollTop = pane.scrollHeight }
+      img.src = URL.createObjectURL(blob)
+      el.appendChild(img)
+    } catch {
+      // Deleted upload, or a transcript replayed on another machine: name
+      // it honestly instead of a broken-image icon.
+      const note = document.createElement('span')
+      note.className = 'chat-attach-missing'
+      note.textContent = C.attachMissing(name)
+      el.appendChild(note)
+    }
+  }
+
   function appendMsg(m) {
     clearEmpty()
     const stick = atBottom()
@@ -100,7 +142,9 @@
     const el = document.createElement('div')
     el.className = `chat-msg chat-${role}`
     el.dataset.seq = m.seq
-    renderMarkdown(el, m.text)
+    const { shown, images } = splitImageMarkers(m.text)
+    renderMarkdown(el, shown)
+    for (const name of images) appendAttachmentImage(el, name, stick || role === 'user')
     if (role === 'agent') clearActivity() // a reply supersedes the status line
     if (role === 'agent') attachReactBar(el, m.seq)
     else lastUserBubble = el
@@ -339,23 +383,86 @@
     pollOnce()
   }
 
+  // ── image attachments (2026-08-04, Mino "인앱챗에 이미지 업로드할수
+  // 있는 방법이 없음") ─────────────────────────────────────────────────
+  // Flow: pick/paste -> POST /api/chat/upload (base64 JSON) -> pending
+  // chip; send() appends one "[image attached: <path> — read it with the
+  // Read tool]" line per chip, the same local-path convention Discord
+  // inbound images use, so the agent opens them with Read. Uploaded files
+  // live in DATA_HOME/chat_uploads/.
+  let pendingAttachments = [] // { name, path, chip }
+
+  function renderAttachChip(att) {
+    const box = $('ct-attach-chips')
+    if (!box) return
+    const chip = document.createElement('span')
+    chip.className = 'chat-attach-chip'
+    chip.textContent = `🖼 ${att.name} `
+    const x = document.createElement('button')
+    x.type = 'button'
+    x.className = 'link'
+    x.textContent = '×'
+    x.onclick = () => {
+      pendingAttachments = pendingAttachments.filter((a) => a !== att)
+      chip.remove()
+    }
+    chip.appendChild(x)
+    box.appendChild(chip)
+    att.chip = chip
+  }
+
+  async function uploadImageFile(file) {
+    if (!file || !/^image\/(png|jpe?g|gif|webp)$/.test(file.type)) { window.showToast(C.attachBadType); return }
+    if (file.size > 10_000_000) { window.showToast(C.attachTooLarge); return }
+    const dataBase64 = await new Promise((resolve, reject) => {
+      const r = new FileReader()
+      r.onload = () => resolve(String(r.result).split(',')[1] || '')
+      r.onerror = () => reject(new Error('read failed'))
+      r.readAsDataURL(file)
+    })
+    try {
+      const out = await window.api('/api/chat/upload', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ filename: file.name || 'pasted.png', dataBase64 }),
+      })
+      const att = { name: out.name, path: out.path }
+      pendingAttachments.push(att)
+      renderAttachChip(att)
+    } catch (err) {
+      console.error('attachment upload failed:', err)
+      window.showToast(C.attachFailed(err.message))
+    }
+  }
+
   async function send() {
     const text = input.value
-    if (!text.trim()) return
+    if (!text.trim() && pendingAttachments.length === 0) return
+    // One marker line per attachment, appended AFTER the user's text --
+    // the path is what the agent Reads; the UI re-detects the marker to
+    // render the image in the bubble (see appendMsg's image pass).
+    const markers = pendingAttachments
+      .map((a) => `[image attached: ${a.path} — read it with the Read tool]`)
+      .join('\n')
+    const outText = markers ? (text.trim() ? `${text}\n${markers}` : markers) : text
     sendBtn.disabled = true
     try {
       await window.api('/api/chat/in', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text: outText }),
       })
       // No local append: the 202 means the message is already in the
       // transcript, and pollNow() renders it from there (see header).
       input.value = ''
       input.style.height = 'auto'
+      pendingAttachments = []
+      const box = $('ct-attach-chips')
+      if (box) box.textContent = ''
       pollNow()
     } catch (err) {
-      // The text stays in the input on purpose -- see header.
+      // The text stays in the input on purpose -- see header. Chips stay
+      // too: a failed send must not eat the attachments either.
       console.error('chat send failed:', err)
       window.showToast(C.sendFailed)
       refreshStatus()
@@ -379,6 +486,29 @@
     input.addEventListener('input', () => {
       input.style.height = 'auto'
       input.style.height = `${input.scrollHeight}px`
+    })
+    // Image attachments: the + button opens the picker; pasting an image
+    // into the textarea uploads it too (screenshots land here). Uploads are
+    // sequential on purpose -- each one is a chip the user can still remove.
+    const attachBtn = $('ct-attach')
+    const fileInput = $('ct-file')
+    if (attachBtn && fileInput) {
+      attachBtn.title = C.attachTitle
+      attachBtn.onclick = () => fileInput.click()
+      fileInput.onchange = async () => {
+        for (const f of Array.from(fileInput.files || [])) await uploadImageFile(f)
+        fileInput.value = '' // re-selecting the same file must fire change again
+      }
+    }
+    input.addEventListener('paste', (e) => {
+      const items = Array.from((e.clipboardData && e.clipboardData.items) || [])
+      const imgs = items.filter((it) => it.kind === 'file' && /^image\//.test(it.type))
+      if (!imgs.length) return // plain text paste: default behavior untouched
+      e.preventDefault()
+      for (const it of imgs) {
+        const f = it.getAsFile()
+        if (f) uploadImageFile(f)
+      }
     })
     input.focus()
     pollOnce()

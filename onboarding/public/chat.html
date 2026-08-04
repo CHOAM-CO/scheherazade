@@ -22,7 +22,12 @@
       <div class="chat-pane" id="ct-pane" aria-live="polite"></div>
       <p class="chat-status" id="ct-status"></p>
 
+      <!-- attachment chips (image upload, 2026-08-04): pending images shown
+           above the composer, removable until send. -->
+      <div class="chat-attach-chips" id="ct-attach-chips"></div>
       <div class="chat-input-row">
+        <input type="file" id="ct-file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden />
+        <button class="secondary" id="ct-attach" title="Attach image">+</button>
         <textarea id="ct-input" rows="1" autocomplete="off"></textarea>
         <button id="ct-send"></button>
       </div>

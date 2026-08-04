@@ -179,6 +179,41 @@ try {
     const r2 = await fetch(`${base}/api/chat/in`, { method: 'POST', headers: auth, body: JSON.stringify({ text: '   ' }) })
     chk('in with whitespace-only text: 400 text_required', r2.status === 400 && (await r2.json()).reason === 'text_required')
   }
+
+  // ── image upload (2026-08-04): local save, no channel involvement ─────────
+  {
+    // 1x1 red PNG, the smallest honest image bytes
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
+    lastChannelReq = null
+    const r = await fetch(`${base}/api/chat/upload`, { method: 'POST', headers: auth, body: JSON.stringify({ filename: 'my shot (1).png', dataBase64: png.toString('base64') }) })
+    const b = await r.json()
+    chk('upload saves and returns a server-minted name + absolute path', r.status === 200 && b.ok === true && /^\d+_my_shot__1_\.png$/.test(b.name) && b.path.endsWith(b.name), JSON.stringify(b))
+    chk('upload touches the channel not at all', lastChannelReq === null)
+    const onDisk = fs.readFileSync(path.join(process.env.AGENT_DATA_HOME, 'chat_uploads', b.name))
+    chk('the saved bytes are the decoded image, verbatim', onDisk.equals(png))
+    // serve it back
+    const g = await fetch(`${base}/api/chat/upload/${encodeURIComponent(b.name)}`, { headers: auth })
+    chk('GET serves the upload with the right content-type', g.status === 200 && g.headers.get('content-type') === 'image/png' && Buffer.from(await g.arrayBuffer()).equals(png))
+    // traversal shapes never reach the filesystem
+    // bare '..' is normalized away by the URL layer before dispatch (404 at
+    // the router); encoded shapes reach the route and get its 400. Either
+    // way the filesystem is never consulted with a traversal name.
+    for (const bad of ['..%2F..%2Fsecrets.png', 'a%2Fb.png', '..']) {
+      const t = await fetch(`${base}/api/chat/upload/${bad}`, { headers: auth })
+      chk(`upload GET rejects traversal shape ${bad}`, t.status === 400 || t.status === 404, t.status)
+    }
+    chk('missing upload is a 404, not a 500', (await fetch(`${base}/api/chat/upload/${Date.now()}_nope.png`, { headers: auth })).status === 404)
+    // type + size gates
+    const badType = await fetch(`${base}/api/chat/upload`, { method: 'POST', headers: auth, body: JSON.stringify({ filename: 'evil.svg', dataBase64: png.toString('base64') }) })
+    chk('non-whitelisted extension: 400 bad_type (svg = script carrier)', badType.status === 400 && (await badType.json()).reason === 'bad_type')
+    const noData = await fetch(`${base}/api/chat/upload`, { method: 'POST', headers: auth, body: JSON.stringify({ filename: 'x.png' }) })
+    chk('missing dataBase64: 400 no_data', noData.status === 400 && (await noData.json()).reason === 'no_data')
+    const big = await fetch(`${base}/api/chat/upload`, { method: 'POST', headers: auth, body: JSON.stringify({ filename: 'big.png', dataBase64: Buffer.alloc(10_000_001).toString('base64') }) })
+    chk('an over-10MB image: 413 too_large', big.status === 413 && (await big.json()).reason === 'too_large')
+    // gate: upload is a POST, so it sits behind the per-launch token
+    const noTok = await fetch(`${base}/api/chat/upload`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ filename: 'x.png', dataBase64: png.toString('base64') }) })
+    chk('upload without the onboard token is refused', noTok.status === 403, noTok.status)
+  }
 } finally {
   srv.server.close()
   await new Promise((r) => fakeChannel.close(r))
