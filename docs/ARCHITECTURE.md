@@ -158,19 +158,37 @@ a dream's formatting, not a dream.
 
 ## Runtime
 
-`run.sh` is a self-restarting supervisor, not a one-shot launcher:
+`run.sh` is a self-restarting supervisor, not a one-shot launcher. Since
+design-0020 (headless topology) the leaf it supervises is
+`node headless-lane.mjs`, which spawns and owns `claude -p --input-format
+stream-json --output-format stream-json` -- no PTY, no expect, no TUI:
 
 ```
 run.sh (start) -> nohup's itself as run.sh __loop, writes .agent.pid,
 returns immediately
-run.sh __loop  -> cd into $MEM, loop: pkill any stray prior process,
-spawn `claude` under expect (answers trust/onboarding prompts), wait,
-compute backoff from restart count and uptime, sleep, repeat
-run.sh stop    -> touches .stop_requested, pkills the live claude process
-(forces the blocked expect call to return promptly), loop notices the flag
-on its next check and exits; a 15s bounded wait plus SIGKILL on the loop's
-own pid is the fallback if that path is somehow missed
+run.sh __loop  -> cd into $MEM, loop: pkill any stray prior process
+(full lane path + orphaned-leaf --mcp-config pattern), run
+headless-lane.mjs under the session-timeout ceiling, wait, compute
+backoff from restart count and uptime, sleep, repeat
+run.sh stop    -> touches .stop_requested, pkills the live lane/leaf,
+loop notices the flag on its next check and exits; a 15s bounded wait
+plus SIGKILL on the loop's own pid is the fallback if that path is
+somehow missed
 ```
+
+The lane owns two DATA_HOME files: `.ingest-endpoint.json` (loopback
+port + per-boot token; channel backends POST inbound messages there and
+the lane writes them to claude stdin as `<channel>`-tagged stream-json
+user events -- the dev-channels MCP notification is dead in -p mode) and
+`.headless-session.json` (last session id; the next spawn passes
+`--resume`, so a recycle continues the same conversation). Inbound
+routing lives in channel-runtime's `createInboundNotifier`: endpoint
+file present -> ingest POST; absent -> MCP notification (attach
+topology); present but dead -> throw, so the backend's own retry path
+keeps the message instead of a silent black hole. `supervisor.mjs` (the
+node/Windows lane) spawns the same lane script with the same env
+contract, so the two lanes cannot drift apart argv-wise --
+`scripts/test-supervisor.mjs` pins the contract.
 
 Backoff ladder: 5s / 10s / 20s / 40s / 120s (cap), resetting to the start
 of the ladder either when a run survives over 300s (healthy) or when the
@@ -181,17 +199,16 @@ notifications and Anthropic-quota-edge timing; a single lightweight agent
 does not need that specific tuning, and a clean doubling ladder is easier
 to reason about.
 
-`--dangerously-skip-permissions` is intentionally not passed.
-`.claude/settings.local.json` pre-approves `Bash`, `Read`, `Write`, `Edit`
--- exactly the tool surface this package's hooks and scripts use -- which
-is sufficient for fully headless operation without bypassing permission
-checks for tools this agent was never going to need anyway. The Claude
-Code CLI itself documents the skip-permissions flag as intended for
-no-internet sandboxes; a personal Mac with normal internet access is not
-that environment.
+`--dangerously-skip-permissions` IS passed (REVERSAL, Mino directive
+2026-07-04 "bypass까지만 바로 되도록": the product concept is full agent
+autonomy inside its own DATA_HOME, no permission popups; the
+settings.local.json allowlist still ships as a harmless belt). This
+paragraph previously claimed the opposite -- it described the pre-reversal
+design and went stale; run.sh's own header carries the directive.
 
-`expect` answers exactly the onboarding-class prompts (trust dialog, theme
-picker, confirmation dialogs) that would otherwise hang a headless session
-forever with no one to answer them. It does not and cannot answer an OAuth
-login flow -- `claude` must already be authenticated once, interactively,
-before `run.sh` is used.
+The expect layer that used to answer onboarding-class prompts is gone:
+`claude -p` renders no dialogs. OAuth is unchanged -- `claude` must
+already be authenticated once, interactively, before the supervisor is
+used (the in-app setup-token flow covers this; it is the one place that
+still legitimately drives a real TTY, via node-pty in
+setup-token-session.cjs).
