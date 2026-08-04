@@ -348,6 +348,7 @@
     const detail = result.detail ? ` (${result.detail})` : ''
     if (result.branch === 'invalid_bot_token') return C.slackInvalidBotToken + detail
     if (result.branch === 'invalid_app_token') return C.slackInvalidAppToken + detail
+    if (result.branch === 'list_failed') return C.slackListFailed + detail
     if (result.branch === 'not_in_channel') return C.slackNotInChannel(result.channelName || '?')
     return GEN(result.error || result.branch || 'unknown')
   }

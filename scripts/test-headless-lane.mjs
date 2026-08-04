@@ -234,11 +234,14 @@ process.exit(0)
   const runLane = () => new Promise((resolve) => {
     const p = spawn(process.execPath, [path.join(ROOT, 'headless-lane.mjs')], {
       env: { ...process.env, MEM, MODEL: 'fake-model', CLAUDE_BIN: shim },
-      stdio: ['ignore', 'ignore', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe'],
     })
-    let err = ''
-    p.stderr.on('data', (d) => { err += d })
-    p.on('exit', () => resolve(err))
+    // lifecycle logs ride stdout since the red-indicator fix; stderr keeps
+    // genuine failures. Collect both -- assertions grep the combined text.
+    let out = ''
+    p.stdout.on('data', (d) => { out += d })
+    p.stderr.on('data', (d) => { out += d })
+    p.on('exit', () => resolve(out))
   })
 
   await runLane() // strike 1

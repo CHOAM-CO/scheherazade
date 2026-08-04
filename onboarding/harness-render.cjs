@@ -38,6 +38,16 @@ const fs = require('node:fs')
 const path = require('node:path')
 const os = require('node:os')
 
+// Tone as a bare English word ("formal") was too weak an instruction for
+// non-frontier models: a real tester picked Formal and got 반말 anyway
+// (2026-08-04 external tester #4). The word stays for display; this block
+// spells out what the register MEANS, per language, so the model has an
+// explicit rule instead of a vibe to infer.
+const TONE_GUIDANCE = {
+  formal: 'Formal means a polite, professional register at all times: in Korean, every message uses 존댓말 (해요체 or 합니다체) — never 반말; in English, full sentences and no slang.',
+  casual: 'Casual means a relaxed, friendly register: in Korean, 반말 is fine unless the person consistently uses 존댓말 — then mirror them; in English, contractions and everyday words.',
+}
+
 function createHarnessRender(ctx) {
   const {
     log, toUnpackedPath, readAgentConfig, ensureConfigDir,
@@ -629,6 +639,7 @@ function createHarnessRender(ctx) {
       rendered: promptSrc
         .replaceAll('{DISPLAY_NAME}', displayName)
         .replaceAll('{TONE}', tone)
+        .replaceAll('{TONE_GUIDANCE}', TONE_GUIDANCE[tone] || TONE_GUIDANCE.casual)
         .replaceAll('{PRIMARY_TASK}', primaryTask || '일상 대화와 기록'),
     })
 

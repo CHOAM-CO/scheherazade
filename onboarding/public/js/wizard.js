@@ -515,8 +515,41 @@
       loginBtn.onclick = () => startLogin(false)
       reloginBtn.onclick = () => startLogin(true)
 
-      nextBtn.onclick = () => {
-        if (provider === 'ollama') state.model = modelInput.value.trim()
+      // warn-once gate (2026-08-04 tester #1): "connected" used to mean only
+      // "signin worked" -- the typed model was never checked, so a missing/
+      // unpulled cloud model sailed through and died at runtime. First Next
+      // click checks the model against the daemon's list; if absent, the
+      // server's actionable detail renders here and the click does NOT
+      // advance. Fixing the name re-arms the check; pressing Next again on
+      // the same name proceeds anyway (pull-it-later is legitimate).
+      let warnedModel = null
+      nextBtn.onclick = async () => {
+        if (provider === 'ollama') {
+          const m = modelInput.value.trim()
+          if (m !== warnedModel) {
+            nextBtn.disabled = true
+            try {
+              const v = await api('/api/agent/validate-key', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ provider: 'ollama', model: m }),
+              })
+              if (v && v.modelPresent === false) {
+                warnedModel = m
+                statusEl.className = 'status-line failure'
+                statusEl.textContent = `${v.detail || ''} ${P.modelMissingProceed}`.trim()
+                return
+              }
+            } catch (err) {
+              // validation unreachable -> fall through to the old behavior;
+              // blocking setup on a broken checker would be worse than the bug
+            } finally {
+              nextBtn.disabled = false
+              updateNextGate()
+            }
+          }
+          state.model = m
+        }
         state.provider = provider
         showStep('2')
       }

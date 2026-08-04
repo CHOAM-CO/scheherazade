@@ -985,7 +985,44 @@ async function validateProviderKey(provider, key, opts = {}) {
     return checkLocalLiveness(`http://localhost:${portResult.port}`, 'codex-as-api proxy')
   }
   if (provider === 'ollama') {
-    return checkLocalLiveness(OLLAMA_BASE_URL, 'Ollama daemon')
+    // Port-answers-so-"connected" was a lie a real tester paid for
+    // (2026-08-04 external tester #1: install said connected, runtime was
+    // dead, they detoured to a custom proxy). A listening port proves the
+    // daemon, not a usable model: cloud models (":cloud"/"-cloud" tags)
+    // additionally need an ollama.com sign-in. /api/tags is the cheapest
+    // call that separates the three states -- daemon down / daemon up but
+    // model missing / genuinely ready. Still ok:true throughout: like the
+    // rest of this branch family the verdict is informational (the user
+    // may install the model after setup), but the DETAIL now tells the
+    // truth instead of blessing a dead lane.
+    const live = await checkLocalLiveness(OLLAMA_BASE_URL, 'Ollama daemon')
+    if (!live.reachable) return live
+    try {
+      const res = await fetch(`${OLLAMA_BASE_URL}/api/tags`, { signal: AbortSignal.timeout(LOCAL_LIVENESS_TIMEOUT_MS) })
+      const body = await res.json()
+      const names = Array.isArray(body.models) ? body.models.map((m) => m.name) : []
+      const wanted = typeof opts.model === 'string' && opts.model.trim() ? opts.model.trim() : ''
+      if (wanted && !names.includes(wanted)) {
+        return {
+          ok: true,
+          reachable: true,
+          modelPresent: false,
+          detail: `Ollama daemon is up, but model "${wanted}" is not in its local list (${names.length ? names.slice(0, 8).join(', ') : 'no models yet'}). Run \`ollama pull ${wanted}\` first${/cloud/.test(wanted) ? ', and note cloud models also need `ollama signin`' : ''}.`,
+        }
+      }
+      return {
+        ok: true,
+        reachable: true,
+        modelPresent: wanted ? true : undefined,
+        detail: wanted
+          ? `Ollama daemon is up and model "${wanted}" is available.`
+          : `Ollama daemon is up (${names.length} model${names.length === 1 ? '' : 's'} installed).`,
+      }
+    } catch (err) {
+      // Port answered but /api/tags did not parse -- something is listening
+      // that is not (a healthy) ollama. Say that instead of "connected".
+      return { ok: true, reachable: true, modelPresent: false, detail: `something answers at ${OLLAMA_BASE_URL} but it does not speak the Ollama API (${err.message}) -- is that port really ollama?` }
+    }
   }
   if (provider === 'custom') {
     // Same "no secret required, ping instead of validate a key" shape as
@@ -1361,7 +1398,15 @@ async function enumerateSlackChannels(botToken, appToken, fetchImpl = fetch) {
     { types: 'public_channel,private_channel', limit: 200, exclude_archived: true },
     fetchImpl
   )
-  if (!list.ok) throw new Error(`Slack conversations.list failed: ${list.error}`)
+  if (!list.ok) {
+    // Both tokens can pass their shallow probes (auth.test / apps.connections.
+    // open) while the LIST call fails -- the classic case is a from-scratch
+    // Slack app whose bot token lacks the channels:read / groups:read scopes.
+    // This used to THROW -> route 500 -> generic toast, and a real first
+    // external tester (2026-08-04) retried "valid" tokens forever with no clue
+    // why. A branch with the verbatim Slack error is actionable; a 500 is not.
+    return { ok: false, branch: 'list_failed', detail: list.error }
+  }
   const channels = (list.body.channels || []).map((c) => ({ id: c.id, name: c.name, isMember: c.is_member === true }))
   return { ok: true, team: auth.body.team || '', botUser: auth.body.user || '', channels }
 }

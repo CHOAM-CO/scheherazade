@@ -31,7 +31,10 @@ function createRoutes(staticCtx) {
         // consulted for provider === 'custom'. Not sent by wizard.js either
         // (no wizard tab for 'custom' -- see PROVIDERS' own comment above); the
         // settings page's POST /api/agent/custom-provider is the primary path.
-        const { provider, key, proxyPort, baseUrl } = await readJsonBody(req)
+        // model added (2026-08-04 tester #1 fix): optional, only consulted by
+        // the 'ollama' branch -- lets validation check the CHOSEN model is
+        // actually in the daemon's list instead of blessing a bare open port.
+        const { provider, key, proxyPort, baseUrl, model } = await readJsonBody(req)
         if (!PROVIDERS.includes(provider)) {
           sendJson(res, 400, { error: `unknown provider: ${String(provider).slice(0, 80)}` })
           return
@@ -42,7 +45,7 @@ function createRoutes(staticCtx) {
         // closes the backdoor at its source rather than only at
         // onboarding-complete.
         if (rejectIfRouterNotWired(res, provider)) return
-        const result = await validateProviderKey(provider, key, { proxyPort, baseUrl })
+        const result = await validateProviderKey(provider, key, { proxyPort, baseUrl, model })
         if (!result.ok) {
           sendJson(res, 200, result)
           return

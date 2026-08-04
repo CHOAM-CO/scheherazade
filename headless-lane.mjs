@@ -48,12 +48,18 @@ const MODEL = process.env.MODEL
 const SYSTEM_PROMPT_FILE = process.env.SYSTEM_PROMPT_FILE || ''
 const MCP_CONFIG_FILE = process.env.MCP_CONFIG_FILE || ''
 
-const log = (m) => process.stderr.write(`[headless-lane] ${m}\n`)
+// Lifecycle logs go to STDOUT: the app's log console colors stderr red
+// ([agent!]), and a healthy boot painted red read as an error to a real
+// user (Mino 16:02 "인디케이터에서는 빨간색으로 떠서 에러난것같음"). The
+// lane's own stdout is free -- claude's stream-json rides a pipe consumed
+// internally, never this process's stdout. errLog stays on stderr for
+// genuine failures only.
+const log = (m) => process.stdout.write(`[headless-lane] ${m}\n`)
+const errLog = (m) => process.stderr.write(`[headless-lane] ${m}\n`)
 // Per-tool-call chatter drowned the app's log console the moment a real
-// agent got busy (Mino, clean-mac 13:54 "로그 존나뜸") -- everything on
-// stderr renders as [agent!] there. Lifecycle lines (spawn/init/result/
-// exit/redelivery/strikes) stay on by default; per-event diagnostics go
-// behind this flag.
+// agent got busy (Mino, clean-mac 13:54 "로그 존나뜸"). Lifecycle lines
+// (spawn/init/result/exit/redelivery/strikes) stay on by default;
+// per-event diagnostics go behind this flag.
 const DEBUG = process.env.SCHEHERAZADE_LANE_DEBUG === '1'
 const debugLog = (m) => { if (DEBUG) log(m) }
 
@@ -245,7 +251,7 @@ function main() {
   }
 
   child.on('error', (err) => {
-    log(`spawn failed: ${err.message}`)
+    errLog(`spawn failed: ${err.message}`)
     process.exit(127)
   })
 
@@ -353,7 +359,7 @@ function main() {
       // Without the endpoint file backends fall back to the MCP notification,
       // which is dead in -p -- that is an agent that can talk but not hear.
       // Loud and fatal: the supervisor loop respawns us for another try.
-      log(`FATAL: cannot write ingest endpoint file: ${err.message}`)
+      errLog(`FATAL: cannot write ingest endpoint file: ${err.message}`)
       child.kill('SIGTERM')
       process.exitCode = 74 // EX_IOERR
     }
