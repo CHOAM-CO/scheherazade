@@ -861,6 +861,9 @@ window.COPY = {
     ollamaUrlModelWarn: (m) => `ollama.com's catalog doesn't list "${m}" right now — it may still work if it's brand new.`,
     ollamaUrlApplyFailed: 'Switch failed — the agent kept its previous model.',
     ollamaUrlApplied: (m) => `Switched to ${m}. The agent is restarting.`,
+    // Usage gauge cli-session source label (403-scope fix): honest about
+    // WHICH login the number describes.
+    usageCliSourceNote: 'via this Mac\'s Claude CLI login',
     dangerLabel: 'Delete the app and everything it made',
     dangerNote: "Removes the agent, its memory and journals, saved credentials, caches, and the app itself — everything, without Terminal. Your personal Claude Code settings (~/.claude.json) are left untouched.",
     dangerButton: 'Delete everything…',
@@ -1205,10 +1208,20 @@ window.COPY = {
     ollamaKeySave: 'Save',
     ollamaKeyValidating: 'Checking the key against ollama.com…',
     ollamaKeySaved: 'Ollama API key saved.',
-    usageLabel: 'Claude subscription usage',
+    // Usage gauges, one line per lane (2026-08-04 evening: "이게 킥임").
+    usageLabel: 'Usage',
     usageRefresh: 'Refresh',
     usageLoading: 'Reading usage…',
-    usageNoToken: 'No Claude subscription login on file — usage gauges only exist for the subscription lane (Codex/Ollama expose no usage API).',
+    usageClaudePrefix: 'Claude —',
+    usageCodexPrefix: 'Codex —',
+    usageOllamaPrefix: 'Ollama —',
+    usageNoToken: 'no Claude login on file',
+    usageCodexNoLogin: 'no Codex login on this Mac (~/.codex)',
+    usageOllamaNoKey: 'no ollama.com API key on file',
+    // unknown_shape = the undocumented ollama.com endpoint answered with a
+    // shape we have not bound yet; the field list IS the receipt to send us.
+    usageOllamaUnknownShape: (fields) => `endpoint answered but the shape is new to us — ${fields}`,
+    usageWinWeekly: 'weekly',
     usageError: 'Could not read usage.',
     usageUnreadable: 'unreadable',
     usageStaleNote: (time) => `refresh failed, showing ${time} reading`,

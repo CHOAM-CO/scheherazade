@@ -54,10 +54,15 @@
               <button class="secondary" id="conn-ollama-save"></button>
             </div>
           </div>
+          <!-- Usage gauges, one line per lane (2026-08-04 evening: "이게
+               킥임"). claude = OAuth endpoint w/ CLI-session fallback;
+               codex = wham/usage; ollama = undocumented /api/usage probe. -->
           <div class="entry-row">
             <div class="entry-main">
               <div class="entry-value" id="conn-usage-label"></div>
               <div class="entry-meta" id="conn-usage-line"></div>
+              <div class="entry-meta" id="conn-usage-codex-line"></div>
+              <div class="entry-meta" id="conn-usage-ollama-line"></div>
             </div>
             <button class="secondary" id="conn-usage-refresh"></button>
           </div>

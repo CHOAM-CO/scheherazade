@@ -21,7 +21,7 @@ function createRoutes(staticCtx) {
     LOGIN_PROVIDERS, getLoginStatus, startProviderLogin, cancelProviderLogin, BOOTSTRAP_DEPS,
     getBootstrapStatus, resolveBin, MANAGED_INSTALL_SUPPORTED, MANUAL_INSTALL_PAGES,
     getElectron, startBootstrap,
-    fetchClaudeSubscriptionUsage, checkForUpdate,
+    fetchClaudeSubscriptionUsage, fetchCodexUsage, fetchOllamaUsage, checkForUpdate,
     startClaudeCliInstall, getClaudeInstallStatus,
     path, DATA_HOME,
   } = staticCtx
@@ -95,14 +95,32 @@ function createRoutes(staticCtx) {
       },
     },
     {
-      // Usage gauge (tester request 2026-08-04): claude-subscription only in
-      // v1 -- the OAuth usage endpoint is documented-by-practice (MAGI fleet
-      // polls it). codex/ollama expose no usage API we could find; the UI
-      // says so instead of faking a bar.
+      // Usage gauges (2026-08-04 evening, Mino: "ollama/Codex/Claude 사용량
+      // 게이지 ... 이게 킥임"). claude = OAuth usage endpoint (setup-token
+      // 403 -> CLI-session fallback); codex = CodexBar's wham/usage source;
+      // ollama = undocumented /api/usage probe (shape binds on first
+      // real-key receipt). Each fetcher carries its own 60s cache +
+      // stale-on-error; see their headers in http-server.cjs.
       method: 'GET',
       match: (pathname) => pathname === '/api/usage/claude',
       handler: async (req, res) => {
         sendJson(res, 200, await fetchClaudeSubscriptionUsage())
+        return
+      },
+    },
+    {
+      method: 'GET',
+      match: (pathname) => pathname === '/api/usage/codex',
+      handler: async (req, res) => {
+        sendJson(res, 200, await fetchCodexUsage())
+        return
+      },
+    },
+    {
+      method: 'GET',
+      match: (pathname) => pathname === '/api/usage/ollama',
+      handler: async (req, res) => {
+        sendJson(res, 200, await fetchOllamaUsage())
         return
       },
     },

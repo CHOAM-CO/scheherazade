@@ -137,41 +137,89 @@
   // ── usage gauge (tester request 2026-08-04): claude subscription only in
   // v1. The server's null-not-zero contract is honored verbatim here: a
   // null pct renders as 'unreadable', never as 0%. ────────────────────────
+  // ── usage gauges, one line per lane (2026-08-04 evening, Mino: "ollama/
+  // Codex/Claude 사용량 게이지 ... 이게 킥임") ──────────────────────────
+  const pct = (v) => (v == null ? C.usageUnreadable : `${v}%`)
+  const at = (iso, dateToo) => {
+    if (!iso) return ''
+    try {
+      const d = new Date(iso)
+      const t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      return dateToo ? ` (resets ${d.toLocaleDateString([], { month: 'numeric', day: 'numeric' })} ${t})` : ` (resets ${t})`
+    } catch { return '' }
+  }
+  const staleNoteOf = (u) => (u.stale && u.asOf
+    ? (() => { try { const d = new Date(u.asOf); return ` · ${C.usageStaleNote(d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}` } catch { return '' } })()
+    : '')
+
+  async function renderClaudeUsageLine() {
+    const line = $('conn-usage-line')
+    line.textContent = C.usageLoading
+    let u
+    try { u = await api('/api/usage/claude') } catch (err) { line.textContent = `${C.usageClaudePrefix} ${GEN(err.message)}`; return }
+    if (!u.ok) {
+      line.textContent = `${C.usageClaudePrefix} ${u.branch === 'no_token' ? C.usageNoToken : (u.detail || C.usageError)}`
+      return
+    }
+    // cli-session fallback (403-scope fix): say whose login the meter reads.
+    const sourceNote = u.source === 'cli-session' ? ` · ${C.usageCliSourceNote}` : ''
+    line.textContent = `${C.usageClaudePrefix} 5h: ${pct(u.fiveHourPct)}${at(u.fiveHourResetsAt, false)} · weekly: ${pct(u.weeklyPct)}${at(u.weeklyResetsAt, true)}${sourceNote}${staleNoteOf(u)}`
+  }
+
+  async function renderCodexUsageLine() {
+    const line = $('conn-usage-codex-line')
+    if (!line) return
+    line.textContent = C.usageLoading
+    let u
+    try { u = await api('/api/usage/codex') } catch (err) { line.textContent = `${C.usageCodexPrefix} ${GEN(err.message)}`; return }
+    if (!u.ok) {
+      line.textContent = `${C.usageCodexPrefix} ${u.branch === 'no_token' ? C.usageCodexNoLogin : (u.detail || C.usageError)}`
+      return
+    }
+    // Window label from its actual length -- a prolite plan's PRIMARY
+    // window is 7 days, never assume 5h (live receipt 19:3x).
+    const winLabel = (w) => (w && w.windowSeconds
+      ? (w.windowSeconds >= 6 * 86400 ? C.usageWinWeekly : (w.windowSeconds <= 6 * 3600 ? '5h' : `${Math.round(w.windowSeconds / 3600)}h`))
+      : '')
+    const seg = (w) => (w ? `${winLabel(w)}: ${pct(w.usedPct)}${at(w.resetsAt, (w.windowSeconds || 0) >= 86400)}` : null)
+    const parts = [seg(u.primary), seg(u.secondary)].filter(Boolean)
+    const plan = u.planType ? ` (${u.planType})` : ''
+    line.textContent = `${C.usageCodexPrefix} ${parts.length ? parts.join(' · ') : C.usageUnreadable}${plan}${staleNoteOf(u)}`
+  }
+
+  async function renderOllamaUsageLine() {
+    const line = $('conn-usage-ollama-line')
+    if (!line) return
+    line.textContent = C.usageLoading
+    let u
+    try { u = await api('/api/usage/ollama') } catch (err) { line.textContent = `${C.usageOllamaPrefix} ${GEN(err.message)}`; return }
+    if (!u.ok) {
+      // unknown_shape carries the endpoint's field names -- the first
+      // real-key refresh is the schema receipt (undocumented endpoint).
+      const msg = u.branch === 'no_key' ? C.usageOllamaNoKey
+        : u.branch === 'unknown_shape' ? C.usageOllamaUnknownShape(u.detail || '')
+        : (u.detail || C.usageError)
+      line.textContent = `${C.usageOllamaPrefix} ${msg}`
+      return
+    }
+    // Shape bound 19:38 (real-key receipt): session/weekly 0-1 fractions
+    // served as pct; no reset timestamps in the payload -- none shown.
+    const reqNote = u.weeklyRequests != null ? ` (${u.weeklyRequests} reqs this week)` : ''
+    line.textContent = `${C.usageOllamaPrefix} session: ${pct(u.sessionPct)} · weekly: ${pct(u.weeklyPct)}${reqNote}${staleNoteOf(u)}`
+  }
+
   async function renderUsage() {
     const label = $('conn-usage-label')
-    const line = $('conn-usage-line')
     const btn = $('conn-usage-refresh')
-    if (!label || !line || !btn) return
+    if (!label || !btn) return
     label.textContent = C.usageLabel
     btn.textContent = C.usageRefresh
     btn.onclick = () => renderUsage()
-    line.textContent = C.usageLoading
-    let u
-    try {
-      u = await api('/api/usage/claude')
-    } catch (err) {
-      line.textContent = GEN(err.message)
-      return
-    }
-    if (!u.ok) {
-      line.textContent = u.branch === 'no_token' ? C.usageNoToken : (u.detail || C.usageError)
-      return
-    }
-    const pct = (v) => (v == null ? C.usageUnreadable : `${v}%`)
-    const at = (iso, dateToo) => {
-      if (!iso) return ''
-      try {
-        const d = new Date(iso)
-        const t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        return dateToo ? ` (resets ${d.toLocaleDateString([], { month: 'numeric', day: 'numeric' })} ${t})` : ` (resets ${t})`
-      } catch { return '' }
-    }
-    // stale reading: still show the numbers (last good), annotated with
-    // when they were true -- a 429 should never blank a gauge (2026-08-04).
-    const staleNote = u.stale && u.asOf
-      ? (() => { try { const d = new Date(u.asOf); return ` · ${C.usageStaleNote(d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}` } catch { return '' } })()
-      : ''
-    line.textContent = `5h: ${pct(u.fiveHourPct)}${at(u.fiveHourResetsAt, false)} · weekly: ${pct(u.weeklyPct)}${at(u.weeklyResetsAt, true)}${staleNote}`
+    // Three independent lanes -- one slow/failed fetch must not blank the
+    // other two, so no await-chaining, no Promise.all.
+    renderClaudeUsageLine()
+    renderCodexUsageLine()
+    renderOllamaUsageLine()
   }
 
   async function runProviderTest(provider, statusEl, btn) {

@@ -2614,6 +2614,45 @@ const APP_VERSION = (() => {
 // the gauge shows "82% (as of 17:42)" instead of degrading to a bare
 // HTTP 429 -- an error should annotate a gauge, not replace it.
 let usageCache = null // { at, payload } -- last GOOD reading only
+
+// CLI-session token fallback (2026-08-04, Mino field: gauge stuck on
+// "HTTP 403"). The app-captured `claude setup-token` carries user:inference
+// ONLY -- the usage endpoint refuses it. The Claude Code CLI's own
+// interactive login token DOES read it (the MAGI fleet's gauge has polled
+// this endpoint with exactly that credential for weeks). So: try the
+// setup-token first (it's OUR credential, stored with consent), and on
+// 401/403 fall back to the CLI session this machine already has --
+// macOS keychain item "Claude Code-credentials" (payload JSON,
+// .claudeAiOauth.accessToken), or ~/.claude/.credentials.json elsewhere.
+// Honesty rules: the payload carries source:'cli-session' so the UI can say
+// whose login the number describes; the token itself is never logged or
+// returned; expiresAt in the past -> null (the CLI refreshes it when used,
+// we never write). Reading this file/keychain item is a departure from the
+// claude-cli row's "we read nothing" promise -- scoped HERE deliberately:
+// this reads the credential to show the USER their OWN meter, not to
+// pre-validate or to authenticate a lane.
+function readCliSessionToken() {
+  try {
+    let raw = null
+    if (process.platform === 'darwin') {
+      const r = require('child_process').spawnSync('security',
+        ['find-generic-password', '-s', 'Claude Code-credentials', '-w'], { encoding: 'utf8' })
+      if (r.status === 0 && r.stdout) raw = r.stdout.trim()
+    }
+    if (!raw) {
+      const p = path.join(os.homedir(), '.claude', '.credentials.json')
+      if (fs.existsSync(p)) raw = fs.readFileSync(p, 'utf8')
+    }
+    if (!raw) return null
+    const oauth = (JSON.parse(raw) || {}).claudeAiOauth
+    const token = oauth && typeof oauth.accessToken === 'string' && oauth.accessToken ? oauth.accessToken : null
+    const expiresAt = oauth && Number.isFinite(oauth.expiresAt) ? oauth.expiresAt : null
+    if (!token) return null
+    if (expiresAt && expiresAt < Date.now()) return null // stale session: fail honest, never send a dead token
+    return token
+  } catch { return null }
+}
+
 async function fetchClaudeSubscriptionUsage() {
   const now = Date.now()
   if (usageCache && now - usageCache.at < 60_000) return usageCache.payload
@@ -2621,16 +2660,9 @@ async function fetchClaudeSubscriptionUsage() {
     if (usageCache) return { ...usageCache.payload, stale: true, staleReason: detail || branch }
     return { ok: false, branch, ...(detail ? { detail } : {}) }
   }
-  let token = null
-  try {
-    token = readProviderKey('claude-subscription')
-  } catch (err) {
-    return failWith('token_unreadable', err.message)
-  }
-  if (!token) return failWith('no_token')
-  let res, body
-  try {
-    res = await fetch('https://api.anthropic.com/api/oauth/usage', {
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+  const hit = async (token) => {
+    const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
       headers: {
         Authorization: `Bearer ${token}`,
         'anthropic-beta': 'oauth-2025-04-20',
@@ -2638,14 +2670,35 @@ async function fetchClaudeSubscriptionUsage() {
       },
       signal: AbortSignal.timeout(8000),
     })
-    body = await res.json()
+    return { res, body: await res.json().catch(() => null) }
+  }
+  let token = null
+  try {
+    token = readProviderKey('claude-subscription')
+  } catch (err) {
+    return failWith('token_unreadable', err.message)
+  }
+  let source = 'app-login'
+  let out
+  try {
+    if (token) out = await hit(token)
+    // setup-token scope-refused (401/403) or absent -> CLI session fallback
+    if (!out || out.res.status === 401 || out.res.status === 403) {
+      const cliToken = readCliSessionToken()
+      if (cliToken) {
+        out = await hit(cliToken)
+        source = 'cli-session'
+      }
+    }
   } catch (err) {
     return failWith('unreachable', err.message)
   }
-  if (!res.ok) return failWith('http_error', `HTTP ${res.status}`)
-  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+  if (!out) return failWith('no_token')
+  if (!out.res.ok) return failWith('http_error', `HTTP ${out.res.status}`)
+  const body = out.body || {}
   const payload = {
     ok: true,
+    source, // 'app-login' | 'cli-session' -- UI labels whose login the meter reads
     fiveHourPct: num(body.five_hour && body.five_hour.utilization),
     weeklyPct: num(body.seven_day && body.seven_day.utilization),
     fiveHourResetsAt: (body.five_hour && body.five_hour.resets_at) || null,
@@ -2653,6 +2706,134 @@ async function fetchClaudeSubscriptionUsage() {
     asOf: new Date(now).toISOString(),
   }
   usageCache = { at: now, payload }
+  return payload
+}
+
+// ── Codex/ChatGPT usage gauge (2026-08-04, Mino: "ollama/Codex/Claude
+// 사용량 게이지 ... CodexBar같은것처럼 잘 보여야하는데, 이게 킥임") ──────
+// Mechanism = CodexBar's own (verified in its docs/codex.md and live
+// against this machine 19:3x: HTTP 200, plan_type/rate_limit shape below):
+// bearer from ~/.codex/auth.json (tokens.access_token; $CODEX_HOME
+// honored), GET chatgpt.com/backend-api/wham/usage. PRIVATE endpoint --
+// undocumented, no contract, parse defensively and fail as a branch, never
+// a throw. Same 60s-cache + stale-on-error discipline as the claude gauge.
+// window labels derive from limit_window_seconds (a prolite plan's PRIMARY
+// window is 7d/604800s -- never assume 5h).
+//
+// Ollama cloud: NO usage/quota API exists (ollama/ollama#15663 closed-dup,
+// #16448/#15132 open asks; /api/chat only returns per-call token counts).
+// The UI says so honestly and links the dashboard -- nothing to poll here.
+let codexUsageCache = null // { at, payload } -- last GOOD reading only
+function readCodexAccessToken() {
+  try {
+    const home = process.env.CODEX_HOME || path.join(os.homedir(), '.codex')
+    const raw = fs.readFileSync(path.join(home, 'auth.json'), 'utf8')
+    const auth = JSON.parse(raw)
+    const token = auth && auth.tokens && typeof auth.tokens.access_token === 'string' && auth.tokens.access_token
+      ? auth.tokens.access_token : null
+    return token || null
+  } catch { return null }
+}
+async function fetchCodexUsage() {
+  const now = Date.now()
+  if (codexUsageCache && now - codexUsageCache.at < 60_000) return codexUsageCache.payload
+  const failWith = (branch, detail) => {
+    if (codexUsageCache) return { ...codexUsageCache.payload, stale: true, staleReason: detail || branch }
+    return { ok: false, branch, ...(detail ? { detail } : {}) }
+  }
+  const token = readCodexAccessToken()
+  if (!token) return failWith('no_token')
+  let res, body
+  try {
+    res = await fetch('https://chatgpt.com/backend-api/wham/usage', {
+      headers: { Authorization: `Bearer ${token}`, 'User-Agent': `scheherazade/${APP_VERSION}` },
+      signal: AbortSignal.timeout(8000),
+    })
+    body = await res.json().catch(() => null)
+  } catch (err) {
+    return failWith('unreachable', err.message)
+  }
+  if (!res.ok) return failWith('http_error', `HTTP ${res.status}`)
+  const win = (w) => (w && typeof w === 'object' && Number.isFinite(w.used_percent)
+    ? {
+        usedPct: w.used_percent,
+        windowSeconds: Number.isFinite(w.limit_window_seconds) ? w.limit_window_seconds : null,
+        resetsAt: Number.isFinite(w.reset_at) ? new Date(w.reset_at * 1000).toISOString() : null,
+      }
+    : null)
+  const rl = (body && body.rate_limit) || {}
+  const payload = {
+    ok: true,
+    planType: (body && typeof body.plan_type === 'string' && body.plan_type) || null,
+    primary: win(rl.primary_window),
+    secondary: win(rl.secondary_window),
+    asOf: new Date(now).toISOString(),
+  }
+  codexUsageCache = { at: now, payload }
+  return payload
+}
+
+// ── Ollama cloud usage gauge (2026-08-04, Mino "ollama도 사용량 받을 수
+// 있어야해, 어떻게든 해봐") ────────────────────────────────────────────
+// No DOCUMENTED usage API exists (ollama/ollama#15663/#16448/#15132), but
+// live probing tonight found UNDOCUMENTED auth-gated endpoints:
+//   GET https://ollama.com/api/usage  -> 401 {"error":"invalid credentials"}
+//   POST https://ollama.com/api/me    -> 401
+// (404 for /api/account, /api/credits, /v1/usage -- these two are real.)
+// Response SHAPE with a valid key is unverified -- no real key on the dev
+// machine. So: parse defensively for plausible numeric fields; when the
+// shape is unrecognized, return branch 'unknown_shape' with the top-level
+// FIELD NAMES ONLY (never values -- could contain account data) so the
+// first real-key Refresh in the field tells us the schema to bind.
+let ollamaUsageCache = null // { at, payload } -- last GOOD reading only
+async function fetchOllamaUsage() {
+  const now = Date.now()
+  if (ollamaUsageCache && now - ollamaUsageCache.at < 60_000) return ollamaUsageCache.payload
+  const failWith = (branch, detail) => {
+    if (ollamaUsageCache) return { ...ollamaUsageCache.payload, stale: true, staleReason: detail || branch }
+    return { ok: false, branch, ...(detail ? { detail } : {}) }
+  }
+  let key = null
+  try { key = readProviderKey('ollama') } catch (err) { return failWith('key_unreadable', err.message) }
+  if (!key) return failWith('no_key')
+  let res, body
+  try {
+    res = await fetch('https://ollama.com/api/usage', {
+      headers: { Authorization: `Bearer ${key}`, 'User-Agent': `scheherazade/${APP_VERSION}` },
+      signal: AbortSignal.timeout(8000),
+    })
+    body = await res.json().catch(() => null)
+  } catch (err) {
+    return failWith('unreachable', err.message)
+  }
+  if (!res.ok) return failWith('http_error', `HTTP ${res.status}`)
+  if (!body || typeof body !== 'object') return failWith('empty_body')
+  // Shape BOUND from a real-key receipt (Mino's terminal, 2026-08-04
+  // 19:38): { activity: {cost, period, models}, limits: { session:
+  // {usage: 0.918, models:[{name, request_count}...]}, weekly: {usage:
+  // 0.428, models:[...]} } }. usage is a 0-1 fraction; NO reset timestamps
+  // in this payload (the dashboard's "Resets in 3 hours" comes from
+  // elsewhere) -- so resets stay null-honest here, never computed.
+  const frac = (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v * 1000) / 10 : null)
+  const limits = body.limits && typeof body.limits === 'object' ? body.limits : null
+  const sessionPct = frac(limits && limits.session && limits.session.usage)
+  const weeklyPct = frac(limits && limits.weekly && limits.weekly.usage)
+  if (sessionPct == null && weeklyPct == null) {
+    // Unrecognized shape: surface field NAMES only (never values) so the
+    // next real-key refresh is the schema receipt for a re-bind.
+    return failWith('unknown_shape', `fields: ${Object.keys(body).slice(0, 12).join(', ') || '(none)'}`)
+  }
+  const weeklyRequests = limits && limits.weekly && Array.isArray(limits.weekly.models)
+    ? limits.weekly.models.reduce((n, m) => n + (Number.isFinite(m && m.request_count) ? m.request_count : 0), 0)
+    : null
+  const payload = {
+    ok: true,
+    sessionPct,
+    weeklyPct,
+    weeklyRequests,
+    asOf: new Date(now).toISOString(),
+  }
+  ollamaUsageCache = { at: now, payload }
   return payload
 }
 
@@ -2738,7 +2919,7 @@ const staticCtx = {
   // in-app setup-token capture (claude-subscription)
   getSetupTokenSession,
   // usage gauge + update check (2026-08-04 tester requests)
-  fetchClaudeSubscriptionUsage, checkForUpdate,
+  fetchClaudeSubscriptionUsage, fetchCodexUsage, fetchOllamaUsage, checkForUpdate,
   // claude CLI install-assist (2026-08-04, Mino "2로 가자")
   startClaudeCliInstall, getClaudeInstallStatus,
   // agent status / model table
