@@ -1125,6 +1125,11 @@ window.COPY = {
     providerConnected: 'Connected',
     providerNotConnected: 'Not connected',
     providerAuthButton: 'Authenticate',
+    providerTestButton: 'Test',
+    providerReloginButton: 'Re-login',
+    providerTestRunning: 'Testing the connection…',
+    providerTestOk: 'Responded — connection looks alive.',
+    providerTestFail: 'No usable response — try Re-login.',
     providerAuthRunning: 'A login window opened. This updates once you finish logging in in the browser.',
     providerAuthSuccess: 'Connected',
     providerAuthFailures: {

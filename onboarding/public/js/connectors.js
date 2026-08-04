@@ -49,16 +49,59 @@
       btn.textContent = C.providerAuthButton
       btn.classList.toggle('hidden', connected)
       btn.onclick = () => startAuth(provider, statusEl, btn)
+      // A connected row used to be a dead end -- a bare "Connected" label
+      // with no way to re-verify or re-auth (2026-08-04 external tester 2-1:
+      // key rotation after a leak, or just "is this ACTUALLY working?", had
+      // no surface). Test = live probe with the server's verbatim verdict;
+      // Re-login = the same force-login the wizard uses.
+      const testBtn = $(`conn-provider-${provider}-test`)
+      const reloginBtn = $(`conn-provider-${provider}-relogin`)
+      if (testBtn && reloginBtn) {
+        testBtn.textContent = C.providerTestButton
+        reloginBtn.textContent = C.providerReloginButton
+        testBtn.classList.toggle('hidden', !connected)
+        reloginBtn.classList.toggle('hidden', !connected)
+        testBtn.onclick = () => runProviderTest(provider, statusEl, testBtn)
+        reloginBtn.onclick = () => startAuth(provider, statusEl, reloginBtn, true)
+      }
     }
   }
 
-  function startAuth(provider, statusEl, btn) {
+  async function runProviderTest(provider, statusEl, btn) {
+    btn.disabled = true
+    statusEl.textContent = C.providerTestRunning
+    try {
+      const body = { provider }
+      if (provider === 'ollama') {
+        // include the live MODEL so the ollama branch checks the model the
+        // agent will actually spawn with, not just the daemon port
+        try {
+          const cfg = await api('/api/config')
+          if (cfg.MODEL) body.model = cfg.MODEL
+        } catch (err) { /* model check degrades to daemon check */ }
+      }
+      const r = await api('/api/agent/validate-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      // the server's detail is the receipt -- show it verbatim, never a
+      // synthesized "OK" the probe didn't actually say
+      statusEl.textContent = r.detail || r.reason || (r.ok ? C.providerTestOk : C.providerTestFail)
+    } catch (err) {
+      statusEl.textContent = GEN(err.message)
+    } finally {
+      btn.disabled = false
+    }
+  }
+
+  function startAuth(provider, statusEl, btn, force) {
     btn.disabled = true
     statusEl.textContent = C.providerAuthRunning
     api(`/api/onboarding/login/${provider}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify(force ? { force: true } : {}),
     })
       .then(() => pollAuth(provider, statusEl, btn))
       .catch((err) => {
@@ -79,9 +122,13 @@
       }
       if (status.state === 'success') {
         statusEl.textContent = C.providerConnected
-        btn.classList.add('hidden')
         btn.disabled = false
         showToast(C.providerAuthSuccess)
+        // Re-render the whole row set instead of hand-hiding the clicked
+        // button: the caller can be the first-auth button OR the Re-login
+        // button (2-1 fix), and renderProviderAuth() derives the correct
+        // visibility for all three from live /api/config state.
+        renderProviderAuth().catch(() => {})
         return
       }
       if (status.state === 'failed') {
