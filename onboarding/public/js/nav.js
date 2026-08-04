@@ -165,6 +165,16 @@
         '<div class="mute-banner-text" id="nav-update-text"></div>' +
         '<button type="button" id="nav-update-open"></button>' +
       '</div>' +
+      // turn-error banner (2026-08-04, Mino "클로드도 동작안함. 인증
+      // 맛탱이간듯?"): when the model call itself fails (429 limit, 401
+      // auth), the lane used to log to a file nobody reads and the UI
+      // showed a healthy green "Running". This strip carries the actual
+      // upstream error text so the user can tell limit-hit from re-login
+      // without opening logs. Same .mute-banner slot as the other two.
+      '<div class="mute-banner" id="nav-turnerror-banner" hidden>' +
+        '<div class="mute-banner-text" id="nav-turnerror-text"></div>' +
+        '<button type="button" id="nav-turnerror-dismiss"></button>' +
+      '</div>' +
       '<div class="nav-tabs"></div>'
     $('nav-agent-label').textContent = NAV.label
     const tabsEl = root.querySelector('.nav-tabs')
@@ -314,6 +324,7 @@
     // reasoning as the original: a mute-check outage must never take down
     // the status poll everything else depends on.
     await renderMuteBanner()
+    await renderTurnErrorBanner()
     agentPollTimer = setTimeout(pollAgentStatusOnce, AGENT_POLL_INTERVAL_MS)
   }
 
@@ -353,6 +364,34 @@
     const btn = $('nav-update-open')
     btn.textContent = NAV.updateOpen
     btn.onclick = () => window.open(u.url, '_blank', 'noopener')
+    banner.hidden = false
+  }
+
+  // ── turn-error banner (2026-08-04): shows the lane's last failed model
+  // call. Throttled to 10s inside the 2s ride-along poll (a local file read
+  // server-side, but no reason to hammer it). Dismiss remembers the marker's
+  // ts, so the SAME error stays hidden while a NEW failure re-raises the
+  // strip -- an error banner you can silence forever would just recreate the
+  // silent-death this exists to kill. ──
+  const TURNERROR_POLL_MS = 10000
+  let turnErrorLastCheck = 0
+  let turnErrorDismissedTs = 0
+  async function renderTurnErrorBanner() {
+    const banner = $('nav-turnerror-banner')
+    if (!banner) return
+    if (Date.now() - turnErrorLastCheck < TURNERROR_POLL_MS) return
+    turnErrorLastCheck = Date.now()
+    let e
+    try {
+      e = await window.api('/api/agent/turn-error')
+    } catch (err) {
+      return // poll blip; leave the banner as it was
+    }
+    if (!e || !e.present || !e.fresh || e.ts === turnErrorDismissedTs) { banner.hidden = true; return }
+    $('nav-turnerror-text').textContent = NAV.turnError(e.subtype, e.detail)
+    const btn = $('nav-turnerror-dismiss')
+    btn.textContent = NAV.turnErrorDismiss
+    btn.onclick = () => { turnErrorDismissedTs = e.ts; banner.hidden = true }
     banner.hidden = false
   }
 

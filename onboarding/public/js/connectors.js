@@ -166,7 +166,12 @@
         return dateToo ? ` (resets ${d.toLocaleDateString([], { month: 'numeric', day: 'numeric' })} ${t})` : ` (resets ${t})`
       } catch { return '' }
     }
-    line.textContent = `5h: ${pct(u.fiveHourPct)}${at(u.fiveHourResetsAt, false)} · weekly: ${pct(u.weeklyPct)}${at(u.weeklyResetsAt, true)}`
+    // stale reading: still show the numbers (last good), annotated with
+    // when they were true -- a 429 should never blank a gauge (2026-08-04).
+    const staleNote = u.stale && u.asOf
+      ? (() => { try { const d = new Date(u.asOf); return ` · ${C.usageStaleNote(d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}` } catch { return '' } })()
+      : ''
+    line.textContent = `5h: ${pct(u.fiveHourPct)}${at(u.fiveHourResetsAt, false)} · weekly: ${pct(u.weeklyPct)}${at(u.weeklyResetsAt, true)}${staleNote}`
   }
 
   async function runProviderTest(provider, statusEl, btn) {

@@ -23,6 +23,7 @@ function createRoutes(staticCtx) {
     getElectron, startBootstrap,
     fetchClaudeSubscriptionUsage, checkForUpdate,
     startClaudeCliInstall, getClaudeInstallStatus,
+    path, DATA_HOME,
   } = staticCtx
   return [
     {
@@ -46,6 +47,33 @@ function createRoutes(staticCtx) {
           licenseUrl: info.licenseUrl || null,
           docsUrl: info.docsUrl || null,
           managed: process.platform !== 'win32',
+        })
+        return
+      },
+    },
+    {
+      // Last turn error (2026-08-04, Mino "클로드도 동작안함" -- a
+      // rate-limited/auth-dead lane produced ZERO user-visible signal).
+      // Reads the lane's .last-turn-error.json marker; `fresh` = within 10
+      // minutes, which is what the nav banner shows. Older errors stay
+      // available (fresh:false) for a diagnostics surface later.
+      method: 'GET',
+      match: (pathname) => pathname === '/api/agent/turn-error',
+      handler: async (req, res) => {
+        let marker = null
+        try {
+          marker = JSON.parse(fs.readFileSync(path.join(DATA_HOME, '.last-turn-error.json'), 'utf8'))
+        } catch { /* absent/corrupt = no error to report */ }
+        if (!marker || !Number(marker.ts)) {
+          sendJson(res, 200, { present: false })
+          return
+        }
+        sendJson(res, 200, {
+          present: true,
+          fresh: Date.now() - Number(marker.ts) < 10 * 60_000,
+          ts: Number(marker.ts),
+          subtype: String(marker.subtype || 'error').slice(0, 80),
+          detail: String(marker.detail || '').slice(0, 600),
         })
         return
       },

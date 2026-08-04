@@ -747,6 +747,13 @@ window.COPY = {
     updateAvailable: (latest, current) => `Update available: v${latest} (you're on v${current}).`,
     updateOpen: 'Download',
     muteWarn: (n, m) => `${m} was asked to reply ${n}× and didn't. The agent may be unable to send messages.`,
+    // Turn-error strip (2026-08-04, Mino "클로드도 동작안함"): carries the
+    // RAW upstream error text -- that text is the only thing that tells a
+    // rate-limit hit ("429/limit reached", wait it out) apart from dead
+    // auth ("401/authentication", re-login on Connectors). Paraphrasing it
+    // away would hide exactly the discriminator the user needs.
+    turnError: (subtype, detail) => `Model call failed (${subtype}): ${detail || 'no detail from the provider'}`,
+    turnErrorDismiss: 'Dismiss',
     muteRevert: (m) => `Go back to ${m}`,
     // context gauge (v0.0.22): occupancy is exact (from the transcript's own
     // usage counters); the percentage is vs the best-known cap for the model
@@ -1177,6 +1184,7 @@ window.COPY = {
     usageNoToken: 'No Claude subscription login on file — usage gauges only exist for the subscription lane (Codex/Ollama expose no usage API).',
     usageError: 'Could not read usage.',
     usageUnreadable: 'unreadable',
+    usageStaleNote: (time) => `refresh failed, showing ${time} reading`,
     providerAuthRunning: 'A login window opened. This updates once you finish logging in in the browser.',
     providerAuthSuccess: 'Connected',
     providerAuthFailures: {

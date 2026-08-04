@@ -81,6 +81,20 @@ const pendingFile = () => path.join(MEM, '.headless-pending.json')
 // exactly as they were for the pre-headless 12h recycle.
 const MAX_CONVO_AGE_MS = (Number(process.env.SCHEHERAZADE_MAX_CONVO_HOURS) || 24) * 3600 * 1000
 
+// Turn watchdog (2026-08-04, field case: deepseek/glm via ollama.com wedging
+// a turn forever -- process alive, init clean, model call never returns,
+// user sees eternal silence; first reported by external tester #1 as
+// "silent die", reproduced on Mino's own machine 17:47). stream-json emits
+// per-MESSAGE events, not token deltas, so a slow model is legitimately
+// silent for the length of one API call -- the ceiling must be generous.
+// Default 10min of ZERO child stdout while a turn is in flight = wedged:
+// kill the child, let the supervisor respawn, and the stranded-redelivery
+// machinery below retries the unanswered message exactly once (its
+// redelivered:true rule already prevents a wedge->redeliver->wedge loop
+// from re-sending forever; the SECOND wedge drops the message and only the
+// loud log remains).
+const TURN_STALL_MS = Math.max(2, Number(process.env.SCHEHERAZADE_TURN_STALL_MINUTES) || 10) * 60_000
+
 // Stranded-message redelivery (UX red-team 2026-08-04 F4): a recycle can
 // land mid-turn -- the user's message reached claude's stdin (chat shows
 // "Read") but the answer died with the process, and a --resume does NOT
@@ -228,6 +242,14 @@ function main() {
   let childExited = false
   let sawInit = false
 
+  // Turn-watchdog state (see TURN_STALL_MS). openTurn = at least one user
+  // event written to stdin that no `result` has paid for yet; activity =
+  // ANY child stdout line (assistant/tool events count -- a busy agent is
+  // not a wedged one).
+  let openTurn = false
+  let lastActivityTs = Date.now()
+  const noteStdinWrite = () => { openTurn = true; lastActivityTs = Date.now() }
+
   // Redeliver messages stranded by a mid-turn recycle (F4). Runs before the
   // ingest server exists, so these precede any new inbound POST in stdin
   // order. Entries already redelivered once are dropped (no retry loops),
@@ -243,6 +265,7 @@ function main() {
             content: `${ev.content}\n[redelivered: the previous agent process was recycled mid-turn before this message was answered. If a complete reply was already sent, do not repeat it -- otherwise answer now.]`,
             meta: ev.meta || {},
           }))
+          noteStdinWrite()
         } catch (err) {
           log(`redelivery write failed: ${err.message}`)
         }
@@ -258,6 +281,7 @@ function main() {
   // ── stdout: structured events ─────────────────────────────────────────────
   const rl = createInterface({ input: child.stdout })
   rl.on('line', (line) => {
+    lastActivityTs = Date.now() // any child output = not wedged (watchdog input)
     let e
     try { e = JSON.parse(line) } catch {
       if (line.trim()) log(`non-json stdout: ${line.slice(0, 200)}`)
@@ -278,6 +302,25 @@ function main() {
       log(`init: model=${e.model} session=${e.session_id} mcp=${JSON.stringify((e.mcp_servers || []).map((s) => `${s.name}:${s.status}`))}`)
     } else if (e.type === 'result') {
       log(`turn result: ${e.subtype}${e.is_error ? ' (error)' : ''} turns=${e.num_turns}`)
+      // Error turns used to die as one quiet log line while the user saw
+      // nothing at all (2026-08-04 field: subscription lane rate-limited /
+      // auth-dead -> "클로드도 동작안함", zero receipts anywhere). Loud
+      // stderr WITH the upstream error text, plus a marker file the UI
+      // banner reads -- an error must annotate the product, not vanish.
+      if (e.is_error) {
+        const errText = String(e.result || (e.error && (e.error.message || e.error)) || '').slice(0, 600)
+        errLog(`turn ERROR (${e.subtype}): ${errText || 'no detail carried in the result event'}`)
+        try {
+          writeJsonAtomic(path.join(MEM, '.last-turn-error.json'), { ts: Date.now(), subtype: e.subtype || 'error', detail: errText }, 0o600)
+        } catch (err) {
+          log(`turn-error marker write failed: ${err.message}`)
+        }
+      } else {
+        // Recovery clears the banner immediately -- a healthy turn must not
+        // sit under a 10-minute-old error strip (freshness window is only
+        // the fallback for a lane that died before ever succeeding again).
+        try { fs.unlinkSync(path.join(MEM, '.last-turn-error.json')) } catch { /* absent = nothing to clear */ }
+      }
       // A result pays for EVERY pending event written before it: probe 6
       // (2026-08-04, /tmp/sch-probe6.log) pinned -p's queue semantics --
       // user events arriving mid-turn MERGE into the live turn (3 queued
@@ -286,6 +329,7 @@ function main() {
       // race window (a POST landing between turn-end and this line) only
       // costs a redelivery skip, never a double reply.
       const resultTs = Date.now()
+      openTurn = false // the watchdog stands down until the next stdin write
       const p = readPending()
       if (p.length) writePending(p.filter((ev) => (Number(ev.ts) || 0) > resultTs))
     } else if (e.type === 'assistant') {
@@ -341,6 +385,7 @@ function main() {
       if (childExited || !child.stdin.writable) return send(503, { error: 'agent not running' })
       try {
         child.stdin.write(renderUserEvent({ content, meta: payload.meta || {} }))
+        noteStdinWrite()
       } catch (err) {
         log(`stdin write failed: ${err.message}`)
         return send(503, { error: 'stdin write failed' })
@@ -364,6 +409,24 @@ function main() {
       process.exitCode = 74 // EX_IOERR
     }
   })
+
+  // ── turn watchdog ─────────────────────────────────────────────────────────
+  // See TURN_STALL_MS's header. Checks every 30s; fires at most once per
+  // stall (openTurn drops before the kill so a slow SIGTERM can't double-log).
+  const stallTimer = setInterval(() => {
+    if (childExited || !openTurn) return
+    const quietMs = Date.now() - lastActivityTs
+    if (quietMs < TURN_STALL_MS) return
+    openTurn = false
+    errLog(
+      `turn watchdog: a turn has been in flight with ZERO model output for ${Math.round(quietMs / 60_000)}m ` +
+      `(ceiling ${Math.round(TURN_STALL_MS / 60_000)}m, SCHEHERAZADE_TURN_STALL_MINUTES to tune) -- the upstream call is wedged. ` +
+      'Recycling; the unanswered message redelivers once on the next boot. If this repeats on the same model, the model/provider lane is the problem.'
+    )
+    child.kill('SIGTERM')
+    setTimeout(() => { if (!childExited) child.kill('SIGKILL') }, 10_000).unref()
+  }, 30_000)
+  stallTimer.unref()
 
   // ── lifecycle ────────────────────────────────────────────────────────────
   const shutdown = (sig) => {

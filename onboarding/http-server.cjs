@@ -2604,14 +2604,27 @@ const APP_VERSION = (() => {
   try { return require('../package.json').version } catch { return '0.0.0' }
 })()
 
+// Cache + stale-on-error (2026-08-04, Mino field: "usage는 429가 떠버리네" --
+// the OAuth usage endpoint rate-limits fast, and v1 hit it fresh on every
+// page load AND every Refresh click). 60s success TTL absorbs refresh spam;
+// on any failure the LAST GOOD reading is served with stale:true + asOf so
+// the gauge shows "82% (as of 17:42)" instead of degrading to a bare
+// HTTP 429 -- an error should annotate a gauge, not replace it.
+let usageCache = null // { at, payload } -- last GOOD reading only
 async function fetchClaudeSubscriptionUsage() {
+  const now = Date.now()
+  if (usageCache && now - usageCache.at < 60_000) return usageCache.payload
+  const failWith = (branch, detail) => {
+    if (usageCache) return { ...usageCache.payload, stale: true, staleReason: detail || branch }
+    return { ok: false, branch, ...(detail ? { detail } : {}) }
+  }
   let token = null
   try {
     token = readProviderKey('claude-subscription')
   } catch (err) {
-    return { ok: false, branch: 'token_unreadable', detail: err.message }
+    return failWith('token_unreadable', err.message)
   }
-  if (!token) return { ok: false, branch: 'no_token' }
+  if (!token) return failWith('no_token')
   let res, body
   try {
     res = await fetch('https://api.anthropic.com/api/oauth/usage', {
@@ -2624,17 +2637,20 @@ async function fetchClaudeSubscriptionUsage() {
     })
     body = await res.json()
   } catch (err) {
-    return { ok: false, branch: 'unreachable', detail: err.message }
+    return failWith('unreachable', err.message)
   }
-  if (!res.ok) return { ok: false, branch: 'http_error', detail: `HTTP ${res.status}` }
+  if (!res.ok) return failWith('http_error', `HTTP ${res.status}`)
   const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
-  return {
+  const payload = {
     ok: true,
     fiveHourPct: num(body.five_hour && body.five_hour.utilization),
     weeklyPct: num(body.seven_day && body.seven_day.utilization),
     fiveHourResetsAt: (body.five_hour && body.five_hour.resets_at) || null,
     weeklyResetsAt: (body.seven_day && body.seven_day.resets_at) || null,
+    asOf: new Date(now).toISOString(),
   }
+  usageCache = { at: now, payload }
+  return payload
 }
 
 // Update check against the PUBLIC releases repo (the download surface
