@@ -49,6 +49,13 @@ const SYSTEM_PROMPT_FILE = process.env.SYSTEM_PROMPT_FILE || ''
 const MCP_CONFIG_FILE = process.env.MCP_CONFIG_FILE || ''
 
 const log = (m) => process.stderr.write(`[headless-lane] ${m}\n`)
+// Per-tool-call chatter drowned the app's log console the moment a real
+// agent got busy (Mino, clean-mac 13:54 "로그 존나뜸") -- everything on
+// stderr renders as [agent!] there. Lifecycle lines (spawn/init/result/
+// exit/redelivery/strikes) stay on by default; per-event diagnostics go
+// behind this flag.
+const DEBUG = process.env.SCHEHERAZADE_LANE_DEBUG === '1'
+const debugLog = (m) => { if (DEBUG) log(m) }
 
 // Resolved lazily inside main() -- MEM is unset when this module is merely
 // imported (tests import the pure renderers), and a module-level guard here
@@ -277,7 +284,7 @@ function main() {
       if (p.length) writePending(p.filter((ev) => (Number(ev.ts) || 0) > resultTs))
     } else if (e.type === 'assistant') {
       for (const c of (e.message && e.message.content) || []) {
-        if (c.type === 'tool_use') log(`tool: ${c.name}`)
+        if (c.type === 'tool_use') debugLog(`tool: ${c.name}`)
       }
     }
   })

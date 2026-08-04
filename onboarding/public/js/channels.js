@@ -25,6 +25,21 @@
   // re-fetch rather than hand-writing the badge (셸은 현실).
   let lastStatus = null
 
+  // Button label derives from LIVE state, not the backend's history: a
+  // never-connected Discord said "Reconnect" and a connected Slack said
+  // "Connect" (Mino, clean-mac 2026-08-04 13:55). Discord's ids keep the
+  // legacy reconnect-flow names; the label logic is shared.
+  function connectBtnFor(key) {
+    return $(key === 'discord' ? 'ch-discord-reconnect' : `ch-${key}-connect`)
+  }
+  function flowFor(key) {
+    return $(key === 'discord' ? 'ch-reconnect-flow' : `ch-${key}-flow`)
+  }
+  function baseLabel(key) {
+    const info = lastStatus && lastStatus.backends && lastStatus.backends[key]
+    return info && info.configured ? C.reconnectButton : C.connectButton
+  }
+
   function renderBackendRow(key, status) {
     const info = status.backends[key]
     const isActive = status.active === key
@@ -33,6 +48,12 @@
     parts.push(isActive ? C.activeBadge : info.configured ? C.configuredBadge : C.notConfiguredBadge)
     if (info.configured && info.home) parts.push(C.homeLine(info.detail ? `${info.detail} / ${info.home}` : info.home))
     $(`ch-${key}-status`).textContent = parts.join(' · ')
+    const connectBtn = connectBtnFor(key)
+    if (connectBtn) {
+      const flowEl = flowFor(key)
+      const flowOpen = flowEl && !flowEl.classList.contains('hidden')
+      if (!flowOpen) connectBtn.textContent = baseLabel(key)
+    }
     const switchBtn = $(`ch-${key}-switch`)
     switchBtn.textContent = C.switchButton
     switchBtn.classList.toggle('hidden', isActive || !info.configured)
@@ -131,11 +152,11 @@
 
     const flow = $('ch-reconnect-flow')
     const reconnectBtn = $('ch-discord-reconnect')
-    reconnectBtn.textContent = C.reconnectButton
+    reconnectBtn.textContent = baseLabel('discord')
     reconnectBtn.onclick = () => {
       const opening = flow.classList.contains('hidden')
       flow.classList.toggle('hidden', !opening)
-      reconnectBtn.textContent = opening ? C.closeButton : C.reconnectButton
+      reconnectBtn.textContent = opening ? C.closeButton : baseLabel('discord')
     }
 
     $('ch-reconnect-enum').onclick = async () => {
@@ -192,7 +213,7 @@
         statusEl.textContent = ''
         showToast(C.discordApplied(result.guildName || result.guildId, result.channelName))
         $('ch-reconnect-flow').classList.add('hidden')
-        $('ch-discord-reconnect').textContent = C.reconnectButton
+        $('ch-discord-reconnect').textContent = baseLabel('discord')
         $('ch-reconnect-token').value = ''
         await refreshStatus()
       } catch (err) {
@@ -219,11 +240,11 @@
 
     const flow = $('ch-telegram-flow')
     const connectBtn = $('ch-telegram-connect')
-    connectBtn.textContent = C.connectButton
+    connectBtn.textContent = baseLabel('telegram')
     connectBtn.onclick = () => {
       const opening = flow.classList.contains('hidden')
       flow.classList.toggle('hidden', !opening)
-      connectBtn.textContent = opening ? C.closeButton : C.connectButton
+      connectBtn.textContent = opening ? C.closeButton : baseLabel('telegram')
     }
 
     $('ch-telegram-enum').onclick = async () => {
@@ -327,11 +348,11 @@
 
     const flow = $('ch-slack-flow')
     const connectBtn = $('ch-slack-connect')
-    connectBtn.textContent = C.connectButton
+    connectBtn.textContent = baseLabel('slack')
     connectBtn.onclick = () => {
       const opening = flow.classList.contains('hidden')
       flow.classList.toggle('hidden', !opening)
-      connectBtn.textContent = opening ? C.closeButton : C.connectButton
+      connectBtn.textContent = opening ? C.closeButton : baseLabel('slack')
     }
 
     $('ch-slack-enum').onclick = async () => {
@@ -413,8 +434,8 @@
 
   function flowClose(key) {
     $(`ch-${key}-flow`).classList.add('hidden')
-    const btn = $(`ch-${key}-connect`)
-    if (btn) btn.textContent = C.connectButton
+    const btn = connectBtnFor(key)
+    if (btn) btn.textContent = baseLabel(key)
   }
 
   // ── init ──────────────────────────────────────────────────────────────────
