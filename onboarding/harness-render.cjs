@@ -401,6 +401,51 @@ function createHarnessRender(ctx) {
     }
   }
 
+  // Default skills (v0.0.41): onboarding/templates/skills/<name>/SKILL.md is
+  // seeded to CONFIG_DIR/.claude/skills/<name>/SKILL.md. Claude Code loads
+  // .claude/skills natively, so shipping a skill is pure seeding — zero
+  // runtime code. Same seed-if-absent contract as agent definitions: absence
+  // is checked per skill FILE, so a user who edited a skill keeps their
+  // edit while genuinely new skills from later app versions still arrive
+  // (a deleted skill therefore comes back on next boot, same as agents —
+  // "don't want it" is expressed by editing, e.g. emptying, not deleting).
+  // Deliberately NO keyword auto-inject layer (Aside-style
+  // autoInject) — the skill description is the discovery surface.
+  const TEMPLATE_SKILLS_DIR = path.join(REPO_ROOT, 'onboarding', 'templates', 'skills')
+  const SKILLS_DIR = path.join(CONFIG_DIR, '.claude', 'skills')
+
+  function seedSkillDefinitions() {
+    if (!fs.existsSync(TEMPLATE_SKILLS_DIR)) return
+    let entries
+    try {
+      entries = fs.readdirSync(TEMPLATE_SKILLS_DIR, { withFileTypes: true })
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name)
+    } catch (err) {
+      console.error(`[scheherazade/onboarding] cannot read skill templates dir: ${err.message}`)
+      return
+    }
+    for (const name of entries) {
+      const source = path.join(TEMPLATE_SKILLS_DIR, name, 'SKILL.md')
+      if (!fs.existsSync(source)) continue
+      const targetDir = path.join(SKILLS_DIR, name)
+      const target = path.join(targetDir, 'SKILL.md')
+      if (fs.existsSync(target)) continue
+      // tmp+rename + per-skill catch, for the same reasons as
+      // seedAgentDefinitions above: a truncated copy must not read as
+      // "seeded", and one bad skill must not abort the boot path.
+      try {
+        fs.mkdirSync(targetDir, { recursive: true })
+        const tmp = `${target}.tmp`
+        fs.copyFileSync(source, tmp)
+        fs.renameSync(tmp, target)
+        log(`seeded skill ${name} into .claude/skills`)
+      } catch (err) {
+        console.error(`[scheherazade/onboarding] seeding skill ${name} failed (continuing): ${err.message}`)
+      }
+    }
+  }
+
   function seedConfigFromTemplates() {
     seedConfigFromTemplate(TEMPLATE_MCP_JSON_PATH, MCP_JSON_PATH)
     seedConfigFromTemplate(TEMPLATE_ENV_PATH, ENV_PATH)
@@ -408,6 +453,7 @@ function createHarnessRender(ctx) {
     seedSettingsLocal()
     ensureSettingsLocalAdditions()
     seedAgentDefinitions()
+    seedSkillDefinitions()
   }
 
   // Global Claude Code CLI first-run state -- NOT part of CONFIG_DIR, and NOT
@@ -744,6 +790,7 @@ function createHarnessRender(ctx) {
 
   return {
     seedConfigFromTemplates,
+    seedSkillDefinitions,
     ensureClaudeOnboardingDone,
     refreshHarnessIfOnboarded,
     renderAgentSubstrate,
