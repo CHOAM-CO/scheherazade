@@ -71,11 +71,11 @@ console.log('\n-- headless lane parity: both lanes exec headless-lane.mjs')
     supSrc.includes('MCP_CONFIG_FILE: cfg.mcpConfigFile'))
   ok('node-pty is fully gone from the supervisor', !supSrc.includes("require_('node-pty')"))
   // reaper parity: same two patterns on both lanes
-  ok('run.sh reaper patterns: lane script + --mcp-config leaf',
-    runSh.includes('PKILL_PATTERN="headless-lane.mjs"') &&
+  ok('run.sh reaper patterns: FULL lane path + --mcp-config leaf (basename alone cross-matches editors/greps -- live bite 2026-08-04)',
+    runSh.includes('PKILL_PATTERN="${SCRIPT_DIR}/headless-lane.mjs"') &&
     runSh.includes('PKILL_LEAF_PATTERN="--mcp-config ${MEM}/.mcp.json"'))
-  ok('supervisor reaper patterns mirror run.sh',
-    supSrc.includes("pkillPattern: 'headless-lane.mjs'") &&
+  ok('supervisor reaper patterns mirror run.sh (full path)',
+    supSrc.includes("pkillPattern: path.join(path.dirname(SELF_PATH), 'headless-lane.mjs')") &&
     supSrc.includes("pkillLeafPattern: `--mcp-config ${path.join(mem, '.mcp.json')}`"))
 }
 

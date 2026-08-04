@@ -125,13 +125,16 @@ export function resolveConfig(env = process.env, scriptDir = SCRIPT_DIR) {
     stopflag: path.join(mem, '.stop_requested'),
     failfile: path.join(mem, '.agent-failed.json'),
     // Stop-time reaper patterns, lane parity with run.sh's
-    // PKILL_PATTERN/PKILL_LEAF_PATTERN (design-0020): the lane script path
-    // matches the `node headless-lane.mjs` process; the leaf pattern
-    // matches an orphaned `claude -p` child via its --mcp-config argv
-    // (stable per-agent path -- never key the reaper to post-spawn-mutable
-    // fields like MODEL, the 2026-07-03 lesson). Here they only serve the
-    // orphan sweep; live kills go through the child handle.
-    pkillPattern: 'headless-lane.mjs',
+    // PKILL_PATTERN/PKILL_LEAF_PATTERN (design-0020): the lane's FULL
+    // script path (basename alone cross-matched any argv mentioning the
+    // file -- editor, grep, the E2E driver's own pkill; live bite
+    // 2026-08-04) matches the `node .../headless-lane.mjs` process; the
+    // leaf pattern matches an orphaned `claude -p` child via its
+    // --mcp-config argv (stable per-agent path -- never key the reaper to
+    // post-spawn-mutable fields like MODEL, the 2026-07-03 lesson). Here
+    // they only serve the orphan sweep; live kills go through the child
+    // handle.
+    pkillPattern: path.join(path.dirname(SELF_PATH), 'headless-lane.mjs'),
     pkillLeafPattern: `--mcp-config ${path.join(mem, '.mcp.json')}`,
     sessionTimeoutSec: Number(merged.SESSION_TIMEOUT) > 0 ? Number(merged.SESSION_TIMEOUT) : 43200,
     // v0.0.15 stall watchdog window (seconds). 0 disables. Default 15 min

@@ -98,17 +98,18 @@ FAILFILE="$MEM/.agent-failed.json"
 # headless-topology (design-0020): the leaf is now `node headless-lane.mjs`
 # with a `claude -p ...` child. Two patterns because there are two processes
 # to reap when the group kill fails:
-#   - the lane: its argv always contains the script path (stable within an
-#     install; two INSTALLS on one machine would cross-match, accepted --
-#     the product is one agent per machine, and the old "--name" pattern
-#     had the same property via a shared AGENT_NAME default)
+#   - the lane: matched by FULL script path, not basename -- the basename
+#     alone cross-matched ANY process whose argv mentions the file (an
+#     editor with it open, a grep, even the pkill that killed the E2E
+#     driver shell -- live bite 2026-08-04 13:2x). Full path still matches
+#     both the packaged app path and a repo checkout, per install.
 #   - an orphaned claude leaf (lane SIGKILLed before it could TERM its
 #     child): its argv carries "--mcp-config $MEM/.mcp.json" once onboarding
 #     has seeded that file -- $MEM embeds AGENT_NAME, so this is per-agent
 #     specific AND model-agnostic (the 2026-07-03 lesson: never key the
 #     reaper to post-spawn-mutable fields like MODEL). Pre-onboarding there
 #     is no channel to orphan, so the gap before .mcp.json exists is moot.
-PKILL_PATTERN="headless-lane.mjs"
+PKILL_PATTERN="${SCRIPT_DIR}/headless-lane.mjs"
 PKILL_LEAF_PATTERN="--mcp-config ${MEM}/.mcp.json"
 
 # Session timeout: forces the lane-wrapped claude process to exit after
