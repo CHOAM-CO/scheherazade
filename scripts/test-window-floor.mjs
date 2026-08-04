@@ -48,21 +48,29 @@ const shell = /\.page-shell\s*\{([^}]*)\}/.exec(css)
 assert(shell !== null, '.page-shell rule is present in app.css')
 const shellBody = shell ? shell[1] : ''
 const maxW = /max-width:\s*(\d+)px/.exec(shellBody)
-const padX = /padding:\s*[\d.]+rem\s+([\d.]+)rem/.exec(shellBody)
 assert(maxW !== null, '.page-shell declares a max-width in px')
-assert(padX !== null, '.page-shell declares horizontal padding in rem')
-if (!maxW || !padX) { console.log(`\n${pass} passed, ${fail} failed`); process.exit(1) }
+if (!maxW) { console.log(`\n${pass} passed, ${fail} failed`); process.exit(1) }
 
-// 1rem = 16px at the app's declared root font-size (html { font-size: 14px }
-// sets the BODY text size, not the rem base -- rem stays on the browser
-// default of 16px, which is what padding: 1.5rem resolves against).
+// 대공사 2026-08-05: .page-shell went FLUID (max-width 1100 + .page-grid
+// two-column reflow), so "minWidth >= max-width" stopped being the contract
+// -- the floor no longer has to fit the WIDEST layout, it has to land in
+// SINGLE-COLUMN territory, where rows are known to fit. The binding numbers
+// are now: (a) the floor sits BELOW the two-column breakpoint, so a
+// floor-width window renders one column, never two squeezed ones; (b) the
+// breakpoint sits at or below the layout cap, so two-column mode actually
+// exists inside the fluid range.
+const gridBp = /@media\s*\(min-width:\s*(\d+)px\)\s*\{[^}]*\.page-grid/.exec(css)
+assert(gridBp !== null, '.page-grid declares its two-column breakpoint (min-width media)')
+if (!gridBp) { console.log(`\n${pass} passed, ${fail} failed`); process.exit(1) }
+
+console.log('\n2. the floor lands in single-column territory')
+console.log(`     window floor ${minW[1]}px | 2-col breakpoint ${gridBp[1]}px | shell cap ${maxW[1]}px`)
+assert(Number(minW[1]) < Number(gridBp[1]),
+  `minWidth (${minW[1]}) < two-column breakpoint (${gridBp[1]}) -- a floor-width window is single-column`)
+assert(Number(gridBp[1]) <= Number(maxW[1]),
+  `breakpoint (${gridBp[1]}) <= shell max-width (${maxW[1]}) -- two-column mode exists in range`)
+
 const REM = 16
-const contentWidth = Number(maxW[1]) + Number(padX[1]) * REM * 2
-
-console.log('\n2. the floor covers the layout')
-console.log(`     .page-shell needs ${contentWidth}px (max-width ${maxW[1]} + ${padX[1]}rem padding x2)`)
-console.log(`     window floor is ${minW[1]}px`)
-assert(Number(minW[1]) >= contentWidth, `minWidth (${minW[1]}) >= .page-shell content width (${contentWidth})`)
 
 // The settings label column is the reason the floor exists at all. If it ever
 // grows past a third of the content width, the control column is the thing
@@ -74,7 +82,9 @@ const hasStackFallback = /@media\s*\(max-width:\s*(\d+)px\)/.test(css)
 assert(hasStackFallback, 'a narrow-window media query exists so rows stack instead of colliding')
 if (labelCol) {
   const labelPx = Number(labelCol[1]) * REM
-  assert(labelPx * 3 < contentWidth, `--label-col (${labelPx}px) leaves the control column the majority of the row`)
+  // Judged at the FLOOR width -- the narrowest single-column window is where
+  // the control column is most squeezed, so that is where majority must hold.
+  assert(labelPx * 3 < Number(minW[1]), `--label-col (${labelPx}px) leaves the control column the majority of the row at floor width (${minW[1]}px)`)
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
