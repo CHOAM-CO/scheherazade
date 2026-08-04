@@ -132,6 +132,17 @@ main.cjs ──spawns──> claude -p --input-format stream-json
   2026-07-05 expect freeze class is therefore dead at the root, not merely
   routed around.
 
+- **Bypass-permissions consent (Mino's clean-mac repro, 2026-08-04
+  13:43): interactive-lane only, ABSENT in -p.** The shipped (expect)
+  build crash-loops on a clean Mac first boot: claude renders the
+  "Bypass Permissions mode … Yes, I accept" picker, expect dies
+  (`spawn id exp5 not open`), restart loop. Re-probed the exact class
+  headlessly: fresh `CLAUDE_CONFIG_DIR` + `-p --dangerously-skip-
+  permissions --strict-mcp-config` + mock base URL → no dialog,
+  completed end-to-end, exit 0 (receipt `/tmp/sch-mock-anthropic.log`
+  04:45Z entries). The clean-install freeze class dies at the root on
+  this branch.
+
 ### Red-team fixes (2026-08-04, tech + UX passes)
 
 - **Poisoned resume id** (UX F1 / tech #2): 2 consecutive no-init exits
