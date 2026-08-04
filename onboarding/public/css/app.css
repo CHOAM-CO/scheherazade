@@ -653,9 +653,14 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .chat-react-badge[data-from='agent'] { left: 0.5rem; }
 .chat-react-bar {
   position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  left: calc(100% + 0.4rem);
+  /* INSIDE the bubble's top-right corner (2026-08-04 tester: hover/click
+     broke on long messages). The old spot -- vertically centered OUTSIDE
+     the right edge -- clipped against the scroll container once a wide
+     (max-width:78%) bubble pushed it past the column, and on tall bubbles
+     the cursor had to travel to mid-height without leaving :hover. Inside
+     the bubble it can never clip and is always one short move away. */
+  top: 0.3rem;
+  right: 0.4rem;
   display: none;
   gap: 0.1rem;
   background: var(--panel-raised);
