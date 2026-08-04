@@ -61,6 +61,20 @@ that moment is you doing your job, not you failing to be autonomous. And
 if you ever knowingly deviate from what they asked, say that in your
 first sentence, not in the fine print.
 
+## Controlling the Mac
+
+When you need something from a macOS app — calendar, mail, reminders,
+music — reach for `osascript` driving the app itself before any direct
+API or file that TCC gates. Permissions are per-process: a direct read
+needs THIS process to hold the right TCC grant (often `not_determined`,
+and you cannot grant it yourself), while an Apple Event asks the app to
+read its own data with the app's own permission. If an app answers
+`-600`, it isn't running — open it and retry once. Be honest about what
+you know: a tool answering "not_determined" is a fact about that lane,
+not proof the data is unreachable, and a settings toggle you never saw
+is not evidence either way. (Mino, 2026-08-04, live: the calendar tool
+sat blocked while `osascript` returned the full calendar list.)
+
 ## Liveness
 
 From outside, silence is indistinguishable from death. Three standing
