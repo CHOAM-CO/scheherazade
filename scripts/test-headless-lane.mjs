@@ -98,6 +98,7 @@ process.on('SIGTERM', () => process.exit(0))
   const ep = JSON.parse(fs.readFileSync(epPath, 'utf8'))
   assert(Number.isInteger(ep.port) && typeof ep.token === 'string' && ep.token.length === 64,
     'endpoint file carries port + 64-hex token')
+  assert(ep.pid === lane.pid, 'endpoint file carries the lane pid (notifier liveness gate)')
   const mode = fs.statSync(epPath).mode & 0o777
   assert(mode === 0o600, `endpoint file is 0600 (got ${mode.toString(8)})`)
 
@@ -117,6 +118,27 @@ process.on('SIGTERM', () => process.exit(0))
   assert(badRoute.status === 404, 'unknown route -> 404')
   const badJson = await fetch(`${base}/inbound`, { method: 'POST', headers: { 'x-ingest-token': ep.token }, body: 'not json' })
   assert(badJson.status === 400, 'garbage body -> 400')
+  // foreign Host header -> 403 (DNS-rebinding posture parity with channel-local)
+  {
+    const http = await import('node:http')
+    const status = await new Promise((resolve) => {
+      const rq = http.request({ host: '127.0.0.1', port: ep.port, method: 'POST', path: '/inbound',
+        headers: { host: 'evil.example.com', 'x-ingest-token': ep.token } }, (rs) => resolve(rs.statusCode))
+      rq.on('error', () => resolve(-1))
+      rq.end(JSON.stringify({ content: 'x' }))
+    })
+    assert(status === 403, `foreign Host header -> 403 (got ${status})`)
+  }
+  // oversized body -> real 413 response, not a bare connection reset
+  {
+    const big = JSON.stringify({ content: 'A'.repeat(300 * 1024) })
+    let status413 = -1
+    try {
+      const r = await fetch(`${base}/inbound`, { method: 'POST', headers: { 'x-ingest-token': ep.token, 'content-type': 'application/json' }, body: big })
+      status413 = r.status
+    } catch { /* connection may still drop after the 413 is sent */ }
+    assert(status413 === 413, `oversized POST -> real 413 (got ${status413})`)
+  }
   const good = await fetch(`${base}/inbound`, {
     method: 'POST',
     headers: { 'x-ingest-token': ep.token, 'content-type': 'application/json' },
@@ -188,6 +210,224 @@ console.log('\n3. createInboundNotifier routes by topology')
   try { await n1({ content: 'd', meta: {} }) } catch { threw2 = true }
   assert(threw2, 'lane HTTP 500 -> throws')
   srv2.close()
+}
+
+// ── 4. resume-strikes: a poisoned --resume id self-heals ────────────────────
+console.log('\n4. resume-strikes lifecycle (poisoned resume id abandoned after 2 no-init exits)')
+{
+  const MEM = path.join(TMP, 'mem-strikes')
+  fs.mkdirSync(MEM, { recursive: true })
+  // fake claude: with --resume -> die BEFORE init (poisoned transcript);
+  // without --resume -> emit init and exit 0 (healthy fresh boot)
+  const fake = path.join(TMP, 'fake-strike.mjs')
+  fs.writeFileSync(fake, `
+if (process.argv.includes('--resume')) process.exit(1)
+process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'fresh-after-abandon', model: 'fake', mcp_servers: [] }) + '\\n')
+process.exit(0)
+`)
+  const shim = path.join(TMP, 'strike-shim.sh')
+  fs.writeFileSync(shim, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fake)} "$@"\n`, { mode: 0o755 })
+  const sessPath = path.join(MEM, '.headless-session.json')
+  const strikesPath = path.join(MEM, '.headless-resume-strikes.json')
+  fs.writeFileSync(sessPath, JSON.stringify({ sessionId: 'poisoned-id', ts: Date.now(), bornTs: Date.now() }))
+
+  const runLane = () => new Promise((resolve) => {
+    const p = spawn(process.execPath, [path.join(ROOT, 'headless-lane.mjs')], {
+      env: { ...process.env, MEM, MODEL: 'fake-model', CLAUDE_BIN: shim },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    })
+    let err = ''
+    p.stderr.on('data', (d) => { err += d })
+    p.on('exit', () => resolve(err))
+  })
+
+  await runLane() // strike 1
+  assert(fs.existsSync(sessPath), 'after strike 1: session file kept (one more try allowed)')
+  assert(fs.existsSync(strikesPath) && JSON.parse(fs.readFileSync(strikesPath, 'utf8')).strikes === 1,
+    'after strike 1: strikes file records {strikes:1}')
+  const err2 = await runLane() // strike 2 -> abandon
+  assert(!fs.existsSync(sessPath), 'after strike 2: poisoned session file unlinked')
+  assert(!fs.existsSync(strikesPath), 'after strike 2: strikes file cleaned up')
+  assert(err2.includes('abandoning'), 'abandonment is logged loudly')
+  await runLane() // fresh boot, no --resume, init fires
+  assert(fs.existsSync(sessPath) && JSON.parse(fs.readFileSync(sessPath, 'utf8')).sessionId === 'fresh-after-abandon',
+    'third boot runs fresh and captures a new session id')
+  assert(!fs.existsSync(strikesPath), 'successful init leaves no strikes file')
+}
+
+// ── 5. conversation rotation by bornTs ──────────────────────────────────────
+console.log('\n5. conversation rotation (bornTs ceiling)')
+{
+  const MEM = path.join(TMP, 'mem-rotate')
+  fs.mkdirSync(MEM, { recursive: true })
+  // fake claude: writes its argv to FAKE_SINK, emits init, exits
+  const fake = path.join(TMP, 'fake-rotate.mjs')
+  fs.writeFileSync(fake, `
+import fs from 'node:fs'
+fs.appendFileSync(process.env.FAKE_SINK, JSON.stringify(process.argv.slice(2)) + '\\n')
+process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'rotated-or-resumed', model: 'fake', mcp_servers: [] }) + '\\n')
+process.exit(0)
+`)
+  const shim = path.join(TMP, 'rotate-shim.sh')
+  fs.writeFileSync(shim, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fake)} "$@"\n`, { mode: 0o755 })
+  const sessPath = path.join(MEM, '.headless-session.json')
+  const sink = path.join(TMP, 'rotate-sink.jsonl')
+
+  const runLane = (extraEnv = {}) => new Promise((resolve) => {
+    const p = spawn(process.execPath, [path.join(ROOT, 'headless-lane.mjs')], {
+      env: { ...process.env, MEM, MODEL: 'fake-model', CLAUDE_BIN: shim, FAKE_SINK: sink, ...extraEnv },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    })
+    p.on('exit', () => resolve())
+  })
+
+  // young conversation -> resumed, bornTs preserved
+  const youngBorn = Date.now() - 3600_000
+  fs.writeFileSync(sessPath, JSON.stringify({ sessionId: 'young-id', ts: Date.now(), bornTs: youngBorn }))
+  await runLane()
+  const argv1 = JSON.parse(fs.readFileSync(sink, 'utf8').trim().split('\n').at(-1))
+  assert(argv1.includes('--resume') && argv1.includes('young-id'), 'young conversation (1h) IS resumed')
+  assert(JSON.parse(fs.readFileSync(sessPath, 'utf8')).bornTs === youngBorn,
+    'bornTs preserved across a resume (conversation birth, not process start)')
+
+  // old conversation -> rotated to fresh
+  fs.writeFileSync(sessPath, JSON.stringify({ sessionId: 'old-id', ts: Date.now(), bornTs: Date.now() - 25 * 3600_000 }))
+  await runLane()
+  const argv2 = JSON.parse(fs.readFileSync(sink, 'utf8').trim().split('\n').at(-1))
+  assert(!argv2.includes('--resume'), 'conversation past the 24h ceiling is NOT resumed')
+  const rotated = JSON.parse(fs.readFileSync(sessPath, 'utf8'))
+  assert(rotated.bornTs > Date.now() - 60_000, 'rotation restarts the bornTs clock')
+
+  // ceiling is env-tunable
+  fs.writeFileSync(sessPath, JSON.stringify({ sessionId: 'tuned-id', ts: Date.now(), bornTs: Date.now() - 3 * 3600_000 }))
+  await runLane({ SCHEHERAZADE_MAX_CONVO_HOURS: '2' })
+  const argv3 = JSON.parse(fs.readFileSync(sink, 'utf8').trim().split('\n').at(-1))
+  assert(!argv3.includes('--resume'), 'SCHEHERAZADE_MAX_CONVO_HOURS overrides the ceiling')
+}
+
+// ── 6. stranded-message redelivery (pending FIFO) ──────────────────────────
+console.log('\n6. stranded-message redelivery')
+{
+  const MEM = path.join(TMP, 'mem-pending')
+  fs.mkdirSync(MEM, { recursive: true })
+  // fake claude: init, echo stdin lines to sink; a line containing
+  // 'emit-result' also makes it emit a stream-json result event
+  const fake = path.join(TMP, 'fake-pending.mjs')
+  fs.writeFileSync(fake, `
+import fs from 'node:fs'
+import { createInterface } from 'node:readline'
+process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'pend-sess', model: 'fake', mcp_servers: [] }) + '\\n')
+const rl = createInterface({ input: process.stdin })
+rl.on('line', (l) => {
+  fs.appendFileSync(process.env.FAKE_SINK, l + '\\n')
+  if (l.includes('emit-result')) process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', num_turns: 1 }) + '\\n')
+})
+process.on('SIGTERM', () => process.exit(0))
+`)
+  const shim = path.join(TMP, 'pending-shim.sh')
+  fs.writeFileSync(shim, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fake)} "$@"\n`, { mode: 0o755 })
+  const pendPath = path.join(MEM, '.headless-pending.json')
+  const sink = path.join(TMP, 'pending-sink.jsonl')
+
+  // seed a stranded message from a "previous" recycle
+  fs.writeFileSync(pendPath, JSON.stringify([{ content: '유실된 질문이야', meta: { channelId: 'in-app' }, ts: Date.now() }]))
+
+  const lane = spawn(process.execPath, [path.join(ROOT, 'headless-lane.mjs')], {
+    env: { ...process.env, MEM, MODEL: 'fake-model', CLAUDE_BIN: shim, FAKE_SINK: sink },
+    stdio: ['ignore', 'ignore', 'pipe'],
+  })
+  const epPath = path.join(MEM, '.ingest-endpoint.json')
+  const deadline = Date.now() + 8000
+  while (!fs.existsSync(epPath) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
+  const waitSinkLines = async (n) => {
+    const d = Date.now() + 4000
+    while (Date.now() < d) {
+      if (fs.existsSync(sink) && fs.readFileSync(sink, 'utf8').trim().split('\n').filter(Boolean).length >= n) break
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    return fs.existsSync(sink) ? fs.readFileSync(sink, 'utf8').trim().split('\n').filter(Boolean) : []
+  }
+
+  const lines1 = await waitSinkLines(1)
+  const first = lines1[0] ? JSON.parse(lines1[0]).message.content[0].text : ''
+  assert(first.includes('유실된 질문이야') && first.includes('redelivered'),
+    'stranded message re-injected at boot with the redelivery note')
+  assert(fs.existsSync(pendPath) && JSON.parse(fs.readFileSync(pendPath, 'utf8'))[0].redelivered === true,
+    'redelivered entry marked (will never be re-sent a second time)')
+
+  // a live POST joins the FIFO; its result pays off the OLDEST entry
+  const ep = JSON.parse(fs.readFileSync(epPath, 'utf8'))
+  await fetch(`http://127.0.0.1:${ep.port}/inbound`, {
+    method: 'POST',
+    headers: { 'x-ingest-token': ep.token, 'content-type': 'application/json' },
+    body: JSON.stringify({ content: 'emit-result 부탁', meta: { channelId: 'in-app' } }),
+  })
+  await waitSinkLines(2)
+  const settled = Date.now() + 4000
+  while (Date.now() < settled) {
+    const p = fs.existsSync(pendPath) ? JSON.parse(fs.readFileSync(pendPath, 'utf8')) : []
+    if (p.length === 1 && !p[0].redelivered) break
+    await new Promise((r) => setTimeout(r, 50))
+  }
+  const afterResult = fs.existsSync(pendPath) ? JSON.parse(fs.readFileSync(pendPath, 'utf8')) : []
+  assert(afterResult.length === 1 && afterResult[0].content === 'emit-result 부탁',
+    'result event pays off the oldest pending entry (FIFO)')
+
+  lane.kill('SIGTERM')
+  await new Promise((r) => lane.on('exit', r))
+
+  // second boot: the still-pending live POST gets redelivered; then kill and
+  // boot a third time -> a redelivered:true entry is dropped, not looped
+  fs.rmSync(sink, { force: true })
+  const lane2 = spawn(process.execPath, [path.join(ROOT, 'headless-lane.mjs')], {
+    env: { ...process.env, MEM, MODEL: 'fake-model', CLAUDE_BIN: shim, FAKE_SINK: sink },
+    stdio: ['ignore', 'ignore', 'pipe'],
+  })
+  const lines2 = await waitSinkLines(1)
+  const second = lines2[0] ? JSON.parse(lines2[0]).message.content[0].text : ''
+  assert(second.includes('emit-result 부탁') && second.includes('redelivered'),
+    'unpaid message from the previous boot is redelivered once')
+  lane2.kill('SIGTERM')
+  await new Promise((r) => lane2.on('exit', r))
+  fs.rmSync(sink, { force: true })
+  const lane3 = spawn(process.execPath, [path.join(ROOT, 'headless-lane.mjs')], {
+    env: { ...process.env, MEM, MODEL: 'fake-model', CLAUDE_BIN: shim, FAKE_SINK: sink },
+    stdio: ['ignore', 'ignore', 'pipe'],
+  })
+  const ep3Deadline = Date.now() + 8000
+  while (!fs.existsSync(epPath) && Date.now() < ep3Deadline) await new Promise((r) => setTimeout(r, 50))
+  await new Promise((r) => setTimeout(r, 300)) // give a wrong redelivery time to appear
+  assert(!fs.existsSync(sink) || !fs.readFileSync(sink, 'utf8').includes('emit-result 부탁'),
+    'redelivered:true entry is dropped at next boot (one retry, no loops)')
+  assert(!fs.existsSync(pendPath), 'pending file cleared once nothing redeliverable remains')
+  lane3.kill('SIGTERM')
+  await new Promise((r) => lane3.on('exit', r))
+}
+
+// ── 7. notifier pid-liveness gate ───────────────────────────────────────────
+console.log('\n7. notifier pid-liveness (stale endpoint file after SIGKILL)')
+{
+  const dataHome = path.join(TMP, 'nh-pid')
+  fs.mkdirSync(dataHome, { recursive: true })
+  const mcpCalls = []
+  const notifier = createInboundNotifier({ dataHome, mcpNotify: async (p) => { mcpCalls.push(p) }, log: () => {} })
+
+  // dead pid in the endpoint file -> treated as no-endpoint -> MCP fallback
+  const deadProc = spawn(process.execPath, ['-e', ''])
+  await new Promise((r) => deadProc.on('exit', r))
+  fs.writeFileSync(path.join(dataHome, '.ingest-endpoint.json'),
+    JSON.stringify({ port: 1, token: 't', pid: deadProc.pid }))
+  let threwDead = false
+  try { await notifier({ content: 'stale', meta: {} }) } catch { threwDead = true }
+  assert(!threwDead && mcpCalls.length === 1 && mcpCalls[0].content === 'stale',
+    'dead-pid endpoint file -> MCP fallback, no throw (attach topology unpoisoned)')
+
+  // live pid but dead port -> still throws (headless mid-hiccup, no black hole)
+  fs.writeFileSync(path.join(dataHome, '.ingest-endpoint.json'),
+    JSON.stringify({ port: 1, token: 't', pid: process.pid }))
+  let threwLive = false
+  try { await notifier({ content: 'hiccup', meta: {} }) } catch { threwLive = true }
+  assert(threwLive && mcpCalls.length === 1, 'live-pid + failed POST -> still throws (no silent fallback)')
 }
 
 fs.rmSync(TMP, { recursive: true, force: true })

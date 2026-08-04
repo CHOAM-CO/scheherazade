@@ -55,6 +55,75 @@ const log = (m) => process.stderr.write(`[headless-lane] ${m}\n`)
 // killed the import itself (caught 2026-08-04, first syntax check).
 const sessionFile = () => path.join(MEM, '.headless-session.json')
 const endpointFile = () => path.join(MEM, '.ingest-endpoint.json')
+const strikesFile = () => path.join(MEM, '.headless-resume-strikes.json')
+const pendingFile = () => path.join(MEM, '.headless-pending.json')
+
+// Conversation rotation (UX red-team 2026-08-04 F3): --resume on every
+// recycle means the conversation would otherwise grow forever -- slower
+// replies, slower boots, climbing cost, and a 12h boot-greeting turn
+// accumulating in one endless thread. `bornTs` is the CONVERSATION's birth
+// (preserved across resumes; `ts` is just the last process start and
+// refreshes every boot, so it cannot express age). Past the ceiling we
+// rotate to a fresh session -- checkpoint files are the continuity bridge,
+// exactly as they were for the pre-headless 12h recycle.
+const MAX_CONVO_AGE_MS = (Number(process.env.SCHEHERAZADE_MAX_CONVO_HOURS) || 24) * 3600 * 1000
+
+// Stranded-message redelivery (UX red-team 2026-08-04 F4): a recycle can
+// land mid-turn -- the user's message reached claude's stdin (chat shows
+// "Read") but the answer died with the process, and a --resume does NOT
+// restart the turn. The lane keeps a FIFO of user events written to stdin
+// that have not yet been paid for by a `result` event; whatever is left at
+// boot gets re-injected once (redelivered:true entries are never re-sent a
+// second time -- one retry, no loops).
+function readPending() {
+  try {
+    const v = JSON.parse(fs.readFileSync(pendingFile(), 'utf8'))
+    return Array.isArray(v) ? v : []
+  } catch { return [] }
+}
+function writePending(list) {
+  try {
+    if (!list.length) {
+      try { fs.unlinkSync(pendingFile()) } catch { /* already gone */ }
+      return
+    }
+    writeJsonAtomic(pendingFile(), list.slice(-20), 0o600)
+  } catch (err) {
+    log(`pending write failed (a mid-turn recycle could strand this message): ${err.message}`)
+  }
+}
+
+// Stale-resume recovery (red-team 2026-08-04 #2): a session id whose
+// transcript no longer exists could make `claude -p --resume <id>` die
+// before ever emitting init, forever, and the generic crash-loop marker
+// would misdiagnose it as a bad provider key. Rule: two consecutive
+// no-init exits under the SAME resume id -> abandon the id (next boot is
+// fresh). A successful init clears the count. tmp+rename like every other
+// marker; any read error counts as "no strikes" (never blocks a boot).
+function recordExitForResume({ sawInit, resumeId }) {
+  if (sawInit) {
+    try { fs.unlinkSync(strikesFile()) } catch { /* none recorded */ }
+    return
+  }
+  if (!resumeId) return
+  let strikes = 0
+  try {
+    const v = JSON.parse(fs.readFileSync(strikesFile(), 'utf8'))
+    if (v && v.resumeId === resumeId) strikes = Number(v.strikes) || 0
+  } catch { /* fresh count */ }
+  strikes += 1
+  if (strikes >= 2) {
+    log(`resume id ${resumeId} died before init ${strikes} times -- abandoning it; next boot starts a FRESH session (old conversation stays on disk, it is just no longer auto-resumed)`)
+    try { fs.unlinkSync(sessionFile()) } catch { /* already gone */ }
+    try { fs.unlinkSync(strikesFile()) } catch { /* already gone */ }
+    return
+  }
+  try {
+    writeJsonAtomic(strikesFile(), { resumeId, strikes }, 0o600)
+  } catch (err) {
+    log(`strikes write failed (worst case: one extra resume attempt): ${err.message}`)
+  }
+}
 
 function writeJsonAtomic(file, value, mode) {
   const tmp = `${file}.tmp`
@@ -62,10 +131,11 @@ function writeJsonAtomic(file, value, mode) {
   fs.renameSync(tmp, file)
 }
 
-function readPriorSessionId() {
+function readPriorSession() {
   try {
     const v = JSON.parse(fs.readFileSync(sessionFile(), 'utf8'))
-    return typeof v.sessionId === 'string' && v.sessionId ? v.sessionId : null
+    if (typeof v.sessionId !== 'string' || !v.sessionId) return null
+    return v
   } catch {
     return null
   }
@@ -119,7 +189,14 @@ function main() {
     log('FATAL: MEM and MODEL env vars are required (run.sh exports both)')
     process.exit(78) // EX_CONFIG
   }
-  const resumeId = readPriorSessionId()
+  const prior = readPriorSession()
+  let resumeId = prior ? prior.sessionId : null
+  const priorBornTs = prior && Number(prior.bornTs) ? Number(prior.bornTs) : null
+  if (resumeId && priorBornTs && Date.now() - priorBornTs > MAX_CONVO_AGE_MS) {
+    const ageH = Math.round((Date.now() - priorBornTs) / 3600_000)
+    log(`conversation is ~${ageH}h old (ceiling ${Math.round(MAX_CONVO_AGE_MS / 3600_000)}h) -- rotating to a FRESH session; checkpoint files carry continuity`)
+    resumeId = null
+  }
   const args = buildArgs({
     model: MODEL,
     systemPromptFile: SYSTEM_PROMPT_FILE && fs.existsSync(SYSTEM_PROMPT_FILE) ? SYSTEM_PROMPT_FILE : null,
@@ -138,6 +215,28 @@ function main() {
   let childExited = false
   let sawInit = false
 
+  // Redeliver messages stranded by a mid-turn recycle (F4). Runs before the
+  // ingest server exists, so these precede any new inbound POST in stdin
+  // order. Entries already redelivered once are dropped (no retry loops),
+  // as is anything older than 48h (stale beyond usefulness).
+  {
+    const stranded = readPending().filter((ev) => !ev.redelivered && Date.now() - (Number(ev.ts) || 0) < 48 * 3600_000)
+    writePending(stranded.map((ev) => ({ ...ev, redelivered: true })))
+    if (stranded.length) {
+      log(`re-delivering ${stranded.length} message(s) stranded by the previous recycle`)
+      for (const ev of stranded) {
+        try {
+          child.stdin.write(renderUserEvent({
+            content: `${ev.content}\n[redelivered: the previous agent process was recycled mid-turn before this message was answered. If a complete reply was already sent, do not repeat it -- otherwise answer now.]`,
+            meta: ev.meta || {},
+          }))
+        } catch (err) {
+          log(`redelivery write failed: ${err.message}`)
+        }
+      }
+    }
+  }
+
   child.on('error', (err) => {
     log(`spawn failed: ${err.message}`)
     process.exit(127)
@@ -155,7 +254,10 @@ function main() {
       sawInit = true
       if (typeof e.session_id === 'string' && e.session_id) {
         try {
-          writeJsonAtomic(sessionFile(), { sessionId: e.session_id, ts: Date.now() }, 0o600)
+          // bornTs survives resumes (conversation birth); a fresh session --
+          // no resume, or rotation above -- starts a new clock.
+          const bornTs = resumeId && priorBornTs ? priorBornTs : Date.now()
+          writeJsonAtomic(sessionFile(), { sessionId: e.session_id, ts: Date.now(), bornTs }, 0o600)
         } catch (err) {
           log(`session file write failed (resume degrades to fresh next boot): ${err.message}`)
         }
@@ -163,6 +265,13 @@ function main() {
       log(`init: model=${e.model} session=${e.session_id} mcp=${JSON.stringify((e.mcp_servers || []).map((s) => `${s.name}:${s.status}`))}`)
     } else if (e.type === 'result') {
       log(`turn result: ${e.subtype}${e.is_error ? ' (error)' : ''} turns=${e.num_turns}`)
+      // One result pays for the oldest pending user event (FIFO). If -p
+      // ever batches queued messages into one turn instead, leftovers get
+      // one guarded redelivery at next boot -- the redelivery note tells
+      // the agent not to answer twice, so the failure mode is a nudge, not
+      // a double reply. (Queued-turn semantics are design-0020 open q.1.)
+      const p = readPending()
+      if (p.length) writePending(p.slice(1))
     } else if (e.type === 'assistant') {
       for (const c of (e.message && e.message.content) || []) {
         if (c.type === 'tool_use') log(`tool: ${c.name}`)
@@ -183,14 +292,32 @@ function main() {
       res.writeHead(code, { 'content-type': 'application/json' })
       res.end(JSON.stringify(obj))
     }
+    // Host check before anything else, mirroring channel-local.mjs:447 --
+    // a DNS-rebinding target resolves to 127.0.0.1 but arrives with a
+    // foreign Host header. Token auth already blocks the actual attack;
+    // this keeps the two loopback servers on one security posture
+    // (red-team 2026-08-04 #5).
+    const host = String(req.headers.host || '')
+    if (!/^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(host)) {
+      return send(403, { error: 'bad host' })
+    }
     if (req.method !== 'POST' || req.url !== '/inbound') return send(404, { error: 'not found' })
     if (!tokenOk(req.headers['x-ingest-token'])) return send(403, { error: 'bad token' })
     let body = ''
+    let tooLarge = false
     req.on('data', (chunk) => {
       body += chunk
-      if (body.length > 256 * 1024) { req.destroy(); }
+      if (body.length > 256 * 1024 && !tooLarge) {
+        // Answer with a real 413 BEFORE dropping the socket -- a bare
+        // req.destroy() surfaced caller-side as a generic 'fetch failed',
+        // indistinguishable from a dead lane (red-team 2026-08-04 #4).
+        tooLarge = true
+        send(413, { error: 'too large' })
+        req.destroy()
+      }
     })
     req.on('end', () => {
+      if (tooLarge) return // 413 already sent
       let payload
       try { payload = JSON.parse(body) } catch { return send(400, { error: 'invalid json' }) }
       const content = String(payload.content == null ? '' : payload.content).trim()
@@ -202,6 +329,7 @@ function main() {
         log(`stdin write failed: ${err.message}`)
         return send(503, { error: 'stdin write failed' })
       }
+      writePending([...readPending(), { content, meta: payload.meta || {}, ts: Date.now() }])
       send(200, { ok: true })
     })
   })
@@ -209,7 +337,7 @@ function main() {
   server.listen(0, '127.0.0.1', () => {
     const port = server.address().port
     try {
-      writeJsonAtomic(endpointFile(), { port, token }, 0o600)
+      writeJsonAtomic(endpointFile(), { port, token, pid: process.pid }, 0o600)
       log(`ingest endpoint on 127.0.0.1:${port} (token file ${path.basename(endpointFile())})`)
     } catch (err) {
       // Without the endpoint file backends fall back to the MCP notification,
@@ -234,6 +362,7 @@ function main() {
   child.on('exit', (code, signal) => {
     childExited = true
     try { fs.unlinkSync(endpointFile()) } catch { /* never written or already gone */ }
+    recordExitForResume({ sawInit, resumeId })
     log(`claude exited code=${code} signal=${signal} sawInit=${sawInit}`)
     server.close(() => process.exit(code == null ? 1 : code))
     // If close callbacks hang (open keep-alive sockets), don't wait forever.

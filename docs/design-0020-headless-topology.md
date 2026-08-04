@@ -108,6 +108,53 @@ main.cjs ──spawns──> claude -p --input-format stream-json
    a later diet) or remove in this branch. Leaning: keep until the topology
    has soaked.
 
+### Resolved with receipts
+
+- **Fresh-dir trust/theme gates (red-team tech #3): ABSENT in -p.** The
+  2026-08-04 subscription-policy probe doubled as the receipt: brand-new
+  `CLAUDE_CONFIG_DIR` (never trusted, never themed) + `ANTHROPIC_API_KEY`
+  set + mock `ANTHROPIC_BASE_URL` (`tmp_scratch/headless-spike/
+  mock-anthropic.mjs`, server-side request log) → `claude -p` on CLI
+  2.1.221 completed end-to-end, exit 0, no dialog of any class. First-boot
+  onboarding installs therefore do not need a pre-trust step for -p.
+- **BYOK first-key approval (UX red-team F2): NO GATE in -p.** Same probe,
+  same receipt file (`/tmp/sch-mock-anthropic.log`): the key was
+  `sk-ant-dummy-key-for-probe`, never approved by any interactive session
+  (fresh config dir ⇒ empty `customApiKeyResponses`), and the mock server
+  logged `POST /v1/messages auth=sk-ant-dummy-key-for-probe` — the CLI sent
+  the unapproved env key straight to the API. The "Do you want to use this
+  API key?" consent is an interactive-TUI-lane behavior; `-p` skips it. The
+  2026-07-05 expect freeze class is therefore dead at the root, not merely
+  routed around.
+
+### Red-team fixes (2026-08-04, tech + UX passes)
+
+- **Poisoned resume id** (UX F1 / tech #2): 2 consecutive no-init exits
+  under the same resume id → session file abandoned, fresh boot.
+  (`.headless-resume-strikes.json`, lane `recordExitForResume`.)
+- **Conversation rotation** (UX F3): `bornTs` in the session file tracks
+  conversation birth across resumes; past 24h (env
+  `SCHEHERAZADE_MAX_CONVO_HOURS`) the lane rotates fresh — checkpoint files
+  are the bridge, same as the old 12h-recycle contract. **Ceiling default
+  is a product decision — flag at QA.**
+- **Mid-turn recycle strands a message** (UX F4): `.headless-pending.json`
+  FIFO of stdin-written user events not yet paid by a `result`; leftovers
+  redelivered ONCE at next boot with a no-double-reply note.
+- **Stale endpoint file after SIGKILL** (UX F5 / tech stale-file): endpoint
+  file carries the lane pid; notifier probes it (`kill(pid,0)`) and treats
+  dead-pid as no-endpoint → MCP fallback. Live-pid + failed POST still
+  throws (no black hole).
+- **Lost inbound receipts** (tech #1 / UX F7): Discord clears 🤔 + reacts
+  ⚠️ + replies a re-send ask on notify failure; Slack posts the same
+  receipt (it acks before delivery, Slack never redelivers); the notifier
+  comment no longer claims a universal retry path that only telegram has.
+- **Ingest hygiene** (tech #4/#5): real 413 before destroy; Host-header
+  check mirroring channel-local.
+- Deferred, recorded: boot-announcer wording under resume (UX F8, minor —
+  "재기동 #N" still reads as amnesiac restart; revisit after soak), drain-
+  on-TERM (subsumed by F4 redelivery), orphaned-leaf pre-.mcp.json reap
+  (tech #6, moot for product topology).
+
 ## Rollout
 
 1. Implement behind the branch; all 55 suite files must stay green.

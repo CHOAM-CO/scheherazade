@@ -408,7 +408,16 @@ socketModeClient.on('message', async ({ event, ack }) => {
   try {
     await handleInboundMessage(event)
   } catch (err) {
-    log('message handler error:', err.message)
+    // We ack BEFORE handling (Slack punishes slow acks with redelivery
+    // storms), so a failure here means Slack will never redeliver and the
+    // message is GONE for the agent (red-team 2026-08-04 #1). Post a
+    // visible failure receipt so the sender knows to re-send -- best-effort.
+    log('message handler error, inbound message lost for the agent:', err.message)
+    if (event?.channel) {
+      slackWeb.chat
+        .postMessage({ channel: event.channel, text: '메시지 전달에 실패했어요 (에이전트 재시작 중일 수 있어요). 잠시 후 다시 보내주세요.' })
+        .catch((e) => log('failure receipt post failed:', e.message))
+    }
   }
 })
 

@@ -505,6 +505,17 @@ export function createInboundNotifier({ dataHome, mcpNotify, log = console.log, 
       return false // no endpoint file -> not the headless topology (or lane not up yet)
     }
     if (!ep || !ep.port || !ep.token) return false
+    // Liveness gate (red-team 2026-08-04 #2 / UX F5): the lane unlinks this
+    // file on exit, but SIGKILL / power loss skips that handler and the stale
+    // file would poison the ATTACH topology forever (POST fails -> throw ->
+    // no MCP fallback -> every message "fails" even though the interactive
+    // session would receive the notification fine). The endpoint file carries
+    // the lane's pid; if that pid is gone, treat the file as absent and take
+    // the MCP-fallback branch. A LIVE-but-hiccuping lane still throws below,
+    // which is the correct no-black-hole behavior for headless.
+    if (ep.pid) {
+      try { process.kill(ep.pid, 0) } catch { return false }
+    }
     const res = await fetchFn(`http://127.0.0.1:${ep.port}/inbound`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-ingest-token': ep.token },
@@ -518,11 +529,15 @@ export function createInboundNotifier({ dataHome, mcpNotify, log = console.log, 
     try {
       if (await postToLane(params)) return
     } catch (err) {
-      // Endpoint file existed but the lane didn't answer: headless topology
-      // mid-restart. Do NOT silently fall back to the MCP notification --
-      // in -p mode it is a black hole that would swallow the message while
-      // looking delivered. Throw so the backend's existing retry path runs.
-      log(`[inbound-notifier] lane POST failed, message NOT delivered (backend retry path owns it): ${err.message}`)
+      // Endpoint file existed AND its pid is alive, but the POST failed:
+      // headless topology mid-hiccup. Do NOT silently fall back to the MCP
+      // notification -- in -p mode it is a black hole that would swallow the
+      // message while looking delivered. Throw so the CALLER decides what
+      // failure looks like. NOTE the retry reality per backend: telegram
+      // genuinely redelivers (offset not advanced); discord (push) and slack
+      // (acks before delivery) do NOT -- their MessageCreate/event handlers
+      // must catch this and surface a user-visible failure receipt.
+      log(`[inbound-notifier] lane POST failed, message NOT delivered: ${err.message}`)
       throw err
     }
     await mcpNotify(params)

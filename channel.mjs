@@ -711,10 +711,22 @@ discord.on(Events.MessageCreate, async (message) => {
 
     const sender = message.member?.displayName || message.author.username
 
-    await notifyInbound({
+    try {
+      await notifyInbound({
         content,
         meta: { sender, channelId: message.channelId, authorId: message.author.id, timestamp: localNow() },
       })
+    } catch (err) {
+      // Discord is push-based: a failed notify means this message is GONE
+      // unless the sender re-sends it. Leaving the 🤔 reaction up would lie
+      // ("agent is thinking") about a message that never reached the agent
+      // (red-team 2026-08-04 #1). Clear it and give the sender a visible,
+      // actionable receipt -- best-effort, never rethrow past here.
+      log('inbound delivery failed, message lost for the agent:', err.message)
+      clearThinking(message.channelId).catch(() => {})
+      message.react('⚠️').catch(() => {})
+      message.reply('메시지 전달에 실패했어요 (에이전트 재시작 중일 수 있어요). 잠시 후 다시 보내주세요.').catch(() => {})
+    }
   } catch (err) {
     log('MessageCreate handler error:', err.message)
   }
