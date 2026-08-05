@@ -223,6 +223,23 @@ try {
   // sudo/password without the askpass token: the fail-closed 403 branch --
   // exercises the LIVE callCtx.getAskpassToken() getter end to end.
   await hit('G7 GET /api/sudo/password (no askpass token)', '/api/sudo/password', 403)
+  // REGRESSION (2026-08-05, found live by Mino): the 08-04 token-on-all-GETs
+  // hardening swept /api/sudo/password into the onboard-token gate — but the
+  // askpass helper runs in the AGENT's process tree and can never hold the
+  // per-launch onboard token, so every `sudo -A` died at the gate with
+  // "missing or invalid onboard token". The route must be reachable with
+  // ONLY its own per-boot askpass token: on a fresh home that means the
+  // route-level "sudo disabled in settings" refusal, NOT the gate's text.
+  {
+    const ep = JSON.parse(fs.readFileSync(path.join(process.env.AGENT_DATA_HOME, '.sudo-askpass-endpoint.json'), 'utf8'))
+    const r1 = await fetch(`${base}/api/sudo/password`, { headers: { 'x-askpass-token': ep.token } }) // NO onboard token on purpose
+    chk('G7 askpass token alone reaches the route (no onboard token)', r1.status === 403, `got ${r1.status}`)
+    chk('G7 refusal is the ROUTE\'s (toggle off), not the gate\'s', (await r1.text()) === 'sudo disabled in settings')
+    const r2 = await fetch(`${base}/api/sudo/password`, { headers: { 'x-askpass-token': 'deadbeef' } })
+    chk('G7 wrong askpass token refused by the route', r2.status === 403 && (await r2.text()) === 'forbidden')
+    const r3 = await fetch(`${base}/api/sudo/config`) // control: other /api GETs stay onboard-gated
+    chk('G7 other /api GETs still demand the onboard token', r3.status === 403 && (await r3.text()).includes('onboard token'))
+  }
   const tp = await hit('G7 GET /api/topology', '/api/topology', 200)
   const tpBody = await tp.json()
   chk('G7 topology defaults to spawn and carries the bootstrap cmd', tpBody.topology === 'spawn' && typeof tpBody.bootstrapCmd === 'string', JSON.stringify(tpBody).slice(0, 200))

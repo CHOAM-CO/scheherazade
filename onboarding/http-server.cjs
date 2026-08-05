@@ -2507,7 +2507,17 @@ function createOnboardingServer(onOnboardingComplete, agentControls) {
         // cannot attach a header to a navigation, and the token rides
         // INTO the page via serveStatic's <meta> injection.
         const isMutating = req.method === 'POST' || req.method === 'DELETE'
-        if (isMutating || pathname.startsWith('/api/')) {
+        // /api/sudo/password is the ONE /api GET whose caller can never hold
+        // the onboard token: sudo -A runs the askpass helper inside the
+        // AGENT's process tree, not a served page — the per-launch token
+        // never reaches it. It authenticates with its OWN per-boot token
+        // (32-byte random, 0600 endpoint file, checked fail-closed in the
+        // route body). The 2026-08-04 token-on-all-GETs hardening swept this
+        // route in and silently killed every `sudo -A` with a gate 403 the
+        // helper's curl -f turned into exit 22 (found live 2026-08-05, Mino
+        // "sudo + 비밀번호 앱에서 에이전트한테 제대로 못 넘겨주는것같은데").
+        const isAskpassFetch = req.method === 'GET' && pathname === '/api/sudo/password'
+        if ((isMutating || pathname.startsWith('/api/')) && !isAskpassFetch) {
           const origin = req.headers.origin
           if (origin) {
             const originHost = safeOriginHost(origin)
