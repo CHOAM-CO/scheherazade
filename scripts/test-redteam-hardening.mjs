@@ -83,8 +83,9 @@ console.log('\n2. rumination deny in channel A does not open a pass for channel 
   assert(cross.denied, "channel B within the window: STILL denied (the old global marker would have allowed this)")
   const retry = call('channel-A')
   assert(!retry.denied && retry.status === 0, 'retry in channel A: allowed (scoped marker consumed)')
-  const markers = readdirSync(path.join(home, '.gates')).filter((f) => f.startsWith('rumination.last_deny.'))
-  assert(markers.length >= 1 && markers.every((f) => /^rumination\.last_deny\.[0-9a-f]{16}$/.test(f)), 'markers are scoped files, not the legacy global')
+  // v1.3 scheme: channel hash in the filename, fired classes in the content.
+  const markers = readdirSync(path.join(home, '.gates')).filter((f) => f.startsWith('rumination.deny.'))
+  assert(markers.length >= 1 && markers.every((f) => /^rumination\.deny\.[0-9a-f]{16}$/.test(f)), 'markers are channel-scoped files, not the legacy global')
 }
 
 // ── P0-1: corrections injection bounds (functional, hook + fixture db) ────

@@ -41,6 +41,27 @@
 // fail again between bounce and retry don't re-bounce the retry — and rows
 // are judged exactly once per reply, never re-litigated.
 //
+// LENGTH BRANCH (v1.3, 2026-08-05 — Mino's Terra T2M session: the agent
+// pasted a ~5KB subagent report wholesale into reply; "서브에이전트 아웃을
+// 메세지로 뱉는것같디구"): CLASS_D bounces a reply whose text exceeds
+// MAX_REPLY_CHARS. Same grown-inside-this-gate reasoning as the evidence
+// branch — one blocking gate total keeps the consume design sound. One
+// bounce then pass is load-bearing here: "my person explicitly asked for
+// the full text" is legitimate and undetectable, so a deliberate resend
+// must go through. The system prompt carries the matching norm (subagent
+// output is working material, reply = your own conclusion).
+//
+// MARKER v2 (v1.3): the P0-3 marker scoped per (channel × classes) in the
+// FILENAME, which double-bounces the honest path: bounce on A+D → agent
+// summarizes → retry fires A alone → different scope key → bounced again.
+// Now the filename scopes per CHANNEL only (P0-3's actual fix — cross-
+// channel isolation — is preserved) and the fired classes live in the
+// marker CONTENT: a fresh retry passes iff its classes are a SUBSET of the
+// marked ones (every violation being resent already had its bounce beat).
+// A fresh retry with a NEW class bounces again and the marker becomes the
+// union. Old-scheme marker files are deleted on sight, same as the legacy
+// global.
+//
 // FAIL-LOUD (deliberately the ONE gate in this pack that does NOT fail-open):
 // every other gate in this pack is advisory and swallows its own errors
 // silently by design. This gate is the only BLOCKING gate, so a bug here
@@ -48,7 +69,7 @@
 // internal error blocks the reply AND writes a clear, loud diagnostic to
 // stderr (exit code 2), rather than waving the message through.
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync, unlinkSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync, unlinkSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { createHash } from 'node:crypto'
@@ -63,15 +84,25 @@ if (process.env.SCHEHERAZADE_RUMINATION_GATE === '0') process.exit(0)
 // AGENT_DATA_HOME env override, else ~/Documents/Scheherazade.
 const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', 'Scheherazade')
 const CACHE_DIR = path.join(DATA_HOME, '.gates')
-// Marker is SCOPED per (channelId × claim classes) since 2026-08-05
-// (red-team P0-3): the old single global file meant a deny in channel A
-// opened a 10-minute pass for a completely different claim in channel B —
-// cross-channel bypass. Content is deliberately NOT part of the scope: the
-// design contract is "resend the same or a CORRECTED message", so a content
-// hash would bounce exactly the corrected retry the window exists for.
-// The legacy unscoped marker is deleted on sight (one-time migration).
+// Marker scope history: global (pre-P0-3) → per (channel × classes) in the
+// filename (P0-3, 2026-08-05 AM) → per channel in the filename with classes
+// in the CONTENT (v1.3, same day — see MARKER v2 header note). Message
+// content is deliberately NOT part of the scope: the design contract is
+// "resend the same or a CORRECTED message", so a content hash would bounce
+// exactly the corrected retry the window exists for. Both older marker
+// schemes are deleted on sight (one-time migrations).
 const LEGACY_MARKER_PATH = path.join(CACHE_DIR, 'rumination.last_deny')
+const LEGACY_SCOPED_PREFIX = 'rumination.last_deny.' // P0-3 scheme (classes in filename)
+const MARKER_PREFIX = 'rumination.deny.' // v1.3 scheme (channel in filename, classes in content)
 const BOUNCE_WINDOW_MS = 10 * 60 * 1000 // 10 minutes
+
+// CLASS_D threshold. A chat reply longer than this is almost always pasted
+// working material (subagent report, command output, file body), not talk.
+// Env-tunable; 0 disables the length branch entirely.
+const MAX_REPLY_CHARS = (() => {
+  const n = Number(process.env.SCHEHERAZADE_REPLY_MAX_CHARS)
+  return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 1500
+})()
 
 // Evidence branch state (design 0017): ledger written by
 // post-bash-receipt-ledger.mjs; cursor stamped HERE on every allowed reply.
@@ -97,6 +128,8 @@ const GATE_COPY = {
     failedRows.slice(0, 3).map((r) => `  - \`${r.cmd}\` (${r.marker})`).join('\n') +
     (failedRows.length > 3 ? `\n  - 외 ${failedRows.length - 3}개` : '') +
     '\n이 실패가 지금 보내려는 답장에 반영되어 있나요. 반영되어 있다면 그대로 다시 보내면 통과됩니다. 아니라면 실패를 확인하고 답장에 담아 주세요.',
+  lengthClaim: (len, max) =>
+    `지금 보내려는 메시지가 ${len}자입니다 (기준 ${max}자). 작업 중간 산출물 — 서브에이전트 보고서, 명령 출력, 파일 내용 — 을 그대로 붙여넣은 것은 아닌지 확인해 주세요. 결론만 몇 문장으로 요약해 보내는 것이 기본입니다. 사람이 전체 내용을 요청했다면 지금 그대로 다시 보내면 통과됩니다.`,
 }
 
 // CLASS_A: completion/verification claims. Curated action-verb stems, not a
@@ -228,49 +261,84 @@ try {
   const failedRows = freshRows.filter((r) => r.failed === true)
   const hitC = failedRows.length > 0
 
-  if (!hitA && !hitB && !hitC) stampCursorAndAllow()
+  // Length branch (v1.3): raw text length, whole message. Deliberately no
+  // code-block or URL exemption — pasted working material IS mostly code
+  // blocks, and the one-bounce pass already covers every legitimate case.
+  const hitD = MAX_REPLY_CHARS > 0 && text.length > MAX_REPLY_CHARS
 
-  // Scope key: which channel this reply targets × which claim classes fired.
-  // See the LEGACY_MARKER_PATH note up top for why content is excluded.
+  if (!hitA && !hitB && !hitC && !hitD) stampCursorAndAllow()
+
+  const firedClasses = `${hitA ? 'A' : ''}${hitB ? 'B' : ''}${hitC ? 'C' : ''}${hitD ? 'D' : ''}`
+
+  // Marker filename scopes per CHANNEL (P0-3 cross-channel isolation);
+  // fired classes live in the content (v1.3 subset-consume — see header).
   const channelScope = typeof ti.channelId === 'string' && ti.channelId ? ti.channelId : 'current'
-  const scopeKey = createHash('sha256')
-    .update(`${channelScope}|${hitA ? 'A' : ''}${hitB ? 'B' : ''}${hitC ? 'C' : ''}`)
-    .digest('hex')
-    .slice(0, 16)
-  const markerPath = path.join(CACHE_DIR, `rumination.last_deny.${scopeKey}`)
-  // One-time migration: a pre-scoping global marker is deleted, never
-  // honored — honoring it would BE the cross-channel bypass being removed.
+  const scopeKey = createHash('sha256').update(channelScope).digest('hex').slice(0, 16)
+  const markerPath = path.join(CACHE_DIR, `${MARKER_PREFIX}${scopeKey}`)
+  // One-time migrations: markers from both older schemes are deleted, never
+  // honored — the global one would BE the cross-channel bypass P0-3 removed,
+  // and the classes-in-filename ones can't be read under the new scope rule.
   if (existsSync(LEGACY_MARKER_PATH)) {
     try { unlinkSync(LEGACY_MARKER_PATH) } catch { /* best effort */ }
   }
+  try {
+    for (const f of readdirSync(CACHE_DIR)) {
+      if (f.startsWith(LEGACY_SCOPED_PREFIX)) {
+        try { unlinkSync(path.join(CACHE_DIR, f)) } catch { /* best effort */ }
+      }
+    }
+  } catch { /* CACHE_DIR may not exist yet */ }
 
-  // ── One-bounce state check ──────────────────────────────────────────────
+  // ── One-bounce state check (subset-consume) ─────────────────────────────
   if (existsSync(markerPath)) {
     let age
+    let markedClasses
     try {
       age = Date.now() - statSync(markerPath).mtimeMs
+      markedClasses = readFileSync(markerPath, 'utf8').trim()
     } catch (e) {
-      failLoud('marker stat', e)
+      failLoud('marker stat/read', e)
     }
     if (age < BOUNCE_WINDOW_MS) {
-      // This is the retry inside the grace window — consume the marker now
-      // (synchronous consume, see file-header note) and allow. Cursor stamps
-      // here too: rows created BETWEEN bounce and retry (the agent re-running
-      // the failed command to check — often failing again) are part of the
-      // judged evidence, not grounds to re-bounce the retry.
+      if ([...firedClasses].every((c) => markedClasses.includes(c))) {
+        // Retry inside the grace window and every fired class already had
+        // its bounce beat — consume the marker now (synchronous consume,
+        // see file-header note) and allow. Cursor stamps here too: rows
+        // created BETWEEN bounce and retry (the agent re-running the failed
+        // command to check — often failing again) are part of the judged
+        // evidence, not grounds to re-bounce the retry.
+        try {
+          unlinkSync(markerPath)
+        } catch (e) {
+          failLoud('marker consume (unlink)', e)
+        }
+        stampCursorAndAllow()
+      }
+      // A NEW class fired on the retry — bounce again; the marker below
+      // becomes the union so the next honest retry passes as a subset.
+      const union = [...new Set([...markedClasses, ...firedClasses])].sort().join('')
+      try {
+        writeFileSync(markerPath, union, 'utf8')
+      } catch (e) {
+        failLoud('marker union write', e)
+      }
+    } else {
+      // Stale marker (past the window) — the old bounce beat expired. Drop
+      // it so the write below re-arms a FRESH marker with this attempt's
+      // classes; leaving the stale file in place would bounce forever.
       try {
         unlinkSync(markerPath)
       } catch (e) {
-        failLoud('marker consume (unlink)', e)
+        failLoud('stale marker unlink', e)
       }
-      stampCursorAndAllow()
     }
-    // Stale marker (past the window) — fall through and bounce again.
   }
 
   try {
     mkdirSync(CACHE_DIR, { recursive: true })
-    writeFileSync(markerPath, String(Date.now()), 'utf8')
+    // Never shrink a fresh union written above back down to this attempt's
+    // classes — writeFileSync would clobber it, so skip when just unioned.
+    if (!existsSync(markerPath)) writeFileSync(markerPath, firedClasses, 'utf8')
   } catch (e) {
     failLoud('marker write', e)
   }
@@ -281,6 +349,7 @@ try {
   if (hitA) lines.push(GATE_COPY.completionClaim)
   if (hitB) lines.push(GATE_COPY.absenceClaim)
   if (hitC) lines.push(GATE_COPY.evidenceClaim(failedRows, freshRows.length))
+  if (hitD) lines.push(GATE_COPY.lengthClaim(text.length, MAX_REPLY_CHARS))
   lines.push('', GATE_COPY.footer)
 
   deny(lines.join('\n'))
