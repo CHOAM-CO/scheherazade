@@ -8,8 +8,8 @@ description: Help your person connect Slack, Discord, or Telegram to this app. U
 Connecting a messenger is the single biggest setup hurdle. Your job is
 to hand your person exact, copy-pasteable artifacts and walk them through
 the platform screens. **Do not compose Slack manifests or scope lists
-from memory — use the ones below verbatim.** Every scope here maps to an
-API call this app actually makes; adding fewer breaks features, and a
+from memory — use the ones below verbatim.** The manifest is a
+production-proven superset: granting fewer scopes breaks features, and a
 missing scope is the #1 cause of "tokens look valid but the channel list
 never loads."
 
@@ -22,10 +22,15 @@ SWITCH to that channel — switching is what actually moves you there.
 What the app needs: a **bot token** (`xoxb-…`) with the right scopes,
 and an **app-level token** (`xapp-…`) with Socket Mode on.
 
-**The manifest below is served AS-IS.** The ONLY thing you may change is
-the two name fields (`name:` and `display_name:`) — swap "Scheherazade"
-for the agent's name if your person wants. Never add, remove, or reorder
-scopes/events; never retype it from memory; hand over the whole block.
+**The manifest below is served AS-IS.** The ONLY things you may change
+are the three display fields (`name:`, `description:`, `display_name:`)
+— swap them for the agent's name if your person wants. Never add,
+remove, or reorder scopes/events; never retype the block from memory;
+hand over the whole thing. This is a production-proven manifest
+(replaced a minimal one on 2026-08-05 after that one kept producing
+broken connections): it deliberately grants MORE than this app calls
+today, because a spare scope costs nothing and a missing one is the #1
+cause of "tokens look valid but nothing works."
 
 Steps to give your person:
 
@@ -35,33 +40,68 @@ Steps to give your person:
 ```yaml
 display_information:
   name: Scheherazade
+  description: Personal AI agent
+  background_color: "#5b8c30"
 features:
+  app_home:
+    home_tab_enabled: true
+    messages_tab_enabled: false
+    messages_tab_read_only_enabled: false
   bot_user:
     display_name: Scheherazade
     always_online: true
 oauth_config:
   scopes:
-    bot:
-      - chat:write
-      - channels:read
-      - groups:read
+    user:
       - channels:history
+      - im:history
+    bot:
+      - usergroups:write
+      - app_mentions:read
+      - assistant:write
+      - bookmarks:read
+      - bookmarks:write
+      - calls:read
+      - calls:write
+      - canvases:read
+      - canvases:write
+      - channels:history
+      - channels:join
+      - channels:read
+      - chat:write
+      - files:read
+      - files:write
       - groups:history
+      - groups:read
       - im:history
       - im:read
       - im:write
       - users:read
-      - files:write
+      - users:read.email
+      - users:write
+      - usergroups:read
+  pkce_enabled: false
 settings:
   event_subscriptions:
+    user_events:
+      - message.channels
+      - message.im
     bot_events:
+      - app_mention
+      - message.im
       - message.channels
       - message.groups
-      - message.im
   interactivity:
-    is_enabled: false
+    is_enabled: true
+  org_deploy_enabled: false
   socket_mode_enabled: true
+  token_rotation_enabled: false
+  is_mcp_enabled: false
 ```
+
+(The install screen will also ask to authorize a *user* token because
+of the `user:` scopes — that consent is expected; this app only ever
+uses the bot `xoxb` and app-level `xapp` tokens.)
 
 2. **Install App** to the workspace → copy the **Bot User OAuth Token**
    (`xoxb-…`).
@@ -74,14 +114,19 @@ settings:
 5. (Optional) To ALSO use a channel: invite the bot
    (`/invite @Scheherazade`), then use Load channels → pick → connect.
 
-Why each scope (so you can debug, not so you can re-derive):
-`chat:write` send · `channels:read`/`groups:read` list & info (this pair
-missing = "channel list never loads") · `channels:history`/
+What this app actually exercises (so you can debug, not so you can
+trim): `chat:write` send · `channels:read`/`groups:read` list & info
+(this pair missing = "channel list never loads") · `channels:history`/
 `groups:history` read channel messages · `im:history` + the `message.im`
 event = receive DMs (missing = the bot ignores DMs, the default surface)
 · `im:read`/`im:write` resolve & open the DM conversation · `users:read`
-sender display names · `files:write` file uploads · app token
-`connections:write` = Socket Mode transport.
+sender display names · `files:write` file uploads · the
+`message.channels`/`message.groups` events = home-channel mode hears
+plain messages (without them the channel surface is mention-only) · app
+token `connections:write` = Socket Mode transport. The remaining scopes
+in the manifest are the production superset — not called by this app
+today, kept so a future feature or a hand-rolled extension never hits
+`missing_scope`.
 
 If they already made an app by hand and connect fails: the fastest fix
 is App Manifest tab → replace with the YAML above → **Reinstall App**
