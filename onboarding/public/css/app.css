@@ -837,6 +837,17 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
   box-shadow: var(--edge-highlight), 0 4px 16px rgb(0 0 0 / 0.35);
 }
 .chat-jump-pill:hover { background: var(--panel-raised); border-color: var(--fg-dim); }
+/* aside's scroll-to-bottom affordance: the pill scales/fades instead of
+   popping (its own hidden class — the global .hidden is display:none and
+   can't animate) */
+.chat-jump-pill {
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+.chat-jump-pill.chat-pill-hidden {
+  transform: translateX(-50%) scale(0);
+  opacity: 0;
+  pointer-events: none;
+}
 /* activity fold: the labels seen during a wait, collapsed above the reply
    that ended it. Gray, demoted, closed by default (ChatGPT/Claude
    thinking-disclosure adapted to a poll-shaped app). */
@@ -848,15 +859,38 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
 }
 .chat-activity-fold summary { cursor: pointer; user-select: none; }
 .chat-activity-fold[open] summary { margin-bottom: 0.35rem; }
-/* opened: a timeline rail (aside reference, Mino 2026-08-05 19:41 — "서브
-   모듈로 작업중인 로그들 선택적으로 열어볼 수 있게"). One continuous
-   hairline down the left, each step hung off it. */
+/* opened: node-and-segment timeline (ported from aside's process rows —
+   icon gutter + a per-row w-px connector drawn from below one node to the
+   next, so the rail visibly threads THROUGH the steps instead of running
+   beside them). Node = small dot; segment = 1px line to the next node,
+   suppressed on the last row. */
 .chat-activity-fold .fold-line {
-  border-left: 1px solid var(--border-strong);
-  margin-left: 0.3rem;
-  padding: 0.16rem 0 0.16rem 0.95rem;
+  position: relative;
+  padding: 0.18rem 0 0.18rem 1.35rem;
   color: var(--fg-faint);
 }
+.chat-activity-fold .fold-line::before {
+  content: '';
+  position: absolute;
+  left: 0.3rem;
+  top: 0.55em;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--fg-faint);
+}
+.chat-activity-fold .fold-line::after {
+  content: '';
+  position: absolute;
+  left: calc(0.3rem + 2px);
+  top: calc(0.55em + 9px);
+  bottom: -0.45em;
+  width: 1px;
+  background: var(--border-strong);
+}
+.chat-activity-fold .fold-line:last-child::after { display: none; }
+/* live state: the summary reads as quiet working status */
+.chat-run-live summary { color: var(--fg-dim); }
 .chat-gap {
   align-self: center;
   color: var(--fg-dim);
@@ -1004,18 +1038,8 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
    stays visible inside the panel-raised pill on both themes and on the
    accent-colored user bubble. */
 .chat-react-bar .chat-copy-btn { color: var(--fg); }
-.chat-activity {
-  align-self: flex-start;
-  color: var(--fg-dim);
-  font-size: 0.8rem;
-  font-style: italic;
-  padding: 0.35rem var(--s4);
-  /* one line, hard: a long command label must never wrap into a paragraph */
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 78%;
-}
+/* (.chat-activity status line removed in P1 v2 — the live run timeline in
+   .chat-activity-fold.chat-run-live replaced it.) */
 .chat-typing {
   display: inline-flex;
   gap: 0.28rem;

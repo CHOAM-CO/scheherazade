@@ -58,10 +58,14 @@
   let channelUp = false // freshest signal: did the last /out poll succeed
   let typingEl = null
   let readEl = null
-  let activityEl = null // "⚙ running: ..." status line; latest activity wins
-  // P1 activity fold: labels accumulate here while a reply is owed, then
-  // collapse into a <details> above the reply that ends the wait.
+  // P1 v2 live run fold (aside port, Mino 2026-08-05 19:49 "어사이드 렌더링
+  // 잘 베끼셈"): while the agent works, steps render LIVE into an open
+  // <details> timeline; the reply that ends the wait collapses the SAME
+  // element into a "Worked for Ns" summary. (v1 showed one latest-wins
+  // status line and rebuilt the fold after the fact.)
   const MAX_FOLD_LINES = 60
+  let runEl = null // the live <details>; null when no run is on screen
+  let runSummary = null
   let activityLog = []
   let activityStart = 0
   let lastActivityAt = 0
@@ -87,8 +91,10 @@
   }
 
   const jumpBtn = $('ct-jump')
-  function showJump() { jumpBtn.classList.remove('hidden') }
-  function hideJump() { jumpBtn.classList.add('hidden') }
+  // Dedicated class (not the global display:none .hidden) so the pill can
+  // scale/fade in and out (aside's scroll-to-bottom affordance).
+  function showJump() { jumpBtn.classList.remove('chat-pill-hidden') }
+  function hideJump() { jumpBtn.classList.add('chat-pill-hidden') }
 
   function showEmpty() {
     if (emptyEl || msgCount) return
@@ -172,11 +178,10 @@
     clearEmpty()
     const stick = atBottom()
     const role = roleOf(m)
-    // P1 activity fold: the labels seen during the wait collapse into one
-    // quiet disclosure ABOVE the reply that ends it (thinking-disclosure
-    // pattern adapted to a poll-shaped app — we fold tool labels, not
-    // streamed thinking text).
-    if (role === 'agent') buildActivityFold()
+    // P1 v2: the reply that ends the wait collapses the live run timeline
+    // into its "Worked for Ns" resting state (aside behavior — we fold tool
+    // labels, not streamed thinking text).
+    if (role === 'agent') finalizeActivityFold()
     const el = document.createElement('div')
     el.className = `chat-msg chat-${role}`
     el.dataset.seq = m.seq
@@ -187,7 +192,6 @@
     // flow), per Mino's 2026-08-05 19:40 verdict on the labeled flat look
     // ("누가 누군지 잘 안보이잖아").
     for (const name of images) appendAttachmentImage(el, name, stick || role === 'user')
-    if (role === 'agent') clearActivity() // a reply supersedes the status line
     if (role === 'agent') attachReactBar(el, m.seq, shown)
     else { lastUserBubble = el; attachCopyBar(el, shown) }
     pane.appendChild(el)
@@ -274,55 +278,64 @@
     badge.textContent = m.emoji
   }
 
-  // One status line, not a bubble stream: a turn with thirty Bash calls
-  // must not bury the conversation under thirty rows. Latest label wins;
-  // an agent MESSAGE landing retires the line (the work spoke for itself),
-  // and updatePresence retires it when the awaiting state clears.
+  // Live run timeline (aside port): every step appends a row into an OPEN
+  // <details> while the agent works — the reader watches the run happen and
+  // can collapse it by hand (we set .open once at creation and never fight
+  // the user's toggle). The reply that ends the wait closes the same
+  // element into a "Worked for Ns" summary — no rebuild, the DOM the
+  // reader watched IS the record.
   function showActivity(m) {
     const stick = atBottom()
-    if (!activityEl) {
-      activityEl = document.createElement('div')
-      activityEl.className = 'chat-activity'
-      activityEl.setAttribute('aria-label', C.activityAria)
+    if (!runEl) {
+      runEl = document.createElement('details')
+      runEl.className = 'chat-activity-fold chat-run-live'
+      runEl.open = true
+      runEl.setAttribute('aria-label', C.activityAria)
+      runSummary = document.createElement('summary')
+      runEl.appendChild(runSummary)
+      activityStart = Date.now()
     }
-    activityEl.textContent = C.activity(m.text)
-    // P1 fold bookkeeping: display stays latest-wins (one quiet line), but
-    // every label is kept for the post-turn fold.
-    if (activityLog.length === 0) activityStart = Date.now()
     lastActivityAt = Date.now()
     activityLog.push(String(m.text || ''))
-    if (activityLog.length > MAX_FOLD_LINES) activityLog.shift()
-    pane.appendChild(activityEl) // appendChild moves it back to the end
+    if (activityLog.length > MAX_FOLD_LINES) {
+      activityLog.shift()
+      const first = runEl.querySelector('.fold-line')
+      if (first) first.remove()
+    }
+    const row = document.createElement('div')
+    row.className = 'fold-line'
+    row.textContent = String(m.text || '')
+    runEl.appendChild(row)
+    runSummary.textContent = C.activityRunning(activityLog.length)
+    pane.appendChild(runEl) // appendChild moves it back to the end
     if (stick) pane.scrollTop = pane.scrollHeight
   }
 
-  function clearActivity() {
-    if (!activityEl) return
-    activityEl.remove()
-    activityEl = null
+  // Collapse the live timeline into its resting summary. Staleness guard
+  // kept from v1: if the last step is older than the typing cap, the wait
+  // it belonged to died — sitting a dead run above a LATER reply would
+  // mislabel that turn, so it is dropped instead of closed.
+  function finalizeActivityFold() {
+    if (!runEl) { activityLog = []; return }
+    if (Date.now() - lastActivityAt > TYPING_SHOW_MAX_MS) { discardRun(); return }
+    closeRun()
   }
 
-  // Collapse the accumulated labels into a <details> row. Staleness guard:
-  // if the last activity is older than the typing cap, the wait it belonged
-  // to died without a reply — attaching its labels to a LATER reply would
-  // mislabel that turn, so drop them instead.
-  function buildActivityFold() {
-    if (!activityLog.length) return
-    if (Date.now() - lastActivityAt > TYPING_SHOW_MAX_MS) { activityLog = []; return }
-    const fold = document.createElement('details')
-    fold.className = 'chat-activity-fold'
-    fold.setAttribute('aria-label', C.activityFoldAria)
-    const summary = document.createElement('summary')
+  function closeRun() {
     const secs = Math.max(1, Math.round((lastActivityAt - activityStart) / 1000))
-    summary.textContent = C.activityFoldSummary(activityLog.length, secs)
-    fold.appendChild(summary)
-    for (const line of activityLog) {
-      const row = document.createElement('div')
-      row.className = 'fold-line'
-      row.textContent = line
-      fold.appendChild(row)
-    }
-    pane.appendChild(fold)
+    runSummary.textContent = C.activityFoldSummary(activityLog.length, secs)
+    runEl.setAttribute('aria-label', C.activityFoldAria)
+    runEl.open = false
+    runEl.classList.remove('chat-run-live')
+    runEl = null
+    runSummary = null
+    activityLog = []
+  }
+
+  function discardRun() {
+    if (runEl) runEl.remove()
+    runEl = null
+    runSummary = null
     activityLog = []
   }
 
@@ -351,11 +364,16 @@
   // dots when the channel dies mid-wait.
   function updatePresence() {
     const waiting = awaitingSince !== null && channelUp
-    // The activity line only makes sense while work is owed: once nothing
-    // is awaited (or the channel died), a lingering "running X" would be
-    // the same dressed-up-silence the typing cap exists to prevent.
-    if (!waiting) clearActivity()
-    const typing = waiting && (Date.now() - awaitingSince) < TYPING_SHOW_MAX_MS
+    // A live run only makes sense while work is owed. If the wait died
+    // (channel down, no reply ever) the open timeline would sit there as
+    // dressed-up silence — close it into its honest summary once the
+    // typing cap has passed. (A reply landing finalizes it earlier via
+    // finalizeActivityFold; this is the no-reply path only.)
+    if (!waiting && runEl && Date.now() - lastActivityAt > TYPING_SHOW_MAX_MS) closeRun()
+    // Typing dots only before the first step lands — once the live
+    // timeline is on screen, the run itself is the liveness signal
+    // (aside shows the working steps, not dots beside them).
+    const typing = waiting && !runEl && (Date.now() - awaitingSince) < TYPING_SHOW_MAX_MS
     if (typing) {
       if (!typingEl) {
         typingEl = document.createElement('div')

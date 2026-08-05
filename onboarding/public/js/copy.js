@@ -797,9 +797,11 @@ window.COPY = {
     // P1: jump-to-latest pill (auto-scroll stops when the reader scrolls
     // up; the pill is the way back instead of viewport-yanking).
     jumpToLatest: 'Jump to latest ↓',
-    // P1: activity fold — the labels seen while waiting collapse into one
-    // quiet disclosure above the reply that ends the wait.
-    activityFoldSummary: (n, secs) => `${n} step${n === 1 ? '' : 's'} · ${secs}s`,
+    // P1 v2: live run timeline (aside port) — steps render open while the
+    // agent works, then collapse into the "Worked for" summary when the
+    // reply lands.
+    activityRunning: (n) => `Working… · ${n} step${n === 1 ? '' : 's'}`,
+    activityFoldSummary: (n, secs) => `Worked for ${secs}s · ${n} step${n === 1 ? '' : 's'}`,
     activityFoldAria: 'What the agent did during this turn',
     sendFailed: "Couldn't send. Your message is still in the box — try again.",
     // DM interaction states (v0.0.34). `read` is honest by construction:
@@ -807,9 +809,6 @@ window.COPY = {
     // into the agent process, so the label never claims more than that.
     read: 'Read',
     typingAria: 'The agent is typing…',
-    // Activity feed (v0.0.41): what the agent is doing right now, from the
-    // PreToolUse hook. One line, latest wins.
-    activity: (label) => `⚙ ${label}`,
     activityAria: 'What the agent is working on right now',
     reactAria: (emoji) => `React with ${emoji}`,
     reactFailed: "Couldn't react — try again.",
