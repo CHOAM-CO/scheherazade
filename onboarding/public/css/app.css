@@ -15,8 +15,13 @@
 
 :root {
   --bg: #111214;
-  --panel: #1a1c1f;
-  --panel-raised: #212327;
+  /* Panels are TRANSLUCENT so the window's acrylic/vibrancy reads through
+     them — with opaque panels the glass only ever showed in page margins.
+     Composite over the body wash (frost-alpha 0.35): panel ≈ 0.71 dark,
+     raised ≈ 0.81. Calibrated against the win acrylic probe 2026-08-05
+     (alpha-sweep screenshot: 0.82 reads flat, 0.5-0.7 reads as glass). */
+  --panel: rgba(26, 28, 31, 0.55);
+  --panel-raised: rgba(33, 35, 39, 0.7);
   --border: #2c2f34;
   --fg: #eaeaea;
   --fg-dim: #9a9da3;
@@ -37,9 +42,12 @@
   --s5: 24px;
   --s6: 32px;
   /* frosted: how much of the OS blur shows through the page background.
-     0.82 = subtle; the window's solid fallback color makes this a no-op
-     when the platform effect is unavailable. */
-  --frost-alpha: 0.82;
+     0.82 shipped in 0.59/0.60 and read as FLAT even over working acrylic
+     (win probe 2026-08-05) — the wash was the curtain, not the effect.
+     0.35 keeps the page airy; panels add their own translucent layer on
+     top. The window's solid fallback color makes this a no-op when the
+     platform effect is unavailable. */
+  --frost-alpha: 0.35;
   /* One label column width for every settings row on every page. Defined
      once so the control column can never drift apart again (alignment pass
      2026-07-25). */
@@ -467,7 +475,9 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   position: sticky;
   top: 0;
   z-index: 5;
-  background: var(--bg);
+  /* Sticky: must mask content scrolling beneath it, so it stays nearly
+     opaque — 0.88 keeps a hint of the glass without ghosting text. */
+  background: rgba(17, 18, 20, 0.88);
   padding-top: 0.5rem;
   padding-bottom: 1rem;
   margin-bottom: 1.5rem;
