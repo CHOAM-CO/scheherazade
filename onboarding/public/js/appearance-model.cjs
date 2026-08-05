@@ -22,22 +22,33 @@
 ;(function (root) {
   'use strict'
 
-  const DEFAULTS = { glass: 60, fontSize: 13.5, fontFamily: 'system', accent: '#5b8dee', bg: '#000000', macMaterial: 'under-window' }
+  const DEFAULTS = { glass: 60, fontSize: 13.5, fontFamily: 'system', accent: '#5b8dee', bg: '#000000', fg: '#eaeaea', blur: 'soft' }
 
   // Quick-pick swatches beside the pickers. Presets are plain hex — a
   // swatch click and a picker pick flow through the SAME field.
   const PRESET_ACCENTS = ['#5b8dee', '#8b7bee', '#5fae7c', '#d9a15f', '#d9695f']
   const PRESET_BGS = ['#000000', '#0f1115', '#111214', '#14100f']
+  const PRESET_FGS = ['#eaeaea', '#ffffff', '#e6dfd2', '#cfd8e6']
 
   // Pre-v2 configs stored accent as a named key. Map, don't reject — a
   // saved file from 0.0.63 must not silently reset the user's color.
   const LEGACY_ACCENTS = { blue: '#5b8dee', violet: '#8b7bee', green: '#5fae7c', amber: '#d9a15f', rose: '#d9695f' }
 
-  // macOS-only: which NSVisualEffectView material backs the window. Tahoe
-  // (macOS 26) renders these differently and only eyes on the target
-  // machine can judge — the Appearance tab live-switches via
-  // win.setVibrancy. Ignored on Windows (acrylic) and Linux (flat).
-  const MAC_MATERIALS = ['under-window', 'sidebar', 'hud', 'fullscreen-ui', 'header', 'window', 'content']
+  // v3 (Mino 2026-08-05 16:12 "Background Tint / Background Blur << 이거
+  // 두개로 간단하게"): the 7-material switcher tested as "slider
+  // sensitivity" — differences too subtle to justify seven names. Folded
+  // into a 3-step Blur control. HONESTY CONSTRAINT: macOS does not expose a
+  // continuous blur radius — materials are the only granularity the OS
+  // gives — so Blur is discrete BY DESIGN, not laziness. A continuous
+  // slider here would be fake middle values.
+  //   off    → no platform effect (CSS goes solid — see cssVars)
+  //   soft   → under-window (the calibrated default backdrop)
+  //   strong → hud (the brightest/most-diffuse of the seven, max contrast
+  //            against soft per the 7-way probe + Mino's eyes 16:09)
+  const BLUR_LEVELS = ['off', 'soft', 'strong']
+  const MAC_BLUR_MATERIALS = { off: null, soft: 'under-window', strong: 'hud' }
+  // Legacy v2 configs stored macMaterial by name; map to the nearest step.
+  const LEGACY_MATERIAL_TO_BLUR = { hud: 'strong', 'fullscreen-ui': 'strong' } // every other material ≈ soft
 
   const FONTS = {
     system: '-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif',
@@ -80,13 +91,23 @@
   // fall back per-field (never throws — this also validates PUT bodies).
   function normalize(raw) {
     const src = raw && typeof raw === 'object' ? raw : {}
+    const blur = BLUR_LEVELS.includes(src.blur)
+      ? src.blur
+      : typeof src.macMaterial === 'string' // legacy v2 config migration
+        ? (LEGACY_MATERIAL_TO_BLUR[src.macMaterial] || 'soft')
+        : DEFAULTS.blur
     return {
       glass: Math.round(clampNum(src.glass, 0, 100, DEFAULTS.glass)),
       fontSize: Math.round(clampNum(src.fontSize, 12, 16, DEFAULTS.fontSize) * 2) / 2,
       fontFamily: Object.prototype.hasOwnProperty.call(FONTS, src.fontFamily) ? src.fontFamily : DEFAULTS.fontFamily,
       accent: parseHex(src.accent) || LEGACY_ACCENTS[src.accent] || DEFAULTS.accent,
       bg: parseHex(src.bg) || DEFAULTS.bg,
-      macMaterial: MAC_MATERIALS.includes(src.macMaterial) ? src.macMaterial : DEFAULTS.macMaterial,
+      fg: parseHex(src.fg) || DEFAULTS.fg,
+      blur,
+      // Derived, kept in the shape because main.cjs (construction) and the
+      // PUT live-apply both consume a material, not a level. null = no
+      // platform effect.
+      macMaterial: MAC_BLUR_MATERIALS[blur],
     }
   }
 
@@ -103,14 +124,19 @@
   function cssVars(cfg) {
     const c = normalize(cfg)
     const g = c.glass / 100
+    // blur off = no platform effect behind the window. Anything translucent
+    // would show the window's own (unset/white) base paint, so the whole
+    // tint stack goes opaque — the Tint gauge still tints, it just can't
+    // reveal glass that isn't there.
+    const solid = c.blur === 'off'
     return {
       '--bg': c.bg,
       '--frost-rgb': triplet(c.bg),
       '--panel-rgb': triplet(mix(c.bg, '#ffffff', 0.08)),
       '--raised-rgb': triplet(mix(c.bg, '#ffffff', 0.115)),
-      '--frost-alpha': (0.82 * (1 - g)).toFixed(3),
-      '--panel-alpha': (1 - 0.75 * g).toFixed(3),
-      '--raised-alpha': (1 - 0.5 * g).toFixed(3),
+      '--frost-alpha': solid ? '1.000' : (0.82 * (1 - g)).toFixed(3),
+      '--panel-alpha': solid ? '1.000' : (1 - 0.75 * g).toFixed(3),
+      '--raised-alpha': solid ? '1.000' : (1 - 0.5 * g).toFixed(3),
       '--border': 'rgb(255 255 255 / 0.09)',
       '--border-strong': 'rgb(255 255 255 / 0.16)',
       '--edge-highlight': 'inset 0 1px 0 rgb(255 255 255 / 0.06)',
@@ -122,6 +148,12 @@
       '--accent': c.accent,
       '--accent-hover': mix(c.accent, '#000000', 0.15),
       '--accent-ring': `rgb(${triplet(c.accent)} / 0.45)`,
+      // v3 text seed: one picked color; the dim/faint steps derive by
+      // mixing TOWARD the bg seed, so the hierarchy keeps its contrast
+      // relationships on any background.
+      '--fg': c.fg,
+      '--fg-dim': mix(c.fg, c.bg, 0.38),
+      '--fg-faint': mix(c.fg, c.bg, 0.6),
     }
   }
 
@@ -130,7 +162,7 @@
     return `:root {\n${Object.entries(vars).map(([k, v]) => `  ${k}: ${v};`).join('\n')}\n}`
   }
 
-  const model = { DEFAULTS, FONTS, PRESET_ACCENTS, PRESET_BGS, LEGACY_ACCENTS, MAC_MATERIALS, normalize, cssVars, cssText, mix }
+  const model = { DEFAULTS, FONTS, PRESET_ACCENTS, PRESET_BGS, PRESET_FGS, LEGACY_ACCENTS, BLUR_LEVELS, MAC_BLUR_MATERIALS, normalize, cssVars, cssText, mix }
   if (typeof module !== 'undefined' && module.exports) module.exports = model
   else root.AppearanceModel = model
 })(typeof window !== 'undefined' ? window : globalThis)

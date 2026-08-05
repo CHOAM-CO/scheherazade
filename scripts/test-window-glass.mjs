@@ -47,8 +47,17 @@ const mac = glassOptions('darwin', '23.0.0')
 assert(mac.vibrancy === 'under-window' && mac.visualEffectState === 'active',
   "darwin gets under-window vibrancy with 'active' state (electron#46164: followWindow DROPS vibrancy on inactive windows)")
 assert(!('backgroundColor' in mac), 'darwin carries NO backgroundColor (an opaque one killed vibrancy in 0.59)')
-assert(glassOptions('darwin', '23.0.0', 'hud').vibrancy === 'hud', 'darwin material override (Appearance 재질 switcher) is honored')
+assert(glassOptions('darwin', '23.0.0', 'hud').vibrancy === 'hud', 'darwin material override (blur level → material) is honored')
 assert(glassOptions('win32', '10.0.26100', 'hud').backgroundMaterial === 'acrylic', 'material override is a no-op off-mac')
+
+console.log("\n2b. v3 blur-off sentinel ('none')")
+const off = glassOptions('darwin', '23.0.0', 'none')
+assert(off.backgroundColor === FLAT_FALLBACK && !('vibrancy' in off),
+  "material 'none' (blur off) constructs flat on mac — no vibrancy at all")
+assert(glassOptions('win32', '10.0.26100', 'none').backgroundColor === FLAT_FALLBACK,
+  "material 'none' constructs flat on win too (blur off beats acrylic)")
+const noConfig = glassOptions('darwin', '23.0.0', null)
+assert(noConfig.vibrancy === 'under-window', 'null (no config) still means the default material, NOT off')
 const win11 = glassOptions('win32', '10.0.26100')
 assert(win11.backgroundMaterial === 'acrylic', 'win11 24H2 gets acrylic')
 assert(!('backgroundColor' in win11), 'win11 carries NO backgroundColor (it kills backgroundMaterial)')
@@ -62,6 +71,7 @@ const main = readFileSync(path.join(root, 'main.cjs'), 'utf8')
 assert(/require\(path\.join\(__dirname, 'window-glass\.cjs'\)\)/.test(main), 'main.cjs requires window-glass.cjs')
 assert(/\.\.\.glassOptions\(process\.platform, os\.release\(\), readSavedMacMaterial\(\)\)/.test(main), 'BrowserWindow spreads glassOptions with the saved mac material')
 assert(/function readSavedMacMaterial\(\)/.test(main) && main.includes("appearance.json"), 'main.cjs restores the Appearance material across relaunches')
+assert(main.includes(".macMaterial || 'none'"), "main.cjs maps saved blur-off (null material) to the explicit 'none' sentinel — distinct from no-config")
 const winOpts = /new BrowserWindow\(\{[\s\S]*?\}\)/.exec(main)
 assert(winOpts && !/backgroundColor:/.test(winOpts[0]), 'no literal backgroundColor beside the spread (the 0.59 regression shape)')
 

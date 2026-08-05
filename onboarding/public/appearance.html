@@ -31,13 +31,16 @@
           <input type="range" id="ap-glass-range" min="0" max="100" step="5" />
           <span class="ap-value" id="ap-glass-value"></span>
         </div>
-        <!-- macOS only (hidden elsewhere by appearance.js): which
-             NSVisualEffectView material backs the window. Live-switched via
-             setVibrancy on save — Tahoe renders materials differently, so
-             the user's eyes on the actual machine pick the winner. -->
-        <div class="ap-row hidden" id="ap-material-row">
-          <label id="ap-material-label"></label>
-          <div class="ap-options" id="ap-material-options"></div>
+        <!-- v3 (Mino 2026-08-05 16:12 "Background Tint / Background Blur
+             두개로 간단하게"): the 7-material switcher is gone from the UI.
+             Blur is a 3-step control (Off/Soft/Strong) because macOS only
+             exposes blur at material granularity — a continuous slider
+             would be fake middle values. Mapping lives in
+             appearance-model.cjs; live-apply via PUT (setVibrancy /
+             setBackgroundMaterial). -->
+        <div class="ap-row">
+          <label id="ap-blur-label"></label>
+          <div class="ap-options" id="ap-blur-options"></div>
           <span class="ap-value"></span>
         </div>
       </div>
@@ -72,6 +75,14 @@
           <label id="ap-accent-row-label" for="ap-accent-picker"></label>
           <div class="ap-options" id="ap-accent-options"></div>
           <input type="color" id="ap-accent-picker" class="ap-color-picker" />
+        </div>
+        <!-- v3: text seed (Mino 16:12 "텍스트 컬러피커도 빼먹었네").
+             One picked color; dim/faint hierarchy derives toward the bg
+             seed in the model. -->
+        <div class="ap-row">
+          <label id="ap-fg-row-label" for="ap-fg-picker"></label>
+          <div class="ap-options" id="ap-fg-options"></div>
+          <input type="color" id="ap-fg-picker" class="ap-color-picker" />
         </div>
       </div>
 

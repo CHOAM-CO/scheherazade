@@ -34,6 +34,8 @@ const M = require(path.join(root, 'onboarding', 'public', 'js', 'appearance-mode
 const d = M.normalize(null)
 assert(d.glass === 60 && d.fontSize === 13.5 && d.fontFamily === 'system' && d.accent === '#5b8dee' && d.bg === '#000000',
   'defaults: glass 60 / 13.5px / system / accent blue / bg black (Mino 2026-08-05)')
+assert(d.fg === '#eaeaea' && d.blur === 'soft' && d.macMaterial === 'under-window',
+  'v3 defaults: fg #eaeaea, blur soft (macMaterial derives to under-window)')
 const solid = M.cssVars({ glass: 0 })
 assert(solid['--frost-alpha'] === '0.820' && solid['--panel-alpha'] === '1.000' && solid['--raised-alpha'] === '1.000',
   'glass 0 reproduces the solid pre-0.61 look exactly (wash .82, opaque panels)')
@@ -44,10 +46,14 @@ const junk = M.normalize({ glass: 'x', fontSize: 999, fontFamily: 'evil', accent
 assert(junk.glass === 60 && junk.fontSize === 16 && junk.fontFamily === 'system' && junk.accent === '#5b8dee' && junk.bg === '#000000',
   'junk input falls back per-field, never throws (PUT-body safety — colors reject non-hex)')
 assert(M.normalize({ fontSize: 12.7 }).fontSize === 12.5, 'fontSize snaps to half steps')
-assert(d.macMaterial === 'under-window' && M.normalize({ macMaterial: 'hud' }).macMaterial === 'hud'
-  && M.normalize({ macMaterial: 'evil' }).macMaterial === 'under-window',
-  'macMaterial: default under-window, whitelist enforced')
-assert(Array.isArray(M.MAC_MATERIALS) && M.MAC_MATERIALS.length >= 5, 'material catalog exported for the switcher UI')
+// v3 blur: 3 levels, macMaterial DERIVED. Legacy v2 macMaterial configs
+// migrate to the nearest step instead of resetting.
+assert(M.normalize({ blur: 'off' }).macMaterial === null, 'blur off derives macMaterial null (no platform effect)')
+assert(M.normalize({ blur: 'strong' }).macMaterial === 'hud', 'blur strong derives hud (max contrast vs soft)')
+assert(M.normalize({ blur: 'evil' }).blur === 'soft', 'junk blur falls back to soft')
+assert(M.normalize({ macMaterial: 'hud' }).blur === 'strong' && M.normalize({ macMaterial: 'sidebar' }).blur === 'soft',
+  'legacy v2 macMaterial configs migrate to the nearest blur step')
+assert(Array.isArray(M.BLUR_LEVELS) && M.BLUR_LEVELS.join(',') === 'off,soft,strong', 'blur catalog exported for the UI')
 assert(M.cssText({ glass: 60 }).startsWith(':root {'), 'cssText emits a :root block')
 for (const hex of [...M.PRESET_ACCENTS, ...M.PRESET_BGS]) {
   assert(/^#[0-9a-f]{6}$/.test(hex), `preset ${hex} is normalized hex`)
@@ -73,6 +79,18 @@ assert(defVars['--radius-s'] === '6px' && defVars['--radius-m'] === '12px' && de
 assert(defVars['--border'] === 'rgb(255 255 255 / 0.09)' && defVars['--edge-highlight'].includes('inset 0 1px 0'),
   'hairline border + top-edge highlight emitted from the model')
 
+console.log('\n1c. v3 fg seed + blur-off solid guarantee')
+const fgSeeded = M.cssVars({ fg: '#ffffff', bg: '#000000' })
+assert(fgSeeded['--fg'] === '#ffffff' && fgSeeded['--fg-dim'] === M.mix('#ffffff', '#000000', 0.38)
+  && fgSeeded['--fg-faint'] === M.mix('#ffffff', '#000000', 0.6),
+  'text hierarchy derives from the fg seed toward the bg seed')
+assert(M.normalize({ fg: 'red' }).fg === '#eaeaea', 'junk fg falls back (colors are hex-only)')
+const offVars = M.cssVars({ blur: 'off', glass: 100 })
+assert(offVars['--frost-alpha'] === '1.000' && offVars['--panel-alpha'] === '1.000' && offVars['--raised-alpha'] === '1.000',
+  'blur off forces the whole tint stack opaque even at glass 100 — nothing behind the window to reveal')
+const softVars = M.cssVars({ blur: 'soft', glass: 100 })
+assert(softVars['--frost-alpha'] === '0.000', 'blur soft keeps the gauge live (glass 100 = raw effect)')
+
 console.log('\n2. server wiring pins (http-server.cjs)')
 const server = readFileSync(path.join(root, 'onboarding', 'http-server.cjs'), 'utf8')
 assert(server.includes("require('./public/js/appearance-model.cjs')"), 'server requires the SAME model file the browser loads')
@@ -89,9 +107,13 @@ const routes = readFileSync(path.join(root, 'onboarding', 'routes', 'onboarding-
 assert(routes.includes("pathname === '/api/appearance'"), 'GET/PUT /api/appearance registered')
 assert(routes.includes("method: 'PUT'"), 'PUT variant present')
 assert(routes.includes('writeAppearance(body)'), 'PUT saves through normalize (writeAppearance)')
-assert(routes.includes('win.setVibrancy(values.macMaterial)'), 'PUT live-applies the mac material (setVibrancy is runtime-mutable)')
+assert(routes.includes('win.setVibrancy(null)') && routes.includes('win.setVibrancy(values.macMaterial)'),
+  'PUT live-applies blur via the null-then-material dance (direct setMaterial: swaps do not reliably repaint — native_window_mac.mm)')
+assert(routes.includes("win.setBackgroundMaterial(values.blur === 'off' ? 'none' : 'acrylic')"),
+  'PUT live-applies blur on Windows too (acrylic on/off — no strength axis there)')
 const page2 = readFileSync(path.join(root, 'onboarding', 'public', 'js', 'appearance.js'), 'utf8')
-assert(page2.includes("meta.content === 'darwin'") && page2.includes('MAC_MATERIALS'), 'material switcher renders only on macOS, from the model catalog')
+assert(page2.includes('BLUR_LEVELS') && page2.includes("update({ blur: key })"), 'blur 3-step control renders from the model catalog')
+assert(!page2.includes('MAC_MATERIALS'), 'the raw 7-material switcher is gone from the UI (v3)')
 
 console.log('\n4. page + nav + copy wiring')
 const page = readFileSync(path.join(root, 'onboarding', 'public', 'appearance.html'), 'utf8')
@@ -118,15 +140,18 @@ assert(!/border-radius:\s*(7px|8px|10px|999px)/.test(css), 'no ad-hoc radius val
 assert(css.includes('box-shadow: var(--edge-highlight)'), 'panels carry the top-edge light-catch')
 assert(css.includes('box-shadow: 0 0 0 2px var(--accent-ring)'), 'focus ring uses the derived accent ring')
 
-console.log('\n6. v2 picker wiring (page + controller)')
-for (const id of ['ap-bg-picker', 'ap-accent-picker', 'ap-bg-options']) {
+console.log('\n6. v2/v3 picker wiring (page + controller)')
+for (const id of ['ap-bg-picker', 'ap-accent-picker', 'ap-fg-picker', 'ap-bg-options', 'ap-fg-options', 'ap-blur-options']) {
   assert(page.includes(`id="${id}"`), `appearance.html carries #${id}`)
 }
 assert(page2.includes("addEventListener('input', (e) => update({ accent: e.target.value }))")
-  && page2.includes("addEventListener('input', (e) => update({ bg: e.target.value }))"),
-  "pickers live-apply on 'input' (repaint while dragging)")
-assert(page2.includes('PRESET_ACCENTS') && page2.includes('PRESET_BGS'), 'swatches render from the model presets')
-assert(copy.includes('bgRowLabel'), 'bg row label in copy')
+  && page2.includes("addEventListener('input', (e) => update({ bg: e.target.value }))")
+  && page2.includes("addEventListener('input', (e) => update({ fg: e.target.value }))"),
+  "all three pickers live-apply on 'input' (repaint while dragging)")
+assert(page2.includes('PRESET_ACCENTS') && page2.includes('PRESET_BGS') && page2.includes('PRESET_FGS'),
+  'swatches render from the model presets')
+assert(copy.includes('bgRowLabel') && copy.includes('fgRowLabel') && copy.includes('blurLevels'),
+  'bg/fg row labels + blur level names in copy')
 
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)

@@ -786,6 +786,25 @@ window.COPY = {
     // backend now, so that state no longer exists.
     gapMarker: '— some earlier messages fell out of the buffer —',
     empty: 'No messages yet. Say hi.',
+    // P1 (design-research 2026-08): empty state doubles as example prompts
+    // (Notion pattern). Click fills the composer — never auto-sends.
+    emptyTitle: 'No messages yet. Try one of these, or just say hi:',
+    emptyExamples: [
+      'What can you do for me?',
+      'Remember this: I prefer short answers.',
+      'What do you remember about me so far?',
+    ],
+    // P1: full-width flat turns carry a small role label instead of
+    // bubble sides/colors.
+    roleUser: 'You',
+    roleAgent: 'Agent',
+    // P1: jump-to-latest pill (auto-scroll stops when the reader scrolls
+    // up; the pill is the way back instead of viewport-yanking).
+    jumpToLatest: 'Jump to latest ↓',
+    // P1: activity fold — the labels seen while waiting collapse into one
+    // quiet disclosure above the reply that ends the wait.
+    activityFoldSummary: (n, secs) => `${n} step${n === 1 ? '' : 's'} · ${secs}s`,
+    activityFoldAria: 'What the agent did during this turn',
     sendFailed: "Couldn't send. Your message is still in the box — try again.",
     // DM interaction states (v0.0.34). `read` is honest by construction:
     // a user message only enters the transcript after it was delivered
@@ -842,10 +861,11 @@ window.COPY = {
   appearance: {
     title: 'Appearance',
     subtitle: 'Tune the look. Every change applies instantly — this page is the preview — and saves on its own.',
-    glassLabel: 'Frosted glass',
-    glassNote: 'How much the window blur shows through. 0 is solid dark. The glass itself needs macOS or Windows 11, and Windows pauses it while the window is in the background.',
-    glassRangeLabel: 'Intensity',
-    materialLabel: 'Material (macOS)',
+    glassLabel: 'Background',
+    glassNote: 'Tint is how much your background color covers the window glass. Blur is the glass itself — it has three levels because the OS only offers blur in steps, and Windows pauses it while the window is in the background.',
+    glassRangeLabel: 'Tint',
+    blurLabel: 'Blur',
+    blurLevels: { off: 'Off', soft: 'Soft', strong: 'Strong' },
     typeLabel: 'Type',
     fontSizeLabel: 'Font size',
     fontFamilyLabel: 'Font family',
@@ -853,6 +873,7 @@ window.COPY = {
     accentLabel: 'Color',
     accentRowLabel: 'Accent',
     bgRowLabel: 'Background',
+    fgRowLabel: 'Text',
     reset: 'Reset to defaults',
     saved: 'Saved',
     saveFailed: 'Save failed',

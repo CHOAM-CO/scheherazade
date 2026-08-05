@@ -16,8 +16,12 @@
       <p class="subtitle" id="ct-subtitle"></p>
 
       <!-- aria-live polite: a conversation SHOULD narrate new turns, unlike
-           the logs firehose next door -->
-      <div class="chat-pane" id="ct-pane" aria-live="polite"></div>
+           the logs firehose next door. The wrap exists so the jump pill can
+           overlay the pane without joining the scroll flow (P1). -->
+      <div class="chat-pane-wrap">
+        <div class="chat-pane" id="ct-pane" aria-live="polite"></div>
+        <button class="chat-jump-pill hidden" id="ct-jump" type="button"></button>
+      </div>
       <p class="chat-status" id="ct-status"></p>
 
       <!-- attachment chips (image upload, 2026-08-04): pending images shown

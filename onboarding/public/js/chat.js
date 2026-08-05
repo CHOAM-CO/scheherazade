@@ -59,6 +59,12 @@
   let typingEl = null
   let readEl = null
   let activityEl = null // "⚙ running: ..." status line; latest activity wins
+  // P1 activity fold: labels accumulate here while a reply is owed, then
+  // collapse into a <details> above the reply that ends the wait.
+  const MAX_FOLD_LINES = 60
+  let activityLog = []
+  let activityStart = 0
+  let lastActivityAt = 0
 
   function setStatics() {
     $('ct-title').textContent = C.title
@@ -66,17 +72,42 @@
     sendBtn.textContent = C.send
     input.placeholder = C.placeholder
     $('ct-status').textContent = C.statusChecking
+    jumpBtn.textContent = C.jumpToLatest
+    jumpBtn.onclick = () => { pane.scrollTop = pane.scrollHeight; hideJump() }
+    // reaching the bottom by hand retires the pill too
+    pane.addEventListener('scroll', () => { if (atBottom()) hideJump() })
   }
 
   function atBottom() {
-    return pane.scrollHeight - pane.scrollTop - pane.clientHeight < 8
+    // P1: 100px "near bottom" threshold (was 8px — any upward wheel broke
+    // the stick with no way back but manual scroll). Past the threshold,
+    // auto-scroll stops and the jump pill appears instead of yanking the
+    // viewport (ChatGPT/Claude convention).
+    return pane.scrollHeight - pane.scrollTop - pane.clientHeight < 100
   }
+
+  const jumpBtn = $('ct-jump')
+  function showJump() { jumpBtn.classList.remove('hidden') }
+  function hideJump() { jumpBtn.classList.add('hidden') }
 
   function showEmpty() {
     if (emptyEl || msgCount) return
+    // P1: example prompts instead of a blank sentence (Notion pattern).
+    // A click FILLS the composer — the user keeps the send trigger.
     emptyEl = document.createElement('div')
     emptyEl.className = 'chat-empty'
-    emptyEl.textContent = C.empty
+    const title = document.createElement('div')
+    title.className = 'chat-empty-title'
+    title.textContent = C.emptyTitle
+    emptyEl.appendChild(title)
+    for (const example of C.emptyExamples) {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.className = 'chat-empty-item'
+      b.textContent = example
+      b.onclick = () => { input.value = example; input.focus() }
+      emptyEl.appendChild(b)
+    }
     pane.appendChild(emptyEl)
   }
 
@@ -141,11 +172,22 @@
     clearEmpty()
     const stick = atBottom()
     const role = roleOf(m)
+    // P1 activity fold: the labels seen during the wait collapse into one
+    // quiet disclosure ABOVE the reply that ends it (thinking-disclosure
+    // pattern adapted to a poll-shaped app — we fold tool labels, not
+    // streamed thinking text).
+    if (role === 'agent') buildActivityFold()
     const el = document.createElement('div')
     el.className = `chat-msg chat-${role}`
     el.dataset.seq = m.seq
     const { shown, images } = splitImageMarkers(m.text)
     renderMarkdown(el, shown)
+    // P1: full-width flat rows carry a small caps role label (renderMarkdown
+    // clears the element, so the label attaches AFTER it, as first child).
+    const roleTag = document.createElement('span')
+    roleTag.className = 'chat-role'
+    roleTag.textContent = role === 'user' ? C.roleUser : C.roleAgent
+    el.insertBefore(roleTag, el.firstChild)
     for (const name of images) appendAttachmentImage(el, name, stick || role === 'user')
     if (role === 'agent') clearActivity() // a reply supersedes the status line
     if (role === 'agent') attachReactBar(el, m.seq, shown)
@@ -161,6 +203,7 @@
       msgCount--
     }
     if (stick || role === 'user') pane.scrollTop = pane.scrollHeight
+    else if (role === 'agent') showJump() // landed off-screen — offer the way back
   }
 
   // Hover affordance on agent bubbles -- the fixed two-emoji menu the
@@ -245,6 +288,12 @@
       activityEl.setAttribute('aria-label', C.activityAria)
     }
     activityEl.textContent = C.activity(m.text)
+    // P1 fold bookkeeping: display stays latest-wins (one quiet line), but
+    // every label is kept for the post-turn fold.
+    if (activityLog.length === 0) activityStart = Date.now()
+    lastActivityAt = Date.now()
+    activityLog.push(String(m.text || ''))
+    if (activityLog.length > MAX_FOLD_LINES) activityLog.shift()
     pane.appendChild(activityEl) // appendChild moves it back to the end
     if (stick) pane.scrollTop = pane.scrollHeight
   }
@@ -253,6 +302,30 @@
     if (!activityEl) return
     activityEl.remove()
     activityEl = null
+  }
+
+  // Collapse the accumulated labels into a <details> row. Staleness guard:
+  // if the last activity is older than the typing cap, the wait it belonged
+  // to died without a reply — attaching its labels to a LATER reply would
+  // mislabel that turn, so drop them instead.
+  function buildActivityFold() {
+    if (!activityLog.length) return
+    if (Date.now() - lastActivityAt > TYPING_SHOW_MAX_MS) { activityLog = []; return }
+    const fold = document.createElement('details')
+    fold.className = 'chat-activity-fold'
+    fold.setAttribute('aria-label', C.activityFoldAria)
+    const summary = document.createElement('summary')
+    const secs = Math.max(1, Math.round((lastActivityAt - activityStart) / 1000))
+    summary.textContent = C.activityFoldSummary(activityLog.length, secs)
+    fold.appendChild(summary)
+    for (const line of activityLog) {
+      const row = document.createElement('div')
+      row.className = 'fold-line'
+      row.textContent = line
+      fold.appendChild(row)
+    }
+    pane.appendChild(fold)
+    activityLog = []
   }
 
   function renderItem(m) {

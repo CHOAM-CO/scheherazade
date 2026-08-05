@@ -142,6 +142,8 @@ function createRoutes(staticCtx) {
           fonts: Object.keys(AppearanceModel.FONTS),
           accents: AppearanceModel.PRESET_ACCENTS,
           bgs: AppearanceModel.PRESET_BGS,
+          fgs: AppearanceModel.PRESET_FGS,
+          blurLevels: AppearanceModel.BLUR_LEVELS,
         })
         return
       },
@@ -152,14 +154,34 @@ function createRoutes(staticCtx) {
       handler: async (req, res) => {
         const body = await readJsonBody(req)
         const values = writeAppearance(body)
-        // macOS: apply the material LIVE — setVibrancy is runtime-mutable
-        // (unlike visualEffectState), so the Appearance tab's 재질 switcher
-        // changes the actual window backdrop on click. Fail-soft outside a
-        // real Electron main process (dev-serve-ui) or on other platforms.
+        // Apply the blur level LIVE. Fail-soft outside a real Electron main
+        // process (dev-serve-ui) or on unsupported platforms.
+        // macOS: setVibrancy is runtime-mutable (visualEffectState is not,
+        // electron#25513). Electron reuses the existing vibrant view and
+        // only calls setMaterial: on a direct swap, which does not reliably
+        // force a repaint (native_window_mac.mm; docs: "animating between
+        // different types of vibrancy is not supported") — so go through
+        // null first, then set the target on the next tick: the
+        // remove-and-reattach path lays out the view every time.
+        // values.macMaterial: null = blur off (vibrancy stays removed).
         if (process.platform === 'darwin') {
           try {
             const win = getElectron().BrowserWindow.getAllWindows()[0]
-            if (win) win.setVibrancy(values.macMaterial)
+            if (win) {
+              win.setVibrancy(null)
+              if (values.macMaterial) setTimeout(() => { try { win.setVibrancy(values.macMaterial) } catch { /* window died mid-tick */ } }, 0)
+            }
+          } catch { /* not running under Electron -- config-only save */ }
+        }
+        // Windows: acrylic has no strength axis — blur is on/off only
+        // (soft and strong both mean acrylic). setBackgroundMaterial is
+        // runtime-callable on Win11 22H2+; 'none' drops to the solid look.
+        if (process.platform === 'win32') {
+          try {
+            const win = getElectron().BrowserWindow.getAllWindows()[0]
+            if (win && typeof win.setBackgroundMaterial === 'function') {
+              win.setBackgroundMaterial(values.blur === 'off' ? 'none' : 'acrylic')
+            }
           } catch { /* not running under Electron -- config-only save */ }
         }
         sendJson(res, 200, { ok: true, values })

@@ -202,9 +202,13 @@ const AppearanceModel = require(path.join(__dirname, 'onboarding', 'public', 'js
 function readSavedMacMaterial() {
   if (process.platform !== 'darwin') return null
   try {
+    // v3: macMaterial is DERIVED from the blur level (off/soft/strong ->
+    // null/'under-window'/'hud'). null here means the user chose blur OFF,
+    // which must construct flat — distinct from "no config" (catch below),
+    // which means default. 'none' is glassOptions' explicit-off sentinel.
     return AppearanceModel.normalize(
       JSON.parse(fs.readFileSync(path.join(DATA_HOME, 'appearance.json'), 'utf8'))
-    ).macMaterial
+    ).macMaterial || 'none'
   } catch {
     return null // no config yet -> glassOptions default
   }

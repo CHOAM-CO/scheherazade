@@ -36,10 +36,14 @@ const FLAT_FALLBACK = '#111214'
 // option (electron#25513) — changing it means relaunch.
 const MAC_EFFECT_STATE = 'active'
 
-// material may come from the user's Appearance config (macOS "유리 재질"
-// switcher, 2026-08-05 — Tahoe renders materials differently and only eyes
-// on the target machine can pick; the switcher makes Mino the verifier).
+// material may come from the user's Appearance config. v3 (2026-08-05
+// 16:12, Mino "Background Tint / Background Blur 두개로 간단하게"): the
+// 7-material switcher folded into blur levels — appearance-model.cjs maps
+// off/soft/strong to null/'under-window'/'hud'. 'none' is the explicit
+// blur-off sentinel: construct WITHOUT the platform effect (flat fallback),
+// distinct from null/undefined which means "no config, use the default".
 function glassOptions(platform, release, material) {
+  if (material === 'none') return { backgroundColor: FLAT_FALLBACK }
   if (platform === 'darwin') {
     return { vibrancy: material || 'under-window', visualEffectState: MAC_EFFECT_STATE }
   }
