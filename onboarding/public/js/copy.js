@@ -906,9 +906,12 @@ window.COPY = {
     migrateStarting: 'Asking the agent to take over…',
     migrateStartedLive: 'The agent is on it — watch the chat.',
     migrateStartedQueued: "Queued. The agent will start the import next time it's running.",
-    // design-0023 handover: custom agent folder.
+    // design-0023 handover: custom agents (rev B: agent-led discovery
+    // first, manual path as fallback).
     handoverLabel: 'A custom agent',
-    handoverHint: "Built or ran an agent that isn't on the list? Point at its folder. Your agent will map how it worked first — prompt files, memory layout, routines — then absorb what matters. Credential files are never touched.",
+    handoverHint: "Built or ran an agent that isn't on the list? Your agent can hunt for its traces (persona.md, AGENTS.md and kin) by filename, show you what it found, and take over only the folders you approve — mapping how each one worked before absorbing anything. Credential files are never touched.",
+    handoverDiscoverButton: 'Find agents on this computer',
+    handoverManualHint: 'Or point at a folder directly (useful for drives the search index misses):',
     handoverPlaceholder: '/path/to/that/agent',
     handoverCheckButton: 'Preview',
     handoverChecking: 'Looking…',

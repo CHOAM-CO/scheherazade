@@ -263,10 +263,16 @@
             <span class="status-line" id="set-migrate-status"></span>
             <button id="set-migrate-start"></button>
           </div>
-          <!-- design-0023 handover: a custom agent folder the fixed probes
-               can't know about. Preview (names only) -> consent -> sweep. -->
+          <!-- design-0023 handover: agents the fixed probes can't know
+               about. Primary: agent-led discovery (rev B — mdfind hunt +
+               per-folder consent in chat). Fallback: point at a folder. -->
           <div class="category-label" id="set-handover-label"></div>
           <p class="subtitle" id="set-handover-hint"></p>
+          <div class="step-actions">
+            <span class="status-line" id="set-handover-discover-status"></span>
+            <button id="set-handover-discover"></button>
+          </div>
+          <p class="subtitle" id="set-handover-manual-hint"></p>
           <div class="handover-row">
             <input id="set-handover-path" type="text" spellcheck="false" />
             <button id="set-handover-check"></button>

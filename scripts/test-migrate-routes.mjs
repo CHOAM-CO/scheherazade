@@ -200,6 +200,18 @@ try {
     chk('sweep names the found markers as starting points', c.includes('persona.md'), c.slice(0, 400))
     chk('sweep carries the DO-NOT-READ list, no secret value leaked', c.includes('auth.json') && !c.includes('SECRET-'))
     chk('sweep forbids pasting the map into chat', c.includes('붙여넣지 마라'))
+    // rev B: agent-led discovery — one click, the hunt turn goes to chat.
+    fs.writeFileSync(path.join(process.env.AGENT_DATA_HOME, '.ingest-endpoint.json'),
+      JSON.stringify({ port: fakeLane.address().port, token: 'i'.repeat(64), pid: process.pid }))
+    r = await fetch(`${base}/api/migrate/custom/discover`, { method: 'POST', headers: auth, body: '{}' })
+    const db = await r.json()
+    const dc = String(got && got.content || '')
+    chk('discover: 202 live', r.status === 202 && db.delivery === 'live', JSON.stringify(db))
+    chk('discovery turn hunts by filename via mdfind, forbids disk walks', dc.includes('mdfind') && dc.includes('디스크 훑기 금지'), dc.slice(0, 160))
+    chk('discovery turn requires PER-FOLDER user consent before absorbing', dc.includes('승인') && dc.includes('사용자에게 보여줘라'))
+    chk('discovery turn excludes known tool homes + own memory dir', dc.includes('.claude') && dc.includes('네 자신의 메모리 디렉토리'))
+    chk('discovery turn keeps the structure-map-first procedure', dc.includes('handover/') && dc.includes('해부도'))
+    chk('discovery turn carries the DO-NOT-READ list', dc.includes('auth.json') && !dc.includes('SECRET-'))
     await new Promise((r2) => fakeLane.close(r2))
     fs.rmSync(path.join(process.env.AGENT_DATA_HOME, '.ingest-endpoint.json'), { force: true })
   }

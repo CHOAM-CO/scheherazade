@@ -161,6 +161,26 @@
     // sweep — but structure-map-first, since nobody knows this layout. ──
     $('set-handover-label').textContent = C.handoverLabel
     $('set-handover-hint').textContent = C.handoverHint
+    // rev B primary: one click hands the HUNT to the agent (mdfind by
+    // marker filename, candidates + per-folder consent live in chat).
+    const hoDiscover = $('set-handover-discover')
+    const hoDiscoverStatus = $('set-handover-discover-status')
+    hoDiscover.textContent = C.handoverDiscoverButton
+    hoDiscover.onclick = async () => {
+      hoDiscover.disabled = true
+      hoDiscoverStatus.className = 'status-line pending'
+      hoDiscoverStatus.textContent = C.migrateStarting
+      try {
+        const r = await api('/api/migrate/custom/discover', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+        hoDiscoverStatus.className = 'status-line success'
+        hoDiscoverStatus.textContent = r.delivery === 'live' ? C.migrateStartedLive : C.migrateStartedQueued
+      } catch (err) {
+        hoDiscoverStatus.className = 'status-line failure'
+        hoDiscoverStatus.textContent = GEN(err.message)
+        hoDiscover.disabled = false
+      }
+    }
+    $('set-handover-manual-hint').textContent = C.handoverManualHint
     const hoPath = $('set-handover-path')
     const hoCheck = $('set-handover-check')
     const hoStatus = $('set-handover-status')

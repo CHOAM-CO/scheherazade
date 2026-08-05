@@ -153,6 +153,29 @@ function createRoutes(staticCtx) {
     return { root }
   }
 
+  // Discovery sweep (Mino 2026-08-05 20:39 "persona.md/agents.md 자동으로
+  // 찾아서 역추적하는 방식으로 에이전트한테 맡기는게 안 낫나"): instead of
+  // the user typing a path, the AGENT locates candidates itself — marker
+  // filenames via Spotlight (no disk walk), containing folder = the
+  // candidate agent home — and asks for consent PER FOLDER in chat before
+  // absorbing anything. The known five stay on their dedicated cards; this
+  // hunts the hand-rolled ones.
+  function discoverSweepContent() {
+    return [
+      '[SYSTEM] 에이전트 탐색 -- 사용자가 이 컴퓨터에서 다른 에이전트를 찾아 인수인계 받는 데 동의했다. 탐색과 후보 제시까지가 이 턴의 일이다. 흡수는 폴더별로 사용자 승인을 받은 뒤에만 한다.',
+      '',
+      '1단계 (탐색, 파일명만): 에이전트 흔적 파일을 이름으로 찾아라. macOS면 mdfind가 인덱스로 즉시 답한다 (디스크 훑기 금지):',
+      "  mdfind 'kMDItemFSName == persona.md' / AGENTS.md / SOUL.md / IDENTITY.md / system_prompt.md 등. CLAUDE.md는 결과가 많으니 보조 신호로만.",
+      '  mdfind가 없는 환경이면 흔한 위치(~/Documents, ~/Desktop, 개발 폴더)만 깊이 제한을 걸고 찾아라. 전체 디스크 워크는 금지.',
+      '2단계 (역추적): 히트를 담고 있는 폴더로 후보를 묶어라. 제외: 알려진 툴 홈(~/.claude, ~/.codex, ~/.hermes, ~/.config/opencode, ~/.openclaw -- 설정 화면의 전용 카드가 담당), 네 자신의 메모리 디렉토리, 앱 번들/시스템 경로, node_modules 류.',
+      '3단계 (제시): 후보 폴더 목록을 사용자에게 보여줘라 -- 경로, 잡힌 흔적 파일, 한 줄 추정 ("페르소나+메모리 구조, 에이전트로 보임"). 파일 내용은 아직 읽지 마라. 이름과 존재만으로 말해라.',
+      '4단계 (승인 후에만): 사용자가 "이 폴더 ㄱ" 하면 그 폴더에 한해 핸드오버 절차를 실행해라: 구조 해부도 먼저 (근거 파일 경로 포함, 네 메모리 디렉토리의 handover/<폴더명>.md 로 저장), 그 다음 흡수 (사실·선호·진행 중이던 일 -> memory_write/checkpoint.md, 반복 작업 -> 인수 제안 목록), 마지막으로 짧은 보고. 해부도 전문을 채팅에 붙여넣지 마라.',
+      '',
+      `절대 읽지 마라 (어느 깊이에서든 이 이름들): ${[...FORBIDDEN_NAMES].join(', ')}. 자격증명/토큰 파일이다. 훅이 한 번 더 막지만, 시도 자체를 하지 마라.`,
+      '파일 안에서 시크릿(키, 토큰, 비밀번호)을 마주치면 그 값은 어디에도 옮겨 적지 마라.',
+    ].join('\n')
+  }
+
   function customSweepContent(root, markers) {
     const name = (path.basename(root) || 'agent').replace(/[^\w.-]+/g, '_')
     return [
@@ -272,6 +295,23 @@ function createRoutes(staticCtx) {
   }
 
   return [
+    {
+      // design-0023 rev B: agent-led discovery. One consented click delivers
+      // the hunt turn; everything after (candidates, per-folder consent,
+      // absorption) happens in chat where the agent can actually converse.
+      method: 'POST',
+      match: (pathname) => pathname === '/api/migrate/custom/discover',
+      handler: async (req, res) => {
+        try {
+          const delivery = await deliverSweep(discoverSweepContent())
+          log(`handover discovery sweep ${delivery}`)
+          sendJson(res, 202, { ok: true, delivery })
+        } catch (err) {
+          sendJson(res, 500, { error: `could not deliver the sweep request: ${err.message}`, reason: 'delivery_failed' })
+        }
+        return
+      },
+    },
     {
       // design-0023: bounded names-only preview of a user-pointed folder.
       // Same walker, same forbidden filter as the fixed five.
