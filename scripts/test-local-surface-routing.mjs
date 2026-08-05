@@ -15,7 +15,7 @@
 import { mkdtempSync, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 // Sandbox BEFORE any channel import: channel.mjs writes markers at module
 // scope, and channel-local's transcript persistence must never touch a real
@@ -34,8 +34,11 @@ function assert(cond, msg) {
   else { failed++; console.error(`  FAIL: ${msg}`) }
 }
 
-const local = await import(path.join(root, 'channel-local.mjs'))
-const discord = await import(path.join(root, 'channel.mjs'))
+// pathToFileURL, not the bare path: on Windows an absolute path ('C:\...')
+// is not a valid ESM specifier (ERR_UNSUPPORTED_ESM_URL_SCHEME, caught live
+// on the 0.0.60 win suite run).
+const local = await import(pathToFileURL(path.join(root, 'channel-local.mjs')).href)
+const discord = await import(pathToFileURL(path.join(root, 'channel.mjs')).href)
 
 console.log('1. channel-local handleToolCall serves the routed calls (channelId present)')
 local.resetQueueForTest()
