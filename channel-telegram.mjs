@@ -33,6 +33,11 @@ import {
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
   createInboundNotifier, createOutboundDedup,
 } from './channel-runtime.mjs'
+// Always-on in-app chat (2026-08-05): hosted alongside Telegram; import is
+// side-effect-safe (isMainModule guard) -- full rationale in channel.mjs.
+import {
+  LOCAL_CHANNEL_ID, handleToolCall as handleLocalToolCall, startLocalChatSurface,
+} from './channel-local.mjs'
 
 // ── stdout hygiene (channel-runtime) ───────────────────────────────────────
 // Installed before anything else runs -- MCP stdout is JSON-RPC only.
@@ -304,7 +309,8 @@ channelId is the Telegram chat id -- in the normal single-user setup, a private 
 Reply with the "reply" tool. channelId is optional -- omit it and the message goes to the current conversation chat. Never invent a channelId; only pass one when replying to a DIFFERENT chat than the one that messaged you. A channelId you DO pass is honored exactly or the call fails: an unresolvable one sends nothing anywhere, it is never quietly redirected.
 Image attachments (Telegram photos, or documents sent as images) are downloaded locally; the notification includes the local file path(s) -- open with the Read tool.
 Use "send_file_to_discord" (filePath, comment?, channelId?) to upload a local file via Telegram's sendDocument -- "reply" is text-only. (Tool name kept as-is from the Discord original on purpose -- this is the Telegram backend; do not rename, permission allowlists and hooks match this exact name.)
-Use "read_channel_history" (channelId, limit, after?, before?) to look back through the chat. This reads a LOCAL ledger, not a Telegram API call -- Telegram's Bot API has no history endpoint. It only covers messages sent/received while this bot was running; there is no record of anything from before. after/before each accept a Telegram message_id or an ISO date.`
+Use "read_channel_history" (channelId, limit, after?, before?) to look back through the chat. This reads a LOCAL ledger, not a Telegram API call -- Telegram's Bot API has no history endpoint. It only covers messages sent/received while this bot was running; there is no record of anything from before. after/before each accept a Telegram message_id or an ISO date.
+The app's own chat window is ALSO always connected: its messages arrive with channelId="in-app". Reply to those with channelId "in-app" exactly -- never route an in-app conversation to a Telegram chat or vice versa. The "react" tool (one emoji on the user's bubble) works only for the in-app window.`
 const INSTRUCTIONS = process.env.CHANNEL_INSTRUCTIONS || DEFAULT_INSTRUCTIONS
 
 const mcp = new Server(
@@ -355,8 +361,32 @@ const TOOLS = [
       required: ['channelId'],
     },
   },
+  {
+    // In-app-only (the local chat surface this backend hosts) -- see
+    // channel.mjs's twin definition.
+    name: 'react',
+    description: "Attach one emoji to the user's message bubble in the app's chat window (in-app conversations only). Use it when acknowledgment needs no words.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        emoji: { type: 'string', description: 'A single emoji, e.g. 👍 or ❤️' },
+        targetSeq: { type: 'number', description: "OPTIONAL transcript seq of the message to react to (visible in read_channel_history with channelId 'in-app'). Defaults to the user's latest in-app message." },
+        channelId: { type: 'string', description: 'OPTIONAL; only "in-app" is valid here.' },
+      },
+      required: ['emoji'],
+    },
+  },
   ROUTINE_TOOL,
 ]
+
+// Local-surface routing, twin of channel.mjs's: deterministic on the "in-app"
+// channelId; react has no other valid surface.
+const LOCAL_ROUTED_TOOLS = new Set(['reply', 'send_file_to_discord', 'read_channel_history', 'react'])
+function isLocalCall(name, args) {
+  if (!LOCAL_ROUTED_TOOLS.has(name)) return false
+  if (name === 'react') return true
+  return Boolean(args && args.channelId === LOCAL_CHANNEL_ID)
+}
 
 const ReplyArgs = z.object({ channelId: z.string().min(1).optional(), text: z.string().min(1) })
 const SendFileArgs = z.object({ channelId: z.string().min(1).optional(), filePath: z.string().min(1), comment: z.string().optional() })
@@ -418,6 +448,11 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
 
 mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: args } = req.params
+
+  // In-app chat rides along on every backend (2026-08-05): "in-app" is the
+  // local surface's constant id, disjoint from Telegram's numeric chat ids.
+  // Before the zod parses below on purpose (see channel.mjs).
+  if (isLocalCall(name, args)) return handleLocalToolCall(name, args)
 
   if (name === 'reply') {
     const { channelId, text } = ReplyArgs.parse(args || {})
@@ -663,6 +698,15 @@ const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === path.
 async function boot() {
   await mcp.connect(new StdioServerTransport())
   log(`MCP server up (${AGENT_NAME})`)
+
+  // Always-on in-app chat surface, fail-soft (see channel.mjs's twin block).
+  try {
+    const surface = await startLocalChatSurface({ notify: (n) => notifyInbound(n.params), log })
+    process.stdin.on('end', surface.stop)
+    process.stdin.on('close', surface.stop)
+  } catch (err) {
+    log(`in-app chat surface failed to start (chat page off this session): ${err.message}`)
+  }
 
   const tokenOk = await verifyTokenOrFail()
   if (!tokenOk) {

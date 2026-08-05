@@ -45,14 +45,14 @@
     const isActive = status.active === key
     $(`ch-${key}-name`).textContent = C.names[key]
     // On/off light (2026-08-05, Mino "초록불/회색불로 on off 인디케이팅"):
-    // green = the channel the agent is actually on; gray (the .dot base
-    // color) = everything else, configured or not — the status TEXT still
-    // carries the configured/not distinction, the light answers only
-    // "which one is live".
+    // green = live. The in-app surface is hosted by EVERY backend now, so
+    // its light is always green; for messengers, green = the one the agent
+    // is actually on. The status TEXT keeps the configured/not distinction.
     const dot = $(`ch-${key}-dot`)
-    if (dot) dot.classList.toggle('ok', isActive)
+    if (dot) dot.classList.toggle('ok', isActive || key === 'local')
     const parts = []
-    parts.push(isActive ? C.activeBadge : info.configured ? C.configuredBadge : C.notConfiguredBadge)
+    if (key === 'local') parts.push(C.localAlwaysOn)
+    else parts.push(isActive ? C.activeBadge : info.configured ? C.configuredBadge : C.notConfiguredBadge)
     if (info.configured && info.home) parts.push(C.homeLine(info.detail ? `${info.detail} / ${info.home}` : info.home))
     $(`ch-${key}-status`).textContent = parts.join(' · ')
     const connectBtn = connectBtnFor(key)

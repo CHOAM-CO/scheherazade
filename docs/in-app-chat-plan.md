@@ -1,5 +1,15 @@
 # In-app chat — plan
 
+> **2026-08-05 UPDATE — ALWAYS-ON**: in-app chat stopped being a switch
+> target. `startLocalChatSurface` (channel-local.mjs) is hosted by every
+> platform backend (channel/-slack/-telegram.mjs); tool calls with
+> channelId "in-app" route to channel-local's handleToolCall
+> deterministically, before the platform zod parses. The "switch to
+> in-app to chat here" state no longer exists; CHANNEL_BACKEND now means
+> "which messenger ALSO carries the agent" ('local' = none). Receipt:
+> scripts/test-local-surface-routing.mjs. The plan below is the original
+> switch-era design, kept for history.
+
 > **STATUS: ALL FIVE SLICES SHIPPED 2026-07-30** — 1: `ea320fa` (channel) ·
 > 2: `ea320fa` (registration) · 3: `1cca773` (proxy) · 4: `f8a0f57` (page;
 > plus the orphan guard — stdin EOF exits and unlinks the port file, found

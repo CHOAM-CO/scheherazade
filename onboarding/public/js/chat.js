@@ -337,24 +337,14 @@
     }
   }
 
-  // The backend banner answers the WHY behind a down status: when the agent
-  // talks through discord/slack/telegram, channel-local.mjs never runs, so
-  // chat here reads not_running forever. That deserves an explanation, not
-  // just a red line.
+  // The wrong-backend banner is RETIRED (2026-08-05): every backend now
+  // hosts the local chat surface (startLocalChatSurface in channel-local.mjs
+  // rides along in channel/-slack/-telegram.mjs), so "the agent talks
+  // through discord, chat is off" stopped being a state that exists. Down
+  // now only means the agent itself is down, which the status line says.
   async function refreshStatus() {
     try {
       const s = await window.api('/api/chat/status')
-      const banner = $('ct-backend-banner')
-      // The banner explains WHY chat is down -- so it only shows when chat
-      // actually IS down. A running channel with a non-local backend value
-      // (mid-switch, dev harness) must not read "chat is off" above a
-      // conversation that is demonstrably working.
-      if (!s.up && s.backend && s.backend !== 'local') {
-        banner.textContent = C.wrongBackend(s.backend)
-        banner.classList.remove('hidden')
-      } else {
-        banner.classList.add('hidden')
-      }
       if (s.up) setStatus('up', s.agent || '')
       else setStatus(s.reason === 'not_running' ? 'not_running' : 'unreachable')
     } catch (err) {

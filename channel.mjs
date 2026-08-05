@@ -27,6 +27,16 @@ import {
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
   createInboundNotifier, createOutboundDedup,
 } from './channel-runtime.mjs'
+// Always-on in-app chat (2026-08-05): this backend HOSTS the local chat
+// surface alongside Discord, so the app's chat window works without
+// switching. Importing channel-local is safe -- its module body is guarded
+// (isMainModule) and nothing connects a transport at import time; tests have
+// imported it since slice 1. Tool calls carrying channelId "in-app" are
+// routed to its handleToolCall deterministically (no model judgment beyond
+// echoing back the channelId it was handed, which is the existing contract).
+import {
+  LOCAL_CHANNEL_ID, handleToolCall as handleLocalToolCall, startLocalChatSurface,
+} from './channel-local.mjs'
 
 // autonomy/*.cjs are CommonJS on purpose: onboarding/http-server.cjs has to
 // read the same meter to show the user their own numbers, and it cannot import
@@ -218,7 +228,8 @@ Discord messages arrive as: <channel source="${AGENT_NAME}" sender="..." channel
 Reply with the "reply" tool. channelId is optional -- omit it and the message goes to the current conversation channel. Never invent a channelId; only pass one when replying to a DIFFERENT channel than the one that messaged you. A channelId you DO pass is honored exactly or the call fails: an unresolvable one sends nothing anywhere, it is never quietly redirected.
 Image attachments are downloaded locally; the notification includes the local file path(s) -- open with the Read tool.
 Use "send_file_to_discord" (filePath, comment?, channelId?) to upload a local file (image, document, etc.) -- "reply" is text-only.
-Use "read_channel_history" (channelId, limit, after?, before?) to look back through the channel. after/before each accept a Discord message ID or an ISO date.`
+Use "read_channel_history" (channelId, limit, after?, before?) to look back through the channel. after/before each accept a Discord message ID or an ISO date.
+The app's own chat window is ALSO always connected: its messages arrive with channelId="in-app". Reply to those with channelId "in-app" exactly -- never route an in-app conversation to a Discord channel or vice versa. The "react" tool (one emoji on the user's bubble) works only for the in-app window.`
 const INSTRUCTIONS = process.env.CHANNEL_INSTRUCTIONS || DEFAULT_INSTRUCTIONS
 
 const mcp = new Server(
@@ -266,8 +277,34 @@ const TOOLS = [
       required: ['channelId'],
     },
   },
+  {
+    // In-app-only (the local chat surface this backend hosts). Same shape as
+    // channel-local.mjs's react tool; calls route there regardless of
+    // channelId because no other surface has reactions.
+    name: 'react',
+    description: "Attach one emoji to the user's message bubble in the app's chat window (in-app conversations only). Use it when acknowledgment needs no words.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        emoji: { type: 'string', description: 'A single emoji, e.g. 👍 or ❤️' },
+        targetSeq: { type: 'number', description: "OPTIONAL transcript seq of the message to react to (visible in read_channel_history with channelId 'in-app'). Defaults to the user's latest in-app message." },
+        channelId: { type: 'string', description: 'OPTIONAL; only "in-app" is valid here.' },
+      },
+      required: ['emoji'],
+    },
+  },
   ROUTINE_TOOL,
 ]
+
+// Local-surface routing: these tools, when aimed at the in-app conversation,
+// belong to channel-local's handler. react has no other valid surface, so it
+// routes local even without a channelId.
+const LOCAL_ROUTED_TOOLS = new Set(['reply', 'send_file_to_discord', 'read_channel_history', 'react'])
+function isLocalCall(name, args) {
+  if (!LOCAL_ROUTED_TOOLS.has(name)) return false
+  if (name === 'react') return true
+  return Boolean(args && args.channelId === LOCAL_CHANNEL_ID)
+}
 
 const ReplyArgs = z.object({ channelId: z.string().min(1).optional(), text: z.string().min(1) })
 const SendFileArgs = z.object({ channelId: z.string().min(1).optional(), filePath: z.string().min(1), comment: z.string().optional() })
@@ -292,6 +329,13 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
 
 mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: args } = req.params
+
+  // In-app chat rides along on every backend (2026-08-05): channelId
+  // "in-app" is the local surface's constant id, disjoint from Discord's
+  // numeric snowflakes, so this routing is deterministic. Before the zod
+  // parses below on purpose -- read_channel_history's Discord schema, for
+  // one, would reject the local call shape.
+  if (isLocalCall(name, args)) return handleLocalToolCall(name, args)
 
   if (name === 'reply') {
     const { channelId, text } = ReplyArgs.parse(args || {})
@@ -756,6 +800,19 @@ async function boot() {
   await mcp.connect(new StdioServerTransport())
   log(`MCP server up (${AGENT_NAME})`)
 
+  // Always-on in-app chat surface, fail-soft: a surface that cannot bind
+  // costs Discord nothing but a log line (and the chat page reads an honest
+  // not_running from the missing port file). stdin EOF = parent death; drop
+  // the port file so the proxy never probes a corpse (channel-local's own
+  // boot has the full story on this guard).
+  try {
+    const surface = await startLocalChatSurface({ notify: (n) => notifyInbound(n.params), log })
+    process.stdin.on('end', surface.stop)
+    process.stdin.on('close', surface.stop)
+  } catch (err) {
+    log(`in-app chat surface failed to start (chat page off this session): ${err.message}`)
+  }
+
   try {
     await discord.login(DISCORD_TOKEN)
   } catch (err) {
@@ -775,7 +832,7 @@ async function boot() {
   }
 }
 
-export { writeLivenessMarker, LIVENESS_MARKER_PATH, writeFailureMarker, FAILURE_MARKER_PATH, DATA_HOME, resolveOutboundChannel }
+export { writeLivenessMarker, LIVENESS_MARKER_PATH, writeFailureMarker, FAILURE_MARKER_PATH, DATA_HOME, resolveOutboundChannel, isLocalCall }
 
 if (isMainModule) {
   await boot()

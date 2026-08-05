@@ -545,6 +545,38 @@ export async function writePortFile(dataHome, payload) {
   return file
 }
 
+// ── always-on surface (2026-08-05, colleague via Mino: "슬랙/디코/텔레그램
+// 이랑 인앱챗을 스위칭하는 방식이 아니라 인앱챗 기본 + 채널 하나 방식") ────
+// The whole local chat surface — transcript restore, loopback HTTP listener,
+// port file — as one bootable unit that a PLATFORM backend hosts alongside
+// its own transport, so in-app chat works no matter which messenger is the
+// active CHANNEL_BACKEND. Routing back out is deterministic: the host
+// intercepts tool calls whose channelId is LOCAL_CHANNEL_ID and hands them
+// to this module's handleToolCall — no model judgment involved beyond
+// passing back the channelId it was given, which is the existing contract.
+//
+// The host owns process lifecycle: call stop() from its own shutdown path
+// (stdin EOF guard) so the port file dies with the process. Fail-soft at the
+// call site — a surface that cannot bind must cost the platform channel
+// nothing but a log line.
+export async function startLocalChatSurface({ notify, log: slog = log } = {}) {
+  const { restored } = await enableTranscriptPersistence()
+  slog(`in-app transcript restored: ${restored} item(s)`)
+  const token = crypto.randomBytes(32).toString('hex')
+  const handler = createRequestHandler({ notify, token })
+  const server = http.createServer((req, res) => { handler(req, res) })
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    // Port 0 = OS-picked; the real port goes in the file (see boot()'s note).
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  const { port } = server.address()
+  const portFilePath = await writePortFile(DATA_HOME, { port, token, pid: process.pid, startedAt: localNow() })
+  slog(`in-app chat listening on 127.0.0.1:${port}`)
+  const stop = () => { try { unlinkSync(portFilePath) } catch { /* already gone */ } }
+  return { port, portFilePath, stop }
+}
+
 // ── boot ──────────────────────────────────────────────────────────────────
 // Same "am I the entry point" guard as the other backends, for the same
 // reason: scripts/test-local-channel.mjs imports this file to exercise its
@@ -552,32 +584,15 @@ export async function writePortFile(dataHome, payload) {
 const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])
 
 async function boot() {
-  // Restore the conversation BEFORE anything can enqueue (boot announce
-  // appends a greeting below; it must land after yesterday's messages, not
-  // instead of them).
-  const { restored } = await enableTranscriptPersistence()
-  log(`transcript restored: ${restored} item(s)`)
-
   await mcp.connect(new StdioServerTransport())
   log(`MCP server up (${AGENT_NAME})`)
 
-  const token = crypto.randomBytes(32).toString('hex')
-  const handler = createRequestHandler({
-    notify: (n) => notifyInbound(n.params),
-    token,
-  })
-  const server = http.createServer((req, res) => { handler(req, res) })
-
-  await new Promise((resolve, reject) => {
-    server.once('error', reject)
-    // Port 0 = let the OS pick. The app spawns claude which spawns this, so a
-    // fixed port would collide across two installs and there is nothing to
-    // gain from guessing one; the real port goes in the file below.
-    server.listen(0, '127.0.0.1', resolve)
-  })
-  const { port } = server.address()
-  const portFilePath = await writePortFile(DATA_HOME, { port, token, pid: process.pid, startedAt: localNow() })
-  log(`in-app chat listening on 127.0.0.1:${port}`)
+  // The surface unit restores the transcript BEFORE anything can enqueue
+  // (boot announce appends a greeting below; it must land after yesterday's
+  // messages, not instead of them), binds the loopback listener (port 0 =
+  // OS-picked: the app spawns claude which spawns this, so a fixed port
+  // would collide across two installs), and writes the port file.
+  const surface = await startLocalChatSurface({ notify: (n) => notifyInbound(n.params) })
 
   // Parent-death guard (found live, 2026-07-30: a killed parent left this
   // process orphaned and the chat page said "listening" while notifications
@@ -588,7 +603,7 @@ async function boot() {
   // backend exists to remove. Delete the port file first so the proxy reads
   // an honest not_running instead of probing a corpse.
   const shutdown = () => {
-    try { unlinkSync(portFilePath) } catch { /* already gone */ }
+    surface.stop()
     process.exit(0)
   }
   process.stdin.on('end', shutdown)

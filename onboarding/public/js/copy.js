@@ -782,7 +782,8 @@ window.COPY = {
     statusUp: (agent) => (agent ? `${agent} is listening.` : 'Connected.'),
     statusNotRunning: "The agent isn't running — start it from the bar above.",
     statusUnreachable: "The agent isn't answering. If it's restarting, this usually clears on its own.",
-    wrongBackend: (b) => `The agent currently talks through ${b}, so in-app chat is off. To chat here instead, switch the channel to in-app on the Channels page.`,
+    // wrongBackend retired 2026-08-05: in-app chat is hosted by every
+    // backend now, so that state no longer exists.
     gapMarker: '— some earlier messages fell out of the buffer —',
     empty: 'No messages yet. Say hi.',
     sendFailed: "Couldn't send. Your message is still in the box — try again.",
@@ -1126,10 +1127,13 @@ window.COPY = {
   // 존댓말, no 이모지, no 느낌표.
   channels: {
     title: 'Channels',
-    subtitle: 'The messenger the agent talks through. Connect one and switch anytime.',
+    subtitle: 'In-app chat is always on. Connect a messenger to also reach the agent from your phone.',
     activeBadge: 'Active',
     configuredBadge: 'Connected',
     notConfiguredBadge: 'Not connected',
+    // In-app chat stopped being a switch target in spirit (2026-08-05:
+    // every backend hosts it), so its row states presence, not selection.
+    localAlwaysOn: 'Always on',
     switchButton: 'Switch to this channel',
     switchConfirm: (name) => `Switch to ${name} and restart the agent. Continue?`,
     switchOk: 'Switch',
