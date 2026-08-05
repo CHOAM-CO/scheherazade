@@ -165,11 +165,12 @@
     : '')
 
   // ── gauge DOM (2026-08-05, Mino: 텍스트 말고 진짜 게이지 "보기쉽게") ────
-  // Thresholds mirror app.css: <60 ok(green), 60-84 warn(amber), 85+ hot(red).
+  // Thresholds per Mino 11:55 ("80퍼센트 넘으면 주황색 / 90퍼센트 넘으면
+  // 빨간색"): <80 ok(green), 80-89 warn(orange), 90+ hot(red).
   // pctVal == null renders a striped track labeled unreadable — the server's
   // null-not-zero contract survives the move from text to bars.
-  const GAUGE_WARN = 60
-  const GAUGE_HOT = 85
+  const GAUGE_WARN = 80
+  const GAUGE_HOT = 90
   function gaugeSeg({ label, pctVal, meta }) {
     const seg = document.createElement('div')
     seg.className = 'usage-seg'
@@ -224,12 +225,12 @@
     body.appendChild(n)
   }
 
-  async function renderClaudeUsageLine() {
+  async function renderClaudeUsageLine(force) {
     let body = laneBody('conn-usage-lane-claude', C.usageLaneClaude)
     if (!body) return
     laneNote(body, C.usageLoading)
     let u
-    try { u = await api('/api/usage/claude') } catch (err) {
+    try { u = await api(`/api/usage/claude${force ? '?force=1' : ''}`) } catch (err) {
       body = laneBody('conn-usage-lane-claude', C.usageLaneClaude); laneNote(body, GEN(err.message)); return
     }
     body = laneBody('conn-usage-lane-claude', C.usageLaneClaude)
@@ -244,12 +245,12 @@
     if (notes.length) laneNote(body, notes.join(' · '))
   }
 
-  async function renderCodexUsageLine() {
+  async function renderCodexUsageLine(force) {
     let body = laneBody('conn-usage-lane-codex', C.usageLaneCodex)
     if (!body) return
     laneNote(body, C.usageLoading)
     let u
-    try { u = await api('/api/usage/codex') } catch (err) {
+    try { u = await api(`/api/usage/codex${force ? '?force=1' : ''}`) } catch (err) {
       body = laneBody('conn-usage-lane-codex', C.usageLaneCodex); laneNote(body, GEN(err.message)); return
     }
     body = laneBody('conn-usage-lane-codex', C.usageLaneCodex)
@@ -271,12 +272,12 @@
     if (notes.length) laneNote(body, notes.join(' · '))
   }
 
-  async function renderOllamaUsageLine() {
+  async function renderOllamaUsageLine(force) {
     let body = laneBody('conn-usage-lane-ollama', C.usageLaneOllama)
     if (!body) return
     laneNote(body, C.usageLoading)
     let u
-    try { u = await api('/api/usage/ollama') } catch (err) {
+    try { u = await api(`/api/usage/ollama${force ? '?force=1' : ''}`) } catch (err) {
       body = laneBody('conn-usage-lane-ollama', C.usageLaneOllama); laneNote(body, GEN(err.message)); return
     }
     body = laneBody('conn-usage-lane-ollama', C.usageLaneOllama)
@@ -297,18 +298,24 @@
     if (stale) laneNote(body, stale)
   }
 
-  async function renderUsage() {
+  // force=true (the Refresh icon) rides ?force=1 through to the server so a
+  // manual refresh actually re-parses instead of bouncing off the 60s cache
+  // (Mino 11:55: 진입 시 1회 파싱 + 수동 리프레시 — 주기 폴링은 원래 없음,
+  // 이 페이지가 진입 시 한 번 부르고 끝이다).
+  async function renderUsage(force) {
     const label = $('conn-usage-label')
     const btn = $('conn-usage-refresh')
     if (!label || !btn) return
     label.textContent = C.usageLabel
-    btn.textContent = C.usageRefresh
-    btn.onclick = () => renderUsage()
+    btn.textContent = '↻'
+    btn.title = C.usageRefresh
+    btn.setAttribute('aria-label', C.usageRefresh)
+    btn.onclick = () => renderUsage(true)
     // Three independent lanes -- one slow/failed fetch must not blank the
     // other two, so no await-chaining, no Promise.all.
-    renderClaudeUsageLine()
-    renderCodexUsageLine()
-    renderOllamaUsageLine()
+    renderClaudeUsageLine(force)
+    renderCodexUsageLine(force)
+    renderOllamaUsageLine(force)
   }
 
   async function runProviderTest(provider, statusEl, btn) {

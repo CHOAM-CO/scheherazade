@@ -526,12 +526,28 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
    empty green bar — the track goes striped + the label says unreadable
    (server null-not-zero contract, same as the old text lines). */
 .usage-lanes { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.4rem; }
-.usage-lane { display: flex; align-items: flex-start; gap: 0.6rem; }
-.usage-lane-name { width: 3.8rem; flex: none; color: var(--fg-dim); font-size: 0.8rem; padding-top: 0.05rem; }
-.usage-lane-body { flex: 1; display: flex; flex-direction: column; gap: 0.3rem; min-width: 0; }
+/* 2026-08-05 margin pass (Mino: "큰 칸 나누고 마진설계부터 한다음에 칸 안에
+   정보들 배치" -- the lanes sat crammed in one undivided block). Each
+   provider is its own sub-panel: box first, then name as a header line,
+   then gauges with their own vertical rhythm. */
+.usage-lanes { display: flex; flex-direction: column; gap: var(--s4); }
+.usage-lane {
+  display: block;
+  padding: var(--s4);
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.usage-lane-name {
+  display: block;
+  color: var(--fg);
+  font-size: 0.8rem;
+  margin-bottom: var(--s3);
+}
+.usage-lane-body { display: flex; flex-direction: column; gap: 0.55rem; min-width: 0; }
 .usage-seg { display: flex; align-items: center; gap: 0.5rem; }
 .usage-seg-label { width: 3.4rem; flex: none; color: var(--fg-faint); font-size: 0.72rem; text-align: right; }
-.usage-bar { flex: 1; height: 8px; border-radius: 4px; background: var(--panel-raised); border: 1px solid var(--border); overflow: hidden; min-width: 4rem; }
+.usage-bar { flex: 1; height: 10px; border-radius: 5px; background: var(--panel-raised); border: 1px solid var(--border); overflow: hidden; min-width: 4rem; }
 .usage-bar.unreadable {
   background: repeating-linear-gradient(45deg, var(--panel-raised), var(--panel-raised) 4px, var(--panel) 4px, var(--panel) 8px);
 }

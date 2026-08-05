@@ -104,7 +104,9 @@ function createRoutes(staticCtx) {
       method: 'GET',
       match: (pathname) => pathname === '/api/usage/claude',
       handler: async (req, res) => {
-        sendJson(res, 200, await fetchClaudeSubscriptionUsage())
+        // ?force=1 = the Refresh button bypassing the 60s cache (2026-08-05,
+        // Mino: manual refresh must actually parse). Page-enter loads omit it.
+        sendJson(res, 200, await fetchClaudeSubscriptionUsage({ force: /[?&]force=1(&|$)/.test(String(req.url || '')) }))
         return
       },
     },
@@ -112,7 +114,7 @@ function createRoutes(staticCtx) {
       method: 'GET',
       match: (pathname) => pathname === '/api/usage/codex',
       handler: async (req, res) => {
-        sendJson(res, 200, await fetchCodexUsage())
+        sendJson(res, 200, await fetchCodexUsage({ force: /[?&]force=1(&|$)/.test(String(req.url || '')) }))
         return
       },
     },
@@ -120,7 +122,7 @@ function createRoutes(staticCtx) {
       method: 'GET',
       match: (pathname) => pathname === '/api/usage/ollama',
       handler: async (req, res) => {
-        sendJson(res, 200, await fetchOllamaUsage())
+        sendJson(res, 200, await fetchOllamaUsage({ force: /[?&]force=1(&|$)/.test(String(req.url || '')) }))
         return
       },
     },

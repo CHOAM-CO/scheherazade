@@ -2653,9 +2653,14 @@ function readCliSessionToken() {
   } catch { return null }
 }
 
-async function fetchClaudeSubscriptionUsage() {
+// force (2026-08-05, Mino: 수동 리프레시는 진짜 파싱이어야 함): the Refresh
+// button passes ?force=1 to bypass the 60s read-cache -- without it a manual
+// refresh inside the window is a silent no-op. The cache still gets WRITTEN
+// (and stale-on-error still applies), only the read is skipped. All three
+// fetchers share this contract.
+async function fetchClaudeSubscriptionUsage(opts = {}) {
   const now = Date.now()
-  if (usageCache && now - usageCache.at < 60_000) return usageCache.payload
+  if (!opts.force && usageCache && now - usageCache.at < 60_000) return usageCache.payload
   const failWith = (branch, detail) => {
     if (usageCache) return { ...usageCache.payload, stale: true, staleReason: detail || branch }
     return { ok: false, branch, ...(detail ? { detail } : {}) }
@@ -2734,9 +2739,9 @@ function readCodexAccessToken() {
     return token || null
   } catch { return null }
 }
-async function fetchCodexUsage() {
+async function fetchCodexUsage(opts = {}) {
   const now = Date.now()
-  if (codexUsageCache && now - codexUsageCache.at < 60_000) return codexUsageCache.payload
+  if (!opts.force && codexUsageCache && now - codexUsageCache.at < 60_000) return codexUsageCache.payload
   const failWith = (branch, detail) => {
     if (codexUsageCache) return { ...codexUsageCache.payload, stale: true, staleReason: detail || branch }
     return { ok: false, branch, ...(detail ? { detail } : {}) }
@@ -2786,9 +2791,9 @@ async function fetchCodexUsage() {
 // FIELD NAMES ONLY (never values -- could contain account data) so the
 // first real-key Refresh in the field tells us the schema to bind.
 let ollamaUsageCache = null // { at, payload } -- last GOOD reading only
-async function fetchOllamaUsage() {
+async function fetchOllamaUsage(opts = {}) {
   const now = Date.now()
-  if (ollamaUsageCache && now - ollamaUsageCache.at < 60_000) return ollamaUsageCache.payload
+  if (!opts.force && ollamaUsageCache && now - ollamaUsageCache.at < 60_000) return ollamaUsageCache.payload
   const failWith = (branch, detail) => {
     if (ollamaUsageCache) return { ...ollamaUsageCache.payload, stale: true, staleReason: detail || branch }
     return { ok: false, branch, ...(detail ? { detail } : {}) }
