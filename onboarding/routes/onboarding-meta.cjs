@@ -23,6 +23,7 @@ function createRoutes(staticCtx) {
     getElectron, startBootstrap,
     fetchClaudeSubscriptionUsage, fetchCodexUsage, fetchOllamaUsage, checkForUpdate,
     startClaudeCliInstall, getClaudeInstallStatus,
+    readAppearance, writeAppearance, AppearanceModel,
     path, DATA_HOME,
   } = staticCtx
   return [
@@ -123,6 +124,33 @@ function createRoutes(staticCtx) {
       match: (pathname) => pathname === '/api/usage/ollama',
       handler: async (req, res) => {
         sendJson(res, 200, await fetchOllamaUsage({ force: /[?&]force=1(&|$)/.test(String(req.url || '')) }))
+        return
+      },
+    },
+    {
+      // Appearance tab (2026-08-05, Mino "어피어런스 탭 만들고 ... CSS들
+      // 게이지로 쭉 나열"). GET returns the saved (normalized) config plus
+      // the model's option catalog so the page renders choices from ONE
+      // source; PUT saves whatever survives normalize() — invalid fields
+      // silently fall back to defaults rather than 400ing a slider drag.
+      method: 'GET',
+      match: (pathname) => pathname === '/api/appearance',
+      handler: async (req, res) => {
+        sendJson(res, 200, {
+          values: readAppearance(),
+          defaults: AppearanceModel.DEFAULTS,
+          fonts: Object.keys(AppearanceModel.FONTS),
+          accents: AppearanceModel.ACCENTS,
+        })
+        return
+      },
+    },
+    {
+      method: 'PUT',
+      match: (pathname) => pathname === '/api/appearance',
+      handler: async (req, res) => {
+        const body = await readJsonBody(req)
+        sendJson(res, 200, { ok: true, values: writeAppearance(body) })
         return
       },
     },

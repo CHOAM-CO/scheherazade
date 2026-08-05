@@ -727,7 +727,7 @@ window.COPY = {
     // channels FIRST (multichannel v0.0.18, Mino 07-16: "맨 앞에 채널 섹션") --
     // tab order is meaning here: the messenger the agent lives through
     // outranks what it remembers and how it runs.
-    tabs: { chat: 'Chat', channels: 'Channels', memory: 'Memory', connectors: 'Connectors', settings: 'Settings', logs: 'Logs' },
+    tabs: { chat: 'Chat', channels: 'Channels', memory: 'Memory', connectors: 'Connectors', settings: 'Settings', appearance: 'Appearance', logs: 'Logs' },
     label: 'AGENT',
     states: { live: 'Running', connecting: 'Starting…', stopped: 'Stopped', failed: 'Failed', idle: 'Not started' },
     start: 'Start',
@@ -839,6 +839,23 @@ window.COPY = {
   },
 
   // AUTHORED (not in copy file) -- settings page, minimal v1.
+  appearance: {
+    title: 'Appearance',
+    subtitle: 'Tune the look. Every change applies instantly — this page is the preview — and saves on its own.',
+    glassLabel: 'Frosted glass',
+    glassNote: 'How much the window blur shows through. 0 is solid dark. The glass itself needs macOS or Windows 11, and Windows pauses it while the window is in the background.',
+    glassRangeLabel: 'Intensity',
+    typeLabel: 'Type',
+    fontSizeLabel: 'Font size',
+    fontFamilyLabel: 'Font family',
+    fonts: { system: 'System', serif: 'Serif', mono: 'Mono', rounded: 'Rounded' },
+    accentLabel: 'Accent color',
+    accentRowLabel: 'Color',
+    reset: 'Reset to defaults',
+    saved: 'Saved',
+    saveFailed: 'Save failed',
+  },
+
   settings: {
     title: 'Settings',
     backToMemory: 'Back to Memory', // unused since the IA pass removed the back link; kept so a future page can reuse it

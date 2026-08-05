@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Scheherazade — Appearance</title>
+    <link rel="stylesheet" href="/css/app.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <div id="app-nav"></div>
+
+      <div class="page-header">
+        <h1 id="ap-title"></h1>
+      </div>
+      <p class="subtitle" id="ap-subtitle"></p>
+
+      <!-- Appearance tab (2026-08-05, Mino: "얼기설기 붙이지 말고 어피어런스
+           탭 만들고 -> UX랑 컴포넌트 마진부터 설계"). Margin design mirrors
+           the connectors usage-lane pass: three boxed lanes (glass / type /
+           accent), each lane owning its rows on the shared --label-col grid,
+           values read out beside their gauge. The page IS the live preview:
+           every control applies instantly via appearance-model.js (the same
+           mapping the server injects pre-paint) and auto-saves — no Save
+           button to forget. -->
+      <div class="category" id="ap-glass">
+        <div class="category-label" id="ap-glass-label"></div>
+        <p class="subtitle" id="ap-glass-note"></p>
+        <div class="ap-row">
+          <label for="ap-glass-range" id="ap-glass-range-label"></label>
+          <input type="range" id="ap-glass-range" min="0" max="100" step="5" />
+          <span class="ap-value" id="ap-glass-value"></span>
+        </div>
+      </div>
+
+      <div class="category" id="ap-type">
+        <div class="category-label" id="ap-type-label"></div>
+        <div class="ap-row">
+          <label for="ap-fontsize-range" id="ap-fontsize-label"></label>
+          <input type="range" id="ap-fontsize-range" min="12" max="16" step="0.5" />
+          <span class="ap-value" id="ap-fontsize-value"></span>
+        </div>
+        <div class="ap-row">
+          <label id="ap-fontfamily-label"></label>
+          <div class="ap-options" id="ap-fontfamily-options"></div>
+          <span class="ap-value"></span>
+        </div>
+      </div>
+
+      <div class="category" id="ap-accent">
+        <div class="category-label" id="ap-accent-label"></div>
+        <div class="ap-row">
+          <label id="ap-accent-row-label"></label>
+          <div class="ap-options" id="ap-accent-options"></div>
+          <span class="ap-value"></span>
+        </div>
+      </div>
+
+      <div class="step-actions">
+        <span class="field-hint" id="ap-status"></span>
+        <button class="secondary" id="ap-reset"></button>
+      </div>
+    </div>
+
+    <script src="/js/copy.js"></script>
+    <script src="/js/nav.js"></script>
+    <script src="/js/appearance-model.cjs"></script>
+    <script src="/js/appearance.js"></script>
+  </body>
+</html>

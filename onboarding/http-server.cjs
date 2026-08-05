@@ -140,6 +140,30 @@ const AGENT_CONFIG_PATH = path.join(CONFIG_DIR, '.agent-config')
 const ENV_PATH = path.join(CONFIG_DIR, '.env')
 const MCP_JSON_PATH = path.join(CONFIG_DIR, '.mcp.json')
 
+// ── appearance (Appearance tab, 2026-08-05 Mino "어피어런스 탭 만들고") ──
+// User-tunable look knobs (glass gauge / font / accent). The mapping lives
+// in public/js/appearance-model.js — required HERE too, so the pre-paint
+// <style> the server injects and the browser's live slider apply can never
+// drift. Store = plain JSON in DATA_HOME; normalize() makes any on-disk
+// junk safe, so reads never throw.
+const AppearanceModel = require('./public/js/appearance-model.cjs')
+const APPEARANCE_PATH = path.join(CONFIG_DIR, 'appearance.json')
+
+function readAppearance() {
+  try {
+    return AppearanceModel.normalize(JSON.parse(fs.readFileSync(APPEARANCE_PATH, 'utf8')))
+  } catch {
+    return AppearanceModel.normalize(null) // defaults
+  }
+}
+
+function writeAppearance(raw) {
+  const cfg = AppearanceModel.normalize(raw)
+  fs.mkdirSync(CONFIG_DIR, { recursive: true })
+  fs.writeFileSync(APPEARANCE_PATH, JSON.stringify(cfg, null, 2) + '\n')
+  return cfg
+}
+
 // Process-side liveness status (spawned/failed), written by main.cjs's
 // child-process lifecycle. See onboarding/agent-status.cjs's own header for
 // why this is a plain shared require() rather than IPC.
@@ -1640,6 +1664,11 @@ const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  // .cjs: appearance-model.cjs is shared verbatim between this server
+  // (require) and the browser (classic <script>) — the extension keeps
+  // node's "type":"module" from reading it as ESM, and this MIME entry
+  // keeps browsers from refusing it as octet-stream.
+  '.cjs': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
 }
 
@@ -1680,9 +1709,17 @@ function serveStatic(req, res, urlPath) {
     // Windows equivalent. Mino hit all of it on the first Windows install
     // (2026-08-03 23:56). The renderer cannot see process.platform, so it
     // gets told. copy.js reads this before it builds any string.
-    const injected = html.replace(
+    let injected = html.replace(
       '<head>',
       `<head>\n    <meta name="onboard-token" content="${SERVER_TOKEN}">\n    <meta name="host-platform" content="${process.platform}">`
+    )
+    // Appearance overrides ride the SAME serve (Appearance tab, 2026-08-05):
+    // injected before </head> so they land AFTER app.css's <link> and win
+    // the :root cascade — pre-paint, so no flash of default styling. The
+    // element id is what js/appearance.js live-updates on slider drag.
+    injected = injected.replace(
+      '</head>',
+      `  <style id="appearance-style">\n${AppearanceModel.cssText(readAppearance())}\n    </style>\n  </head>`
     )
     res.writeHead(200, { 'Content-Type': MIME[ext] })
     res.end(injected)
@@ -2403,6 +2440,7 @@ const ROUTE_TO_FILE = {
   '/settings': 'settings.html',
   '/connectors': 'connectors.html',
   '/waiting': 'waiting.html',
+  '/appearance': 'appearance.html',
 }
 
 // createOnboardingServer(onOnboardingComplete) -- onOnboardingComplete is an
@@ -2996,6 +3034,7 @@ const staticCtx = {
   getSetupTokenSession,
   // usage gauge + update check (2026-08-04 tester requests)
   fetchClaudeSubscriptionUsage, fetchCodexUsage, fetchOllamaUsage, checkForUpdate,
+  readAppearance, writeAppearance, AppearanceModel,
   // vision stand-in captioning (0.0.56)
   laneVision, fetchImageCaption,
   // claude CLI install-assist (2026-08-04, Mino "2로 가자")

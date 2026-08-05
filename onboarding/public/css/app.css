@@ -17,11 +17,15 @@
   --bg: #111214;
   /* Panels are TRANSLUCENT so the window's acrylic/vibrancy reads through
      them — with opaque panels the glass only ever showed in page margins.
-     Composite over the body wash (frost-alpha 0.35): panel ≈ 0.71 dark,
-     raised ≈ 0.81. Calibrated against the win acrylic probe 2026-08-05
-     (alpha-sweep screenshot: 0.82 reads flat, 0.5-0.7 reads as glass). */
-  --panel: rgba(26, 28, 31, 0.55);
-  --panel-raised: rgba(33, 35, 39, 0.7);
+     The three *-alpha vars below are the SINGLE knob surface: nav.js
+     derives them from the user's glass-level setting (Settings > Frosted
+     glass, Mino 2026-08-05 "custom 옵션 하나 만들어놓던가") and these CSS
+     defaults equal glass level 60. Calibrated against the win acrylic
+     probe 2026-08-05 (alpha-sweep: 0.82 reads flat, 0.5-0.7 reads glass). */
+  --panel-alpha: 0.55;
+  --raised-alpha: 0.7;
+  --panel: rgb(26 28 31 / var(--panel-alpha));
+  --panel-raised: rgb(33 35 39 / var(--raised-alpha));
   --border: #2c2f34;
   --fg: #eaeaea;
   --fg-dim: #9a9da3;
@@ -64,7 +68,9 @@ html, body {
   background: rgba(17, 18, 20, var(--frost-alpha));
   color: var(--fg);
   font-family: var(--font);
-  font-size: 13.5px;
+  /* --font-base comes from the Appearance tab (server-injected override
+     style; appearance-model.js owns the mapping). 13.5px = default. */
+  font-size: var(--font-base, 13.5px);
   line-height: 1.55;
 }
 
@@ -990,3 +996,45 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 }
 .chat-msg hr { border: 0; border-top: 1px solid rgba(127, 127, 127, 0.3); margin: 0.6rem 0; }
 .chat-msg a { color: inherit; text-decoration: underline; }
+
+/* ── appearance tab (2026-08-05, "마진부터 설계") ─────────────────────────
+   Same grammar as the connectors usage lanes: the .category boxes carry the
+   outer rhythm, rows inside share one grid — label column (--label-col),
+   stretching control, fixed value readout — so every gauge lines up on the
+   same three rails regardless of control type. */
+.ap-row {
+  display: grid;
+  grid-template-columns: var(--label-col) 1fr 3.5rem;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s2) 0;
+}
+.ap-row + .ap-row { border-top: 1px solid var(--border); }
+.ap-row label { color: var(--fg-dim); font-size: 0.9rem; }
+.ap-value {
+  text-align: right;
+  color: var(--fg-dim);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+.ap-row input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+.ap-options { display: flex; gap: var(--s2); flex-wrap: wrap; }
+.ap-option { padding: 0.3rem 0.7rem; }
+.ap-option.active {
+  color: var(--fg);
+  border-color: var(--accent);
+  background: var(--panel-raised);
+}
+.ap-swatch {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+}
+.ap-swatch.active { border-color: var(--fg); }
+.ap-swatch:hover { transform: scale(1.1); }

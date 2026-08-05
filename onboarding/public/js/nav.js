@@ -118,6 +118,7 @@
     { id: 'memory', href: '/memory', label: NAV.tabs.memory },
     { id: 'connectors', href: '/connectors', label: NAV.tabs.connectors },
     { id: 'settings', href: '/settings', label: NAV.tabs.settings },
+    { id: 'appearance', href: '/appearance', label: NAV.tabs.appearance },
     // logs LAST, deliberately low-key (Mino 07-16: "버튼 어딘가에 짱박아놓고")
     // -- a dev/debug surface, not a daily destination.
     { id: 'logs', href: '/logs', label: NAV.tabs.logs },
@@ -129,6 +130,7 @@
     if (path.startsWith('/channels')) return 'channels'
     if (path.startsWith('/connectors')) return 'connectors'
     if (path.startsWith('/settings')) return 'settings'
+    if (path.startsWith('/appearance')) return 'appearance'
     if (path.startsWith('/logs')) return 'logs'
     return 'memory' // '/memory' and '/' both read as home
   }
