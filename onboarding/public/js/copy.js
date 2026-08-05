@@ -797,6 +797,10 @@ window.COPY = {
     activityAria: 'What the agent is working on right now',
     reactAria: (emoji) => `React with ${emoji}`,
     reactFailed: "Couldn't react — try again.",
+    // Message copy button (2026-08-05, colleague feedback via Mino).
+    copyAria: 'Copy this message',
+    copied: 'Copied.',
+    copyFailed: 'Copy failed. Select the text manually and copy it.',
     // Image attachments (2026-08-04, Mino "인앱챗에 이미지 업로드할수있는
     // 방법이 없음"). The 10MB number matches the server's hard cap in
     // routes/chat.cjs -- if that changes, change both.

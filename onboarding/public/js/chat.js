@@ -148,8 +148,8 @@
     renderMarkdown(el, shown)
     for (const name of images) appendAttachmentImage(el, name, stick || role === 'user')
     if (role === 'agent') clearActivity() // a reply supersedes the status line
-    if (role === 'agent') attachReactBar(el, m.seq)
-    else lastUserBubble = el
+    if (role === 'agent') attachReactBar(el, m.seq, shown)
+    else { lastUserBubble = el; attachCopyBar(el, shown) }
     pane.appendChild(el)
     bubbles.set(m.seq, el)
     msgCount++
@@ -163,10 +163,11 @@
     if (stick || role === 'user') pane.scrollTop = pane.scrollHeight
   }
 
-  // Hover affordance on agent bubbles only -- the fixed two-emoji menu the
-  // channel accepts. The badge itself renders from the transcript echo
+  // Hover affordance on agent bubbles -- the fixed two-emoji menu the
+  // channel accepts, plus a copy button (2026-08-05, colleague feedback via
+  // Mino). The badge itself renders from the transcript echo
   // (applyReaction), never optimistically.
-  function attachReactBar(el, seq) {
+  function attachReactBar(el, seq, copyText) {
     const bar = document.createElement('span')
     bar.className = 'chat-react-bar'
     for (const emoji of REACTIONS) {
@@ -177,7 +178,42 @@
       btn.onclick = () => sendReaction(seq, emoji)
       bar.appendChild(btn)
     }
+    appendCopyBtn(bar, copyText)
     el.appendChild(bar)
+  }
+
+  // User bubbles get the same hover pill with only the copy button -- the
+  // channel accepts reactions on agent messages, not on the user's own.
+  function attachCopyBar(el, copyText) {
+    if (!String(copyText || '').trim()) return // image-only bubble
+    const bar = document.createElement('span')
+    bar.className = 'chat-react-bar'
+    appendCopyBtn(bar, copyText)
+    el.appendChild(bar)
+  }
+
+  // Copies the DISPLAYED text -- image markers are already lifted out by
+  // splitImageMarkers, and the marker line is plumbing, not something a
+  // user wants in their clipboard. Same clipboard+toast pattern as logs.js.
+  function appendCopyBtn(bar, copyText) {
+    const text = String(copyText || '')
+    if (!text.trim()) return // nothing meaningful to copy
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'chat-copy-btn'
+    btn.textContent = '⧉'
+    btn.setAttribute('aria-label', C.copyAria)
+    btn.title = C.copyAria
+    btn.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(text)
+        window.showToast(C.copied)
+      } catch (err) {
+        console.error('clipboard write failed:', err)
+        window.showToast(C.copyFailed)
+      }
+    }
+    bar.appendChild(btn)
   }
 
   // One badge per reactor per bubble: reacting again replaces (DM semantics),

@@ -822,6 +822,10 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   transition: transform 0.1s ease;
 }
 .chat-react-bar button:hover { transform: scale(1.25); }
+/* The copy glyph is text, not emoji -- pin its color to the theme fg so it
+   stays visible inside the panel-raised pill on both themes and on the
+   accent-colored user bubble. */
+.chat-react-bar .chat-copy-btn { color: var(--fg); }
 .chat-activity {
   align-self: flex-start;
   color: var(--fg-dim);
