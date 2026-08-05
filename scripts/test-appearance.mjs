@@ -140,6 +140,21 @@ assert(!/border-radius:\s*(7px|8px|10px|999px)/.test(css), 'no ad-hoc radius val
 assert(css.includes('box-shadow: var(--edge-highlight)'), 'panels carry the top-edge light-catch')
 assert(css.includes('box-shadow: 0 0 0 2px var(--accent-ring)'), 'focus ring uses the derived accent ring')
 
+console.log('\n5b. Pretendard Variable bundling (P0)')
+import { statSync } from 'node:fs'
+{
+  const fontPath = path.join(root, 'onboarding', 'public', 'fonts', 'PretendardVariable.woff2')
+  const sz = statSync(fontPath).size
+  assert(sz > 1_000_000, `bundled font is a real file (${sz} bytes)`)
+  assert(statSync(path.join(root, 'onboarding', 'public', 'fonts', 'LICENSE-Pretendard.txt')).size > 500,
+    'OFL license ships beside the font (the one obligation the license carries)')
+  assert(M.FONTS.pretendard && M.FONTS.pretendard.includes('"Pretendard Variable"'),
+    'model FONTS carries the pretendard stack')
+  assert(css.includes("font-family: 'Pretendard Variable'") && css.includes('/fonts/PretendardVariable.woff2')
+    && css.includes('font-weight: 45 920'), '@font-face with the full variable weight axis')
+  assert(server.includes("'.woff2': 'font/woff2'"), 'server MIME map serves woff2 (browsers refuse octet-stream fonts)')
+}
+
 console.log('\n6. v2/v3 picker wiring (page + controller)')
 for (const id of ['ap-bg-picker', 'ap-accent-picker', 'ap-fg-picker', 'ap-bg-options', 'ap-fg-options', 'ap-blur-options']) {
   assert(page.includes(`id="${id}"`), `appearance.html carries #${id}`)

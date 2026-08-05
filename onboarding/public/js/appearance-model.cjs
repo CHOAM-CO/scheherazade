@@ -52,6 +52,12 @@
 
   const FONTS = {
     system: '-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif',
+    // Bundled (P0 design-research 2026-08): OFL-licensed variable font
+    // whose Hangul and Latin are metric-matched by construction — the one
+    // way the app looks the SAME on mac (Apple SD Gothic) and Windows
+    // (Malgun, visually heavier at equal weight). @font-face + LICENSE in
+    // public/fonts/; falls back to the system stack if loading fails.
+    pretendard: '"Pretendard Variable", -apple-system, BlinkMacSystemFont, system-ui, sans-serif',
     serif: 'ui-serif, Georgia, "Times New Roman", serif',
     mono: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
     rounded: 'ui-rounded, -apple-system, BlinkMacSystemFont, system-ui, sans-serif',

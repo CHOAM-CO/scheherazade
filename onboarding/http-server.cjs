@@ -1670,6 +1670,10 @@ const MIME = {
   // keeps browsers from refusing it as octet-stream.
   '.cjs': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  // Pretendard Variable (P0 design-research 2026-08: one bundled KR/Latin
+  // font kills the Malgun vs Apple SD Gothic cross-platform mismatch).
+  '.woff2': 'font/woff2',
+  '.txt': 'text/plain; charset=utf-8', // OFL license file beside the font
 }
 
 function serveStatic(req, res, urlPath) {

@@ -869,7 +869,7 @@ window.COPY = {
     typeLabel: 'Type',
     fontSizeLabel: 'Font size',
     fontFamilyLabel: 'Font family',
-    fonts: { system: 'System', serif: 'Serif', mono: 'Mono', rounded: 'Rounded' },
+    fonts: { system: 'System', pretendard: 'Pretendard', serif: 'Serif', mono: 'Mono', rounded: 'Rounded' },
     accentLabel: 'Color',
     accentRowLabel: 'Accent',
     bgRowLabel: 'Background',

@@ -80,6 +80,17 @@
   --label-col: 9rem;
 }
 
+/* Pretendard Variable (P0): bundled OFL variable font, weight axis 45-920.
+   font-display swap — system stack paints first, Pretendard swaps in.
+   Selected via the Appearance tab (appearance-model FONTS.pretendard). */
+@font-face {
+  font-family: 'Pretendard Variable';
+  src: url('/fonts/PretendardVariable.woff2') format('woff2-variations');
+  font-weight: 45 920;
+  font-style: normal;
+  font-display: swap;
+}
+
 * { box-sizing: border-box; }
 
 html, body {
@@ -107,6 +118,8 @@ p { margin: 0 0 0.75em; color: var(--fg-dim); }
 
 button {
   font-family: inherit;
+  /* P0 weight map: UI labels/buttons 500 (body 400, headings 600) */
+  font-weight: 500;
   font-size: 0.85rem;
   padding: 0.42rem 0.95rem;
   border-radius: var(--radius-s);
