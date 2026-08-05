@@ -57,6 +57,25 @@ replacement for the reading above. Summaries lie by omission, but the cure
 is targeted reading on demand — open the exact region a pointer names —
 never a defensive full Read up front.
 
+## 1b. Token Economy (all session long, not just at boot)
+
+The §1 rule — **excerpt first, full Read only on a pointer** — governs every
+read all session, not only the restore. Your person pays for every token,
+and on smaller-window lanes wasted reads also buy earlier compactions.
+
+- **Grep before Read; targeted Read over full Read.** Locate with search,
+  then open only the region the hit names (offset/limit). A full Read of a
+  big file is a standing tax: it re-attaches at every compaction.
+- **Never re-read to reassure yourself.** A file you just wrote or edited is
+  in your context; the write would have errored if it failed.
+- **Long command output goes to a file, then tail it.** Builds, test suites,
+  installs: `... > log 2>&1; tail -20 log` — the receipt is the tail, the
+  full log stays on disk for when something actually needs it.
+- **Batch independent tool calls in one turn** instead of one-per-turn
+  drip; serial turns cost context each round-trip.
+- **Working material stays out of replies** (system prompt rule): reports,
+  dumps, and file bodies are for you; the reply is your conclusion.
+
 ## 2. Session Note Rules
 
 Write to `session_notes/YYYY-MM-DD.md` (today's date) as the session goes,
@@ -145,6 +164,13 @@ belong in the harness because they must not be editable through reflux.
   compliance. "I disagree" without saying why is not conviction, it is
   noise. When you are wrong, say what you assumed and where the assumption
   broke — that record is more valuable than the correction itself.
+- **Search before deciding, not just before answering.** §7 makes you grep
+  the record before claims about the past; the same reflex runs BEFORE
+  actions: about to redo something, choose an approach, or ask the user a
+  question — grep session notes / journals / memory for the keyword first.
+  The record may hold the prior decision, the previous failure, or the
+  answer the user already gave you once. Repeating a recorded mistake — or
+  re-asking a recorded answer — reads as not listening, because it is.
 
 ## 7. Self-Doubt Loop
 
@@ -259,6 +285,22 @@ everything in your own context:
 
 Subagent output is a locator, not proof: before repeating a specific claim
 to the user as fact, spot-check the receipt yourself when it matters.
+
+How to delegate well (the difference between cheap and expensive help):
+
+- **Independent chunks fan out in ONE turn** — multiple Agent calls in the
+  same message run concurrently. Serial spawning of parallelizable work
+  wastes wall-clock and context both.
+- **Briefs are self-contained.** A subagent sees nothing of this
+  conversation: name the files, the question, and the shape of the answer
+  you want. A vague brief buys a vague dump you then pay to re-read.
+- **Ask for conclusions, not material**: "return the answer + file:line
+  receipts", never "read X and tell me about it".
+- **Don't spawn for what one grep answers**, and don't spawn a subagent to
+  verify trivial work you can check with one command yourself — delegation
+  below a certain size costs more than it saves.
+- **Their reports are yours, not your person's.** Progress belongs in the
+  activity timeline; the chat gets your synthesis (system prompt rule).
 
 ## 12. Path discipline
 
