@@ -51,6 +51,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync, unlinkSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { createHash } from 'node:crypto'
 
 const HOOK = 'pre-reply-rumination-gate'
 const REPLY_TOOL = 'mcp__agent-channel__reply' // confirmed: .mcp.json server name "agent-channel" (channel.mjs)
@@ -62,7 +63,14 @@ if (process.env.SCHEHERAZADE_RUMINATION_GATE === '0') process.exit(0)
 // AGENT_DATA_HOME env override, else ~/Documents/Scheherazade.
 const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', 'Scheherazade')
 const CACHE_DIR = path.join(DATA_HOME, '.gates')
-const MARKER_PATH = path.join(CACHE_DIR, 'rumination.last_deny')
+// Marker is SCOPED per (channelId × claim classes) since 2026-08-05
+// (red-team P0-3): the old single global file meant a deny in channel A
+// opened a 10-minute pass for a completely different claim in channel B —
+// cross-channel bypass. Content is deliberately NOT part of the scope: the
+// design contract is "resend the same or a CORRECTED message", so a content
+// hash would bounce exactly the corrected retry the window exists for.
+// The legacy unscoped marker is deleted on sight (one-time migration).
+const LEGACY_MARKER_PATH = path.join(CACHE_DIR, 'rumination.last_deny')
 const BOUNCE_WINDOW_MS = 10 * 60 * 1000 // 10 minutes
 
 // Evidence branch state (design 0017): ledger written by
@@ -222,11 +230,25 @@ try {
 
   if (!hitA && !hitB && !hitC) stampCursorAndAllow()
 
+  // Scope key: which channel this reply targets × which claim classes fired.
+  // See the LEGACY_MARKER_PATH note up top for why content is excluded.
+  const channelScope = typeof ti.channelId === 'string' && ti.channelId ? ti.channelId : 'current'
+  const scopeKey = createHash('sha256')
+    .update(`${channelScope}|${hitA ? 'A' : ''}${hitB ? 'B' : ''}${hitC ? 'C' : ''}`)
+    .digest('hex')
+    .slice(0, 16)
+  const markerPath = path.join(CACHE_DIR, `rumination.last_deny.${scopeKey}`)
+  // One-time migration: a pre-scoping global marker is deleted, never
+  // honored — honoring it would BE the cross-channel bypass being removed.
+  if (existsSync(LEGACY_MARKER_PATH)) {
+    try { unlinkSync(LEGACY_MARKER_PATH) } catch { /* best effort */ }
+  }
+
   // ── One-bounce state check ──────────────────────────────────────────────
-  if (existsSync(MARKER_PATH)) {
+  if (existsSync(markerPath)) {
     let age
     try {
-      age = Date.now() - statSync(MARKER_PATH).mtimeMs
+      age = Date.now() - statSync(markerPath).mtimeMs
     } catch (e) {
       failLoud('marker stat', e)
     }
@@ -237,7 +259,7 @@ try {
       // the failed command to check — often failing again) are part of the
       // judged evidence, not grounds to re-bounce the retry.
       try {
-        unlinkSync(MARKER_PATH)
+        unlinkSync(markerPath)
       } catch (e) {
         failLoud('marker consume (unlink)', e)
       }
@@ -248,7 +270,7 @@ try {
 
   try {
     mkdirSync(CACHE_DIR, { recursive: true })
-    writeFileSync(MARKER_PATH, String(Date.now()), 'utf8')
+    writeFileSync(markerPath, String(Date.now()), 'utf8')
   } catch (e) {
     failLoud('marker write', e)
   }

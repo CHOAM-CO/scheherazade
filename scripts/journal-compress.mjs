@@ -53,7 +53,33 @@ if (mode === 'scan') {
   let archived = 0
   for (const f of oldNotes()) {
     const fdate = path.basename(f, '.md')
-    if (!fs.existsSync(path.join(JOURNAL_DIR, `${fdate}.md`))) continue
+    const journalPath = path.join(JOURNAL_DIR, `${fdate}.md`)
+    if (!fs.existsSync(journalPath)) continue
+    // Integrity gate (red-team 2026-08-05 P0-2): existence alone proved
+    // nothing — an empty or 🔒-dropping journal would still archive the
+    // note. (The note is MOVED to archive/, never deleted, so this was a
+    // burial risk, not a loss risk — but the compression procedure's
+    // "keep 🔥 Felt and 🔒 lines verbatim" invariant deserves a machine
+    // check, not an honor system.)
+    const journal = fs.readFileSync(journalPath, 'utf8')
+    const note = fs.readFileSync(f, 'utf8')
+    if (!journal.trim()) {
+      console.error(`SKIP ${fdate}: journal exists but is blank — write the journal entry first`)
+      continue
+    }
+    const missingLocked = note
+      .split('\n')
+      .filter((l) => l.includes('🔒') && l.trim())
+      .filter((l) => !journal.includes(l.trim()))
+    if (missingLocked.length > 0) {
+      console.error(`SKIP ${fdate}: ${missingLocked.length} 🔒 line(s) from the session note are not in the journal verbatim — carry them over first:`)
+      for (const l of missingLocked.slice(0, 5)) console.error(`  ${l.trim().slice(0, 120)}`)
+      continue
+    }
+    if (note.includes('🔥 Felt') && !journal.includes('🔥 Felt')) {
+      console.error(`SKIP ${fdate}: session note has a 🔥 Felt section but the journal does not — carry it over first`)
+      continue
+    }
     fs.renameSync(f, path.join(ARCHIVE_DIR, `${fdate}.md`))
     archived++
     console.log(`archived ${fdate}.md`)

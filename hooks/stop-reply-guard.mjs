@@ -211,7 +211,12 @@ async function main() {
         const text = Array.isArray(block.content)
           ? block.content.map((c) => (typeof c?.text === 'string' ? c.text : '')).join('\n')
           : typeof block.content === 'string' ? block.content : ''
-        const m = text.match(/^delivered_channel=(-?\d+)$/m)
+        // ID charset is per-platform (red-team 2026-08-05 P1-4): discord =
+        // numeric snowflake, telegram = possibly-negative integer, slack =
+        // alphanumeric (C0123ABC), local = 'in-app'. The old numeric-only
+        // pattern silently ignored every non-discord delivery receipt and
+        // fell back to tool args — lower-authority evidence.
+        const m = text.match(/^delivered_channel=([A-Za-z0-9_.-]+)$/m)
         if (m && m[1] === triggerChannelId) {
           replyFound = true
           break

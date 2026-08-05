@@ -362,7 +362,12 @@ export async function handleToolCall(name, args) {
     const dup = checkOutboundDup('local', text)
     if (dup.duplicate) return { content: [{ type: 'text', text: dup.receipt }] }
     const n = enqueueOutbound(text)
-    return { content: [{ type: 'text', text: `sent (#${n})` }] }
+    // delivered_channel= line: machine-readable delivery receipt, same
+    // contract as the platform backends (channel.mjs L354 note). The local
+    // surface never emitted one, so hooks/stop-reply-guard.mjs had only its
+    // lower-authority tool-args fallback for in-app replies (red-team
+    // 2026-08-05 P1-4).
+    return { content: [{ type: 'text', text: `sent (#${n})\ndelivered_channel=${LOCAL_CHANNEL_ID}` }] }
   }
   if (name === 'send_file_to_discord') {
     const filePath = args && args.filePath
@@ -374,7 +379,7 @@ export async function handleToolCall(name, args) {
     // queue would be a second storage design with nothing asking for it yet.
     const comment = args.comment ? `${args.comment}\n` : ''
     const n = enqueueOutbound(`${comment}[file] ${filePath}`)
-    return { content: [{ type: 'text', text: `sent (#${n})` }] }
+    return { content: [{ type: 'text', text: `sent (#${n})\ndelivered_channel=${LOCAL_CHANNEL_ID}` }] }
   }
   if (name === 'read_channel_history') {
     const limit = Math.max(1, Math.min(200, Number(args && args.limit) || 30))
