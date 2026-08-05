@@ -193,17 +193,18 @@ function fatal(msg, err) {
 const startOnboardingServer = createOnboardingServer
 
 // ── (a) BrowserWindow ────────────────────────────────────────────────────
+// Frosted glass: options come from window-glass.cjs (effect and solid
+// fallback are exclusive -- 0.59 carried both and the fallback painted over
+// the effect on every platform; full story in that module's header).
+const { glassOptions } = require(path.join(__dirname, 'window-glass.cjs'))
+
 function createMainWindow(url) {
   const win = new BrowserWindow({
     width: 1120,
     height: 760,
-    // Frosted glass (대공사 2026-08-05): the page body is rgba over this.
-    // backgroundColor is the FALLBACK — if the platform effect is missing
-    // (old win10, reduced-transparency), the solid color shows through the
-    // page's 18% translucency and the app looks exactly like the flat theme.
-    backgroundColor: '#111214',
-    ...(process.platform === 'darwin' ? { vibrancy: 'under-window', visualEffectState: 'followWindow' } : {}),
-    ...(process.platform === 'win32' ? { backgroundMaterial: 'acrylic' } : {}),
+    // The page body is a dark rgba wash over whichever backdrop
+    // glassOptions() picked -- see window-glass.cjs.
+    ...glassOptions(process.platform, os.release()),
     // Floor the window at the layout's own width (alignment pass
     // 2026-07-25). .page-shell is max-width 760px + 1.5rem padding each
     // side = 808px of content; below that the settings label column and

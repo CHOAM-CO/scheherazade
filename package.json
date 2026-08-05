@@ -39,6 +39,7 @@
     },
     "files": [
       "main.cjs",
+      "window-glass.cjs",
       "attach-topology.cjs",
       "channel.mjs",
       "channel-slack.mjs",
