@@ -41,6 +41,9 @@
     for (const btn of document.querySelectorAll('#ap-accent-options button')) {
       btn.classList.toggle('active', btn.dataset.value === current.accent)
     }
+    for (const btn of document.querySelectorAll('#ap-material-options button')) {
+      btn.classList.toggle('active', btn.dataset.value === current.macMaterial)
+    }
   }
 
   function scheduleSave() {
@@ -95,6 +98,25 @@
       b.setAttribute('aria-label', key)
       b.addEventListener('click', () => update({ accent: key }))
       accBox.appendChild(b)
+    }
+
+    // macOS only: the vibrancy material switcher. The CSS side of the page
+    // can't preview this (it's the WINDOW backdrop) — the click PUTs and
+    // the server live-applies win.setVibrancy, so the user sees the real
+    // thing change behind the page.
+    const meta = document.querySelector('meta[name="host-platform"]')
+    if (meta && meta.content === 'darwin') {
+      $('ap-material-row').classList.remove('hidden')
+      $('ap-material-label').textContent = C.materialLabel
+      const matBox = $('ap-material-options')
+      for (const key of M.MAC_MATERIALS) {
+        const b = document.createElement('button')
+        b.className = 'secondary ap-option'
+        b.dataset.value = key
+        b.textContent = key
+        b.addEventListener('click', () => update({ macMaterial: key }))
+        matBox.appendChild(b)
+      }
     }
 
     $('ap-glass-range').addEventListener('input', (e) => update({ glass: e.target.value }))

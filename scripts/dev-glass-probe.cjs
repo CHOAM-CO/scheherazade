@@ -44,13 +44,20 @@ app.whenReady().then(() => {
   if (process.argv.includes('backdrop')) {
     // Vivid full-screen window to sit UNDER the probes: blur is invisible
     // over a flat dark desktop, so give it something to smear.
-    const bg = new BrowserWindow({ fullscreen: true, title: 'glass-backdrop' })
+    // NOT fullscreen on mac — macOS fullscreen moves the window to its own
+    // Space, leaving the probes on the desktop with nothing behind them.
+    const bg = process.platform === 'darwin'
+      ? new BrowserWindow({ x: 0, y: 0, width: 1800, height: 1100, title: 'glass-backdrop' })
+      : new BrowserWindow({ fullscreen: true, title: 'glass-backdrop' })
     bg.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(backdropPage))
     return
   }
   const opts = glassOptions(process.platform, os.release())
   if (materialOverride && materialOverride !== 'clear' && process.platform === 'darwin') opts.vibrancy = materialOverride
   if (clearBase) opts.backgroundColor = '#00000000'
+  // electron#46164: followWindow doesn't just dim vibrancy on inactive
+  // windows — it drops it entirely on modern macOS. 'active' pins it on.
+  if (process.argv.includes('activeState')) opts.visualEffectState = 'active'
   console.log('[glass-probe] glassOptions =>', JSON.stringify(opts))
   const win = new BrowserWindow({
     width: 560,
@@ -58,10 +65,13 @@ app.whenReady().then(() => {
     // Cascade + alwaysOnTop: probes launched into a remote interactive
     // session land BEHIND whatever is focused there; without this the
     // desktop screenshot shows no probe at all (caught live 2026-08-05).
-    x: clearBase ? 720 : 120,
-    y: 120,
-    alwaysOnTop: true,
-    title: `glass-probe ${materialOverride || opts.vibrancy || opts.backgroundMaterial || 'flat'}${clearBase ? ' +clear' : ''}`,
+    x: 120 + 300 * (Number(process.env.PROBE_SLOT) || (clearBase ? 2 : 0)),
+    y: 120 + 40 * (Number(process.env.PROBE_SLOT) || 0),
+    // NOTE: alwaysOnTop windows can vanish from screen-capture source lists
+    // (Chrome getDisplayMedia picker, macOS) — PROBE_NOTOP=1 disables it
+    // when a probe needs to be capturable rather than visible-over-everything.
+    alwaysOnTop: !process.env.PROBE_NOTOP,
+    title: `glass-probe ${materialOverride || opts.vibrancy || opts.backgroundMaterial || 'flat'}${clearBase ? ' +clear' : ''}${process.argv.includes('activeState') ? ' +active' : ''}`,
     ...opts,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   })

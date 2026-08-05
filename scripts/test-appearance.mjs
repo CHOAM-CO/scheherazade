@@ -44,6 +44,10 @@ const junk = M.normalize({ glass: 'x', fontSize: 999, fontFamily: 'evil', accent
 assert(junk.glass === 60 && junk.fontSize === 16 && junk.fontFamily === 'system' && junk.accent === 'blue',
   'junk input falls back per-field, never throws (PUT-body safety)')
 assert(M.normalize({ fontSize: 12.7 }).fontSize === 12.5, 'fontSize snaps to half steps')
+assert(d.macMaterial === 'under-window' && M.normalize({ macMaterial: 'hud' }).macMaterial === 'hud'
+  && M.normalize({ macMaterial: 'evil' }).macMaterial === 'under-window',
+  'macMaterial: default under-window, whitelist enforced')
+assert(Array.isArray(M.MAC_MATERIALS) && M.MAC_MATERIALS.length >= 5, 'material catalog exported for the switcher UI')
 assert(M.cssText({ glass: 60 }).startsWith(':root {'), 'cssText emits a :root block')
 for (const [k, v] of Object.entries(M.ACCENTS)) {
   assert(/^#[0-9a-f]{6}$/.test(v.accent) && /^#[0-9a-f]{6}$/.test(v.hover), `accent ${k} is a hex pair`)
@@ -65,6 +69,9 @@ const routes = readFileSync(path.join(root, 'onboarding', 'routes', 'onboarding-
 assert(routes.includes("pathname === '/api/appearance'"), 'GET/PUT /api/appearance registered')
 assert(routes.includes("method: 'PUT'"), 'PUT variant present')
 assert(routes.includes('writeAppearance(body)'), 'PUT saves through normalize (writeAppearance)')
+assert(routes.includes('win.setVibrancy(values.macMaterial)'), 'PUT live-applies the mac material (setVibrancy is runtime-mutable)')
+const page2 = readFileSync(path.join(root, 'onboarding', 'public', 'js', 'appearance.js'), 'utf8')
+assert(page2.includes("meta.content === 'darwin'") && page2.includes('MAC_MATERIALS'), 'material switcher renders only on macOS, from the model catalog')
 
 console.log('\n4. page + nav + copy wiring')
 const page = readFileSync(path.join(root, 'onboarding', 'public', 'appearance.html'), 'utf8')

@@ -28,9 +28,20 @@
 const WIN11_22H2_BUILD = 22621
 const FLAT_FALLBACK = '#111214'
 
-function glassOptions(platform, release) {
+// electron#46164 (open, confirmed): with 'followWindow' modern macOS does
+// not merely dim the vibrancy backdrop on an inactive window — it drops it
+// entirely, which reads as "유리 안 뜬다". 'active' pins the backdrop on;
+// reproduced 2026-08-05 on macOS 26 via dev-glass-probe (followWindow
+// probe = dead backdrop, active probe = material alive). Construction-only
+// option (electron#25513) — changing it means relaunch.
+const MAC_EFFECT_STATE = 'active'
+
+// material may come from the user's Appearance config (macOS "유리 재질"
+// switcher, 2026-08-05 — Tahoe renders materials differently and only eyes
+// on the target machine can pick; the switcher makes Mino the verifier).
+function glassOptions(platform, release, material) {
   if (platform === 'darwin') {
-    return { vibrancy: 'under-window', visualEffectState: 'followWindow' }
+    return { vibrancy: material || 'under-window', visualEffectState: MAC_EFFECT_STATE }
   }
   if (platform === 'win32') {
     const build = Number(String(release || '').split('.')[2] || 0)
@@ -39,4 +50,4 @@ function glassOptions(platform, release) {
   return { backgroundColor: FLAT_FALLBACK }
 }
 
-module.exports = { glassOptions, WIN11_22H2_BUILD, FLAT_FALLBACK }
+module.exports = { glassOptions, WIN11_22H2_BUILD, FLAT_FALLBACK, MAC_EFFECT_STATE }

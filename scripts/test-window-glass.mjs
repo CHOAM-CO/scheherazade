@@ -44,8 +44,11 @@ for (const [platform, release] of cases) {
 
 console.log('\n2. platform matrix')
 const mac = glassOptions('darwin', '23.0.0')
-assert(mac.vibrancy === 'under-window' && mac.visualEffectState === 'followWindow', 'darwin gets under-window vibrancy')
+assert(mac.vibrancy === 'under-window' && mac.visualEffectState === 'active',
+  "darwin gets under-window vibrancy with 'active' state (electron#46164: followWindow DROPS vibrancy on inactive windows)")
 assert(!('backgroundColor' in mac), 'darwin carries NO backgroundColor (an opaque one killed vibrancy in 0.59)')
+assert(glassOptions('darwin', '23.0.0', 'hud').vibrancy === 'hud', 'darwin material override (Appearance 재질 switcher) is honored')
+assert(glassOptions('win32', '10.0.26100', 'hud').backgroundMaterial === 'acrylic', 'material override is a no-op off-mac')
 const win11 = glassOptions('win32', '10.0.26100')
 assert(win11.backgroundMaterial === 'acrylic', 'win11 24H2 gets acrylic')
 assert(!('backgroundColor' in win11), 'win11 carries NO backgroundColor (it kills backgroundMaterial)')
@@ -57,7 +60,8 @@ assert(glassOptions('linux', '6.1.0').backgroundColor === FLAT_FALLBACK, 'linux 
 console.log('\n3. main.cjs uses glassOptions and does not reintroduce the 0.59 shape')
 const main = readFileSync(path.join(root, 'main.cjs'), 'utf8')
 assert(/require\(path\.join\(__dirname, 'window-glass\.cjs'\)\)/.test(main), 'main.cjs requires window-glass.cjs')
-assert(/\.\.\.glassOptions\(process\.platform, os\.release\(\)\)/.test(main), 'BrowserWindow spreads glassOptions(process.platform, os.release())')
+assert(/\.\.\.glassOptions\(process\.platform, os\.release\(\), readSavedMacMaterial\(\)\)/.test(main), 'BrowserWindow spreads glassOptions with the saved mac material')
+assert(/function readSavedMacMaterial\(\)/.test(main) && main.includes("appearance.json"), 'main.cjs restores the Appearance material across relaunches')
 const winOpts = /new BrowserWindow\(\{[\s\S]*?\}\)/.exec(main)
 assert(winOpts && !/backgroundColor:/.test(winOpts[0]), 'no literal backgroundColor beside the spread (the 0.59 regression shape)')
 

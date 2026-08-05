@@ -197,14 +197,29 @@ const startOnboardingServer = createOnboardingServer
 // fallback are exclusive -- 0.59 carried both and the fallback painted over
 // the effect on every platform; full story in that module's header).
 const { glassOptions } = require(path.join(__dirname, 'window-glass.cjs'))
+const AppearanceModel = require(path.join(__dirname, 'onboarding', 'public', 'js', 'appearance-model.cjs'))
+
+function readSavedMacMaterial() {
+  if (process.platform !== 'darwin') return null
+  try {
+    return AppearanceModel.normalize(
+      JSON.parse(fs.readFileSync(path.join(DATA_HOME, 'appearance.json'), 'utf8'))
+    ).macMaterial
+  } catch {
+    return null // no config yet -> glassOptions default
+  }
+}
 
 function createMainWindow(url) {
   const win = new BrowserWindow({
     width: 1120,
     height: 760,
     // The page body is a dark rgba wash over whichever backdrop
-    // glassOptions() picked -- see window-glass.cjs.
-    ...glassOptions(process.platform, os.release()),
+    // glassOptions() picked -- see window-glass.cjs. On macOS the material
+    // comes from the user's Appearance config (live-switchable from the
+    // Appearance tab via setVibrancy; this read makes it stick across
+    // relaunches). Junk/missing config falls back to the default material.
+    ...glassOptions(process.platform, os.release(), readSavedMacMaterial()),
     // Floor the window at the layout's own width (alignment pass
     // 2026-07-25). .page-shell is max-width 760px + 1.5rem padding each
     // side = 808px of content; below that the settings label column and

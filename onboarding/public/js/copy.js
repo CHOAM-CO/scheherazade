@@ -845,6 +845,7 @@ window.COPY = {
     glassLabel: 'Frosted glass',
     glassNote: 'How much the window blur shows through. 0 is solid dark. The glass itself needs macOS or Windows 11, and Windows pauses it while the window is in the background.',
     glassRangeLabel: 'Intensity',
+    materialLabel: 'Material (macOS)',
     typeLabel: 'Type',
     fontSizeLabel: 'Font size',
     fontFamilyLabel: 'Font family',

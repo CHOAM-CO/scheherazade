@@ -15,7 +15,13 @@
 ;(function (root) {
   'use strict'
 
-  const DEFAULTS = { glass: 60, fontSize: 13.5, fontFamily: 'system', accent: 'blue' }
+  const DEFAULTS = { glass: 60, fontSize: 13.5, fontFamily: 'system', accent: 'blue', macMaterial: 'under-window' }
+
+  // macOS-only: which NSVisualEffectView material backs the window. Tahoe
+  // (macOS 26) renders these differently and only eyes on the target
+  // machine can judge — the Appearance tab live-switches via
+  // win.setVibrancy. Ignored on Windows (acrylic) and Linux (flat).
+  const MAC_MATERIALS = ['under-window', 'sidebar', 'hud', 'fullscreen-ui', 'header', 'window', 'content']
 
   const FONTS = {
     system: '-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif',
@@ -48,6 +54,7 @@
       fontSize: Math.round(clampNum(src.fontSize, 12, 16, DEFAULTS.fontSize) * 2) / 2,
       fontFamily: Object.prototype.hasOwnProperty.call(FONTS, src.fontFamily) ? src.fontFamily : DEFAULTS.fontFamily,
       accent: Object.prototype.hasOwnProperty.call(ACCENTS, src.accent) ? src.accent : DEFAULTS.accent,
+      macMaterial: MAC_MATERIALS.includes(src.macMaterial) ? src.macMaterial : DEFAULTS.macMaterial,
     }
   }
 
@@ -73,7 +80,7 @@
     return `:root {\n${Object.entries(vars).map(([k, v]) => `  ${k}: ${v};`).join('\n')}\n}`
   }
 
-  const model = { DEFAULTS, FONTS, ACCENTS, normalize, cssVars, cssText }
+  const model = { DEFAULTS, FONTS, ACCENTS, MAC_MATERIALS, normalize, cssVars, cssText }
   if (typeof module !== 'undefined' && module.exports) module.exports = model
   else root.AppearanceModel = model
 })(typeof window !== 'undefined' ? window : globalThis)

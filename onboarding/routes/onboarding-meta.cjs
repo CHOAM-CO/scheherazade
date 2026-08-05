@@ -150,7 +150,18 @@ function createRoutes(staticCtx) {
       match: (pathname) => pathname === '/api/appearance',
       handler: async (req, res) => {
         const body = await readJsonBody(req)
-        sendJson(res, 200, { ok: true, values: writeAppearance(body) })
+        const values = writeAppearance(body)
+        // macOS: apply the material LIVE — setVibrancy is runtime-mutable
+        // (unlike visualEffectState), so the Appearance tab's 재질 switcher
+        // changes the actual window backdrop on click. Fail-soft outside a
+        // real Electron main process (dev-serve-ui) or on other platforms.
+        if (process.platform === 'darwin') {
+          try {
+            const win = getElectron().BrowserWindow.getAllWindows()[0]
+            if (win) win.setVibrancy(values.macMaterial)
+          } catch { /* not running under Electron -- config-only save */ }
+        }
+        sendJson(res, 200, { ok: true, values })
         return
       },
     },
