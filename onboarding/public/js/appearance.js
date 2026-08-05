@@ -41,9 +41,14 @@
     for (const btn of document.querySelectorAll('#ap-accent-options button')) {
       btn.classList.toggle('active', btn.dataset.value === current.accent)
     }
+    for (const btn of document.querySelectorAll('#ap-bg-options button')) {
+      btn.classList.toggle('active', btn.dataset.value === current.bg)
+    }
     for (const btn of document.querySelectorAll('#ap-material-options button')) {
       btn.classList.toggle('active', btn.dataset.value === current.macMaterial)
     }
+    $('ap-accent-picker').value = current.accent
+    $('ap-bg-picker').value = current.bg
   }
 
   function scheduleSave() {
@@ -75,6 +80,7 @@
     $('ap-fontfamily-label').textContent = C.fontFamilyLabel
     $('ap-accent-label').textContent = C.accentLabel
     $('ap-accent-row-label').textContent = C.accentRowLabel
+    $('ap-bg-row-label').textContent = C.bgRowLabel
     $('ap-reset').textContent = C.reset
 
     const famBox = $('ap-fontfamily-options')
@@ -88,17 +94,28 @@
       famBox.appendChild(b)
     }
 
-    const accBox = $('ap-accent-options')
-    for (const [key, val] of Object.entries(M.ACCENTS)) {
-      const b = document.createElement('button')
-      b.className = 'ap-swatch'
-      b.dataset.value = key
-      b.title = key
-      b.style.background = val.accent
-      b.setAttribute('aria-label', key)
-      b.addEventListener('click', () => update({ accent: key }))
-      accBox.appendChild(b)
+    // v2: swatches are plain hex quick-picks; the picker beside them writes
+    // the SAME field, so a swatch click and a picker drag are one path.
+    const swatchRow = (boxId, presets, field) => {
+      const box = $(boxId)
+      for (const hex of presets) {
+        const b = document.createElement('button')
+        b.className = 'ap-swatch'
+        b.dataset.value = hex
+        b.title = hex
+        b.style.background = hex
+        b.setAttribute('aria-label', hex)
+        b.addEventListener('click', () => update({ [field]: hex }))
+        box.appendChild(b)
+      }
     }
+    swatchRow('ap-accent-options', M.PRESET_ACCENTS, 'accent')
+    swatchRow('ap-bg-options', M.PRESET_BGS, 'bg')
+    // 'input' fires continuously while the native picker drags — the page
+    // repaints live (Mino: "실시간으로 변하는거 볼 수 있게"); the save stays
+    // debounced so drags don't hammer the PUT endpoint.
+    $('ap-accent-picker').addEventListener('input', (e) => update({ accent: e.target.value }))
+    $('ap-bg-picker').addEventListener('input', (e) => update({ bg: e.target.value }))
 
     // macOS only: the vibrancy material switcher. The CSS side of the page
     // can't preview this (it's the WINDOW backdrop) — the click PUTs and

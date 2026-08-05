@@ -14,29 +14,48 @@
      columns when the window is wide (요구 ⑧ "리액티브하게") */
 
 :root {
-  --bg: #111214;
+  /* v2 (2026-08-05, Mino "제일 중요한 대원칙 : 일관성"): the user seeds TWO
+     colors (bg, accent) in the Appearance tab; appearance-model.cjs derives
+     the whole palette — panel ladder rgb triplets, frost wash, hover, focus
+     ring — and the server injects the result over these fallbacks. The
+     fallbacks below EQUAL the model's defaults (bg black / accent blue) so
+     a page served without injection looks identical. */
+  --bg: #000000;
+  --frost-rgb: 0 0 0;
+  --panel-rgb: 20 20 20;
+  --raised-rgb: 29 29 29;
   /* Panels are TRANSLUCENT so the window's acrylic/vibrancy reads through
      them — with opaque panels the glass only ever showed in page margins.
-     The three *-alpha vars below are the SINGLE knob surface: nav.js
-     derives them from the user's glass-level setting (Settings > Frosted
-     glass, Mino 2026-08-05 "custom 옵션 하나 만들어놓던가") and these CSS
-     defaults equal glass level 60. Calibrated against the win acrylic
-     probe 2026-08-05 (alpha-sweep: 0.82 reads flat, 0.5-0.7 reads glass). */
+     The three *-alpha vars below are the SINGLE knob surface, derived from
+     the glass gauge; these defaults equal glass level 60. Calibrated
+     against the win acrylic probe 2026-08-05 (alpha-sweep: 0.82 reads
+     flat, 0.5-0.7 reads glass). */
   --panel-alpha: 0.55;
   --raised-alpha: 0.7;
-  --panel: rgb(26 28 31 / var(--panel-alpha));
-  --panel-raised: rgb(33 35 39 / var(--raised-alpha));
-  --border: #2c2f34;
+  --panel: rgb(var(--panel-rgb) / var(--panel-alpha));
+  --panel-raised: rgb(var(--raised-rgb) / var(--raised-alpha));
+  /* Hairline grammar (design-research 2026-08, Linear): translucent white
+     borders instead of opaque gray — they sit correctly on ANY seeded bg
+     and on glass. --edge-highlight is the top-edge light-catch line. */
+  --border: rgb(255 255 255 / 0.09);
+  --border-strong: rgb(255 255 255 / 0.16);
+  --edge-highlight: inset 0 1px 0 rgb(255 255 255 / 0.06);
   --fg: #eaeaea;
   --fg-dim: #9a9da3;
   --fg-faint: #6b6e74;
   --accent: #5b8dee;
   --accent-hover: #4877d6;
+  --accent-ring: rgb(91 141 238 / 0.45);
   --danger: #d9695f;
   --danger-hover: #c25850;
   --success: #5fae7c;
   --warn: #d9a15f;
-  --radius: 10px;
+  /* Radius vocabulary — exactly three values (design-research 2026-08:
+     "don't invent a 4th"). s = buttons/inputs, m = cards/panels, pill. */
+  --radius-s: 6px;
+  --radius-m: 12px;
+  --radius-pill: 999px;
+  --radius: var(--radius-m);
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
   /* spacing scale — the ONLY spacing values new rules should use */
   --s1: 4px;
@@ -65,7 +84,7 @@ html, body {
   padding: 0;
   height: 100%;
   /* translucent over the window's vibrancy/acrylic layer (see :root note) */
-  background: rgba(17, 18, 20, var(--frost-alpha));
+  background: rgb(var(--frost-rgb) / var(--frost-alpha));
   color: var(--fg);
   font-family: var(--font);
   /* --font-base comes from the Appearance tab (server-injected override
@@ -87,7 +106,7 @@ button {
   font-family: inherit;
   font-size: 0.85rem;
   padding: 0.42rem 0.95rem;
-  border-radius: 7px;
+  border-radius: var(--radius-s);
   border: none;
   cursor: pointer;
   background: var(--accent);
@@ -120,13 +139,13 @@ input[type="text"], input[type="password"], input[type="time"], textarea {
   font-family: inherit;
   font-size: 0.9rem;
   padding: 0.45rem 0.65rem;
-  border-radius: 8px;
+  border-radius: var(--radius-s);
   border: 1px solid var(--border);
   background: var(--panel-raised);
   color: var(--fg);
   width: 100%;
 }
-input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+input:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-ring); }
 
 .field { margin-bottom: 1.1rem; }
 .field label { display: block; font-size: 0.85rem; color: var(--fg-dim); margin-bottom: 0.4rem; }
@@ -148,6 +167,9 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 2.25rem;
+  /* top-edge light-catch (design-research 2026-08: "the detail that
+     elevates a decent implementation to a great one") */
+  box-shadow: var(--edge-highlight);
 }
 
 .step-actions {
@@ -184,7 +206,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .chip {
   font-size: 0.82rem;
   padding: 0.3rem 0.7rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--border);
   color: var(--fg-dim);
   cursor: pointer;
@@ -222,7 +244,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .screenshot-slot {
   margin-top: 0.85rem;
   border: 1px dashed var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-s);
   background: var(--panel-raised);
   min-height: 140px;
   display: flex;
@@ -331,6 +353,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: var(--s4) var(--s5);
+  box-shadow: var(--edge-highlight);
 }
 /* clean-uninstall block (v0.0.35): visually fenced off from settings that
    are safe to poke at */
@@ -410,7 +433,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   font-family: inherit;
   font-size: 0.95rem;
   padding: 0.55rem 0.7rem;
-  border-radius: 8px;
+  border-radius: var(--radius-s);
   border: 1px solid var(--border);
   background: var(--panel-raised);
   color: var(--fg);
@@ -483,7 +506,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   z-index: 5;
   /* Sticky: must mask content scrolling beneath it, so it stays nearly
      opaque — 0.88 keeps a hint of the glass without ghosting text. */
-  background: rgba(17, 18, 20, 0.88);
+  background: rgb(var(--frost-rgb) / 0.88);
   padding-top: 0.5rem;
   padding-bottom: 1rem;
   margin-bottom: 1.5rem;
@@ -552,7 +575,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   padding: var(--s4);
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-s);
 }
 .usage-lane-name {
   display: block;
@@ -563,7 +586,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .usage-lane-body { display: flex; flex-direction: column; gap: 0.55rem; min-width: 0; }
 .usage-seg { display: flex; align-items: center; gap: 0.5rem; }
 .usage-seg-label { width: 3.4rem; flex: none; color: var(--fg-faint); font-size: 0.72rem; text-align: right; }
-.usage-bar { flex: 1; height: 10px; border-radius: 5px; background: var(--panel-raised); border: 1px solid var(--border); overflow: hidden; min-width: 4rem; }
+.usage-bar { flex: 1; height: 10px; border-radius: var(--radius-pill); background: var(--panel-raised); border: 1px solid var(--border); overflow: hidden; min-width: 4rem; }
 .usage-bar.unreadable {
   background: repeating-linear-gradient(45deg, var(--panel-raised), var(--panel-raised) 4px, var(--panel) 4px, var(--panel) 8px);
 }
@@ -609,7 +632,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   border: 1px solid var(--border);
   color: var(--fg);
   padding: 0.6rem 1.1rem;
-  border-radius: 8px;
+  border-radius: var(--radius-s);
   font-size: 0.85rem;
   opacity: 0;
   pointer-events: none;
@@ -646,7 +669,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   margin: 0.5rem 0;
   padding: 0.6rem 0.75rem;
   border: 1px solid var(--danger);
-  border-radius: 6px;
+  border-radius: var(--radius-s);
 }
 .mute-banner[hidden] { display: none; }
 .mute-banner-text { color: var(--danger); font-size: 0.9rem; }
@@ -658,7 +681,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   margin: 0 0 1rem;
   padding: 0.9rem 1rem;
   border: 1px solid var(--success);
-  border-radius: 6px;
+  border-radius: var(--radius-s);
 }
 .found-login.hidden { display: none; }
 .found-login-title { font-weight: 600; margin-bottom: 0.4rem; }
@@ -722,7 +745,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .chat-msg {
   max-width: 78%;
   padding: 0.55rem 0.85rem;
-  border-radius: 12px;
+  border-radius: var(--radius-m);
   /* Line breaks are still part of the message, but they are now carried by the
      markdown renderer as real <br>/<p> nodes instead of by pre-wrap. Leaving
      pre-wrap on would double every gap: the source newline AND the block it
@@ -796,7 +819,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   gap: 0.3rem;
   padding: 0.2rem 0.55rem;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 0.85rem;
   color: var(--fg-faint);
 }
@@ -806,7 +829,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   max-width: min(20rem, 100%);
   max-height: 16rem;
   margin-top: 0.4rem;
-  border-radius: 0.5rem;
+  border-radius: var(--radius-s);
 }
 .chat-attach-missing {
   display: block;
@@ -835,7 +858,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   font-size: 0.78rem;
   background: var(--panel-raised);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 0.08rem 0.34rem;
   line-height: 1.25;
   white-space: nowrap;
@@ -856,7 +879,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   gap: 0.1rem;
   background: var(--panel-raised);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 0.12rem 0.3rem;
   white-space: nowrap;
 }
@@ -933,7 +956,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
      output shows, and it should read as such, not as app chrome */
   background: #0a0b0d;
   border: 1px solid #26282c;
-  border-radius: 6px;
+  border-radius: var(--radius-s);
   height: 60vh;
   overflow-y: auto;
   padding: 0.75rem;
@@ -974,14 +997,14 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.88em;
   padding: 0.1em 0.32em;
-  border-radius: 4px;
+  border-radius: var(--radius-s);
   background: rgba(127, 127, 127, 0.18);
   word-break: break-word;
 }
 .chat-msg pre {
   margin: 0 0 0.5rem;
   padding: 0.55rem 0.7rem;
-  border-radius: 8px;
+  border-radius: var(--radius-s);
   background: rgba(127, 127, 127, 0.16);
   /* a long line scrolls the block, never the whole chat pane sideways */
   overflow-x: auto;
@@ -1038,3 +1061,17 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 }
 .ap-swatch.active { border-color: var(--fg); }
 .ap-swatch:hover { transform: scale(1.1); }
+/* Color picker wells (v2, Mino "colour Picker로 찍을 수 있게"). The native
+   input paints its own color as content — strip chrome so it reads as one
+   more swatch, sized to the readout column. */
+.ap-color-picker {
+  width: 100%;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
+  background: none;
+  cursor: pointer;
+}
+.ap-color-picker::-webkit-color-swatch-wrapper { padding: 2px; }
+.ap-color-picker::-webkit-color-swatch { border: none; border-radius: 4px; }

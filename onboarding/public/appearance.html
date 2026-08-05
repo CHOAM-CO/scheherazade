@@ -56,12 +56,22 @@
         </div>
       </div>
 
-      <div class="category" id="ap-accent">
+      <!-- v2 (Mino 2026-08-05 "악센트 컬러 / 백그라운드 컬러 colour Picker로
+           찍을 수 있게 ... 기본값은 백그라운드 : 블랙 / 악센트 : 블루"):
+           two seed colors, each row = quick-pick swatches + a free picker in
+           the readout column. Every pick derives the full palette live via
+           appearance-model.cjs — the page repaints as the picker drags. -->
+      <div class="category" id="ap-color">
         <div class="category-label" id="ap-accent-label"></div>
         <div class="ap-row">
-          <label id="ap-accent-row-label"></label>
+          <label id="ap-bg-row-label" for="ap-bg-picker"></label>
+          <div class="ap-options" id="ap-bg-options"></div>
+          <input type="color" id="ap-bg-picker" class="ap-color-picker" />
+        </div>
+        <div class="ap-row">
+          <label id="ap-accent-row-label" for="ap-accent-picker"></label>
           <div class="ap-options" id="ap-accent-options"></div>
-          <span class="ap-value"></span>
+          <input type="color" id="ap-accent-picker" class="ap-color-picker" />
         </div>
       </div>
 

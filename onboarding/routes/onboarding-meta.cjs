@@ -140,7 +140,8 @@ function createRoutes(staticCtx) {
           values: readAppearance(),
           defaults: AppearanceModel.DEFAULTS,
           fonts: Object.keys(AppearanceModel.FONTS),
-          accents: AppearanceModel.ACCENTS,
+          accents: AppearanceModel.PRESET_ACCENTS,
+          bgs: AppearanceModel.PRESET_BGS,
         })
         return
       },
