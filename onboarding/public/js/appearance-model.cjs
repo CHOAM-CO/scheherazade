@@ -154,6 +154,10 @@
       '--accent': c.accent,
       '--accent-hover': mix(c.accent, '#000000', 0.15),
       '--accent-ring': `rgb(${triplet(c.accent)} / 0.45)`,
+      // Raw triplet so surfaces can compose their own alpha over the seed
+      // (P1 v2 user bubble: rgb(var(--accent-rgb) / 0.16) glass, never a
+      // solid accent fill).
+      '--accent-rgb': triplet(c.accent),
       // v3 text seed: one picked color; the dim/faint steps derive by
       // mixing TOWARD the bg seed, so the hierarchy keeps its contrast
       // relationships on any background.

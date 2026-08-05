@@ -182,12 +182,10 @@
     el.dataset.seq = m.seq
     const { shown, images } = splitImageMarkers(m.text)
     renderMarkdown(el, shown)
-    // P1: full-width flat rows carry a small caps role label (renderMarkdown
-    // clears the element, so the label attaches AFTER it, as first child).
-    const roleTag = document.createElement('span')
-    roleTag.className = 'chat-role'
-    roleTag.textContent = role === 'user' ? C.roleUser : C.roleAgent
-    el.insertBefore(roleTag, el.firstChild)
+    // P1 v2: no role labels — identity is carried by the asymmetry itself
+    // (user = right-aligned accent glass bubble, agent = flat document
+    // flow), per Mino's 2026-08-05 19:40 verdict on the labeled flat look
+    // ("누가 누군지 잘 안보이잖아").
     for (const name of images) appendAttachmentImage(el, name, stick || role === 'user')
     if (role === 'agent') clearActivity() // a reply supersedes the status line
     if (role === 'agent') attachReactBar(el, m.seq, shown)

@@ -794,10 +794,6 @@ window.COPY = {
       'Remember this: I prefer short answers.',
       'What do you remember about me so far?',
     ],
-    // P1: full-width flat turns carry a small role label instead of
-    // bubble sides/colors.
-    roleUser: 'You',
-    roleAgent: 'Agent',
     // P1: jump-to-latest pill (auto-scroll stops when the reader scrolls
     // up; the pill is the way back instead of viewport-yanking).
     jumpToLatest: 'Jump to latest ↓',

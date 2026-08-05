@@ -745,11 +745,13 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
   /* The pane flexes to fill the window; the input stays reachable. */
   height: 100vh;
 }
-/* P1 (design-research 2026-08): full-width flat turns, not bubbles —
-   "bubbles read messenger, full-width reads workspace tool". Role is
-   carried by a small caps label (.chat-role), turn boundaries by hairline
-   separators (Warp: lines between blocks, not card borders), and the
-   agent side by a barely-different surface tint. */
+/* P1 v2 (Mino 2026-08-05 19:40 "깔끔하긴 한데 누가 누군지 잘 안보이잖아" +
+   aside reference 19:41): asymmetric surface. USER turns are compact
+   right-aligned glass bubbles (accent-derived, iMessage-shaped) — identity
+   readable from across the room. AGENT turns stay flat document flow on
+   the canvas (aside: no bubble, the answer IS the page), with the working
+   log folded above as a timeline. The v1 flat-both-sides look tested as
+   "who is who?" — labels alone were too quiet. */
 .chat-pane-wrap {
   position: relative; /* jump pill overlay anchor */
   flex: 1;
@@ -792,29 +794,33 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
   position: relative;
 }
 .chat-agent {
-  background: rgba(255, 255, 255, 0.02);
-  color: var(--fg);
-}
-.chat-user {
   background: transparent;
   color: var(--fg);
+  margin: 0.15rem 0;
 }
-/* hairline separators between consecutive turns (skip decorations) */
-.chat-msg + .chat-msg { border-top: 1px solid var(--border); }
-.chat-role {
-  display: block;
-  font-size: 0.68rem;
-  font-weight: 500;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--fg-faint);
-  margin-bottom: 0.3rem;
+/* user bubble: translucent accent glass, never a solid accent fill —
+   the seed color shows through at reading-comfortable alpha on any
+   background, and backdrop blur gives it the same frosted material as
+   the window chrome. Shape quotes iMessage: soft corners, tighter
+   bottom-right "tail" corner. */
+.chat-user {
+  align-self: flex-end;
+  max-width: 72%;
+  background: rgb(var(--accent-rgb) / 0.16);
+  border: 1px solid rgb(var(--accent-rgb) / 0.32);
+  border-left-width: 1px; /* bubbles opt out of the error-rail slot */
+  border-radius: 18px 18px 6px 18px;
+  padding: 0.55rem 0.95rem;
+  color: var(--fg);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: var(--edge-highlight);
+  margin: 0.3rem var(--s4);
 }
-.chat-user .chat-role { color: var(--accent); }
 /* dormant until the transcript carries an error kind (P1 doc: adopt the
    visual, don't invent an error taxonomy ahead of the data) */
 .chat-msg.chat-error {
-  border-left-color: var(--danger);
+  border-left: 2px solid var(--danger);
   background: rgb(217 105 95 / 0.06);
 }
 .chat-jump-pill {
@@ -841,8 +847,16 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
   color: var(--fg-faint);
 }
 .chat-activity-fold summary { cursor: pointer; user-select: none; }
-.chat-activity-fold[open] summary { margin-bottom: 0.25rem; }
-.chat-activity-fold .fold-line { padding-left: 1rem; color: var(--fg-faint); }
+.chat-activity-fold[open] summary { margin-bottom: 0.35rem; }
+/* opened: a timeline rail (aside reference, Mino 2026-08-05 19:41 — "서브
+   모듈로 작업중인 로그들 선택적으로 열어볼 수 있게"). One continuous
+   hairline down the left, each step hung off it. */
+.chat-activity-fold .fold-line {
+  border-left: 1px solid var(--border-strong);
+  margin-left: 0.3rem;
+  padding: 0.16rem 0 0.16rem 0.95rem;
+  color: var(--fg-faint);
+}
 .chat-gap {
   align-self: center;
   color: var(--fg-dim);
