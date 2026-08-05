@@ -194,7 +194,7 @@ const VENDOR_B = 'https://api.vendor-b.com'
   const fill = SRC.match(/keyFromPaste = Boolean\(parsed\.apiKey\)[^\n]*\n[^\n]*/)
   assert(Boolean(fill) && /pastedKeyBaseUrl = /.test(fill[0]),
     'the paste handler sets pastedKeyBaseUrl on the line after keyFromPaste')
-  const oninput = SRC.match(/oninput = \(\) => \{[^}]*\}/)
+  const oninput = SRC.match(/\$\('set-custom-key-input'\)\.oninput = \(\) => \{[^}]*\}/)
   assert(Boolean(oninput) && /keyFromPaste = false/.test(oninput[0]) && /pastedKeyBaseUrl = ''/.test(oninput[0]),
     'the key field oninput clears BOTH keyFromPaste and pastedKeyBaseUrl')
 }
