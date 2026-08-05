@@ -49,10 +49,17 @@ is invisible to it, and Scheherazade "구조 파악은 잘 못하더라고".
   second persona (or fronting the other agent's live process) touches the
   single-agent architecture everywhere — harness render, hooks, channel
   identity, stop-reply guard. Needs its own design; do not bolt onto migrate.
-- **Whole-disk autonomous scan** ("맥 다긁어서"): privacy blast radius and
-  scan time both argue for point-me-at-it v1. If v1 shows the pointing step
-  is the friction, a guided scan of likely roots (~/Documents, ~/Desktop,
-  code dirs) can be v2 — still consent-gated per directory.
+- ~~**Whole-disk autonomous scan** ("맥 다긁어서")~~ — SUPERSEDED same day
+  (rev B, Mino 20:39 "자동으로 찾아서 역추적하는 방식으로 에이전트한테
+  맡기는게 안 낫나"): the objection was walk time + blast radius, but
+  Spotlight answers marker FILENAMES from its index with no walk at all.
+  Discovery is now the primary flow: one click delivers a hunt turn — mdfind
+  by marker name (bounded common-location search where mdfind is absent),
+  reverse-trace to containing folders, exclude known tool homes / own
+  DATA_HOME / bundles, candidates presented in chat by name-and-existence
+  only, and the structure-map-first procedure runs per folder only after
+  the user approves THAT folder. The path input stays as the
+  unindexed-volume fallback.
 
 ## Why structure-map-first is the fix for "구조 파악을 잘 못하더라고"
 
