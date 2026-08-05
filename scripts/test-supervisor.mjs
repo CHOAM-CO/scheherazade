@@ -35,6 +35,27 @@ import {
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
+// ── orphan reaper ───────────────────────────────────────────────────────────
+// The integration sections spawn REAL `supervisor.mjs __loop` processes. Their
+// try/catch paths kill them, but a hard death of THIS process (Ctrl-C, a
+// harness timeout kill, an uncaught throw outside those trys) used to leave
+// the loop running forever — an orphan supervisor from an ad-hoc run survived
+// 2026-08-04→05 and needed kill -9. Every spawned supervisor registers here:
+// on a signal it gets SIGTERM (the supervisor reaps its own pty child on TERM
+// — section 9a proves that), and whatever is somehow still alive at 'exit'
+// gets SIGKILL. SIGKILL of this process itself remains undefendable.
+const LIVE_SUPS = new Set()
+const trackSup = (sup) => { LIVE_SUPS.add(sup); sup.on('exit', () => LIVE_SUPS.delete(sup)); return sup }
+process.on('exit', () => { for (const s of LIVE_SUPS) { try { s.kill('SIGKILL') } catch {} } })
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(sig, () => {
+    for (const s of LIVE_SUPS) { try { s.kill('SIGTERM') } catch {} }
+    // Grace so the supervisors can reap their children before 'exit' SIGKILLs
+    // survivors; unref'd so an already-idle process still exits promptly.
+    setTimeout(() => process.exit(1), 2000).unref()
+  })
+}
+
 let pass = 0
 let fail = 0
 function ok(name, cond, detail = '') {
@@ -392,8 +413,8 @@ if (process.platform === 'win32') {
 
   // 9a. TERM to the supervisor kills the pty child before exit (verdict 7).
   {
-    const sup = spawn(process.execPath, [path.join(ROOT, 'supervisor.mjs'), '__loop'],
-      { env: { ...process.env, AGENT_CONFIG_FILE: configFile }, stdio: ['ignore', 'pipe', 'pipe'] })
+    const sup = trackSup(spawn(process.execPath, [path.join(ROOT, 'supervisor.mjs'), '__loop'],
+      { env: { ...process.env, AGENT_CONFIG_FILE: configFile }, stdio: ['ignore', 'pipe', 'pipe'] }))
     let out = ''
     sup.stdout.on('data', (d) => { out += d })
     sup.stderr.on('data', (d) => { out += d })
@@ -418,8 +439,8 @@ if (process.platform === 'win32') {
   // ends the loop at the post-exit check.
   {
     fs.appendFileSync(configFile, 'SESSION_TIMEOUT=2\n')
-    const sup = spawn(process.execPath, [path.join(ROOT, 'supervisor.mjs'), '__loop'],
-      { env: { ...process.env, AGENT_CONFIG_FILE: configFile }, stdio: ['ignore', 'pipe', 'pipe'] })
+    const sup = trackSup(spawn(process.execPath, [path.join(ROOT, 'supervisor.mjs'), '__loop'],
+      { env: { ...process.env, AGENT_CONFIG_FILE: configFile }, stdio: ['ignore', 'pipe', 'pipe'] }))
     let out = ''
     sup.stdout.on('data', (d) => { out += d })
     // Attach the exit listener NOW: the supervisor exits ~0.2s after the
