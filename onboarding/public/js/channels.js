@@ -44,6 +44,13 @@
     const info = status.backends[key]
     const isActive = status.active === key
     $(`ch-${key}-name`).textContent = C.names[key]
+    // On/off light (2026-08-05, Mino "초록불/회색불로 on off 인디케이팅"):
+    // green = the channel the agent is actually on; gray (the .dot base
+    // color) = everything else, configured or not — the status TEXT still
+    // carries the configured/not distinction, the light answers only
+    // "which one is live".
+    const dot = $(`ch-${key}-dot`)
+    if (dot) dot.classList.toggle('ok', isActive)
     const parts = []
     parts.push(isActive ? C.activeBadge : info.configured ? C.configuredBadge : C.notConfiguredBadge)
     if (info.configured && info.home) parts.push(C.homeLine(info.detail ? `${info.detail} / ${info.home}` : info.home))

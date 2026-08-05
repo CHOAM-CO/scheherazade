@@ -278,6 +278,23 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .dot.ok { background: var(--success); }
 .dot.warn { background: var(--warn); }
 .dot.err { background: var(--danger); }
+
+/* channels page rows (2026-08-05 density pass): one card, slim rows.
+   dot = live light, icon = messenger brand mark riding currentColor so it
+   follows the theme. */
+.channel-row { align-items: center; gap: 0.65rem; }
+/* the last VISIBLE row: :last-child misses it because each row is followed
+   by its (usually hidden) connect-flow div. A row directly before a
+   last-child flow is the bottom row -- and dropping the border when that
+   flow opens is the right look too. */
+.entries > .channel-row:last-child,
+.entries > .channel-row:has(+ .reconnect-flow:last-child) { border-bottom: none; }
+.channel-row .channel-icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  color: var(--fg-dim);
+}
 .status-chip {
   display: inline-flex;
   align-items: center;
