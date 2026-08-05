@@ -987,6 +987,19 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
   cursor: pointer;
 }
 .migrate-tool-row input[type='checkbox'] { flex: 0 0 auto; }
+/* design-0023 handover: path input + preview button on one line */
+.handover-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.4rem 0;
+}
+.handover-row input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font);
+}
+.handover-row button { flex: 0 0 auto; }
 
 /* ── DM interaction states (v0.0.34) ─────────────────────────────────────
    Reaction chips overlap the bubble's bottom edge (iMessage tapback shape);

@@ -906,6 +906,14 @@ window.COPY = {
     migrateStarting: 'Asking the agent to take over…',
     migrateStartedLive: 'The agent is on it — watch the chat.',
     migrateStartedQueued: "Queued. The agent will start the import next time it's running.",
+    // design-0023 handover: custom agent folder.
+    handoverLabel: 'A custom agent',
+    handoverHint: "Built or ran an agent that isn't on the list? Point at its folder. Your agent will map how it worked first — prompt files, memory layout, routines — then absorb what matters. Credential files are never touched.",
+    handoverPlaceholder: '/path/to/that/agent',
+    handoverCheckButton: 'Preview',
+    handoverChecking: 'Looking…',
+    handoverPreviewLine: (n, truncated, shaped) =>
+      `${n}${truncated ? '+' : ''} files.` + (shaped ? ' Looks like an agent lives here.' : ' No agent traces recognized — hand it over anyway if you know better.'),
     groupAbout: 'About',
     aboutLabel: 'App version & updates',
     aboutVersion: (v) => `Scheherazade v${v}`,

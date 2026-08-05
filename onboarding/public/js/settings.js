@@ -155,6 +155,67 @@
       }
     }
 
+    // ── handover: custom-path source (design-0023, Mino 2026-08-05
+    // "persona.md / agents.md 같은 시스템프롬프트류 파일 긁어서 구조파악하고
+    // ... 흡수"). Preview first (names only), then the same one-consent
+    // sweep — but structure-map-first, since nobody knows this layout. ──
+    $('set-handover-label').textContent = C.handoverLabel
+    $('set-handover-hint').textContent = C.handoverHint
+    const hoPath = $('set-handover-path')
+    const hoCheck = $('set-handover-check')
+    const hoStatus = $('set-handover-status')
+    const hoStart = $('set-handover-start')
+    hoPath.placeholder = C.handoverPlaceholder
+    hoCheck.textContent = C.handoverCheckButton
+    hoStart.textContent = C.migrateStartButton
+    hoStart.classList.add('hidden')
+    let hoPreviewedRoot = null
+    hoPath.oninput = () => { hoStart.classList.add('hidden'); hoPreviewedRoot = null; hoStatus.textContent = '' }
+    hoCheck.onclick = async () => {
+      hoCheck.disabled = true
+      hoStatus.className = 'status-line pending'
+      hoStatus.textContent = C.handoverChecking
+      try {
+        const r = await api('/api/migrate/custom/preview', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ root: hoPath.value }),
+        })
+        hoPreviewedRoot = r.root
+        hoStatus.className = 'status-line'
+        hoStatus.textContent = C.handoverPreviewLine(r.files.length, r.truncated, r.agentShaped)
+        hoStart.classList.remove('hidden')
+      } catch (err) {
+        hoPreviewedRoot = null
+        hoStart.classList.add('hidden')
+        hoStatus.className = 'status-line failure'
+        // api() surfaces the server's error string (reason codes are not
+        // preserved) — the route's messages are already user-shaped.
+        hoStatus.textContent = err.message
+      } finally {
+        hoCheck.disabled = false
+      }
+    }
+    hoStart.onclick = async () => {
+      if (!hoPreviewedRoot) return
+      hoStart.disabled = true
+      hoStatus.className = 'status-line pending'
+      hoStatus.textContent = C.migrateStarting
+      try {
+        const r = await api('/api/migrate/custom/start', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ root: hoPreviewedRoot }),
+        })
+        hoStatus.className = 'status-line success'
+        hoStatus.textContent = r.delivery === 'live' ? C.migrateStartedLive : C.migrateStartedQueued
+      } catch (err) {
+        hoStatus.className = 'status-line failure'
+        hoStatus.textContent = GEN(err.message)
+        hoStart.disabled = false
+      }
+    }
+
     // ── about / manual update check (2026-08-04, Mino "오토 업데이트
     // 버튼 어딨니?" -- the nav banner is silent when you're current, so
     // this is the always-present surface: version + Check now). ────────

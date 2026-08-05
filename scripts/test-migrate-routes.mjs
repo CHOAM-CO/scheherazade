@@ -143,6 +143,67 @@ try {
     chk('start without the onboard token is refused', r3.status === 403, r3.status)
   }
 
+  // ── design-0023 handover: custom-path source ───────────────────────────
+  {
+    // A hand-rolled agent living at an arbitrary path (not any known tool).
+    const cadence = path.join(TMP, 'cadence')
+    fs.mkdirSync(path.join(cadence, 'memories'), { recursive: true })
+    fs.writeFileSync(path.join(cadence, 'persona.md'), '# who I am\n')
+    fs.writeFileSync(path.join(cadence, 'boot.sh'), 'echo hi\n')
+    fs.writeFileSync(path.join(cadence, 'memories', 'day.md'), 'memory\n')
+    fs.writeFileSync(path.join(cadence, 'auth.json'), 'SECRET-CADENCE-AUTH')
+    const plain = path.join(TMP, 'just-files')
+    fs.mkdirSync(plain, { recursive: true })
+    fs.writeFileSync(path.join(plain, 'notes.txt'), 'x\n')
+
+    const preview = (root) => fetch(`${base}/api/migrate/custom/preview`, { method: 'POST', headers: auth, body: JSON.stringify({ root }) })
+    let r = await preview(path.join(TMP, 'nope'))
+    chk('preview: nonexistent path -> 400 not_a_directory', r.status === 400 && (await r.json()).reason === 'not_a_directory')
+    r = await preview(fixtureHome)
+    chk('preview: home dir -> 400 root_too_broad', r.status === 400 && (await r.json()).reason === 'root_too_broad')
+    r = await preview(path.parse(fixtureHome).root)
+    chk('preview: filesystem root -> 400 root_too_broad', r.status === 400 && (await r.json()).reason === 'root_too_broad')
+    r = await preview(process.env.AGENT_DATA_HOME)
+    chk('preview: own DATA_HOME -> 400 own_home', r.status === 400 && (await r.json()).reason === 'own_home')
+
+    r = await preview(cadence)
+    const body = await r.text()
+    const p = JSON.parse(body)
+    chk('preview: agent folder -> 200 with names-only listing', r.status === 200 && p.files.some((f) => f.path === 'persona.md'), body.slice(0, 200))
+    chk('preview: forbidden name filtered + reported skipped', !body.includes('SECRET-') && !p.files.some((f) => /auth\.json/.test(f.path)) && p.skippedPresent.length >= 1, JSON.stringify(p.skippedPresent))
+    chk('preview: agent-shape heuristic fires on persona.md + memories/', p.agentShaped === true && JSON.stringify(p.markers).includes('persona.md'), JSON.stringify(p.markers))
+    r = await preview(plain)
+    const p2 = await r.json()
+    chk('preview: plain folder -> agentShaped false, still listed (user knows better)', r.status === 200 && p2.agentShaped === false && p2.files.length === 1, JSON.stringify(p2))
+
+    // start: rejected root never sweeps; good root delivers the
+    // structure-first sweep over the live lane.
+    r = await fetch(`${base}/api/migrate/custom/start`, { method: 'POST', headers: auth, body: JSON.stringify({ root: fixtureHome }) })
+    chk('custom start: broad root -> 400, no sweep', r.status === 400 && (await r.json()).reason === 'root_too_broad')
+
+    let got = null
+    const fakeLane = http.createServer(async (req, res) => {
+      let b = ''
+      for await (const c of req) b += c
+      got = JSON.parse(b)
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end('{"ok":true}')
+    })
+    await new Promise((r2) => fakeLane.listen(0, '127.0.0.1', r2))
+    fs.writeFileSync(path.join(process.env.AGENT_DATA_HOME, '.ingest-endpoint.json'),
+      JSON.stringify({ port: fakeLane.address().port, token: 'i'.repeat(64), pid: process.pid }))
+    r = await fetch(`${base}/api/migrate/custom/start`, { method: 'POST', headers: auth, body: JSON.stringify({ root: cadence }) })
+    const sb = await r.json()
+    chk('custom start: 202 live', r.status === 202 && sb.delivery === 'live', JSON.stringify(sb))
+    const c = String(got && got.content || '')
+    chk('sweep is [SYSTEM], names the root, and is STRUCTURE-FIRST', c.startsWith('[SYSTEM]') && c.includes(cadence) && c.includes('1단계') && c.includes('handover/cadence.md'), c.slice(0, 160))
+    chk('sweep names the found markers as starting points', c.includes('persona.md'), c.slice(0, 400))
+    chk('sweep carries the DO-NOT-READ list, no secret value leaked', c.includes('auth.json') && !c.includes('SECRET-'))
+    chk('sweep forbids pasting the map into chat', c.includes('붙여넣지 마라'))
+    await new Promise((r2) => fakeLane.close(r2))
+    fs.rmSync(path.join(process.env.AGENT_DATA_HOME, '.ingest-endpoint.json'), { force: true })
+  }
+
   // ── credential-guard hook (layer 3) ────────────────────────────────────
   {
     const hook = path.join(ROOT, 'hooks', 'pre-tool-credential-guard.mjs')

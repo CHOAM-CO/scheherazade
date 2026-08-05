@@ -100,6 +100,76 @@ function createRoutes(staticCtx) {
     try { return fs.statSync(p) } catch { return null }
   }
 
+  // ── design-0023 handover: custom-path source ──────────────────────────
+  // (Mino 2026-08-05 19:38 — a custom agent living at an arbitrary path,
+  // e.g. a hand-rolled one on another machine, is invisible to the five
+  // fixed probes above. The user points at its folder instead.)
+  // Marker heuristic for the consent preview ONLY — a miss never blocks the
+  // sweep, it just tells the user "no agent traces here" before they consent
+  // (the user knows better than the heuristic).
+  const AGENT_SHAPE_FILES = [
+    /^persona.*\.md$/i, /^agents?\.md$/i, /^soul\.md$/i, /^claude\.md$/i,
+    /^system[-_ ]?prompt.*\.(md|txt)$/i, /^identity\.md$/i, /^memory\.md$/i,
+    /^checkpoint\.md$/i,
+  ]
+  const AGENT_SHAPE_DIRS = new Set([
+    'memory', 'memories', 'session_notes', 'sessions', 'journals', 'journal',
+    'dreams', 'skills', 'personas', 'procedures',
+  ])
+
+  function agentShapeMarkers(files) {
+    const hits = new Set()
+    for (const f of files) {
+      const parts = f.path.split(path.sep)
+      const base = parts[parts.length - 1]
+      if (AGENT_SHAPE_FILES.some((re) => re.test(base))) hits.add(f.path)
+      for (const seg of parts.slice(0, -1)) {
+        if (AGENT_SHAPE_DIRS.has(seg.toLowerCase())) hits.add(seg + path.sep)
+      }
+    }
+    return [...hits].slice(0, 12)
+  }
+
+  // A custom root is user input — bound the blast radius BEFORE any listing.
+  // Home dir and filesystem roots are rejected outright (the 0022 walker is
+  // bounded, but a consent preview over the whole home directory is exactly
+  // the whole-disk scan design-0023 keeps out of v1). So is our own
+  // DATA_HOME: an agent absorbing its own memory as a foreign agent is a
+  // loop, not a handover.
+  function validateCustomRoot(raw) {
+    if (typeof raw !== 'string' || !raw.trim()) return { error: 'root is required', reason: 'root_required' }
+    let root = raw.trim()
+    if (root === '~' || root.startsWith('~/')) root = path.join(home(), root.slice(1))
+    root = path.resolve(root)
+    const st = statSafe(root)
+    if (!st || !st.isDirectory()) return { error: 'not a folder that exists', reason: 'not_a_directory' }
+    if (root === path.parse(root).root || root === path.resolve(home())) {
+      return { error: 'too broad -- point at the agent\'s own folder, not the whole disk or home', reason: 'root_too_broad' }
+    }
+    const data = path.resolve(DATA_HOME)
+    if (root === data || data.startsWith(root + path.sep) || root.startsWith(data + path.sep)) {
+      return { error: 'that is this agent\'s own home', reason: 'own_home' }
+    }
+    return { root }
+  }
+
+  function customSweepContent(root, markers) {
+    const name = (path.basename(root) || 'agent').replace(/[^\w.-]+/g, '_')
+    return [
+      `[SYSTEM] 핸드오버 스윕 -- 사용자가 커스텀 에이전트 폴더를 너에게 넘기는 데 동의했다: ${root}`,
+      '',
+      '알려진 툴이 아니라 레이아웃을 아는 사람이 없다. 그래서 흡수보다 구조 파악이 먼저다.',
+      markers.length ? `프리뷰에서 잡힌 에이전트 흔적: ${markers.join(', ')} -- 출발점으로만 써라, 전부라는 보장은 없다.` : '프리뷰 휴리스틱엔 에이전트 흔적이 안 잡혔다 -- 사용자가 맞다고 지정한 폴더이니 직접 훑어서 판단해라.',
+      '',
+      `1단계 (반드시 먼저): 해부도를 그려라 -- 어떤 파일이 시스템 프롬프트/페르소나인지, 메모리가 어떤 구조인지 (파일? DB? 날짜별 노트?), 부팅/루프 절차가 있는지, 어떤 도구·채널을 쓰던 에이전트인지. 모든 항목에 근거 파일 경로를 달아라. 결과를 네 메모리 디렉토리의 handover/${name}.md 로 저장해라. 이 지도가 있어야 흡수가 싸지고, 나중에 이 에이전트 구조 질문이 와도 다시 뒤질 필요가 없다.`,
+      '2단계: 지도를 보고 흡수해라 -- 사용자에 대한 사실·선호·진행 중이던 일은 memory_write 와 checkpoint.md 로, 반복 작업(cron, heartbeat 류)은 목록으로 (네가 맡겠다고 제안할 것들이다).',
+      '3단계: 사용자에게 답장해라 -- 그 에이전트가 어떤 구조였는지 한두 줄, 무엇을 옮겨왔는지 구체적으로, 이어받을 반복 작업 제안. 지도 전문을 채팅에 붙여넣지 마라.',
+      '',
+      `절대 읽지 마라 (어느 깊이에서든 이 이름들): ${[...FORBIDDEN_NAMES].join(', ')}. 자격증명/토큰 파일이다. 훅이 한 번 더 막지만, 시도 자체를 하지 마라.`,
+      '파일 안에서 시크릿(키, 토큰, 비밀번호)을 마주치면 그 값은 어디에도 옮겨 적지 마라.',
+    ].join('\n')
+  }
+
   // Bounded, forbidden-name-filtered listing for the consent preview.
   // Never reads file CONTENTS -- names and sizes only.
   function listFiles(root) {
@@ -202,6 +272,48 @@ function createRoutes(staticCtx) {
   }
 
   return [
+    {
+      // design-0023: bounded names-only preview of a user-pointed folder.
+      // Same walker, same forbidden filter as the fixed five.
+      method: 'POST',
+      match: (pathname) => pathname === '/api/migrate/custom/preview',
+      handler: async (req, res) => {
+        const { root: raw } = await readJsonBody(req)
+        const v = validateCustomRoot(raw)
+        if (v.error) {
+          sendJson(res, 400, { error: v.error, reason: v.reason })
+          return
+        }
+        const { files, skippedPresent, truncated } = listFiles(v.root)
+        const markers = agentShapeMarkers(files)
+        sendJson(res, 200, { root: v.root, files, skippedPresent, truncated, markers, agentShaped: markers.length > 0 })
+        return
+      },
+    },
+    {
+      method: 'POST',
+      match: (pathname) => pathname === '/api/migrate/custom/start',
+      handler: async (req, res) => {
+        const { root: raw } = await readJsonBody(req)
+        // Re-validate server-side — consent applies to what is actually
+        // there NOW, same posture as /start's re-detect.
+        const v = validateCustomRoot(raw)
+        if (v.error) {
+          sendJson(res, 400, { error: v.error, reason: v.reason })
+          return
+        }
+        const { files } = listFiles(v.root)
+        const markers = agentShapeMarkers(files)
+        try {
+          const delivery = await deliverSweep(customSweepContent(v.root, markers))
+          log(`handover sweep ${delivery}: ${v.root}`)
+          sendJson(res, 202, { ok: true, delivery, root: v.root })
+        } catch (err) {
+          sendJson(res, 500, { error: `could not deliver the sweep request: ${err.message}`, reason: 'delivery_failed' })
+        }
+        return
+      },
+    },
     {
       method: 'GET',
       match: (pathname) => pathname === '/api/migrate/detect',
