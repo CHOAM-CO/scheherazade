@@ -40,7 +40,12 @@ assert(/\.chat-user \{[^}]*align-self: flex-end/s.test(css), 'user turns are rig
 assert(/\.chat-user \{[^}]*max-width: 72%/s.test(css), 'user bubble is compact, not full-width')
 assert(/\.chat-user \{[^}]*rgb\(var\(--accent-rgb\) \/ 0\.16\)/s.test(css), 'bubble is translucent accent GLASS derived from the seed — never a solid accent fill')
 assert(/\.chat-user \{[^}]*backdrop-filter: blur/s.test(css), 'bubble carries the frosted material (glassmorphism ask)')
-assert(/\.chat-agent \{[^}]*background: transparent/s.test(css), 'agent turns are flat document flow (no bubble, no tint)')
+// P1 v3 (Mino 2026-08-06 14:47): flat agent flow retired — consecutive agent
+// turns read as one wall. Agent turns carry a NEUTRAL glass container
+// (asymmetry survives via side + material: left neutral vs right accent).
+assert(/\.chat-agent \{[^}]*align-self: flex-start/s.test(css), 'agent turns are left-aligned containers (v3)')
+assert(/\.chat-agent \{[^}]*rgba\(255, 255, 255, 0\.05\)/s.test(css), 'agent container is NEUTRAL glass — no accent tint (identity stays asymmetric)')
+assert(!/\.chat-agent \{[^}]*accent/s.test(css), 'agent container never borrows the user accent')
 assert(!js.includes('chat-role') && !css.includes('.chat-role'), 'role labels removed — the asymmetry itself carries identity')
 assert(!/\.chat-user \{[^}]*background: var\(--accent\)/s.test(css), 'no solid accent-filled user bubble')
 

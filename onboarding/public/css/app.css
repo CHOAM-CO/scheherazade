@@ -765,10 +765,12 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
 /* P1 v2 (Mino 2026-08-05 19:40 "깔끔하긴 한데 누가 누군지 잘 안보이잖아" +
    aside reference 19:41): asymmetric surface. USER turns are compact
    right-aligned glass bubbles (accent-derived, iMessage-shaped) — identity
-   readable from across the room. AGENT turns stay flat document flow on
-   the canvas (aside: no bubble, the answer IS the page), with the working
-   log folded above as a timeline. The v1 flat-both-sides look tested as
-   "who is who?" — labels alone were too quiet. */
+   readable from across the room. AGENT turns were flat document flow in
+   v2 (aside: no bubble, the answer IS the page), with the working log
+   folded above as a timeline. The v1 flat-both-sides look tested as
+   "who is who?" — labels alone were too quiet. v3 (2026-08-06) retired
+   the flat half: consecutive agent turns read as one wall in live use —
+   agent turns now carry a neutral glass container (see .chat-agent). */
 .chat-pane-wrap {
   position: relative; /* jump pill overlay anchor */
   flex: 1;
@@ -810,10 +812,24 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
   /* anchor for reaction badges + the hover react bar */
   position: relative;
 }
+/* P1 v3 (Mino 2026-08-06 14:47 "메시지 좀 묶어주는게 좋지 않을까? 말풍선이
+   날아갔는데?" + screenshot: two consecutive agent turns rendered as one
+   unbroken text wall): agent turns get a CONTAINER back so each turn reads
+   as a unit. Asymmetry from v2 survives — identity is still carried by
+   side + material (user = right accent glass, agent = left NEUTRAL glass,
+   no accent) — only the "flat document flow" half of v2 is retired. */
 .chat-agent {
-  background: transparent;
+  align-self: flex-start;
+  max-width: 85%;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  border-radius: 18px 18px 18px 6px;
+  padding: 0.6rem 0.95rem;
   color: var(--fg);
-  margin: 0.15rem 0;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: var(--edge-highlight);
+  margin: 0.3rem var(--s4);
 }
 /* user bubble: translucent accent glass, never a solid accent fill —
    the seed color shows through at reading-comfortable alpha on any
