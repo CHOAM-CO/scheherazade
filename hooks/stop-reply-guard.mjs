@@ -20,8 +20,23 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 
-const SCAN_TAIL = 80
-const TAIL_BYTES = 500 * 1024
+// Escalating scan windows (red-team 2026-08-05 item 5, "tail anchor"): a
+// single fixed tail (was 500KB/80 events) let one large tool output push
+// the last inbound channel message out of the window -- triggerIdx came
+// back -1 and the guard silently waved the turn through, exactly the
+// silent-death class it exists to block. Now: scan the smallest window
+// first (the common case costs what it always cost), and only when NO
+// trigger is found AND the window didn't already cover the whole file,
+// widen and rescan. The 16MB/5000 ceiling is the fail-open boundary: a
+// transcript whose last inbound message is buried deeper than that reads
+// as no-trigger, same as before -- but the boundary moved from "one big
+// tool result" to "16MB of them".
+const SCAN_STEPS = [
+  { bytes: 500 * 1024, entries: 80 },
+  { bytes: 2 * 1024 * 1024, entries: 400 },
+  { bytes: 8 * 1024 * 1024, entries: 2000 },
+  { bytes: 16 * 1024 * 1024, entries: 5000 },
+]
 
 // ── mute-strike ledger (2026-07-13, replaces the killed "swap-time tool-call
 // smoke test") ────────────────────────────────────────────────────────────────
@@ -124,8 +139,6 @@ async function main() {
   const transcriptPath = hookInput.transcript_path
   if (!transcriptPath || !fs.existsSync(transcriptPath)) process.exit(0)
 
-  const entries = tailJsonl(transcriptPath, SCAN_TAIL)
-
   // Most recent user message carrying a channel tag. Id charset is [\w-]:
   // Discord = digits, Telegram groups = NEGATIVE digits (multichannel
   // v0.0.18 -- digits-only left the guard silently inert there), Slack =
@@ -133,21 +146,32 @@ async function main() {
   // the guard inert on the LOCAL backend too, i.e. the 0.0.31 silent-agent
   // class had no net exactly where Mino hit it).
   const channelRegex = /<channel\s+[^>]*channelId="([\w-]+)"[^>]*>([\s\S]*?)<\/channel>/
+  let entries = []
   let triggerIdx = -1
   let triggerChannelId = null
   let triggerBody = ''
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const e = entries[i]
-    if (e.type !== 'user') continue
-    const text = extractUserText(e)
-    if (!text) continue
-    const m = text.match(channelRegex)
-    if (m) {
-      triggerIdx = i
-      triggerChannelId = m[1]
-      triggerBody = m[2]
-      break
+  const transcriptSize = fs.statSync(transcriptPath).size
+  for (const step of SCAN_STEPS) {
+    entries = tailJsonl(transcriptPath, step.entries, step.bytes)
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const e = entries[i]
+      if (e.type !== 'user') continue
+      const text = extractUserText(e)
+      if (!text) continue
+      const m = text.match(channelRegex)
+      if (m) {
+        triggerIdx = i
+        triggerChannelId = m[1]
+        triggerBody = m[2]
+        break
+      }
     }
+    if (triggerIdx !== -1) break
+    // Whole file read AND the entry-count cap didn't clip anything -> the
+    // scan was exhaustive; there is genuinely no trigger. (Both conditions:
+    // a small file can be fully READ while the last-n slice still hides an
+    // older entry.)
+    if (step.bytes >= transcriptSize && entries.length < step.entries) break
   }
   if (triggerIdx === -1) process.exit(0) // no Discord trigger -> not applicable
 
@@ -270,9 +294,9 @@ function extractUserText(entry) {
   return ''
 }
 
-function tailJsonl(filePath, n) {
+function tailJsonl(filePath, n, tailBytes) {
   const stat = fs.statSync(filePath)
-  const bytesToRead = Math.min(stat.size, TAIL_BYTES)
+  const bytesToRead = Math.min(stat.size, tailBytes)
   const start = Math.max(0, stat.size - bytesToRead)
   const buf = Buffer.alloc(bytesToRead)
   const fd = fs.openSync(filePath, 'r')

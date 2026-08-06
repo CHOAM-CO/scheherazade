@@ -56,13 +56,31 @@ if (fs.existsSync(dreamsDir)) {
 // Trigger line lives in YAML frontmatter (between the first two ---
 // delimiter lines), key "trigger:" -- scoped to the frontmatter block so a
 // "trigger:" word in the skill body can't be picked up by mistake.
+// BOOT BUDGET (red-team 2026-08-05 item 7): this listing grew one line per
+// skill file with no ceiling and no per-line cap -- so the more successfully
+// the agent used skills, the fatter EVERY boot got, against CLAUDE.md's own
+// excerpt-first rule. Caps now: at most SKILL_LIST_MAX entries (newest
+// first by mtime, so a fresh skill is never the one that falls off), each
+// trigger clipped to SKILL_TRIGGER_CHARS. Overflow is STATED, not silent --
+// a hidden truncation reads as "that's all of them".
+const SKILL_LIST_MAX = 20
+const SKILL_TRIGGER_CHARS = 160
 const skillLines = []
+let skillOverflow = 0
 const skillsDir = path.join(MEM, 'skills')
 if (fs.existsSync(skillsDir)) {
+  const files = []
   for (const f of fs.readdirSync(skillsDir).sort()) {
     if (!f.endsWith('.md')) continue
     const full = path.join(skillsDir, f)
-    if (!fs.statSync(full).isFile()) continue
+    let st
+    try { st = fs.statSync(full) } catch { continue }
+    if (!st.isFile()) continue
+    files.push({ f, full, mtime: st.mtimeMs })
+  }
+  files.sort((a, b) => b.mtime - a.mtime) // newest first: the cap drops the stalest
+  skillOverflow = Math.max(0, files.length - SKILL_LIST_MAX)
+  for (const { f, full } of files.slice(0, SKILL_LIST_MAX)) {
     let trigger = null
     const lines = fs.readFileSync(full, 'utf8').split('\n')
     let delim = 0
@@ -73,8 +91,10 @@ if (fs.existsSync(skillsDir)) {
         if (m && trigger === null) trigger = m[1].replace(/^"(.*)"$/, '$1')
       }
     }
+    if (trigger && trigger.length > SKILL_TRIGGER_CHARS) trigger = `${trigger.slice(0, SKILL_TRIGGER_CHARS)}…`
     skillLines.push(`- ${f}: ${trigger || '(no trigger field found)'}`)
   }
+  skillLines.sort() // display order stays alphabetical; mtime only chose WHICH
 }
 
 // Permission wall map (P0, 2026-07-15 -- docs/permission-visibility-design.md).
@@ -134,6 +154,9 @@ if (dreamCount > 0) out.push(`${dreamCount} dream fragment(s) in dreams/ -- skim
 if (skillLines.length > 0) {
   out.push(`${skillLines.length} skill(s) in skills/ (Read the file when one looks relevant):`)
   out.push(...skillLines)
+  if (skillOverflow > 0) {
+    out.push(`(+${skillOverflow} older skill(s) not listed -- boot budget cap. \`ls skills/\` for the full set.)`)
+  }
 }
 out.push("Restore order: today's session note (head+tail excerpt, Felt first), then checkpoint.md, then yesterday's journal, then self_persona.md, then 2 recent dreams. Excerpt first, full Read only on a pointer -- CLAUDE.md §1.")
 

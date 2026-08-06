@@ -88,6 +88,45 @@ try {
       fix: 'TCC 토글로 안 풀림. 대안: CGEventPost 방식 입력 주입(손쉬운 사용 권한 필요) 또는 이 접근 포기. SIP 비활성화는 권장 안 함.',
       caveat: '사용자가 "어디서 켜?"라고 물으면 "앱 권한 밖"이라고 답해야 함.',
     },
+    // ── sudo askpass taxonomy (red-team 2026-08-05 item 6) ──────────────
+    // The askpass helper now names its failure cause on stderr ("askpass:
+    // ..."), and sudo -A passes helper stderr through -- so these rules can
+    // say WHICH wall it was instead of the generic "비밀번호 없이는 실행
+    // 불가" that mislabeled a dead endpoint as a missing password in the
+    // 08-05 live incident. Order matters: askpass rules sit BEFORE the
+    // generic sudo rule because RULES.find takes the first match.
+    {
+      cmd: /sudo/i,
+      out: /askpass: (app is not running|cannot reach the app)/i,
+      wall: 'sudo askpass — 앱 미실행',
+      layer: 'askpass 연결 — TCC/비밀번호 아님',
+      fix: 'Scheherazade 앱이 꺼져 있거나 endpoint가 stale함. 앱을 실행(또는 재시작)한 뒤 같은 명령을 다시 시도.',
+      caveat: '비밀번호 문제가 아님 — 사용자에게 비밀번호를 묻지 말 것.',
+    },
+    {
+      cmd: /sudo/i,
+      out: /askpass: token mismatch|askpass: endpoint file is malformed/i,
+      wall: 'sudo askpass — stale endpoint',
+      layer: 'askpass 인증 — TCC/비밀번호 아님',
+      fix: '앱이 재시작되면서 per-boot 토큰이 갈렸음. 앱이 켜져 있는지 확인하고 다시 시도 (다음 앱 부트가 endpoint 파일을 다시 씀).',
+      caveat: '비밀번호 문제가 아님 — 사용자에게 비밀번호를 묻지 말 것.',
+    },
+    {
+      cmd: /sudo/i,
+      out: /askpass: sudo toggle is OFF/i,
+      wall: 'sudo 토글 OFF',
+      layer: '앱 설정 — TCC 아님',
+      fix: '앱 Settings에서 sudo 토글을 켜야 함. 사용자에게 토글을 켜 달라고 요청.',
+      caveat: null,
+    },
+    {
+      cmd: /sudo/i,
+      out: /askpass: no sudo password stored/i,
+      wall: 'sudo 비밀번호 미저장',
+      layer: '앱 vault — TCC 아님',
+      fix: '앱 Settings에서 sudo 비밀번호를 저장해야 함. 사용자에게 설정을 요청.',
+      caveat: '비밀번호를 채팅/stdin으로 받는 우회는 금지 (transcript 영구 노출).',
+    },
     {
       cmd: /sudo/i,
       out: /password is required|a terminal is required/i,

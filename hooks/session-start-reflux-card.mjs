@@ -42,8 +42,17 @@
 // is a real open question for PO sign-off (see file-end note / final
 // report): should this point at self_persona.md's existing reflux path
 // instead of a new self_notes.md concept?
+//
+// SNOOZE (red-team 2026-08-05 item 7, boot budget; DEVIATES from the "no
+// snooze/decay" reading above, deliberately): re-printing the identical card
+// on every boot for as long as the count sits at threshold is unbounded
+// repeat injection, and a card that is always there stops being read at all.
+// The card now re-appears only when the situation CHANGED (active count went
+// up) or SNOOZE_MS elapsed. Snoozing hides a NUDGE, never a correction --
+// the corrections themselves still ride every reply via
+// pre-reply-corrections-context.mjs, which this does not touch.
 
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
@@ -65,6 +74,15 @@ const REFLUX_THRESHOLD = (() => {
 // server writes to.
 const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', 'Scheherazade')
 const DB_PATH = process.env.SCHEHERAZADE_MEMORY_DB || path.join(DATA_HOME, 'memory.db')
+// Snooze state (see SNOOZE note in the header). Lives beside the rumination
+// gate's markers, same .gates/ convention.
+const SNOOZE_PATH = path.join(DATA_HOME, '.gates', 'reflux-card.json')
+const DEFAULT_SNOOZE_HOURS = 12
+const SNOOZE_MS = (() => {
+  const raw = process.env.SCHEHERAZADE_REFLUX_SNOOZE_HOURS
+  const n = raw != null ? Number.parseFloat(raw) : NaN
+  return (Number.isFinite(n) && n >= 0 ? n : DEFAULT_SNOOZE_HOURS) * 3600 * 1000
+})()
 
 // ── PRODUCT COPY — PO 최종화 대기 ──────────────────────────────────────────
 // 초안 원칙(설계 문서 §1-3): 존댓말, 이모지/느낌표 금지, "기능"으로 읽히는 톤.
@@ -122,6 +140,25 @@ try {
   }
 
   if (!count || count < REFLUX_THRESHOLD) succeedEmpty()
+
+  // Snooze check. Best-effort throughout: an unreadable/unwritable state
+  // file must never suppress the card NOR crash the boot -- on any error the
+  // card shows (fail-toward-visible, since the card is the safe outcome).
+  let prev = null
+  try {
+    if (existsSync(SNOOZE_PATH)) prev = JSON.parse(readFileSync(SNOOZE_PATH, 'utf8'))
+  } catch { prev = null }
+  if (prev && typeof prev.count === 'number' && typeof prev.shownAt === 'number') {
+    const escalated = count > prev.count // situation got worse -> speak again immediately
+    const fresh = Date.now() - prev.shownAt < SNOOZE_MS
+    if (!escalated && fresh) succeedEmpty()
+  }
+  try {
+    mkdirSync(path.dirname(SNOOZE_PATH), { recursive: true })
+    const tmp = `${SNOOZE_PATH}.tmp`
+    writeFileSync(tmp, JSON.stringify({ count, shownAt: Date.now() }))
+    renameSync(tmp, SNOOZE_PATH) // atomic: a torn state file reads as corrupt -> card shows
+  } catch { /* best-effort: worst case the card repeats, which is the old behavior */ }
 
   const lines = [`[환류 카드] ${GATE_COPY.header(count)}`, '', GATE_COPY.body, '', GATE_COPY.footer]
   succeedWithContext(lines.join('\n'))
