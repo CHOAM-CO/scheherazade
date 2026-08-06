@@ -1292,6 +1292,22 @@ window.COPY = {
     links: {
       ollamaKeys: 'https://ollama.com/settings/keys',
     },
+    // Prerequisite doctor (2026-08-06, 0.67 clean-mac feedback). The rows
+    // name the two things a fresh machine actually needs; the missing-CLI
+    // fix is the official installer, not npm (npm itself is a prerequisite
+    // a clean machine doesn't have).
+    doctorLabel: 'System check',
+    doctorNote: 'What the agent needs on this machine to run at all.',
+    doctorRecheck: 'Re-check',
+    doctorRowClaudeCli: 'Claude Code CLI — runs the agent in every mode',
+    doctorRowCredential: (p) => `Sign-in for the selected connection (${p || 'none'})`,
+    doctorPresent: 'Found',
+    doctorMissing: 'Missing',
+    doctorCredentialFix: 'Connect it in the Providers card above.',
+    doctorInstallHint: 'Run this in Terminal, then Re-check. It installs the official CLI without needing npm or Homebrew.',
+    doctorInstallCopy: 'Copy command',
+    doctorInstallCopied: 'Install command copied.',
+    doctorDocs: 'Open install guide',
     // Usage gauges, one line per lane (2026-08-04 evening: "이게 킥임").
     usageLabel: 'Usage',
     usageRefresh: 'Refresh',

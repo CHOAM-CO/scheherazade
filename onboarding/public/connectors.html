@@ -212,6 +212,28 @@
           </div>
         </div>
 
+        <!-- Prerequisite doctor (2026-08-06, 0.67 clean-mac feedback: the
+             agent was silently dead with no claude CLI installed and NOTHING
+             said why). Rows come from GET /api/doctor -- the same resolvers
+             the spawn gate uses, never a cached flag. The install field
+             appears only when the claude CLI row is red. -->
+        <div class="category" id="conn-doctor">
+          <div class="category-header">
+            <div class="category-label" id="conn-doctor-label"></div>
+            <button class="secondary" id="conn-doctor-recheck"></button>
+          </div>
+          <div class="field-hint" id="conn-doctor-note"></div>
+          <div class="entries" id="conn-doctor-rows"></div>
+          <div class="field hidden" id="conn-doctor-install-field">
+            <div class="field-hint" id="conn-doctor-install-hint"></div>
+            <div class="step-actions">
+              <input type="text" readonly id="conn-doctor-install-cmd" />
+              <button class="secondary" id="conn-doctor-install-copy"></button>
+              <button class="secondary" id="conn-doctor-docs"></button>
+            </div>
+          </div>
+        </div>
+
         <!-- claude.ai connectors (Gmail/Calendar/…). In-app OAuth intercept.
              Lane warning shows first when the running lane can't actually
              USE connectors even once authorized. -->

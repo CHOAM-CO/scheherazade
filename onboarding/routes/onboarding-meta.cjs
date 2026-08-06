@@ -53,6 +53,50 @@ function createRoutes(staticCtx) {
       },
     },
     {
+      // Prerequisite doctor (2026-08-06, 0.67 clean-mac feedback: agent
+      // silently dead with no claude/codex installed -- "실패해도 되는데
+      // 원인은 알아야지"). Data only; labels live in copy.js. Two rows:
+      //  - claude-cli: the ONE universal runtime dep (every provider mode
+      //    executes through the claude CLI -- headless-lane spawns it).
+      //    Truth = agentControls.claudeCliInfo(), the SAME resolver the
+      //    spawn gate uses, never a cached flag.
+      //  - provider credential: readiness of the CONFIGURED provider per
+      //    computeAvailableProviders() -- the same single source of truth
+      //    the model-swap gate uses (stored credential for claude/
+      //    claude-subscription/ollama, codex auth.json artifact for
+      //    chatgpt, machine login artifact for claude-cli, saved base URL
+      //    for custom). No provider configured -> no row.
+      method: 'GET',
+      match: (pathname) => pathname === '/api/doctor',
+      handler: async (req, res, callCtx) => {
+        const info = callCtx.agentControls && typeof callCtx.agentControls.claudeCliInfo === 'function'
+          ? callCtx.agentControls.claudeCliInfo()
+          : { status: 'unknown' }
+        const rows = [{
+          id: 'claude-cli',
+          required: true,
+          present: info.status === 'found',
+          detail: info.status === 'found' ? info.bin : null,
+          installCommand: info.installCommand || null,
+          docsUrl: info.docsUrl || null,
+        }]
+        const provider = (readAgentConfig().PROVIDER || '').trim() || null
+        if (provider) {
+          let available = []
+          try { available = computeAvailableProviders() } catch (err) { console.error('[doctor] availableProviders failed:', err.message) }
+          rows.push({
+            id: 'provider-credential',
+            provider,
+            required: true,
+            present: available.includes(provider),
+            detail: null,
+          })
+        }
+        sendJson(res, 200, { ok: rows.every((r) => !r.required || r.present), rows })
+        return
+      },
+    },
+    {
       // Last turn error (2026-08-04, Mino "클로드도 동작안함" -- a
       // rate-limited/auth-dead lane produced ZERO user-visible signal).
       // Reads the lane's .last-turn-error.json marker; `fresh` = within 10

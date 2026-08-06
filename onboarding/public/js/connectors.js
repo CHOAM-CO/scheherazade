@@ -1438,6 +1438,80 @@
     card.classList.remove('hidden')
   }
 
+  // ── prerequisite doctor (2026-08-06, 0.67 clean-mac feedback: agent
+  // silently dead with nothing installed and nothing saying why). Rows are
+  // server truth from GET /api/doctor -- the claude-cli row runs the SAME
+  // resolver the spawn gate uses, so this card and the spawn verdict can
+  // never disagree. The install field surfaces the official installer
+  // command (npm needs Node 22+ -- exactly the dependency class a clean
+  // machine doesn't have; see main.cjs CLAUDE_INSTALL_COMMAND). ──────────
+  async function renderDoctor() {
+    $('conn-doctor-label').textContent = C.doctorLabel
+    $('conn-doctor-note').textContent = C.doctorNote
+    const recheck = $('conn-doctor-recheck')
+    recheck.textContent = C.doctorRecheck
+    recheck.onclick = () => {
+      recheck.disabled = true
+      renderDoctor().finally(() => { recheck.disabled = false })
+    }
+    let doc
+    try {
+      doc = await api('/api/doctor')
+    } catch (err) {
+      $('conn-doctor-note').textContent = GEN(err.message)
+      return
+    }
+    const rowsEl = $('conn-doctor-rows')
+    rowsEl.textContent = ''
+    const installField = $('conn-doctor-install-field')
+    installField.classList.add('hidden')
+    for (const row of doc.rows) {
+      const wrap = document.createElement('div')
+      wrap.className = 'entry-row'
+      const main = document.createElement('div')
+      main.className = 'entry-main'
+      const name = document.createElement('div')
+      name.className = 'entry-value'
+      name.textContent = row.id === 'claude-cli' ? C.doctorRowClaudeCli : C.doctorRowCredential(row.provider)
+      const meta = document.createElement('div')
+      meta.className = 'entry-meta'
+      // present shows the receipt (the resolved bin path), never a bare
+      // synthesized "OK" -- same honesty rule as the provider Test button.
+      setChip(meta, row.present ? 'ok' : 'err', row.present ? (row.detail || C.doctorPresent) : C.doctorMissing)
+      main.appendChild(name)
+      main.appendChild(meta)
+      if (row.id === 'provider-credential' && !row.present) {
+        const hint = document.createElement('div')
+        hint.className = 'entry-meta'
+        hint.textContent = C.doctorCredentialFix
+        main.appendChild(hint)
+      }
+      wrap.appendChild(main)
+      rowsEl.appendChild(wrap)
+      if (row.id === 'claude-cli' && !row.present && row.installCommand) {
+        installField.classList.remove('hidden')
+        $('conn-doctor-install-hint').textContent = C.doctorInstallHint
+        const cmd = $('conn-doctor-install-cmd')
+        cmd.value = row.installCommand
+        const copyBtn = $('conn-doctor-install-copy')
+        copyBtn.textContent = C.doctorInstallCopy
+        copyBtn.onclick = async () => {
+          try {
+            await navigator.clipboard.writeText(cmd.value)
+            showToast(C.doctorInstallCopied)
+          } catch (err) {
+            console.error('clipboard write failed:', err)
+            cmd.select()
+          }
+        }
+        const docsBtn = $('conn-doctor-docs')
+        docsBtn.classList.toggle('hidden', !row.docsUrl)
+        docsBtn.textContent = C.doctorDocs
+        docsBtn.onclick = () => window.open(row.docsUrl, '_blank', 'noopener')
+      }
+    }
+  }
+
   async function init() {
     $('conn-title').textContent = C.title
 
@@ -1455,6 +1529,7 @@
     // its settings.js home applied (Mino, first win install 2026-08-03).
     renderAgentConfig()
     renderCustomProvider().catch((err) => console.error(err))
+    renderDoctor().catch((err) => console.error(err))
     if (window.IS_MAC) {
       renderTopology().catch((err) => console.error(err))
     } else {

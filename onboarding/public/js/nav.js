@@ -147,6 +147,11 @@
       '<div class="nav-status">' +
         '<span class="category-label" id="nav-agent-label"></span>' +
         '<span class="status-line" id="nav-status-line"></span>' +
+        // Failure cause (2026-08-06, 0.67 clean-mac feedback: the shell
+        // showed only the word "Failed" while status.detail held the whole
+        // diagnosis -- "실패해도 되는데 원인은 알아야지"). Filled only on
+        // failed; full text rides the title attr when it truncates.
+        '<span class="nav-status-detail failure" id="nav-status-cause"></span>' +
         '<span class="nav-status-detail" id="nav-status-model"></span>' +
         '<span class="nav-status-detail" id="nav-status-effort"></span>' +
         '<span class="nav-status-detail" id="nav-status-context"></span>' +
@@ -277,13 +282,24 @@
     setTimeout(pollContextStatusOnce, CONTEXT_POLL_MS)
   }
 
-  function renderAgentStatus(state) {
+  function renderAgentStatus(state, status) {
     const line = $('nav-status-line')
     line.textContent = NAV.states[state] || state
     line.className = 'status-line'
     if (state === 'live') line.classList.add('success')
     else if (state === 'failed') line.classList.add('failure')
     else if (state === 'connecting' || state === 'idle') line.classList.add('pending')
+    // The state word alone said "Failed" while the WHY sat unread in
+    // status.detail (0.67 clean-mac feedback). Shown verbatim -- the server
+    // strings already carry the fix (e.g. cli_missing includes the install
+    // command); synthesizing a friendlier line here would hide the receipt.
+    const cause = $('nav-status-cause')
+    if (cause) {
+      const text = state === 'failed' && status ? (status.detail || status.code || '') : ''
+      cause.textContent = text
+      cause.title = text
+      cause.classList.toggle('hidden', !text)
+    }
     const running = state === 'live' || state === 'connecting'
     const toggle = $('nav-btn-startstop')
     toggle.textContent = running ? NAV.stop : NAV.start
@@ -312,7 +328,7 @@
       // refetch its birth record before rendering, so the model/effort
       // details never describe the previous child.
       if (result.state !== lastPolledState) await refreshSpawnInfo()
-      renderAgentStatus(result.state)
+      renderAgentStatus(result.state, result)
       lastPolledState = result.state
       if (controlsBusy) {
         if (result.state !== busyStartState) busySawChange = true
