@@ -74,6 +74,10 @@
      top. The window's solid fallback color makes this a no-op when the
      platform effect is unavailable. */
   --frost-alpha: 0.35;
+  /* Sticky-chrome (app-nav) defaults; the appearance model overrides both
+     per the blur option + glass gauge (0.67: blur owns scroll occlusion). */
+  --chrome-alpha: 0.88;
+  --chrome-blur: blur(14px);
   /* One label column width for every settings row on every page. Defined
      once so the control column can never drift apart again (alignment pass
      2026-07-25). */
@@ -520,9 +524,13 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
   position: sticky;
   top: 0;
   z-index: 5;
-  /* Sticky: must mask content scrolling beneath it, so it stays nearly
-     opaque — 0.88 keeps a hint of the glass without ghosting text. */
-  background: rgb(var(--frost-rgb) / 0.88);
+  /* Sticky: content scrolling beneath is handled by the blur option now —
+     backdrop-filter blurs it when blur is on (alpha thins with the glass
+     gauge via --chrome-alpha); blur off collapses to a fully opaque mask.
+     Both vars are seeded by appearance-model.cjs — no literals here. */
+  background: rgb(var(--frost-rgb) / var(--chrome-alpha));
+  -webkit-backdrop-filter: var(--chrome-blur);
+  backdrop-filter: var(--chrome-blur);
   padding-top: 0.5rem;
   padding-bottom: 1rem;
   margin-bottom: 1.5rem;

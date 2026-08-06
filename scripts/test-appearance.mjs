@@ -91,6 +91,16 @@ assert(offVars['--frost-alpha'] === '1.000' && offVars['--panel-alpha'] === '1.0
 const softVars = M.cssVars({ blur: 'soft', glass: 100 })
 assert(softVars['--frost-alpha'] === '0.000', 'blur soft keeps the gauge live (glass 100 = raw effect)')
 
+console.log('\n1d. sticky-chrome blur (0.67 feedback: blur option owns scroll occlusion)')
+assert(offVars['--chrome-blur'] === 'none' && offVars['--chrome-alpha'] === '1.000',
+  'blur off: nav masks with opaque paint, no backdrop filter')
+assert(softVars['--chrome-blur'] === 'blur(14px)' && M.cssVars({ blur: 'strong' })['--chrome-blur'] === 'blur(24px)',
+  'blur soft/strong emit the two backdrop strengths')
+assert(M.cssVars({ glass: 0, blur: 'soft' })['--chrome-alpha'] === '0.880',
+  'glass 0 reproduces the pre-0.67 nav mask (0.88) exactly')
+assert(softVars['--chrome-alpha'] === '0.250',
+  'glass 100 floors chrome alpha at 0.25 — legible over a fully transparent body')
+
 console.log('\n2. server wiring pins (http-server.cjs)')
 const server = readFileSync(path.join(root, 'onboarding', 'http-server.cjs'), 'utf8')
 assert(server.includes("require('./public/js/appearance-model.cjs')"), 'server requires the SAME model file the browser loads')
@@ -139,6 +149,16 @@ assert(css.includes('--radius: var(--radius-m)'), 'legacy --radius aliases into 
 assert(!/border-radius:\s*(7px|8px|10px|999px)/.test(css), 'no ad-hoc radius values outside the vocabulary (50% circles exempt)')
 assert(css.includes('box-shadow: var(--edge-highlight)'), 'panels carry the top-edge light-catch')
 assert(css.includes('box-shadow: 0 0 0 2px var(--accent-ring)'), 'focus ring uses the derived accent ring')
+{
+  // Anchor to the .app-nav block specifically (source-grep tests must anchor
+  // to their selector — 0.67 lesson), not to a whole-file substring.
+  const navBlock = css.slice(css.indexOf('.app-nav {'), css.indexOf('}', css.indexOf('.app-nav {')))
+  assert(navBlock.includes('background: rgb(var(--frost-rgb) / var(--chrome-alpha'),
+    'sticky nav alpha is model-seeded, not a 0.88 literal')
+  assert(navBlock.includes('backdrop-filter: var(--chrome-blur') && navBlock.includes('-webkit-backdrop-filter: var(--chrome-blur'),
+    'sticky nav blurs scrolled content via the chrome-blur seed (both prefixes)')
+  assert(!navBlock.includes('0.88'), 'no hardcoded nav alpha remains')
+}
 
 console.log('\n5b. Pretendard Variable bundling (P0)')
 import { statSync } from 'node:fs'

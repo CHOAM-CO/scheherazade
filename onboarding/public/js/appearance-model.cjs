@@ -143,6 +143,15 @@
       '--frost-alpha': solid ? '1.000' : (0.82 * (1 - g)).toFixed(3),
       '--panel-alpha': solid ? '1.000' : (1 - 0.75 * g).toFixed(3),
       '--raised-alpha': solid ? '1.000' : (1 - 0.5 * g).toFixed(3),
+      // Sticky chrome (app-nav): scrolled content must be BLURRED beneath it,
+      // not masked by opaque paint (0.67 feedback — the blur option now owns
+      // scroll occlusion too). blur off = no backdrop-filter, so the mask
+      // goes fully opaque; blur on = CSS backdrop blur handles ghosting and
+      // the alpha thins with the glass gauge (floor 0.25 keeps text legible
+      // over a transparent body where the filter has nothing to sample).
+      // At g=0 this reproduces the old 0.88 mask exactly.
+      '--chrome-alpha': solid ? '1.000' : Math.max(0.25, 0.82 * (1 - g) + 0.06).toFixed(3),
+      '--chrome-blur': solid ? 'none' : c.blur === 'strong' ? 'blur(24px)' : 'blur(14px)',
       '--border': 'rgb(255 255 255 / 0.09)',
       '--border-strong': 'rgb(255 255 255 / 0.16)',
       '--edge-highlight': 'inset 0 1px 0 rgb(255 255 255 / 0.06)',
