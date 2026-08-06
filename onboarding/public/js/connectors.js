@@ -45,13 +45,16 @@
     return typeof entry === 'string' ? entry : entry[provider] || C.providerAuthFailures.unknown
   }
 
-  async function renderProviderAuth() {
+  // cfgIn: load-time consolidation (2026-08-07) — init() fetches /api/config
+  // once and passes it down; event-driven re-renders call with no arg and
+  // fetch fresh, because their whole point is picking up changed state.
+  async function renderProviderAuth(cfgIn) {
     $('conn-providers-label').textContent = C.providersLabel
     // (subtitle removed in the 대공사 — the section label carries it now)
 
     let available = []
     try {
-      const cfg = await api('/api/config')
+      const cfg = cfgIn || await api('/api/config')
       available = Array.isArray(cfg.availableProviders) ? cfg.availableProviders : []
     } catch (err) {
       console.error(err)
@@ -951,13 +954,15 @@
     return entry.providers.find((p) => availableProviders.includes(p)) || null
   }
 
-  async function renderAgentConfig() {
+  async function renderAgentConfig(cfgIn) {
     $('set-agent-config-label').textContent = S.agentConfigLabel
     $('set-model-label').textContent = S.modelLabel
     $('set-effort-label').textContent = S.effortLabel
 
-    let cfg = {}
-    try { cfg = await api('/api/config') } catch (err) { console.error(err) }
+    let cfg = cfgIn || {}
+    if (!cfgIn) {
+      try { cfg = await api('/api/config') } catch (err) { console.error(err) }
+    }
     currentProvider = cfg.PROVIDER || null
     currentModel = cfg.MODEL || ''
     currentEffort = EFFORT_LEVELS.includes(cfg.EFFORT_LEVEL) ? cfg.EFFORT_LEVEL : EFFORT_DEFAULT
@@ -1153,7 +1158,7 @@
     { label: S.customPresetCodexApi, url: 'http://localhost:18080' },
   ]
 
-  async function renderCustomProvider() {
+  async function renderCustomProvider(cfgIn) {
     $('set-custom-label').textContent = S.customLabel
     $('set-custom-note').textContent = S.customNote
     $('set-custom-preset-label').textContent = S.customPresetLabel
@@ -1181,8 +1186,10 @@
       if (presetSel.value) $('set-custom-url-input').value = presetSel.value
     }
 
-    let cfg = {}
-    try { cfg = await api('/api/config') } catch (err) { console.error(err) }
+    let cfg = cfgIn || {}
+    if (!cfgIn) {
+      try { cfg = await api('/api/config') } catch (err) { console.error(err) }
+    }
     $('set-custom-url-input').value = cfg.CUSTOM_BASE_URL || ''
     // Model id only pre-fills from the live config when custom is ALREADY
     // the running provider -- otherwise cfg.MODEL belongs to whatever
@@ -1515,20 +1522,23 @@
   async function init() {
     $('conn-title').textContent = C.title
 
-    let cfg = {}
+    // One /api/config for the whole load (2026-08-07 consolidation — this
+    // used to be 4 identical GETs: here + the three renders below). Renders
+    // triggered later by events still fetch their own fresh copy.
+    let cfg = null
     try { cfg = await api('/api/config') } catch (err) { console.error(err) }
-    initClaudeSubRow(Array.isArray(cfg.availableProviders) ? cfg.availableProviders : [])
+    initClaudeSubRow(Array.isArray(cfg && cfg.availableProviders) ? cfg.availableProviders : [])
     renderChatgptReceipt()
     renderMcpConnectors()
 
-    await renderProviderAuth()
+    await renderProviderAuth(cfg)
     renderUsage()
 
     // Engine cards (tab merge 2026-08-06). Topology is a macOS-only
     // surface, hidden rather than rendered empty on Windows -- same rule
     // its settings.js home applied (Mino, first win install 2026-08-03).
-    renderAgentConfig()
-    renderCustomProvider().catch((err) => console.error(err))
+    renderAgentConfig(cfg)
+    renderCustomProvider(cfg).catch((err) => console.error(err))
     renderDoctor().catch((err) => console.error(err))
     if (window.IS_MAC) {
       renderTopology().catch((err) => console.error(err))
