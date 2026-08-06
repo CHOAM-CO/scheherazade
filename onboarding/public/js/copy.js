@@ -1285,9 +1285,15 @@ window.COPY = {
     // key. Replaces the login shell-out strings for this provider.
     ollamaKeyReplace: 'Replace key',
     ollamaKeyPlaceholder: 'Paste an ollama.com API key',
+    ollamaKeyGet: 'Get a key at ollama.com',
     ollamaKeySave: 'Save',
     ollamaKeyValidating: 'Checking the key against ollama.com…',
     ollamaKeySaved: 'Ollama API key saved.',
+    // External consoles this page links out to (same shape as the channels
+    // section's links map).
+    links: {
+      ollamaKeys: 'https://ollama.com/settings/keys',
+    },
     // Usage gauges, one line per lane (2026-08-04 evening: "이게 킥임").
     usageLabel: 'Usage',
     usageRefresh: 'Refresh',

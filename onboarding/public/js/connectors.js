@@ -112,6 +112,14 @@
     if (!input || !saveBtn || !lineEl) return
     input.placeholder = C.ollamaKeyPlaceholder
     saveBtn.textContent = C.ollamaKeySave
+    // Straight line to the key console (0.67 feedback: the paste flow
+    // stranded anyone who did not already HAVE a key). House pattern:
+    // window.open -> main.cjs setWindowOpenHandler -> shell.openExternal.
+    const getKeyBtn = $('conn-ollama-get-key')
+    if (getKeyBtn) {
+      getKeyBtn.textContent = C.ollamaKeyGet
+      getKeyBtn.onclick = () => window.open(C.links.ollamaKeys, '_blank', 'noopener')
+    }
     saveBtn.onclick = async () => {
       const key = input.value.trim()
       if (!key) return
@@ -443,6 +451,18 @@
     const codeInput = $('conn-claude-code')
     const codeBtn = $('conn-claude-code-btn')
     btn.textContent = connected ? C.claudeSubRelogin : C.claudeSubLogin
+    // Unified row grammar (0.67 feedback "기능좀 일원화"): every connected
+    // provider row carries the same Test + Re-login pair. Test reuses the
+    // SAME generic probe the other rows hit -- the server's
+    // claude-subscription branch falls back to the stored setup-token when
+    // the body carries no key (mirroring the ollama fallback), so this
+    // works keyless exactly like the ollama Test path.
+    const testBtn = $('conn-provider-claude-test')
+    if (testBtn) {
+      testBtn.textContent = C.providerTestButton
+      testBtn.classList.toggle('hidden', !connected)
+      testBtn.onclick = () => runProviderTest('claude-subscription', statusEl, testBtn)
+    }
     cancelBtn.textContent = C.claudeSubCancel
     $('conn-claude-code-hint').textContent = C.claudeSubCodePrompt
     codeBtn.textContent = C.claudeSubCodeButton

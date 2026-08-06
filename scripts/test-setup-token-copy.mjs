@@ -234,5 +234,29 @@ for (const st of ['running', 'awaiting_code', 'validating']) {
   assert(connResume && connResume[0].includes(`'${st}'`), `connectors resume path treats "${st}" as in-flight`)
 }
 
+// Unified provider-row grammar (2026-08-06, 0.67 feedback "이 페이지 기능좀
+// 일원화"): every connected row carries the same Test + Re-login pair, and
+// the ollama key flow links out to the key console. Anchored to the specific
+// elements (source-grep tests must anchor to their selector — 0.67 lesson).
+console.log('\nconnectors: unified row grammar (0.67)')
+const connectorsHtml = fs.readFileSync(new URL('../onboarding/public/connectors.html', import.meta.url), 'utf8')
+assert(connectorsHtml.includes('id="conn-provider-claude-test"'), 'claude row carries a Test button in the DOM')
+assert(/runProviderTest\('claude-subscription'/.test(connectorsSrc),
+  'claude Test drives the SAME generic probe as the other rows (claude-subscription)')
+assert(connectorsHtml.includes('id="conn-ollama-get-key"'), 'ollama key flow carries the get-a-key button')
+assert(/getKeyBtn\.onclick = \(\) => window\.open\(C\.links\.ollamaKeys, '_blank', 'noopener'\)/.test(connectorsSrc),
+  'get-a-key opens the console via the house window.open pattern')
+const copySrc067 = fs.readFileSync(new URL('../onboarding/public/js/copy.js', import.meta.url), 'utf8')
+assert(copySrc067.includes("ollamaKeys: 'https://ollama.com/settings/keys'"), 'key-console URL lives in the copy links map')
+const serverSrc = fs.readFileSync(new URL('../onboarding/http-server.cjs', import.meta.url), 'utf8')
+{
+  // The keyless claude-subscription Test only works if the stored-token
+  // fallback sits BEFORE the generic empty-key guard in validateProviderKey.
+  const fallbackIdx = serverSrc.indexOf("provider === 'claude-subscription' && (!key")
+  const guardIdx = serverSrc.indexOf("return { ok: false, reason: '키가 비어 있습니다' }")
+  assert(fallbackIdx !== -1 && guardIdx !== -1 && fallbackIdx < guardIdx,
+    'claude-subscription stored-token fallback precedes the empty-key guard (keyless Test works)')
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

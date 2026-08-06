@@ -52,6 +52,10 @@
               </div>
               <div class="step-actions">
                 <span class="status-line" id="conn-ollama-status-line"></span>
+                <!-- Redirect to the key console (0.67 feedback: "이거 있고없고
+                     차이 존나큼") -- same window.open house pattern as the
+                     BotFather / Slack-console buttons on /channels. -->
+                <button class="secondary" id="conn-ollama-get-key"></button>
                 <button class="secondary" id="conn-ollama-save"></button>
               </div>
             </div>
@@ -60,6 +64,10 @@
                 <div class="entry-value" id="conn-provider-claude-name"></div>
                 <div class="entry-meta" id="conn-provider-claude-status"></div>
               </div>
+              <!-- Test added 2026-08-06 (0.67 feedback: "이 페이지 기능좀
+                   일원화" -- every connected row carries the same Test +
+                   Re-login pair; claude was the odd one out). -->
+              <button class="secondary hidden" id="conn-provider-claude-test"></button>
               <button class="secondary hidden" id="conn-claude-cancel"></button>
               <button class="secondary" id="conn-provider-claude-btn"></button>
             </div>

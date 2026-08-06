@@ -1125,6 +1125,16 @@ async function validateProviderKey(provider, key, opts = {}) {
     return checkLocalLiveness(urlResult.url, 'custom proxy')
   }
 
+  // claude-subscription keyless fallback (2026-08-06, connectors-page Test
+  // unification): mirror the ollama branch's stored-key fallback above so the
+  // connectors Test button can re-verify the stored setup-token without a
+  // re-paste (a setup-token CANNOT be pasted twice -- see the branch comment
+  // below). Safe for the same reason ollama's is: the /api/byok/validate
+  // route only persists when the BODY carried a non-empty key, so an ok
+  // verdict from this fallback never writes anything.
+  if (provider === 'claude-subscription' && (!key || typeof key !== 'string' || key.trim() === '')) {
+    try { key = readProviderKey('claude-subscription') || '' } catch (err) { /* fall through to the empty guard */ }
+  }
   if (!key || typeof key !== 'string' || key.trim() === '') {
     return { ok: false, reason: '키가 비어 있습니다' }
   }
