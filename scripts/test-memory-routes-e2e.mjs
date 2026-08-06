@@ -42,7 +42,7 @@ process.env.SCHEHERAZADE_MEMORY_DB = path.join(tmp, 'memory.db')
 // require() AFTER the env block above -- http-server reads AGENT_DATA_HOME
 // and the service reads SCHEHERAZADE_MEMORY_DB at module load, once.
 const require_ = createRequire(path.join(ROOT, 'package.json'))
-const { createOnboardingServer } = require_(path.join(ROOT, 'onboarding', 'http-server.cjs'))
+const { createOnboardingServer, SERVER_TOKEN } = require_(path.join(ROOT, 'onboarding', 'http-server.cjs'))
 // Same URL shape http-server's own dynamic import uses, so this is the SAME
 // module instance (and the same singleton connection) the routes run on.
 const service = await import(pathToFileURL(path.join(ROOT, 'memory', 'service.mjs')).href)
@@ -67,12 +67,9 @@ const base = `http://127.0.0.1:${port}`
 
 try {
   // The token the way the browser gets it: injected into the page head.
-  // Scraped FIRST since 2026-08-04 -- the memory tables are exactly why
-  // reads are token-gated now.
-  const page = await (await fetch(`${base}/memory`)).text()
-  const m = page.match(/name="onboard-token" content="([a-f0-9]+)"/)
-  chk('the page carries an onboard token', Boolean(m), page.slice(0, 120))
-  const token = m ? m[1] : ''
+  // Token from the module export (2026-08-07): the page-scrape this used is
+  // the closed bypass — bare HTML 403s now (pinned in route-dispatch-e2e).
+  const token = SERVER_TOKEN
   const auth = { 'x-onboard-token': token }
 
   // ── the 2026-08-04 boundary: reads are gated too ──────────────────────────

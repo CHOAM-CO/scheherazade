@@ -59,7 +59,7 @@ fs.writeFileSync(path.join(hermesDir, 'auth.json'), 'SECRET-HERMES-AUTH')
 fs.writeFileSync(path.join(hermesDir, '.env'), 'SECRET-ENV')
 
 const require_ = createRequire(path.join(ROOT, 'package.json'))
-const { createOnboardingServer } = require_(path.join(ROOT, 'onboarding', 'http-server.cjs'))
+const { createOnboardingServer, SERVER_TOKEN } = require_(path.join(ROOT, 'onboarding', 'http-server.cjs'))
 
 let pass = 0
 let fail = 0
@@ -72,9 +72,9 @@ const port = srv.server.address().port
 const base = `http://127.0.0.1:${port}`
 
 try {
-  const page = await (await fetch(`${base}/memory`)).text()
-  const m = page.match(/name="onboard-token" content="([a-f0-9]+)"/)
-  const auth = { 'x-onboard-token': m ? m[1] : '', 'content-type': 'application/json' }
+  // Token from the module export (2026-08-07): the page-scrape this used is
+  // the closed bypass — bare HTML 403s now (pinned in route-dispatch-e2e).
+  const auth = { 'x-onboard-token': SERVER_TOKEN, 'content-type': 'application/json' }
 
   // ── detect ────────────────────────────────────────────────────────────
   {

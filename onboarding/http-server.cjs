@@ -407,6 +407,40 @@ function log(...args) {
 // trigger a Discord bot-token validation, or delete memory rows.
 const SERVER_TOKEN = crypto.randomBytes(32).toString('hex')
 
+// ── per-launch UI session cookie (page-scrape fix, 2026-08-07) ───────────
+// The 08-04 "token on all /api GETs" hardening had a bypass: static HTML
+// stayed Host-gated only, and serveStatic injects SERVER_TOKEN into every
+// page as a <meta> tag — so any local process could GET a page (Host is
+// attacker-chosen on a raw socket) and scrape the token right back out
+// (proved in the 0.0.66 vault-roundtrip test, 08-05). Fix: HTML is served
+// ONLY to requests carrying this cookie. The cookie is set by GET
+// /boot?t=<SERVER_TOKEN> — a URL only the Electron main process (same
+// process as this module) and dev-serve-ui's printed URL ever know.
+// Navigations can't carry a header, but they do carry cookies; that is the
+// whole reason this is a cookie and not the existing header check.
+// HttpOnly + SameSite=Strict: page JS never needs the cookie (it reads the
+// meta tag), and no cross-site navigation may ride it.
+const SESSION_COOKIE_NAME = 'schz-ui-session'
+const SESSION_COOKIE = crypto.randomBytes(32).toString('hex')
+
+function hasUiSession(req) {
+  const header = req.headers.cookie
+  if (typeof header !== 'string' || !header) return false
+  for (const part of header.split(';')) {
+    const eq = part.indexOf('=')
+    if (eq === -1) continue
+    if (part.slice(0, eq).trim() !== SESSION_COOKIE_NAME) continue
+    if (safeTokenEqual(part.slice(eq + 1).trim(), SESSION_COOKIE)) return true
+  }
+  return false
+}
+
+// The path (incl. token) the Electron window / dev browser must load FIRST.
+// `to` is where /boot redirects after setting the cookie.
+function bootPathFor(to = '/') {
+  return `/boot?t=${SERVER_TOKEN}&to=${encodeURIComponent(to)}`
+}
+
 function safeTokenEqual(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false
   const bufA = Buffer.from(a)
@@ -1708,6 +1742,15 @@ function serveStatic(req, res, urlPath) {
   if (!fs.existsSync(resolved) || fs.statSync(resolved).isDirectory()) return false
   const ext = path.extname(resolved)
   if (ext === '.html') {
+    // HTML carries the onboard token (meta injection below), so HTML is
+    // exactly the surface the page-scrape bypass used — cookie-gate it.
+    // Non-HTML assets (css/js/img) carry no secret and stay Host-gated.
+    if (!hasUiSession(req)) {
+      log(`REJECT no ui session ${req.method} ${urlPath}`)
+      res.writeHead(403, { 'Content-Type': 'text/plain' })
+      res.end('forbidden: no ui session (open the app, or use the /boot URL the server printed)')
+      return true
+    }
     // Inject the per-launch onboard token as a <meta> tag so client JS can
     // read it back and attach it to mutating fetch() calls (see
     // public/js/copy.js's getOnboardToken()). Every page here has a
@@ -2555,6 +2598,31 @@ function createOnboardingServer(onOnboardingComplete, agentControls) {
           return
         }
 
+        // ── /boot: the only way to acquire the UI session cookie ────────
+        // Proves possession of the per-launch SERVER_TOKEN via query param
+        // (a navigation can carry a query where it cannot carry a header),
+        // sets the HttpOnly session cookie, and bounces to `to`. Wrong or
+        // missing token → same 403 the token gate uses. `to` is sanitized
+        // to a same-origin absolute path: "//evil.example" would be a
+        // protocol-relative external redirect, so anything not matching
+        // "/" + non-"/" collapses to "/".
+        if (pathname === '/boot' && req.method === 'GET') {
+          if (!safeTokenEqual(parsedUrl.searchParams.get('t'), SERVER_TOKEN)) {
+            log(`REJECT bad /boot token`)
+            res.writeHead(403, { 'Content-Type': 'text/plain' })
+            res.end('forbidden: missing or invalid onboard token')
+            return
+          }
+          const rawTo = parsedUrl.searchParams.get('to') || '/'
+          const to = /^\/(?!\/)/.test(rawTo) ? rawTo : '/'
+          res.writeHead(302, {
+            'Set-Cookie': `${SESSION_COOKIE_NAME}=${SESSION_COOKIE}; HttpOnly; SameSite=Strict; Path=/`,
+            Location: to,
+          })
+          res.end()
+          return
+        }
+
         if (pathname in ROUTE_TO_FILE) {
           // Once onboarding is complete, "/" is the wizard's job no longer
           // -- land the user in the memory pane, their steady-state home
@@ -3096,6 +3164,13 @@ const API_ROUTES = [
 
 module.exports = {
   createOnboardingServer,
+  // Page-scrape fix (2026-08-07): main.cjs and dev-serve-ui.mjs load the
+  // window/browser through /boot so it acquires the UI session cookie that
+  // HTML serving now requires. SERVER_TOKEN is exported for the IN-PROCESS
+  // e2e suites, which used to prove the bypass by scraping it off a page —
+  // that scrape now 403s, which is the point.
+  bootPathFor,
+  SERVER_TOKEN,
   AGENT_NAME,
   DATA_HOME,
   contextCapForModel,

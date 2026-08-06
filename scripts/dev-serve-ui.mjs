@@ -30,12 +30,15 @@ if (!dataHome || path.resolve(dataHome) === path.resolve(realHome)) {
   process.exit(1)
 }
 
-const { createOnboardingServer } = require('../onboarding/http-server.cjs')
+const { createOnboardingServer, bootPathFor } = require('../onboarding/http-server.cjs')
 
 const { server } = await createOnboardingServer()
 const { port } = server.address()
+// URLs go through /boot (page-scrape fix, 2026-08-07): HTML now requires
+// the UI session cookie, and /boot is how a browser acquires it. A bare
+// page URL would 403.
 console.log(`UI_PORT=${port}`)
-console.log(`  wizard    http://127.0.0.1:${port}/`)
+console.log(`  wizard    http://127.0.0.1:${port}${bootPathFor('/')}`)
 for (const p of ['channels', 'memory', 'connectors', 'settings', 'logs', 'waiting']) {
-  console.log(`  ${p.padEnd(9)} http://127.0.0.1:${port}/${p}`)
+  console.log(`  ${p.padEnd(9)} http://127.0.0.1:${port}${bootPathFor('/' + p)}`)
 }

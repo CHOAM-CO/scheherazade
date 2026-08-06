@@ -6,7 +6,7 @@ process.env.AGENT_DATA_HOME = tmp
 process.env.SCHEHERAZADE_MEMORY_DB = path.join(tmp, 'memory.db')
 
 ;(async () => {
-  const { createOnboardingServer } = require(path.join(__dirname, '..', 'onboarding', 'http-server.cjs'))
+  const { createOnboardingServer, SERVER_TOKEN } = require(path.join(__dirname, '..', 'onboarding', 'http-server.cjs'))
   const memmod = await import(require('url').pathToFileURL(path.join(__dirname, '..', 'memory', 'server.mjs')).href)
   const db = memmod.initDb()
   memmod.journalWrite(db, { date: '2026-07-12', body: '어제의 나' })
@@ -19,11 +19,9 @@ process.env.SCHEHERAZADE_MEMORY_DB = path.join(tmp, 'memory.db')
   let pass = 0, fail = 0
   const chk = (n, c, d) => { if (c) { pass++; console.log('  ok  ', n) } else { fail++; console.log('  FAIL', n, d === undefined ? '' : d) } }
 
-  // The token the way the browser gets it: injected into the page head.
-  // Scraped FIRST since 2026-08-04 -- reads are token-gated too now.
-  const page0 = await (await fetch(`${base}/memory`)).text()
-  const m0 = page0.match(/name="onboard-token" content="([a-f0-9]+)"/)
-  const tok = m0 ? m0[1] : ''
+  // Token from the module export (2026-08-07): the page-scrape this used is
+  // the closed bypass — bare HTML 403s now (pinned in route-dispatch-e2e).
+  const tok = SERVER_TOKEN
   const getAuth = { 'x-onboard-token': tok }
 
   const gNoTok = await fetch(`${base}/api/journal`)
@@ -40,11 +38,8 @@ process.env.SCHEHERAZADE_MEMORY_DB = path.join(tmp, 'memory.db')
   const d1 = await fetch(`${base}/api/journal/2026-07-12`, { method: 'DELETE' })
   chk('DELETE without a token is REFUSED', d1.status === 403, d1.status)
 
-  // The token the way the browser gets it: injected into the page head.
-  const page = await (await fetch(`${base}/memory`)).text()
-  const m = page.match(/name="onboard-token" content="([a-f0-9]+)"/)
-  chk('the page carries an onboard token', Boolean(m), page.slice(0, 120))
-  const token = m ? m[1] : ''
+  // Token from the module export (2026-08-07; scrape path is the closed bypass).
+  const token = SERVER_TOKEN
 
   const d2 = await fetch(`${base}/api/journal/2026-07-12`, { method: 'DELETE', headers: { 'x-onboard-token': token } })
   chk('DELETE with the token succeeds', d2.status === 200, d2.status)

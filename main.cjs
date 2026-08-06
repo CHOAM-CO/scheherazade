@@ -53,6 +53,7 @@ const {
   killAllLoginChildren,
   AGENT_NAME: FIXED_AGENT_NAME,
   DATA_HOME,
+  bootPathFor,
 } = require('./onboarding/http-server.cjs')
 const { setAgentStatus } = require('./onboarding/agent-status.cjs')
 const { killOllamaDaemon } = require('./onboarding/ollama-daemon.cjs') // ensureOllamaDaemon unused since cloud key-mode (2026-08-04) -- kill stays for pre-cloud-session cleanup
@@ -1937,7 +1938,10 @@ app.whenReady().then(async () => {
 
     const { url } = await startOnboardingServer(onOnboardingComplete, agentControls)
     onboardingServerUrl = url
-    createMainWindow(url)
+    // Load through /boot so the window acquires the UI session cookie that
+    // HTML serving now requires (page-scrape fix, 2026-08-07). /boot 302s
+    // to "/" which lands wizard or /memory as before.
+    createMainWindow(new URL(bootPathFor('/'), url).href)
 
     // Long-lived; deliberately not awaited to exit -- see
     // spawnRealAgentChild()'s own comment. Returns null (onboarding
@@ -1969,13 +1973,16 @@ app.whenReady().then(async () => {
     // failure path with fatal() as its catch, so a config that went bad after
     // boot killed the app on a dock click.
     if (onboardingServerUrl) {
-      createMainWindow(onboardingServerUrl)
+      // Through /boot again: the Electron session usually still holds the
+      // cookie, but a fresh session partition (or cleared storage) must not
+      // reopen onto a 403 — /boot re-issues the same per-launch cookie.
+      createMainWindow(new URL(bootPathFor('/'), onboardingServerUrl).href)
       return
     }
     startOnboardingServer(onOnboardingComplete, agentControls)
       .then(({ url }) => {
         onboardingServerUrl = url
-        createMainWindow(url)
+        createMainWindow(new URL(bootPathFor('/'), url).href)
       })
       .catch((err) => fatal('activate: failed to reopen window', err))
   })

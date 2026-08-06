@@ -48,7 +48,7 @@ process.env.SCHEHERAZADE_MEMORY_DB = path.join(tmp, 'memory.db')
 // require() AFTER the env block above -- same discipline as
 // test-memory-routes-e2e.mjs, and the same singleton the routes run on.
 const require_ = createRequire(path.join(ROOT, 'package.json'))
-const { createOnboardingServer } = require_(path.join(ROOT, 'onboarding', 'http-server.cjs'))
+const { createOnboardingServer, SERVER_TOKEN, bootPathFor } = require_(path.join(ROOT, 'onboarding', 'http-server.cjs'))
 const service = await import(pathToFileURL(path.join(ROOT, 'memory', 'service.mjs')).href)
 
 let pass = 0
@@ -74,11 +74,32 @@ async function hit(name, url, expect, init) {
 }
 
 try {
-  // The per-launch token, the way the browser gets it (mutating routes only).
-  const page = await (await fetch(`${base}/memory`)).text()
-  const m = page.match(/name="onboard-token" content="([a-f0-9]+)"/)
-  chk('the page carries an onboard token', Boolean(m), page.slice(0, 120))
-  const token = m ? m[1] : ''
+  // ── page-scrape bypass CLOSED (2026-08-07) ────────────────────────────────
+  // This suite used to acquire the token exactly the way the bypass did:
+  // GET a page, scrape the <meta>. That is now the negative pin — HTML
+  // without the UI session cookie must 403 and carry no token.
+  {
+    const bare = await fetch(`${base}/memory`)
+    const bareBody = await bare.text()
+    chk('HTML without the ui-session cookie is REFUSED (page-scrape fix)', bare.status === 403, bare.status)
+    chk('the refused body carries no onboard token', !/onboard-token/.test(bareBody))
+    const badBoot = await fetch(`${base}/boot?t=deadbeef`, { redirect: 'manual' })
+    chk('/boot with a wrong token is REFUSED', badBoot.status === 403, badBoot.status)
+    const boot = await fetch(`${base}${bootPathFor('/memory')}`, { redirect: 'manual' })
+    chk('/boot with the real token 302s to the sanitized target', boot.status === 302 && boot.headers.get('location') === '/memory', `${boot.status} ${boot.headers.get('location')}`)
+    const setCookie = boot.headers.get('set-cookie') || ''
+    chk('/boot sets an HttpOnly SameSite=Strict session cookie', /schz-ui-session=[a-f0-9]+; HttpOnly; SameSite=Strict/.test(setCookie), setCookie)
+    const cookie = setCookie.split(';')[0]
+    const withCookie = await fetch(`${base}/memory`, { headers: { cookie } })
+    const cookiePage = await withCookie.text()
+    chk('HTML WITH the cookie serves and carries the meta token', withCookie.status === 200 && /name="onboard-token" content="[a-f0-9]+"/.test(cookiePage), withCookie.status)
+    const evilTo = await fetch(`${base}/boot?t=${SERVER_TOKEN}&to=${encodeURIComponent('//evil.example')}`, { redirect: 'manual' })
+    chk('/boot `to` sanitizer collapses protocol-relative targets to /', evilTo.headers.get('location') === '/', evilTo.headers.get('location'))
+  }
+
+  // The per-launch token, from the module export (in-process suite — the
+  // browser path is pinned above via /boot + cookie + meta).
+  const token = SERVER_TOKEN
   const auth = { 'x-onboard-token': token, 'content-type': 'application/json' }
   defaultAuth = { 'x-onboard-token': token }
 

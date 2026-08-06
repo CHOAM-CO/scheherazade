@@ -21,7 +21,7 @@ const realConfigBefore = fs.existsSync(REAL_CONFIG) ? fs.readFileSync(REAL_CONFI
 
 ;(async () => {
   const ROOT = path.join(__dirname, '..')
-  const { createOnboardingServer } = require(path.join(ROOT, 'onboarding', 'http-server.cjs'))
+  const { createOnboardingServer, SERVER_TOKEN } = require(path.join(ROOT, 'onboarding', 'http-server.cjs'))
   const budget = require(path.join(ROOT, 'autonomy', 'budget.cjs'))
 
   const srv = await createOnboardingServer()
@@ -30,10 +30,9 @@ const realConfigBefore = fs.existsSync(REAL_CONFIG) ? fs.readFileSync(REAL_CONFI
   let pass = 0, fail = 0
   const chk = (n, c, d) => { if (c) { pass++; console.log('  ok  ', n) } else { fail++; console.log('  FAIL', n, d === undefined ? '' : d) } }
 
-  const page = await (await fetch(`${base}/settings`)).text()
-  const m = page.match(/name="onboard-token" content="([a-f0-9]+)"/)
-  chk('the settings page carries an onboard token', Boolean(m))
-  const token = m ? m[1] : ''
+  // Token from the module export (2026-08-07): the page-scrape this used is
+  // the closed bypass — bare HTML 403s now (pinned in route-dispatch-e2e).
+  const token = SERVER_TOKEN
   const post = (body) => fetch(`${base}/api/autonomy`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-onboard-token': token },

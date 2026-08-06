@@ -39,7 +39,7 @@ fs.mkdirSync(process.env.AGENT_DATA_HOME, { recursive: true })
 process.env.SCHEHERAZADE_MEMORY_DB = path.join(tmp, 'memory.db')
 
 const require_ = createRequire(path.join(ROOT, 'package.json'))
-const { createOnboardingServer } = require_(path.join(ROOT, 'onboarding', 'http-server.cjs'))
+const { createOnboardingServer, SERVER_TOKEN } = require_(path.join(ROOT, 'onboarding', 'http-server.cjs'))
 
 let pass = 0
 let fail = 0
@@ -73,10 +73,10 @@ const port = srv.server.address().port
 const base = `http://127.0.0.1:${port}`
 
 try {
-  const page = await (await fetch(`${base}/memory`)).text()
-  const m = page.match(/name="onboard-token" content="([a-f0-9]+)"/)
-  chk('the page carries an onboard token', Boolean(m))
-  const auth = { 'x-onboard-token': m ? m[1] : '', 'content-type': 'application/json' }
+  // Token from the module export — the page-scrape acquisition this block
+  // used is exactly the bypass closed 2026-08-07 (pinned in
+  // test-route-dispatch-e2e); bare HTML now 403s.
+  const auth = { 'x-onboard-token': SERVER_TOKEN, 'content-type': 'application/json' }
 
   // ── not running: no port file ─────────────────────────────────────────────
   {
