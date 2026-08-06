@@ -27,8 +27,8 @@ function check(name, cond, detail) {
 console.log('shell reality pins (셸은 현실, 설정은 의도)\n')
 
 const nav = read('onboarding/public/js/nav.js')
-const settings = read('onboarding/public/js/settings.js')
-const settingsHtml = read('onboarding/public/settings.html')
+const settings = read('onboarding/public/js/connectors.js')
+const settingsHtml = read('onboarding/public/connectors.html')
 const main = read('main.cjs')
 // Route bodies moved to onboarding/routes/agent-lifecycle.cjs (issue #9 PR-2).
 const server = read('onboarding/routes/agent-lifecycle.cjs')
@@ -62,7 +62,7 @@ check('...and the copy states the cycle STOPS with the agent (never the wake lie
   copy.includes("stops with it") && !/stopConfirmAutonomyNote: [^\n]*wake/.test(copy))
 
 // ── settings apply-state line (red-team fold #1) ────────────────────────────
-check('settings.html has the apply-state mount', settingsHtml.includes('set-apply-state'))
+check('connectors.html has the apply-state mount (engine card, tab merge 2026-08-06)', settingsHtml.includes('set-apply-state'))
 check('settings.js compares intent (selects) against reality (spawn-info)',
   settings.includes('renderApplyState') && settings.includes("api('/api/agent/spawn-info')"))
 check('the FAILED state surfaces the refusal detail next to the picker',

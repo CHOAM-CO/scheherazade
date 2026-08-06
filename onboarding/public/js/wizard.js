@@ -1486,6 +1486,11 @@
         // Real navigation -- /settings is a served static route.
         return { label: C.step5.buttonLabels.openSettings, secondary: true, onClick: () => { window.location.href = '/settings' } }
       }
+      if (kind === 'openEngine') {
+        // Engine page = /connectors route (tab merge 2026-08-06: model/
+        // effort, custom proxy and topology live beside the sign-ins).
+        return { label: C.step5.buttonLabels.openEngine, secondary: true, onClick: () => { window.location.href = '/connectors' } }
+      }
       if (kind === 'backToToken') {
         // Real navigation -- back to the tutorial's last (token-paste) step.
         return {

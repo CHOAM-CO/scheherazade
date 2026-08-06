@@ -549,8 +549,8 @@ window.COPY = {
         },
         provider_not_wired: {
           cause: () => "The model connection you chose isn't ready yet.",
-          action: () => 'Switch the model to Claude in Settings, then quit and reopen the app.',
-          buttons: ['openSettings', 'openLogs'],
+          action: () => 'Switch the model to Claude on the Engine page, then quit and reopen the app.',
+          buttons: ['openEngine', 'openLogs'],
         },
         harness_stale: {
           cause: () => "The agent's instruction files couldn't be updated for this version.",
@@ -586,8 +586,8 @@ window.COPY = {
         // reaches the console. Left as a decision for Mino, not silently taken.
         'bootstrap-needed': {
           cause: (name) => `${name} is set to attach mode, but there is no session to attach to yet.`,
-          action: () => 'Restart the app once -- the bundled tmux sets itself up on boot. If it persists, switch topology to spawn in Settings.',
-          buttons: ['openSettings', 'openLogs'],
+          action: () => 'Restart the app once -- the bundled tmux sets itself up on boot. If it persists, switch topology to spawn on the Engine page.',
+          buttons: ['openEngine', 'openLogs'],
         },
         // ── the nine that used to be 'unknown' (2026-08-04) ─────────────
         // main.cjs had 13 sites passing 'unknown', so a missing Claude Code
@@ -615,8 +615,8 @@ window.COPY = {
         },
         proxy_unavailable: {
           cause: () => 'The local proxy this model connection needs did not come up, and the agent was not started rather than routed somewhere unverified.',
-          action: () => 'Quit the app and reopen it. If it keeps happening, switch the model connection in Settings.',
-          buttons: ['openSettings', 'openLogs'],
+          action: () => 'Quit the app and reopen it. If it keeps happening, switch the model connection on the Engine page.',
+          buttons: ['openEngine', 'openLogs'],
         },
         channel_token_error: {
           cause: () => 'The stored chat-service token could not be read. This is the computer refusing to unseal it -- the token itself may be perfectly good.',
@@ -639,8 +639,8 @@ window.COPY = {
         },
         attach_failed: {
           cause: (name) => `${name} is set to attach mode and the terminal session it was attached to could not be brought back.`,
-          action: () => 'Switch topology to spawn in Settings, or restart the app to rebuild the session.',
-          buttons: ['openSettings', 'openLogs'],
+          action: () => 'Switch topology to spawn on the Engine page, or restart the app to rebuild the session.',
+          buttons: ['openEngine', 'openLogs'],
         },
         // Started, then stopped. Distinct from every code above: something DID
         // run, so "it never started" advice would be wrong.
@@ -667,6 +667,7 @@ window.COPY = {
     // use (openLogs and retry have no backend endpoint yet -- see there).
     buttonLabels: {
       openSettings: 'Open Settings',
+      openEngine: 'Open Engine',
       openLogs: 'Open Logs',
       backToToken: 'Back to token step',
       retry: 'Check status again',
@@ -727,7 +728,7 @@ window.COPY = {
     // channels FIRST (multichannel v0.0.18, Mino 07-16: "맨 앞에 채널 섹션") --
     // tab order is meaning here: the messenger the agent lives through
     // outranks what it remembers and how it runs.
-    tabs: { chat: 'Chat', channels: 'Channels', memory: 'Memory', connectors: 'Connectors', settings: 'Settings', appearance: 'Appearance', logs: 'Logs' },
+    tabs: { chat: 'Chat', channels: 'Channels', memory: 'Memory', connectors: 'Engine', settings: 'Settings', appearance: 'Appearance', logs: 'Logs' },
     label: 'AGENT',
     states: { live: 'Running', connecting: 'Starting…', stopped: 'Stopped', failed: 'Failed', idle: 'Not started' },
     start: 'Start',
@@ -881,7 +882,6 @@ window.COPY = {
     // flat blocks; these name the question each group answers, so the answer
     // to "where do I change X" is one read instead of a scan.
     groupAgent: 'Agent',
-    groupEngine: 'Engine',
     groupSystem: 'System',
     // Danger zone (v0.0.35). The confirm names EVERYTHING that dies --
     // memory included -- and the one thing that survives (~/.claude.json,
@@ -935,7 +935,7 @@ window.COPY = {
     ollamaUrlPlaceholder: 'https://ollama.com/library/…',
     ollamaUrlApply: 'Use this model',
     ollamaUrlParseFailed: "Couldn't read a model name from that — paste an ollama.com/library/... URL or a plain model name.",
-    ollamaUrlNoKey: 'Connect Ollama first (Connectors page) — this needs an ollama.com API key.',
+    ollamaUrlNoKey: 'Connect Ollama first (Providers card above) — this needs an ollama.com API key.',
     ollamaUrlChecking: (m) => `Checking "${m}" against ollama.com…`,
     ollamaUrlModelWarn: (m) => `ollama.com's catalog doesn't list "${m}" right now — it may still work if it's brand new.`,
     ollamaUrlApplyFailed: 'Switch failed — the agent kept its previous model.',
@@ -950,9 +950,6 @@ window.COPY = {
     dangerConfirmButton: 'Delete everything',
     dangerCancel: 'Keep it',
     dangerDone: 'Deleting. The app will close itself in a moment — it is already in the Trash.',
-    // Sign-ins live on the connectors page while the model picker lives
-    // here. Until that split is resolved, this link is what closes it.
-    signinLink: 'Manage sign-ins',
     renameLabel: 'Name',
     renameButton: 'Save',
     renameSaved: 'Saved.',
@@ -1254,8 +1251,9 @@ window.COPY = {
   // everything else below is MOVED verbatim from `settings` (provider auth +
   // Slack banner lived there before the split -- unchanged strings, just
   // relocated), except `providersNote`, corrected in place: it used to say
-  // "기억 페이지의 모델 선택" (model select lived on /memory back then); model
-  // select now lives on /settings, so the pointer is updated to match --
+  // "기억 페이지의 모델 선택" (model select lived on /memory back then; then
+  // /settings; since the 2026-08-06 tab merge the model select lives HERE,
+  // tab relabeled Engine) --
   // otherwise this move would ship a note that sends the user to the wrong
   // page for something this same refactor moved. Register unchanged: 간결
   // 존댓말, no 이모지, no 느낌표, no cheerleading.

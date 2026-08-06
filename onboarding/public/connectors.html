@@ -103,6 +103,115 @@
           </div>
         </div>
 
+        <!-- Agent model/effort config (moved from memory.html's agent control
+             panel, subpage split 2026-07-14). SELECT-driven config half; the
+             read-only status display half lives in the nav.js shell above. -->
+        <div class="category" id="set-agent-config">
+          <div class="category-label" id="set-agent-config-label"></div>
+          <div class="agent-control-row">
+            <label for="set-model-select" id="set-model-label"></label>
+            <select id="set-model-select"></select>
+          </div>
+          <!-- Ollama by-URL picker (2026-08-04, Mino: paste an
+               ollama.com/library/{model} URL to run a model the dropdown
+               doesn't list). Hidden until the "Other (ollama.com URL)"
+               catalog action is picked. -->
+          <div class="field hidden" id="set-ollama-url-field">
+            <div class="field-hint" id="set-ollama-url-hint"></div>
+            <div class="step-actions">
+              <input type="text" autocomplete="off" id="set-ollama-url-input" />
+              <button class="secondary" id="set-ollama-url-apply"></button>
+            </div>
+            <div class="status-line" id="set-ollama-url-status"></div>
+          </div>
+          <div class="agent-control-row">
+            <label for="set-effort-select" id="set-effort-label"></label>
+            <select id="set-effort-select"></select>
+          </div>
+          <!-- Apply-state line (IA v0.0.9): explains any gap between these
+               selects (intent) and the running child (reality). A spawn
+               refused by the proxy model-receipt gate surfaces its reason
+               here, next to the picker that caused it. -->
+          <div class="agent-control-hint" id="set-apply-state"></div>
+        </div>
+
+
+        <!-- Custom provider (generic OpenAI-compatible proxy, 2026-07-25).
+             Settings-page-only, like claude-subscription/chatgpt/ollama before
+             it (see http-server.cjs's ROUTER_WIRED comment) -- there is no
+             onboarding-wizard tab for this. Always visible (same convention as
+             every other category on this page), not gated on the current
+             provider: switching TO custom and editing an already-custom
+             install's fields share this one form. Its own status/save pair
+             (not the shared set-apply-state line above, which only settles
+             AFTER a restart is already in flight). -->
+        <div class="category" id="set-custom">
+          <div class="category-label" id="set-custom-label"></div>
+          <p class="subtitle" id="set-custom-note"></p>
+          <div class="agent-control-row">
+            <label for="set-custom-preset-select" id="set-custom-preset-label"></label>
+            <select id="set-custom-preset-select"></select>
+          </div>
+          <div class="agent-control-row">
+            <label for="set-custom-url-input" id="set-custom-url-label"></label>
+            <input type="text" id="set-custom-url-input" placeholder="http://localhost:18080" />
+          </div>
+          <div class="agent-control-row">
+            <label for="set-custom-key-input" id="set-custom-key-label"></label>
+            <input type="password" id="set-custom-key-input" autocomplete="off" />
+          </div>
+          <div class="agent-control-row">
+            <label for="set-custom-model-input" id="set-custom-model-label"></label>
+            <input type="text" id="set-custom-model-input" />
+          </div>
+          <div class="step-actions">
+            <span class="field-hint hidden" id="set-custom-status"></span>
+            <button id="set-custom-save"></button>
+          </div>
+          <!-- Pasted definition (2026-07-29). Sits BELOW the three fields on
+               purpose: the fields are the primary, understandable path, and
+               this is the shortcut for someone who already holds a provider
+               blob from another tool. It never saves directly -- it resolves
+               the paste server-side (POST .../custom-provider/preview, which
+               writes nothing) and fills the fields above, so the user reviews
+               a real base URL and model id before the normal save + confirm
+               restarts the agent. -->
+          <details id="set-custom-json">
+            <summary id="set-custom-json-summary"></summary>
+            <p class="subtitle" id="set-custom-json-note"></p>
+            <textarea id="set-custom-json-input" rows="6" spellcheck="false" autocomplete="off"></textarea>
+            <div class="step-actions">
+              <span class="field-hint hidden" id="set-custom-json-status"></span>
+              <button id="set-custom-json-load"></button>
+            </div>
+          </details>
+        </div>
+
+        <!-- Attach topology (0.1.0 prep, design-0016). The one setting that
+             changes WHO owns the agent process. Bootstrap must run in the
+             user's own terminal (TCC attribution) -- the card below hands out
+             the exact line, the app never runs it. -->
+        <div class="category" id="set-topology">
+          <div class="category-label" id="set-topology-label"></div>
+          <p class="subtitle" id="set-topology-note"></p>
+          <div class="agent-control-row">
+            <label for="set-topology-select" id="set-topology-select-label"></label>
+            <select id="set-topology-select"></select>
+          </div>
+          <div class="agent-control-hint" id="set-topology-state"></div>
+          <div class="field hidden" id="set-topology-bootstrap-card">
+            <div class="field-hint" id="set-topology-bootstrap-why"></div>
+            <input type="text" id="set-topology-bootstrap-cmd" readonly />
+            <div class="step-actions">
+              <button class="secondary" id="set-topology-bootstrap-copy"></button>
+            </div>
+          </div>
+          <div class="step-actions">
+            <span class="field-hint hidden" id="set-topology-status"></span>
+            <button id="set-topology-save"></button>
+          </div>
+        </div>
+
         <!-- claude.ai connectors (Gmail/Calendar/…). In-app OAuth intercept.
              Lane warning shows first when the running lane can't actually
              USE connectors even once authorized. -->

@@ -146,7 +146,7 @@ console.log('cap table:')
 
   // ── every model the user can PICK resolves to a cap (2026-08-04) ──────
   // The list above is hand-written, which makes it a THIRD copy of the same
-  // fact (settings.js's MODEL_CATALOG, http-server.cjs's cap table, here) --
+  // fact (connectors.js's MODEL_CATALOG, http-server.cjs's cap table, here) --
   // and copies drift. They already have: contextCapForModel's CLAUDE_1M set
   // names claude-opus-4-7 and claude-sonnet-4-6, and neither exists in the
   // catalog.
@@ -159,12 +159,12 @@ console.log('cap table:')
   // user picks a model from our own menu and the context meter silently
   // stops working. Nothing today catches that; this does.
   //
-  // Source-text read, not import: settings.js is browser code (it touches
+  // Source-text read, not import: connectors.js is browser code (it touches
   // `window` at load) and importing it here would fail rather than test.
-  const settingsSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'public', 'js', 'settings.js'), 'utf8')
+  const settingsSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'public', 'js', 'connectors.js'), 'utf8')
   const catStart = settingsSrc.indexOf('const MODEL_CATALOG = [')
   const catEnd = settingsSrc.indexOf('\n  ]', catStart)
-  check('located MODEL_CATALOG in settings.js', catStart !== -1 && catEnd > catStart)
+  check('located MODEL_CATALOG in connectors.js', catStart !== -1 && catEnd > catStart)
   const catalogIds = [...settingsSrc.slice(catStart, catEnd).matchAll(/\{\s*id:\s*'([^']+)'/g)].map((m) => m[1])
   check(`MODEL_CATALOG scan found rows (${catalogIds.length})`, catalogIds.length >= 5, catalogIds.join(','))
 

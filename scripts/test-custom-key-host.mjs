@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // test-custom-key-host.mjs — the save-time "this key is about to go to a
-// different host" predicate from onboarding/public/js/settings.js.
+// different host" predicate from onboarding/public/js/connectors.js.
 // Run: node scripts/test-custom-key-host.mjs
 //
 // WHY THIS FILE EXISTS: that predicate shipped wrong twice in one day.
@@ -30,7 +30,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const SRC = fs.readFileSync(path.join(ROOT, 'onboarding/public/js/settings.js'), 'utf8')
+const SRC = fs.readFileSync(path.join(ROOT, 'onboarding/public/js/connectors.js'), 'utf8')
 
 let pass = 0
 let fail = 0
@@ -45,7 +45,7 @@ function extract(name, kind) {
     : new RegExp(`\\n  function ${name}\\([^]*?\\n  \\}`)
   const m = SRC.match(re)
   if (!m) {
-    console.log(`FAIL  could not extract ${name} from settings.js -- it was renamed or reshaped; update this test`)
+    console.log(`FAIL  could not extract ${name} from connectors.js -- it was renamed or reshaped; update this test`)
     process.exit(1)
   }
   return m[0]
@@ -258,7 +258,7 @@ const VENDOR_B = 'https://api.vendor-b.com'
     'call site sends the NOT-stored verdict to the pasted-key string')
   assert(iPasted < iStored && iStored < iNoHost,
     'the branches are in the only correct order: pasted-key first (it is the narrower condition), then stored-with-host, then the no-host fallback')
-  assert(/else confirmText = C\.customSwitchConfirmKeyNoPriorHost/.test(SRC),
+  assert(/else confirmText = S\.customSwitchConfirmKeyNoPriorHost/.test(SRC),
     'the no-prior-host string is the final else, not a condition that could shadow the others')
 }
 
