@@ -1,6 +1,6 @@
 {
   "name": "scheherazade",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "Mac-native local AI agent. Forked from agent-portable (Claude Code single-agent harness); P0 spike layers an Electron packaging shell on top.",
@@ -29,6 +29,7 @@
     "discord.js": "^14.26.4",
     "dotenv": "^17.4.2",
     "node-pty": "^1.1.0",
+    "undici": "^7.28.0",
     "zod": "^4.4.3"
   },
   "build": {
