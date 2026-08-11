@@ -195,7 +195,7 @@ Slack messages arrive as: <channel source="${AGENT_NAME}" sender="..." channelId
 Reply with the "reply" tool. channelId is optional -- omit it and the message goes to the current conversation channel. Never invent a channelId; only pass one when replying to a DIFFERENT channel than the one that messaged you. A channelId you DO pass is honored exactly or the call fails: an unresolvable one sends nothing anywhere, it is never quietly redirected.
 Threading: inbound Slack messages carry messageTs (and threadTs when the message is already inside a thread). To reply in a thread under the message that called you, pass thread_ts = that message's threadTs if present, else its messageTs. When someone talks to you INSIDE a thread, always reply into that thread (thread_ts = threadTs) -- answering a thread at top level strands the conversation. Never invent a thread_ts.
 Use "send_file_to_discord" (filePath, comment?, channelId?) to upload a local file (image, document, etc.) to Slack -- "reply" is text-only.
-Use "read_channel_history" (channelId, limit, after?, before?) to look back through the Slack channel. after/before each accept a Slack message ts or an ISO date.
+Use "read_channel_history" (channelId, limit, after?, before?, thread_ts?) to look back through the Slack channel. after/before each accept a Slack message ts or an ISO date. Channel reads return only TOP-LEVEL messages -- thread replies never appear in them. To read a thread (parent + all replies), pass thread_ts; when someone talks to you inside a thread, read that thread FIRST (thread_ts = the inbound threadTs) so you see the conversation you are joining.
 The app's own chat window is ALSO always connected: its messages arrive with channelId="in-app". Reply to those with channelId "in-app" exactly -- never route an in-app conversation to a Slack channel or vice versa. The "react" tool (one emoji on the user's bubble) works only for the in-app window.`
 const INSTRUCTIONS = process.env.CHANNEL_INSTRUCTIONS || DEFAULT_INSTRUCTIONS
 
@@ -242,6 +242,7 @@ const TOOLS = [
         limit: { type: 'number', description: 'Number of messages to return (default 50, max 100)' },
         after: { type: 'string', description: 'Only messages after this point -- Slack message ts or an ISO date' },
         before: { type: 'string', description: 'Only messages before this point -- Slack message ts or an ISO date' },
+        thread_ts: { type: 'string', description: 'OPTIONAL thread parent ts. Pass it to read a THREAD (parent + all replies) -- without it you get only the channel\'s top-level messages, never thread replies. When called inside a thread, pass the inbound threadTs here to see the earlier conversation.' },
       },
       required: ['channelId'],
     },
@@ -286,6 +287,7 @@ const ReadHistoryArgs = z.object({
   limit: z.number().int().positive().max(100).optional(),
   after: z.string().optional(),
   before: z.string().optional(),
+  thread_ts: threadTsField,
 })
 
 // ── Outbound chunking (hard constraint #4: 4000-char budget) ────────────────
@@ -332,10 +334,15 @@ async function sendFile({ channelId, filePath, comment, thread_ts: threadTs }, o
   return { isError: false, text: `file sent to ${targetId}: ${path.basename(resolvedPath)}${urls.length ? `\nURL: ${urls.join('\n')}` : ''}${note ? `\n${note}` : ''}\ndelivered_channel=${targetId}` }
 }
 
-async function readHistory({ channelId, limit, after, before }, opts = {}) {
-  const historyFn = opts.history || ((args) => slackWeb.conversations.history(args))
+async function readHistory({ channelId, limit, after, before, thread_ts: threadTs }, opts = {}) {
+  // thread_ts (0.1.4, PO item #2): conversations.history returns only
+  // top-level messages (a thread's replies never appear in it, only the
+  // parent) -- so an agent called INSIDE a thread could answer in-thread
+  // (0.1.3) but could not read what the thread had already said. With
+  // thread_ts, conversations.replies returns the parent + every reply.
+  const historyFn = opts.history || ((args) => (threadTs ? slackWeb.conversations.replies(args) : slackWeb.conversations.history(args)))
   const resolveSender = opts.resolveSender || resolveSenderName
-  const fetchOpts = { channel: channelId, limit: limit || 50 }
+  const fetchOpts = { channel: channelId, limit: limit || 50, ...(threadTs ? { ts: threadTs } : {}) }
   const afterTs = toSlackTs(after)
   const beforeTs = toSlackTs(before)
   if (afterTs) fetchOpts.oldest = afterTs
@@ -353,9 +360,12 @@ async function readHistory({ channelId, limit, after, before }, opts = {}) {
       content: m.text || '',
       timestamp: localISO(Math.round(Number(m.ts) * 1000)),
       attachments: (m.files || []).map((f) => f.url_private).filter(Boolean),
+      // threadTs on a top-level row = "this message HAS a thread" (read it
+      // by passing thread_ts); inside a replies read it names the parent.
+      ...(m.thread_ts ? { threadTs: m.thread_ts } : {}),
     })
   }
-  return { channelId, count: result.length, messages: result }
+  return { channelId, ...(threadTs ? { threadTs } : {}), count: result.length, messages: result }
 }
 
 // design-0020 (headless topology): ONE inbound seam. Ingest-POST to

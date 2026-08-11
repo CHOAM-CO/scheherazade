@@ -388,6 +388,21 @@ console.log('\n(bonus) sendFile + readHistory smoke (name/shape only, not exhaus
     resolveSender: async () => 'TestUser',
   })
   check('readHistory maps messages with resolved author name', hist.count === 1 && hist.messages[0].author === 'TestUser' && hist.messages[0].content === 'hi', JSON.stringify(hist))
+
+  // thread reads (0.1.4): thread_ts rides into the fetch opts as `ts`
+  // (conversations.replies takes the parent ts there), the result names the
+  // thread, and rows surface their thread_ts so top-level reads reveal
+  // which messages HAVE threads.
+  let seenOpts = null
+  const th = await readHistory({ channelId: HOME_ID, thread_ts: '1786414183.323289', limit: 10 }, {
+    history: async (o) => { seenOpts = o; return { ok: true, messages: [
+      { ts: '1786414183.323289', user: 'U1', text: 'parent', thread_ts: '1786414183.323289' },
+      { ts: '1786414200.000010', user: 'U2', text: 'reply', thread_ts: '1786414183.323289' },
+    ] } },
+    resolveSender: async (id) => id,
+  })
+  check('thread read passes parent ts as fetch `ts`', seenOpts?.ts === '1786414183.323289', JSON.stringify(seenOpts))
+  check('thread read returns parent + reply, threadTs on rows', th.count === 2 && th.threadTs === '1786414183.323289' && th.messages[1].threadTs === '1786414183.323289', JSON.stringify(th))
 }
 
 // ── source pins (hard to exercise at runtime -- pin the literal text) ──────
