@@ -32,7 +32,7 @@
 
 'use strict'
 
-const { app, BrowserWindow, shell } = require('electron')
+const { app, BrowserWindow, shell, dialog } = require('electron')
 const { spawn, execFileSync } = require('node:child_process')
 const attachTopology = require('./attach-topology.cjs')
 const path = require('node:path')
@@ -1970,6 +1970,12 @@ app.whenReady().then(async () => {
   } catch (err) {
     fatal('boot sequence failed', err)
   }
+
+  // Self-update (0.1.5): deliberately OUTSIDE the try above -- an updater
+  // problem must never take the boot path to fatal(). initAutoUpdate never
+  // throws by contract (see updater.cjs); win=auto-install, mac=notify-only
+  // (unsigned build), dev=off. First check fires ~15s after boot.
+  require('./updater.cjs').initAutoUpdate({ app, dialog, shell, log })
 
   app.on('activate', () => {
     // macOS convention: clicking the dock icon with no windows open

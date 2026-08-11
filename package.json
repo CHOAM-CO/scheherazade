@@ -1,6 +1,6 @@
 {
   "name": "scheherazade",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "type": "module",
   "description": "Mac-native local AI agent. Forked from agent-portable (Claude Code single-agent harness); P0 spike layers an Electron packaging shell on top.",
@@ -11,9 +11,9 @@
   "scripts": {
     "start": "node channel.mjs",
     "electron:dev": "electron .",
-    "dist": "electron-builder --mac dmg",
+    "dist": "electron-builder --mac dmg --publish never",
     "dist:mac": "npm run dist",
-    "dist:win": "node scripts/assert-win32.mjs && electron-builder --win nsis",
+    "dist:win": "node scripts/assert-win32.mjs && electron-builder --win nsis --publish never",
     "postinstall": "node scripts/fix-pty-helper.mjs",
     "predist": "node scripts/test-packaging.mjs",
     "postdist": "node scripts/test-packaging.mjs",
@@ -28,6 +28,7 @@
     "codex-as-api": "0.5.2",
     "discord.js": "^14.26.4",
     "dotenv": "^17.4.2",
+    "electron-updater": "^6.8.9",
     "node-pty": "^1.1.0",
     "undici": "^7.28.0",
     "zod": "^4.4.3"
@@ -40,6 +41,7 @@
     },
     "files": [
       "main.cjs",
+      "updater.cjs",
       "window-glass.cjs",
       "attach-topology.cjs",
       "channel.mjs",
@@ -131,7 +133,14 @@
       "artifactName": "Scheherazade-Setup-${version}.exe"
     },
     "asar": true,
-    "npmRebuild": false
+    "npmRebuild": false,
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Mino-is-me",
+        "repo": "scheherazade-releases"
+      }
+    ]
   },
   "devDependencies": {
     "electron": "^43.0.0",
