@@ -528,19 +528,14 @@
       const spawn = (await window.api('/api/agent/spawn-info')).spawn
       const provider = String((spawn && spawn.provider) || '')
       const model = String((spawn && spawn.model) || '').replace(/:.*$/, '') // strip :tag
-      if (/^claude/.test(provider) || /^claude/.test(model)) { visionState = 'yes'; return }
-      // Mirror of http-server.cjs's laneVision table (library-pill scrape
-      // 2026-08-04) -- change both together. 0.1.4: matched by MODEL NAME
-      // regardless of provider -- glm-5.2 via 'custom' is the same non-vision
-      // model as via 'ollama'; the old provider gate returned 'unknown' whose
-      // marker invited a Read-tool image read that poisoned the transcript.
-      const MODEL_VISION = {
-        'kimi-k2.7-code': 'yes', 'kimi-k3': 'yes', 'kimi-k2.6': 'yes', gemma4: 'yes',
-        'qwen3.5': 'yes', 'minimax-m3': 'yes', 'mistral-large-3': 'yes',
-        'glm-5.2': 'no', 'glm-5.1': 'no', 'deepseek-v4-flash': 'no', 'deepseek-v4-pro': 'no',
-        'gpt-oss': 'no', 'minimax-m2.7': 'no', 'nemotron-3-nano': 'no', 'nemotron-3-super': 'no', 'nemotron-3-ultra': 'no',
-      }
-      visionState = MODEL_VISION[model] || 'unknown' // chatgpt proxy / unlisted custom: not verified either way
+      // Mirror of http-server.cjs's laneVision -- change both together.
+      // 0.1.4 policy (Mino): first-party (Claude/Codex) = yes; everything
+      // else defaults to NO (server attaches a Gemma caption) unless the
+      // model is on the known-vision list. No 'unknown' state -- its marker
+      // invited a Read-tool image read that poisoned non-vision transcripts.
+      if (/^claude/.test(provider) || /^claude/.test(model) || provider === 'chatgpt') { visionState = 'yes'; return }
+      const VISION_YES = new Set(['kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'gemma4', 'qwen3.5', 'minimax-m3', 'mistral-large-3'])
+      visionState = VISION_YES.has(model) ? 'yes' : 'no'
     } catch { visionState = 'unknown' }
   }
 

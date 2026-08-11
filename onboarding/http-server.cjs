@@ -2980,17 +2980,19 @@ async function fetchOllamaUsage(opts = {}) {
 // that description into the attachment marker. A text-only lane then gets
 // the CONTENT of the image, not just the fact that a file exists.
 //
-// Vision table bound from live ollama.com/library capability pills
+// YES-list bound from live ollama.com/library capability pills
 // (2026-08-04 scrape receipts, session notes idea/2026-08-04):
-//   vision:    kimi-k2.7-code, kimi-k3, kimi-k2.6, gemma4, qwen3.5,
-//              minimax-m3, mistral-large-3
-//   no vision: glm-5.2, glm-5.1, deepseek-v4-flash, deepseek-v4-pro,
-//              gpt-oss, minimax-m2.7, nemotron-3-{nano,super,ultra}
-// Anything else (URL-picked future models, custom proxies) is 'unknown'
-// and is NEVER guessed -- unknown gets the honesty clause, not a caption.
-// chat.js keeps a mirror of this table for its pre-send toast; change both.
-const OLLAMA_VISION_YES = new Set(['kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'gemma4', 'qwen3.5', 'minimax-m3', 'mistral-large-3'])
-const OLLAMA_VISION_NO = new Set(['glm-5.2', 'glm-5.1', 'deepseek-v4-flash', 'deepseek-v4-pro', 'gpt-oss', 'minimax-m2.7', 'nemotron-3-nano', 'nemotron-3-super', 'nemotron-3-ultra'])
+//   vision: kimi-k2.7-code, kimi-k3, kimi-k2.6, gemma4, qwen3.5,
+//           minimax-m3, mistral-large-3
+// chat.js keeps a mirror of this list for its pre-send toast; change both.
+// 0.1.4 policy rewrite (Mino 2026-08-11 13:54): first-party providers are
+// vision-'yes'; EVERYTHING else defaults to 'no' (Gemma caption stand-in)
+// unless the model is on the known-vision YES list. There is no 'unknown'
+// state anymore -- 'unknown' was the dangerous one: it skipped the caption
+// AND invited a Read-tool image read that poisoned non-vision transcripts.
+// A default-'no' worst case is an unnecessary caption for a vision-capable
+// unlisted model; the old worst case was a bricked conversation.
+const VISION_YES_MODELS = new Set(['kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'gemma4', 'qwen3.5', 'minimax-m3', 'mistral-large-3'])
 // Smallest vision model in the cloud catalog (31b, vs 397b/675b upward) --
 // caption latency and quota cost scale with this pick.
 const OLLAMA_CAPTION_MODEL = 'gemma4:31b'
@@ -2999,18 +3001,12 @@ function laneVision(spawn) {
   const provider = String((spawn && spawn.provider) || '')
   const model = String((spawn && spawn.model) || '')
   const base = model.replace(/:.*$/, '') // strip :tag (deepseek-v4-flash:0731)
-  if (/^claude/.test(provider) || /^claude/.test(model)) return 'yes'
-  // Match by MODEL NAME regardless of provider (0.1.4 fix): glm-5.2 served
-  // through provider 'custom' is the same non-vision model as through
-  // 'ollama'. The old provider gate made custom-GLM 'unknown', which skipped
-  // the caption stand-in AND handed the agent the 'unknown' marker that
-  // invites a Read-tool image read -- the image block then 400s on the
-  // Anthropic-compat endpoint and poisons the resumed transcript (2026-08-11
-  // field report: repeating "Model call failed" + in-app lane death).
-  // Capability is a property of the model, not of who serves it.
-  if (OLLAMA_VISION_YES.has(base)) return 'yes'
-  if (OLLAMA_VISION_NO.has(base)) return 'no'
-  return 'unknown'
+  // First-party frontier lanes (Claude subscription/API, Codex proxy) all
+  // ship vision. Everything else -- ollama, custom, null spawn-info -- is
+  // 'no' unless the model is on the known-vision list. Never 'unknown'.
+  if (/^claude/.test(provider) || /^claude/.test(model) || provider === 'chatgpt') return 'yes'
+  if (VISION_YES_MODELS.has(base)) return 'yes'
+  return 'no'
 }
 
 async function fetchImageCaption(imageBase64, mediaType) {

@@ -216,16 +216,21 @@ try {
     chk('upload with no agentControls (unknown lane) carries NO caption -- unknown is never guessed', !('caption' in b), JSON.stringify(b))
   }
 
-  // ── vision stand-in table (0.0.56): pure laneVision pins ──────────────────
+  // ── vision policy (0.1.4, Mino: "Unknown이 제일 위험함"): first-party =
+  // yes, everything else defaults to NO unless on the known-vision list.
+  // 'unknown' no longer exists -- its marker invited a Read-tool image read
+  // that poisoned non-vision transcripts (field report 2026-08-11).
   {
     const { laneVision } = require_(path.join(ROOT, 'onboarding', 'http-server.cjs'))
     chk('claude lane -> yes', laneVision({ provider: 'claude-subscription', model: 'claude-fable-5' }) === 'yes')
+    chk('chatgpt/codex proxy lane -> yes (first-party)', laneVision({ provider: 'chatgpt', model: 'gpt-5.6' }) === 'yes')
     chk('ollama kimi-k2.7-code -> yes (library pill receipt)', laneVision({ provider: 'ollama', model: 'kimi-k2.7-code' }) === 'yes')
     chk('ollama glm-5.2 -> no', laneVision({ provider: 'ollama', model: 'glm-5.2' }) === 'no')
     chk('ollama deepseek-v4-flash:0731 -> no (tag stripped)', laneVision({ provider: 'ollama', model: 'deepseek-v4-flash:0731' }) === 'no')
-    chk('ollama unlisted model -> unknown, never guessed', laneVision({ provider: 'ollama', model: 'brand-new-model' }) === 'unknown')
-    chk('no spawn info -> unknown', laneVision(null) === 'unknown')
-    chk('chatgpt proxy lane -> unknown', laneVision({ provider: 'chatgpt', model: 'gpt-5.6' }) === 'unknown')
+    chk('ollama unlisted model -> no (fail-safe default, never unknown)', laneVision({ provider: 'ollama', model: 'brand-new-model' }) === 'no')
+    chk('no spawn info -> no (fail-safe default)', laneVision(null) === 'no')
+    chk('custom glm-5.2 -> no (capability is the model, not the server)', laneVision({ provider: 'custom', model: 'glm-5.2' }) === 'no')
+    chk('custom qwen3.5 -> yes (YES-list works for any provider)', laneVision({ provider: 'custom', model: 'qwen3.5' }) === 'yes')
   }
 } finally {
   srv.server.close()
