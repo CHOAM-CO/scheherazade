@@ -3000,10 +3000,16 @@ function laneVision(spawn) {
   const model = String((spawn && spawn.model) || '')
   const base = model.replace(/:.*$/, '') // strip :tag (deepseek-v4-flash:0731)
   if (/^claude/.test(provider) || /^claude/.test(model)) return 'yes'
-  if (provider === 'ollama') {
-    if (OLLAMA_VISION_YES.has(base)) return 'yes'
-    if (OLLAMA_VISION_NO.has(base)) return 'no'
-  }
+  // Match by MODEL NAME regardless of provider (0.1.4 fix): glm-5.2 served
+  // through provider 'custom' is the same non-vision model as through
+  // 'ollama'. The old provider gate made custom-GLM 'unknown', which skipped
+  // the caption stand-in AND handed the agent the 'unknown' marker that
+  // invites a Read-tool image read -- the image block then 400s on the
+  // Anthropic-compat endpoint and poisons the resumed transcript (2026-08-11
+  // field report: repeating "Model call failed" + in-app lane death).
+  // Capability is a property of the model, not of who serves it.
+  if (OLLAMA_VISION_YES.has(base)) return 'yes'
+  if (OLLAMA_VISION_NO.has(base)) return 'no'
   return 'unknown'
 }
 

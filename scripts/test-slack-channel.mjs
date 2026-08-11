@@ -50,6 +50,7 @@ const {
   handleInboundMessage, isBotEvent, isIgnorableSubtype,
   createLivenessGate,
   sendReply, sendFile, readHistory, ReplyArgs,
+  extractSlackImages, downloadSlackImageToTmp,
   toSlackTs,
   resolveSenderName,
   validateBotToken, validateAppToken,
@@ -166,6 +167,47 @@ console.log('\n(c) reply chunking boundary (4000-char budget)')
   check('last chunk carries the remainder (1 char)', posted[2].text.length === 1, posted[2].text.length)
   check('result reports the chunk count', result.includes('(3 messages)'), result)
   check('result carries the delivered_channel= receipt line', result.includes(`delivered_channel=${HOME_ID}`), result)
+}
+
+// ── (b3) inbound image attachments (0.1.4 parity fix) ──────────────────────
+console.log('\n(b3) image attachments -> local-path marker')
+{
+  // file_share subtype must pass the gate -- it was the blanket-filter hole
+  check('file_share subtype is NOT ignorable', isIgnorableSubtype({ subtype: 'file_share' }) === false)
+  check('message_changed still ignorable', isIgnorableSubtype({ subtype: 'message_changed' }) === true)
+
+  check('extractSlackImages picks mimetype matches', extractSlackImages({ files: [{ url_private: 'https://f/1', mimetype: 'image/png' }] }).length === 1)
+  check('extractSlackImages falls back to extension', extractSlackImages({ files: [{ url_private: 'https://f/2', name: 'shot.JPG' }] }).length === 1)
+  check('extractSlackImages skips non-images', extractSlackImages({ files: [{ url_private: 'https://f/3', mimetype: 'application/pdf', name: 'doc.pdf' }] }).length === 0)
+  check('extractSlackImages survives missing files array', extractSlackImages({}).length === 0)
+
+  let captured = null
+  const ev = { type: 'message', subtype: 'file_share', channel: HOME_ID, user: 'U123', text: '이거 봐봐', ts: '1700000002.000100', files: [{ url_private: 'https://files.slack.com/x.png', mimetype: 'image/png' }] }
+  await handleInboundMessage(ev, {
+    resolveSender: async () => 'T',
+    notify: async (p) => { captured = p },
+    downloadImage: async () => '/tmp/agent-portable-test/123_abc.png',
+  })
+  check('image message content keeps the text', captured?.content?.startsWith('이거 봐봐'), captured?.content)
+  check('content carries the Read-tool local-path marker', captured?.content?.includes('open with Read tool: /tmp/agent-portable-test/123_abc.png'), captured?.content)
+
+  // files-only message (no text) -> marker IS the content, not [empty message]
+  captured = null
+  const evNoText = { ...ev, text: '', ts: '1700000002.000200' }
+  await handleInboundMessage(evNoText, { resolveSender: async () => 'T', notify: async (p) => { captured = p }, downloadImage: async () => '/tmp/t/i.png' })
+  check('files-only message: marker replaces [empty message]', captured?.content?.startsWith('[image attachment'), captured?.content)
+
+  // download failure degrades to text-only, never blocks delivery
+  captured = null
+  await handleInboundMessage({ ...ev, ts: '1700000002.000300' }, { resolveSender: async () => 'T', notify: async (p) => { captured = p }, downloadImage: async () => null })
+  check('failed download degrades to text-only delivery', captured?.content === '이거 봐봐', captured?.content)
+
+  // auth-failure disguise: HTML-with-200 must be rejected, not saved as .png
+  const html = await downloadSlackImageToTmp('https://files.slack.com/x.png', 'image/png', {
+    fetchFn: async () => ({ ok: true, headers: { get: () => 'text/html; charset=utf-8' }, arrayBuffer: async () => new ArrayBuffer(4) }),
+    token: 'xoxb-test',
+  })
+  check('HTML 200 response (auth failure) returns null, no file written', html === null)
 }
 
 // ── (c2) Slack thread support (2026-08-11, Mino: thread replies) ───────────

@@ -529,19 +529,18 @@
       const provider = String((spawn && spawn.provider) || '')
       const model = String((spawn && spawn.model) || '').replace(/:.*$/, '') // strip :tag
       if (/^claude/.test(provider) || /^claude/.test(model)) { visionState = 'yes'; return }
-      if (provider === 'ollama') {
-        // Mirror of http-server.cjs's laneVision table (library-pill scrape
-        // 2026-08-04) -- change both together.
-        const OLLAMA_VISION = {
-          'kimi-k2.7-code': 'yes', 'kimi-k3': 'yes', 'kimi-k2.6': 'yes', gemma4: 'yes',
-          'qwen3.5': 'yes', 'minimax-m3': 'yes', 'mistral-large-3': 'yes',
-          'glm-5.2': 'no', 'glm-5.1': 'no', 'deepseek-v4-flash': 'no', 'deepseek-v4-pro': 'no',
-          'gpt-oss': 'no', 'minimax-m2.7': 'no', 'nemotron-3-nano': 'no', 'nemotron-3-super': 'no', 'nemotron-3-ultra': 'no',
-        }
-        visionState = OLLAMA_VISION[model] || 'unknown'
-        return
+      // Mirror of http-server.cjs's laneVision table (library-pill scrape
+      // 2026-08-04) -- change both together. 0.1.4: matched by MODEL NAME
+      // regardless of provider -- glm-5.2 via 'custom' is the same non-vision
+      // model as via 'ollama'; the old provider gate returned 'unknown' whose
+      // marker invited a Read-tool image read that poisoned the transcript.
+      const MODEL_VISION = {
+        'kimi-k2.7-code': 'yes', 'kimi-k3': 'yes', 'kimi-k2.6': 'yes', gemma4: 'yes',
+        'qwen3.5': 'yes', 'minimax-m3': 'yes', 'mistral-large-3': 'yes',
+        'glm-5.2': 'no', 'glm-5.1': 'no', 'deepseek-v4-flash': 'no', 'deepseek-v4-pro': 'no',
+        'gpt-oss': 'no', 'minimax-m2.7': 'no', 'nemotron-3-nano': 'no', 'nemotron-3-super': 'no', 'nemotron-3-ultra': 'no',
       }
-      visionState = 'unknown' // chatgpt proxy / custom: not verified either way
+      visionState = MODEL_VISION[model] || 'unknown' // chatgpt proxy / unlisted custom: not verified either way
     } catch { visionState = 'unknown' }
   }
 

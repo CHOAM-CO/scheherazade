@@ -420,7 +420,62 @@ function isBotEvent(event) {
 // None of those subtypes carry a fresh human message in the top-level
 // text/user fields, so they're ignored the same way bot echoes are.
 function isIgnorableSubtype(event) {
-  return Boolean(event?.subtype) && event.subtype !== 'bot_message'
+  // file_share passes through (0.1.4): a Slack message with an attached
+  // file arrives AS subtype 'file_share', so the blanket subtype filter was
+  // dropping every image message before the download path could ever run --
+  // the other half of the "슬랙 이미지 fallback 안 됨" report (the first
+  // half being that no download path existed). bot_message still passes
+  // here because isBotEvent handles it; everything else (message_changed,
+  // message_deleted, channel_join, ...) stays ignored.
+  return Boolean(event?.subtype) && event.subtype !== 'bot_message' && event.subtype !== 'file_share'
+}
+
+// ── Inbound image attachments (0.1.4 — Discord/Telegram parity) ────────────
+// channel.mjs downloads Discord attachments to tmp and injects
+// "[image attachment(s) -- local path(s), open with Read tool: ...]".
+// Slack had NO inbound file handling at all (field report 2026-08-11: "슬랙
+// 이미지 fallback 동작 안 함" — there was nothing to fall back to). Slack
+// specifics vs the Discord twin: files ride on event.files[] with mimetype/
+// url_private, and url_private REQUIRES the bot token in an Authorization
+// header — an unauthenticated GET returns an HTML login page with HTTP 200,
+// which is why the content-type check below is load-bearing, not paranoia.
+const IMAGE_MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' }
+const IMAGE_MIME_SET = new Set(Object.values(IMAGE_MIME))
+const TMP_IMAGE_DIR = path.join(os.tmpdir(), `agent-portable-${AGENT_NAME}`)
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024 // same cap as channel.mjs downloadBuffer
+
+function extractSlackImages(event) {
+  const found = []
+  for (const f of event?.files || []) {
+    if (!f || !f.url_private) continue
+    if (f.mimetype && IMAGE_MIME_SET.has(f.mimetype)) { found.push({ url: f.url_private, mime: f.mimetype }); continue }
+    const ext = (f.name || '').toLowerCase().match(/\.\w+$/)?.[0]
+    if (ext && IMAGE_MIME[ext]) found.push({ url: f.url_private, mime: IMAGE_MIME[ext] })
+  }
+  return found
+}
+
+async function downloadSlackImageToTmp(url, mime, opts = {}) {
+  const fetchFn = opts.fetchFn || fetch
+  const token = opts.token || SLACK_BOT_TOKEN
+  try {
+    const res = await fetchFn(url, { headers: { Authorization: `Bearer ${token}` }, redirect: 'follow', signal: AbortSignal.timeout(15_000) })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const ct = String(res.headers.get('content-type') || '')
+    // Auth failure disguise: Slack serves an HTML login page with 200 when
+    // the Authorization header is missing/wrong. Never save that as a .png.
+    if (ct.startsWith('text/html')) throw new Error('got HTML (auth failed?)')
+    const buf = Buffer.from(await res.arrayBuffer())
+    if (buf.length > MAX_IMAGE_BYTES) throw new Error('too large')
+    await fs.mkdir(TMP_IMAGE_DIR, { recursive: true })
+    const ext = mime?.includes('png') ? 'png' : mime?.includes('webp') ? 'webp' : mime?.includes('gif') ? 'gif' : 'jpg'
+    const dest = path.join(TMP_IMAGE_DIR, `${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`)
+    await fs.writeFile(dest, buf)
+    return dest
+  } catch (err) {
+    log(`slack image download failed (${url}): ${err.message}`)
+    return null
+  }
 }
 
 // ── Inbound message injection (the <channel source=...> tag mechanism) ─────
@@ -452,7 +507,21 @@ async function handleInboundMessage(event, opts = {}) {
 
   const sender = await resolveSender(event.user, opts)
   const text = (event.text || '').trim()
-  const content = text ? text : '[empty message]'
+  // Image attachments -> local tmp paths, same convention as channel.mjs
+  // (Discord) :757 -- the agent opens them with the Read tool. Failed
+  // downloads degrade to the text-only message, never block delivery.
+  const images = extractSlackImages(event)
+  const download = opts.downloadImage || downloadSlackImageToTmp
+  const localPaths = []
+  for (const img of images) {
+    const p = await download(img.url, img.mime, opts)
+    if (p) localPaths.push(p)
+  }
+  let content = text ? text : '[empty message]'
+  if (localPaths.length) {
+    const marker = `[image attachment(s) -- local path(s), open with Read tool: ${localPaths.join(', ')}]`
+    content = text ? `${text}\n${marker}` : marker
+  }
   // messageTs/threadTs (2026-08-11, Mino): expose the raw Slack ts so the
   // agent can thread replies. threadTs is set only when the inbound message
   // itself lives in a thread -- reply targeting rule: use threadTs when
@@ -658,6 +727,7 @@ export {
   createLivenessGate,
   sendReply, sendFile, readHistory,
   ReplyArgs, SLACK_TS_RE,
+  extractSlackImages, downloadSlackImageToTmp,
   toSlackTs,
   resolveSenderName,
   validateBotToken, validateAppToken,

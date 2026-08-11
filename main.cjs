@@ -978,6 +978,18 @@ async function spawnRealAgentChildLocked() {
     if (agentTopologyIsAttach()) {
       startAttachLogTail()
       stampAttachSpawnInfo()
+    } else {
+      // 0.1.4 fix (field report 2026-08-11, GLM5.2+ollama): the DEFAULT
+      // topology's adoption path left lastSpawnInfo null for the entire app
+      // run -- laneVision(null) = 'unknown', which silently disabled the
+      // Gemma vision stand-in AND handed the agent the 'unknown' marker that
+      // invites a Read-tool image read. A non-vision lane then 400s on the
+      // image block every turn ("Model call failed" repeating) until a
+      // forced restart happened to take the real spawn path and re-stamp.
+      // The adopted supervisor runs from the same config this app process
+      // reads, so stamping from config is as truthful here as it is for
+      // attach.
+      stampAttachSpawnInfo(null, 'adopted')
     }
     // Timeout-backstop gap fix: stamp 'connecting' on THIS attach path
     // too, not just the fresh-spawn path below. Without it, reopening the
@@ -1516,14 +1528,14 @@ function startAttachLogTail() {
   attachLogTailTimer = setTimeout(tick, 0)
 }
 
-function stampAttachSpawnInfo(config) {
+function stampAttachSpawnInfo(config, lane = 'attach') {
   const cfg = config || readAgentConfig()
   lastSpawnInfo = {
     model: cfg.MODEL || null,
     effort: cfg.EFFORT_LEVEL || null,
     provider: cfg.PROVIDER || null,
     at: new Date().toISOString(),
-    lane: 'attach',
+    lane,
   }
 }
 

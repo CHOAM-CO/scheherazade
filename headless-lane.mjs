@@ -312,6 +312,10 @@ function main() {
   // not a wedged one).
   let openTurn = false
   let lastActivityTs = Date.now()
+  // Consecutive is_error results (poisoned-transcript breaker, 0.1.4).
+  // Reset by any healthy turn; at 3 the lane abandons the session id and
+  // recycles -- see the result handler.
+  let errorTurnStreak = 0
   const noteStdinWrite = () => { openTurn = true; lastActivityTs = Date.now() }
 
   // Context-pressure rotation state (see the constants' header). rotatePending
@@ -407,7 +411,28 @@ function main() {
         } catch (err) {
           log(`turn-error marker write failed: ${err.message}`)
         }
+        // Poisoned-transcript breaker (0.1.4, field report 2026-08-11): a
+        // transcript can carry content the provider rejects on EVERY call
+        // (e.g. an image block sent to a non-vision model's Anthropic-compat
+        // endpoint -> 400) -- then each turn errors, --resume re-sends the
+        // same transcript forever, and only a manual restart-with-fresh-
+        // session recovers. Three CONSECUTIVE error turns = the conversation
+        // itself is judged broken: drop the session file (so the next boot
+        // does NOT resume it) and recycle the lane, mirroring the rotation
+        // recycle above. A single healthy turn resets the streak, so a
+        // transient provider outage (1-2 errored turns) never triggers this.
+        // If fresh sessions ALSO error (dead key), the streak trips again and
+        // run.sh's crash-loop marker takes over -- visible, not silent.
+        errorTurnStreak += 1
+        if (errorTurnStreak >= 3) {
+          errLog(`3 consecutive error turns -- treating the resumed conversation as poisoned; recycling into a FRESH session (old transcript stays on disk, it is just no longer auto-resumed)`)
+          try { fs.unlinkSync(sessionFile()) } catch { /* already gone */ }
+          try { child.stdin.end() } catch { /* already gone */ }
+          child.kill('SIGTERM')
+          setTimeout(() => { if (!childExited) child.kill('SIGKILL') }, 10_000).unref()
+        }
       } else {
+        errorTurnStreak = 0
         // Recovery clears the banner immediately -- a healthy turn must not
         // sit under a 10-minute-old error strip (freshness window is only
         // the fallback for a lane that died before ever succeeding again).
