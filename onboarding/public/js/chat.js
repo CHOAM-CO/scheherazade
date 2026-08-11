@@ -540,6 +540,13 @@
   }
 
   function markerFor(att) {
+    // 0.1.4: kind from the upload response. 'text' is safe for ANY lane to
+    // Read; 'image' and 'pdf' are vision-gated (Read renders PDF pages as
+    // images, so a non-vision lane must not open either).
+    if (att.kind === 'text') {
+      return `[file attached: ${att.path} — open it with the Read tool]`
+    }
+    const noun = att.kind === 'pdf' ? 'PDF' : 'image'
     if (att.caption) {
       // Vision stand-in (0.0.56): the server already had a small vision
       // model describe the image; the text-only lane gets the CONTENT.
@@ -548,12 +555,9 @@
       return `[image attached: ${att.path} — this model cannot view images directly; a vision model (${att.caption.model}) described it: "${clean}"]`
     }
     if (visionState === 'no') {
-      return `[image attached: ${att.path} — NOTE: this model cannot view images. Do not guess the contents; tell the user honestly that you cannot see images on the current model.]`
+      return `[${noun} attached: ${att.path} — NOTE: this model cannot view ${noun === 'PDF' ? 'PDFs (their pages render as images)' : 'images'}. Do NOT open it with the Read tool; do not guess the contents; tell the user honestly that you cannot see it on the current model.]`
     }
-    if (visionState === 'unknown') {
-      return `[image attached: ${att.path} — read it with the Read tool; if this model cannot view images, say so honestly instead of guessing]`
-    }
-    return `[image attached: ${att.path} — read it with the Read tool]`
+    return `[${noun} attached: ${att.path} — read it with the Read tool]`
   }
 
   function renderAttachChip(att) {
@@ -561,7 +565,7 @@
     if (!box) return
     const chip = document.createElement('span')
     chip.className = 'chat-attach-chip'
-    chip.textContent = `🖼 ${att.name} `
+    chip.textContent = `${att.kind === 'text' ? '📄' : att.kind === 'pdf' ? '📕' : '🖼'} ${att.name} `
     const x = document.createElement('button')
     x.type = 'button'
     x.className = 'link'
@@ -575,8 +579,12 @@
     att.chip = chip
   }
 
+  const ATTACH_NAME_RE = /\.(png|jpe?g|gif|webp|pdf|txt|md|csv|tsv|json|log|xml|yaml|yml)$/i
   async function uploadImageFile(file) {
-    if (!file || !/^image\/(png|jpe?g|gif|webp)$/.test(file.type)) { window.showToast(C.attachBadType); return }
+    // Accept by MIME for images (paste has no filename) OR by extension for
+    // documents -- server re-validates the extension either way.
+    const isImage = file && /^image\/(png|jpe?g|gif|webp)$/.test(file.type)
+    if (!file || (!isImage && !ATTACH_NAME_RE.test(file.name || ''))) { window.showToast(C.attachBadType); return }
     if (file.size > 10_000_000) { window.showToast(C.attachTooLarge); return }
     const dataBase64 = await new Promise((resolve, reject) => {
       const r = new FileReader()
@@ -590,10 +598,10 @@
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ filename: file.name || 'pasted.png', dataBase64 }),
       })
-      const att = { name: out.name, path: out.path, caption: out.caption || null }
+      const att = { name: out.name, path: out.path, kind: out.kind || 'image', caption: out.caption || null }
       pendingAttachments.push(att)
       renderAttachChip(att)
-      if (!visionWarned && (att.caption || visionState === 'no')) {
+      if (!visionWarned && att.kind !== 'text' && (att.caption || visionState === 'no')) {
         visionWarned = true // once per page load, not once per image
         window.showToast(att.caption ? C.attachCaptioned : C.attachNoVision)
       }

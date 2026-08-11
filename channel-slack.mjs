@@ -451,6 +451,10 @@ function isIgnorableSubtype(event) {
 // which is why the content-type check below is load-bearing, not paranoia.
 const IMAGE_MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' }
 const IMAGE_MIME_SET = new Set(Object.values(IMAGE_MIME))
+// 0.1.4 (PO item #4): text documents + PDFs join images. kind decides the
+// marker -- 'text' is safe for ANY lane to Read; 'image'/'pdf' are
+// vision-gated (Read renders PDF pages as images).
+const TEXT_EXT = new Set(['.txt', '.md', '.csv', '.tsv', '.json', '.log', '.xml', '.yaml', '.yml'])
 const TMP_IMAGE_DIR = path.join(os.tmpdir(), `agent-portable-${AGENT_NAME}`)
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024 // same cap as channel.mjs downloadBuffer
 
@@ -471,23 +475,37 @@ function laneHasVision(model = process.env.MODEL || '') {
   return VISION_YES_MODELS.has(base)
 }
 
-function imageMarker(localPaths, hasVision = laneHasVision()) {
-  if (hasVision) return `[image attachment(s) -- local path(s), open with Read tool: ${localPaths.join(', ')}]`
-  return `[image attachment(s) saved at: ${localPaths.join(', ')} -- NOTE: the current model cannot view images. Do NOT open them with the Read tool (the image block breaks this model's calls); tell the user honestly that you cannot see images on the current model.]`
+function imageMarker(localPaths, hasVision = laneHasVision(), noun = 'image') {
+  if (hasVision) return `[${noun} attachment(s) -- local path(s), open with Read tool: ${localPaths.join(', ')}]`
+  return `[${noun} attachment(s) saved at: ${localPaths.join(', ')} -- NOTE: the current model cannot view ${noun}s. Do NOT open them with the Read tool (the ${noun === 'PDF' ? 'rendered pages break' : 'image block breaks'} this model's calls); tell the user honestly that you cannot see ${noun}s on the current model.]`
 }
 
-function extractSlackImages(event) {
+function textFileMarker(localPaths) {
+  return `[file attachment(s) -- local path(s), open with Read tool: ${localPaths.join(', ')}]`
+}
+
+function extractSlackFiles(event) {
   const found = []
   for (const f of event?.files || []) {
     if (!f || !f.url_private) continue
-    if (f.mimetype && IMAGE_MIME_SET.has(f.mimetype)) { found.push({ url: f.url_private, mime: f.mimetype }); continue }
-    const ext = (f.name || '').toLowerCase().match(/\.\w+$/)?.[0]
-    if (ext && IMAGE_MIME[ext]) found.push({ url: f.url_private, mime: IMAGE_MIME[ext] })
+    const ext = (f.name || '').toLowerCase().match(/\.\w+$/)?.[0] || ''
+    if ((f.mimetype && IMAGE_MIME_SET.has(f.mimetype)) || IMAGE_MIME[ext]) {
+      found.push({ url: f.url_private, mime: f.mimetype || IMAGE_MIME[ext], kind: 'image', ext: ext || '.png' })
+    } else if (f.mimetype === 'application/pdf' || ext === '.pdf') {
+      found.push({ url: f.url_private, mime: 'application/pdf', kind: 'pdf', ext: '.pdf' })
+    } else if (TEXT_EXT.has(ext) || (f.mimetype || '').startsWith('text/')) {
+      found.push({ url: f.url_private, mime: f.mimetype || 'text/plain', kind: 'text', ext: ext || '.txt' })
+    }
   }
   return found
 }
 
-async function downloadSlackImageToTmp(url, mime, opts = {}) {
+// Back-compat shape used by existing tests/callers: images only.
+function extractSlackImages(event) {
+  return extractSlackFiles(event).filter((f) => f.kind === 'image').map(({ url, mime }) => ({ url, mime }))
+}
+
+async function downloadSlackImageToTmp(url, mime, opts = {}, extHint) {
   const fetchFn = opts.fetchFn || fetch
   const token = opts.token || SLACK_BOT_TOKEN
   try {
@@ -496,16 +514,18 @@ async function downloadSlackImageToTmp(url, mime, opts = {}) {
     const ct = String(res.headers.get('content-type') || '')
     // Auth failure disguise: Slack serves an HTML login page with 200 when
     // the Authorization header is missing/wrong. Never save that as a .png.
+    // (Legit .html attachments are not on the accepted-type list anyway.)
     if (ct.startsWith('text/html')) throw new Error('got HTML (auth failed?)')
     const buf = Buffer.from(await res.arrayBuffer())
     if (buf.length > MAX_IMAGE_BYTES) throw new Error('too large')
     await fs.mkdir(TMP_IMAGE_DIR, { recursive: true })
-    const ext = mime?.includes('png') ? 'png' : mime?.includes('webp') ? 'webp' : mime?.includes('gif') ? 'gif' : 'jpg'
+    const ext = extHint ? extHint.replace(/^\./, '')
+      : mime?.includes('png') ? 'png' : mime?.includes('webp') ? 'webp' : mime?.includes('gif') ? 'gif' : 'jpg'
     const dest = path.join(TMP_IMAGE_DIR, `${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`)
     await fs.writeFile(dest, buf)
     return dest
   } catch (err) {
-    log(`slack image download failed (${url}): ${err.message}`)
+    log(`slack file download failed (${url}): ${err.message}`)
     return null
   }
 }
@@ -539,19 +559,24 @@ async function handleInboundMessage(event, opts = {}) {
 
   const sender = await resolveSender(event.user, opts)
   const text = (event.text || '').trim()
-  // Image attachments -> local tmp paths, same convention as channel.mjs
-  // (Discord) :757 -- the agent opens them with the Read tool. Failed
-  // downloads degrade to the text-only message, never block delivery.
-  const images = extractSlackImages(event)
+  // Attachments -> local tmp paths, same convention as channel.mjs
+  // (Discord) :757 -- markers per kind (image/PDF vision-gated, text files
+  // always Read-safe). Failed downloads degrade to the text-only message,
+  // never block delivery.
+  const attachments = extractSlackFiles(event)
   const download = opts.downloadImage || downloadSlackImageToTmp
-  const localPaths = []
-  for (const img of images) {
-    const p = await download(img.url, img.mime, opts)
-    if (p) localPaths.push(p)
+  const byKind = { image: [], pdf: [], text: [] }
+  for (const f of attachments) {
+    const p = await download(f.url, f.mime, opts, f.ext)
+    if (p) byKind[f.kind].push(p)
   }
   let content = text ? text : '[empty message]'
-  if (localPaths.length) {
-    const marker = opts.imageMarker ? opts.imageMarker(localPaths) : imageMarker(localPaths)
+  const markers = []
+  if (byKind.image.length) markers.push(opts.imageMarker ? opts.imageMarker(byKind.image) : imageMarker(byKind.image))
+  if (byKind.pdf.length) markers.push(opts.imageMarker ? opts.imageMarker(byKind.pdf) : imageMarker(byKind.pdf, laneHasVision(), 'PDF'))
+  if (byKind.text.length) markers.push(textFileMarker(byKind.text))
+  if (markers.length) {
+    const marker = markers.join('\n')
     content = text ? `${text}\n${marker}` : marker
   }
   // messageTs/threadTs (2026-08-11, Mino): expose the raw Slack ts so the
@@ -759,7 +784,7 @@ export {
   createLivenessGate,
   sendReply, sendFile, readHistory,
   ReplyArgs, SLACK_TS_RE,
-  extractSlackImages, downloadSlackImageToTmp, laneHasVision, imageMarker,
+  extractSlackImages, extractSlackFiles, downloadSlackImageToTmp, laneHasVision, imageMarker, textFileMarker,
   toSlackTs,
   resolveSenderName,
   validateBotToken, validateAppToken,

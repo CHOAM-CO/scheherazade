@@ -181,11 +181,16 @@ function createRoutes(staticCtx) {
           return
         }
         const { filename, dataBase64 } = parsed
-        const ext = String(filename || '').toLowerCase().match(/\.(png|jpe?g|gif|webp)$/)
+        // 0.1.4 (PO item #4, attachment generalization): text-y documents and
+        // PDFs join images. kind drives the client marker -- 'text' is safe
+        // for ANY lane to Read; 'image'/'pdf' are vision-gated (Read renders
+        // PDF pages as images, so a non-vision lane must not open them).
+        const ext = String(filename || '').toLowerCase().match(/\.(png|jpe?g|gif|webp|pdf|txt|md|csv|tsv|json|log|xml|yaml|yml)$/)
         if (!ext) {
-          sendJson(res, 400, { error: 'only png/jpg/gif/webp images', reason: 'bad_type' })
+          sendJson(res, 400, { error: 'unsupported type -- images (png/jpg/gif/webp), pdf, or text files (txt/md/csv/tsv/json/log/xml/yaml)', reason: 'bad_type' })
           return
         }
+        const kind = /^\.(png|jpe?g|gif|webp)$/.test(ext[0]) ? 'image' : ext[0] === '.pdf' ? 'pdf' : 'text'
         if (typeof dataBase64 !== 'string' || !dataBase64) {
           sendJson(res, 400, { error: 'dataBase64 is required', reason: 'no_data' })
           return
@@ -219,13 +224,13 @@ function createRoutes(staticCtx) {
           let caption
           const spawn = callCtx && callCtx.agentControls && typeof callCtx.agentControls.spawnInfo === 'function'
             ? callCtx.agentControls.spawnInfo() : null
-          if (laneVision(spawn) === 'no' && typeof fetchImageCaption === 'function') {
+          if (kind === 'image' && laneVision(spawn) === 'no' && typeof fetchImageCaption === 'function') {
             const type = ext[0] === '.png' ? 'image/png' : ext[0] === '.gif' ? 'image/gif' : ext[0] === '.webp' ? 'image/webp' : 'image/jpeg'
             const cap = await fetchImageCaption(buf.toString('base64'), type)
             if (cap.ok) caption = { text: cap.caption, model: cap.model }
             else log && log(`chat upload: vision stand-in caption failed (${cap.reason}) -- marker degrades to the honest no-vision text`)
           }
-          sendJson(res, 200, { ok: true, name, path: full, ...(caption ? { caption } : {}) })
+          sendJson(res, 200, { ok: true, name, path: full, kind, ...(caption ? { caption } : {}) })
         } catch (err) {
           sendJson(res, 500, { error: `could not save the image: ${err.message}`, reason: 'write_failed' })
         }

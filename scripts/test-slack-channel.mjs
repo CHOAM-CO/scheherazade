@@ -50,7 +50,7 @@ const {
   handleInboundMessage, isBotEvent, isIgnorableSubtype,
   createLivenessGate,
   sendReply, sendFile, readHistory, ReplyArgs,
-  extractSlackImages, downloadSlackImageToTmp, laneHasVision, imageMarker,
+  extractSlackImages, extractSlackFiles, downloadSlackImageToTmp, laneHasVision, imageMarker, textFileMarker,
   toSlackTs,
   resolveSenderName,
   validateBotToken, validateAppToken,
@@ -180,6 +180,20 @@ console.log('\n(b3) image attachments -> local-path marker')
   check('extractSlackImages falls back to extension', extractSlackImages({ files: [{ url_private: 'https://f/2', name: 'shot.JPG' }] }).length === 1)
   check('extractSlackImages skips non-images', extractSlackImages({ files: [{ url_private: 'https://f/3', mimetype: 'application/pdf', name: 'doc.pdf' }] }).length === 0)
   check('extractSlackImages survives missing files array', extractSlackImages({}).length === 0)
+
+  // 0.1.4 generalization: pdf + text docs classified by kind
+  const kinds = extractSlackFiles({ files: [
+    { url_private: 'https://f/1', mimetype: 'image/png' },
+    { url_private: 'https://f/2', mimetype: 'application/pdf', name: 'doc.pdf' },
+    { url_private: 'https://f/3', name: 'notes.md' },
+    { url_private: 'https://f/4', mimetype: 'text/csv', name: 'data.csv' },
+    { url_private: 'https://f/5', mimetype: 'application/zip', name: 'a.zip' },
+  ] })
+  check('extractSlackFiles classifies image/pdf/text and skips others',
+    kinds.length === 4 && kinds[0].kind === 'image' && kinds[1].kind === 'pdf' && kinds[2].kind === 'text' && kinds[2].ext === '.md' && kinds[3].kind === 'text',
+    JSON.stringify(kinds))
+  check('textFileMarker always invites Read', textFileMarker(['/tmp/n.md']).includes('open with Read tool: /tmp/n.md'))
+  check('PDF marker vision-gated like images', imageMarker(['/tmp/d.pdf'], false, 'PDF').includes('Do NOT open them with the Read tool'))
 
   // vision-aware marker (0.1.4 policy: first-party/YES-list = Read invite,
   // everything else = honest no-vision text that FORBIDS Read -- the Read
