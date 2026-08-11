@@ -50,7 +50,7 @@ const {
   handleInboundMessage, isBotEvent, isIgnorableSubtype,
   createLivenessGate,
   sendReply, sendFile, readHistory, ReplyArgs,
-  extractSlackImages, downloadSlackImageToTmp,
+  extractSlackImages, downloadSlackImageToTmp, laneHasVision, imageMarker,
   toSlackTs,
   resolveSenderName,
   validateBotToken, validateAppToken,
@@ -181,12 +181,25 @@ console.log('\n(b3) image attachments -> local-path marker')
   check('extractSlackImages skips non-images', extractSlackImages({ files: [{ url_private: 'https://f/3', mimetype: 'application/pdf', name: 'doc.pdf' }] }).length === 0)
   check('extractSlackImages survives missing files array', extractSlackImages({}).length === 0)
 
+  // vision-aware marker (0.1.4 policy: first-party/YES-list = Read invite,
+  // everything else = honest no-vision text that FORBIDS Read -- the Read
+  // invitation on a non-vision lane is the transcript-poison path)
+  check('laneHasVision: claude model -> true', laneHasVision('claude-fable-5') === true)
+  check('laneHasVision: gpt (codex) model -> true', laneHasVision('gpt-5.6-sol') === true)
+  check('laneHasVision: YES-list model with tag -> true', laneHasVision('qwen3.5:latest') === true)
+  check('laneHasVision: glm-5.2 -> false', laneHasVision('glm-5.2') === false)
+  check('laneHasVision: unlisted/empty -> false (fail-safe)', laneHasVision('') === false && laneHasVision('brand-new') === false)
+  check('imageMarker vision lane invites Read', imageMarker(['/tmp/a.png'], true).includes('open with Read tool'))
+  const noVis = imageMarker(['/tmp/a.png'], false)
+  check('imageMarker non-vision lane forbids Read + keeps the path', noVis.includes('Do NOT open them with the Read tool') && noVis.includes('/tmp/a.png'), noVis)
+
   let captured = null
   const ev = { type: 'message', subtype: 'file_share', channel: HOME_ID, user: 'U123', text: '이거 봐봐', ts: '1700000002.000100', files: [{ url_private: 'https://files.slack.com/x.png', mimetype: 'image/png' }] }
   await handleInboundMessage(ev, {
     resolveSender: async () => 'T',
     notify: async (p) => { captured = p },
     downloadImage: async () => '/tmp/agent-portable-test/123_abc.png',
+    imageMarker: (paths) => imageMarker(paths, true),
   })
   check('image message content keeps the text', captured?.content?.startsWith('이거 봐봐'), captured?.content)
   check('content carries the Read-tool local-path marker', captured?.content?.includes('open with Read tool: /tmp/agent-portable-test/123_abc.png'), captured?.content)
@@ -194,7 +207,7 @@ console.log('\n(b3) image attachments -> local-path marker')
   // files-only message (no text) -> marker IS the content, not [empty message]
   captured = null
   const evNoText = { ...ev, text: '', ts: '1700000002.000200' }
-  await handleInboundMessage(evNoText, { resolveSender: async () => 'T', notify: async (p) => { captured = p }, downloadImage: async () => '/tmp/t/i.png' })
+  await handleInboundMessage(evNoText, { resolveSender: async () => 'T', notify: async (p) => { captured = p }, downloadImage: async () => '/tmp/t/i.png', imageMarker: (paths) => imageMarker(paths, true) })
   check('files-only message: marker replaces [empty message]', captured?.content?.startsWith('[image attachment'), captured?.content)
 
   // download failure degrades to text-only, never blocks delivery

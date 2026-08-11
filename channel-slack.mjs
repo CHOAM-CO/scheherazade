@@ -444,6 +444,28 @@ const IMAGE_MIME_SET = new Set(Object.values(IMAGE_MIME))
 const TMP_IMAGE_DIR = path.join(os.tmpdir(), `agent-portable-${AGENT_NAME}`)
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024 // same cap as channel.mjs downloadBuffer
 
+// Lane vision verdict, channel-side (0.1.4). Mirrors the onboarding
+// server's laneVision POLICY (first-party yes / default no / YES-list
+// exception) but from the channel process's vantage: PROVIDER is not in
+// this env (run.sh exports MODEL only), so first-party is detected by model
+// name. Default-'no' is the fail-safe: the worst case is telling a
+// vision-capable unlisted model to be honest about an image it could have
+// read; the old worst case (Read invitation on a non-vision lane) poisoned
+// the transcript with an image block the provider 400s on every turn.
+// Gemma caption parity for Slack needs an authenticated local endpoint
+// (readProviderKey is Electron-safeStorage-only) -- deferred, 0.1.5.
+const VISION_YES_MODELS = new Set(['kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'gemma4', 'qwen3.5', 'minimax-m3', 'mistral-large-3'])
+function laneHasVision(model = process.env.MODEL || '') {
+  const base = String(model).replace(/:.*$/, '')
+  if (/^claude/.test(base) || /^gpt/.test(base)) return true
+  return VISION_YES_MODELS.has(base)
+}
+
+function imageMarker(localPaths, hasVision = laneHasVision()) {
+  if (hasVision) return `[image attachment(s) -- local path(s), open with Read tool: ${localPaths.join(', ')}]`
+  return `[image attachment(s) saved at: ${localPaths.join(', ')} -- NOTE: the current model cannot view images. Do NOT open them with the Read tool (the image block breaks this model's calls); tell the user honestly that you cannot see images on the current model.]`
+}
+
 function extractSlackImages(event) {
   const found = []
   for (const f of event?.files || []) {
@@ -519,7 +541,7 @@ async function handleInboundMessage(event, opts = {}) {
   }
   let content = text ? text : '[empty message]'
   if (localPaths.length) {
-    const marker = `[image attachment(s) -- local path(s), open with Read tool: ${localPaths.join(', ')}]`
+    const marker = opts.imageMarker ? opts.imageMarker(localPaths) : imageMarker(localPaths)
     content = text ? `${text}\n${marker}` : marker
   }
   // messageTs/threadTs (2026-08-11, Mino): expose the raw Slack ts so the
@@ -727,7 +749,7 @@ export {
   createLivenessGate,
   sendReply, sendFile, readHistory,
   ReplyArgs, SLACK_TS_RE,
-  extractSlackImages, downloadSlackImageToTmp,
+  extractSlackImages, downloadSlackImageToTmp, laneHasVision, imageMarker,
   toSlackTs,
   resolveSenderName,
   validateBotToken, validateAppToken,
