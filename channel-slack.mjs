@@ -191,8 +191,9 @@ async function resolveSenderName(userId, opts = {}) {
 // allowlists/hooks match on the exact name. Only descriptions change to
 // describe Slack reality.
 const DEFAULT_INSTRUCTIONS = `You are ${AGENT_NAME}.
-Slack messages arrive as: <channel source="${AGENT_NAME}" sender="..." channelId="..." authorId="..." timestamp="...">content</channel>
+Slack messages arrive as: <channel source="${AGENT_NAME}" sender="..." channelId="..." authorId="..." timestamp="..." messageTs="..." threadTs="...">content</channel> (messageTs = that message's raw Slack ts; threadTs present only when the message is inside a thread)
 Reply with the "reply" tool. channelId is optional -- omit it and the message goes to the current conversation channel. Never invent a channelId; only pass one when replying to a DIFFERENT channel than the one that messaged you. A channelId you DO pass is honored exactly or the call fails: an unresolvable one sends nothing anywhere, it is never quietly redirected.
+Threading: inbound Slack messages carry messageTs (and threadTs when the message is already inside a thread). To reply in a thread under the message that called you, pass thread_ts = that message's threadTs if present, else its messageTs. When someone talks to you INSIDE a thread, always reply into that thread (thread_ts = threadTs) -- answering a thread at top level strands the conversation. Never invent a thread_ts.
 Use "send_file_to_discord" (filePath, comment?, channelId?) to upload a local file (image, document, etc.) to Slack -- "reply" is text-only.
 Use "read_channel_history" (channelId, limit, after?, before?) to look back through the Slack channel. after/before each accept a Slack message ts or an ISO date.
 The app's own chat window is ALSO always connected: its messages arrive with channelId="in-app". Reply to those with channelId "in-app" exactly -- never route an in-app conversation to a Slack channel or vice versa. The "react" tool (one emoji on the user's bubble) works only for the in-app window.`
@@ -212,6 +213,7 @@ const TOOLS = [
       properties: {
         text: { type: 'string', description: 'Message text to send' },
         channelId: { type: 'string', description: 'OPTIONAL Slack channel ID. Omit to send to the current conversation channel. Never guess or invent this value.' },
+        thread_ts: { type: 'string', description: 'OPTIONAL Slack thread parent ts (e.g. "1786414183.323289"). Pass the inbound message\'s threadTs (if present) or messageTs to reply in a thread under that message. Omit for a top-level channel message. Never invent this value.' },
       },
       required: ['text'],
     },
@@ -225,6 +227,7 @@ const TOOLS = [
         filePath: { type: 'string', description: 'Full local path of the file to upload' },
         comment: { type: 'string', description: 'Optional message text sent with the file' },
         channelId: { type: 'string', description: 'OPTIONAL Slack channel ID. Omit to send to the current conversation channel. Never guess or invent this value.' },
+        thread_ts: { type: 'string', description: 'OPTIONAL Slack thread parent ts. Same semantics as the reply tool -- upload lands in that thread.' },
       },
       required: ['filePath'],
     },
@@ -270,8 +273,14 @@ function isLocalCall(name, args) {
   return Boolean(args && args.channelId === LOCAL_CHANNEL_ID)
 }
 
-const ReplyArgs = z.object({ channelId: z.string().min(1).optional(), text: z.string().min(1) })
-const SendFileArgs = z.object({ channelId: z.string().min(1).optional(), filePath: z.string().min(1), comment: z.string().optional() })
+// thread_ts: Slack ts format only ("1786414183.323289"). Validated here so a
+// hallucinated/ISO value fails loud at the tool boundary with a message that
+// names the fix, instead of surfacing as a raw Slack API error (or worse,
+// whatever Slack's lenient parsing decides it means).
+const SLACK_TS_RE = /^\d{10}\.\d{6}$/
+const threadTsField = z.string().regex(SLACK_TS_RE, 'thread_ts must be a Slack message ts like "1786414183.323289"').optional()
+const ReplyArgs = z.object({ channelId: z.string().min(1).optional(), text: z.string().min(1), thread_ts: threadTsField })
+const SendFileArgs = z.object({ channelId: z.string().min(1).optional(), filePath: z.string().min(1), comment: z.string().optional(), thread_ts: threadTsField })
 const ReadHistoryArgs = z.object({
   channelId: z.string().min(1),
   limit: z.number().int().positive().max(100).optional(),
@@ -295,18 +304,20 @@ function chunkText(text, size = REPLY_CHUNK_SIZE) {
 // opts.postMessage / opts.fetchFn / opts.lastId / opts.homeId are test seams
 // (scripts/test-slack-channel.mjs) -- production call sites pass only the
 // tool args and get live module state + the real WebClient.
-async function sendReply({ channelId, text }, opts = {}) {
+async function sendReply({ channelId, text, thread_ts: threadTs }, opts = {}) {
   const post = opts.postMessage || ((args) => slackWeb.chat.postMessage(args))
   const { target: targetId, note } = await resolveOutboundChannel(channelId, opts)
   const chunks = chunkText(text)
-  for (const chunk of chunks) await post({ channel: targetId, text: chunk })
+  // threadTs: every chunk goes to the same thread -- a multi-chunk reply
+  // must not straddle thread and top-level.
+  for (const chunk of chunks) await post({ channel: targetId, text: chunk, ...(threadTs ? { thread_ts: threadTs } : {}) })
   lastActivityMs = Date.now() // delivered reply = live conversation (mirrors channel.mjs)
   // delivered_channel= line: same machine-readable delivery receipt
   // convention as channel.mjs (stop-reply-guard greps this exact token).
-  return `sent to ${targetId} (${chunks.length} message${chunks.length > 1 ? 's' : ''})${note ? `\n${note}` : ''}\ndelivered_channel=${targetId}`
+  return `sent to ${targetId}${threadTs ? ` (thread ${threadTs})` : ''} (${chunks.length} message${chunks.length > 1 ? 's' : ''})${note ? `\n${note}` : ''}\ndelivered_channel=${targetId}`
 }
 
-async function sendFile({ channelId, filePath, comment }, opts = {}) {
+async function sendFile({ channelId, filePath, comment, thread_ts: threadTs }, opts = {}) {
   const upload = opts.uploadFile || ((args) => slackWeb.files.uploadV2(args))
   const fsMod = opts.fs || fs
   const resolvedPath = filePath.startsWith('~') ? path.join(os.homedir(), filePath.slice(1)) : filePath
@@ -316,7 +327,7 @@ async function sendFile({ channelId, filePath, comment }, opts = {}) {
     return { isError: true, text: `file not found: ${resolvedPath}` }
   }
   const { target: targetId, note } = await resolveOutboundChannel(channelId, opts)
-  const result = await upload({ channel_id: targetId, file: resolvedPath, filename: path.basename(resolvedPath), initial_comment: comment || '' })
+  const result = await upload({ channel_id: targetId, file: resolvedPath, filename: path.basename(resolvedPath), initial_comment: comment || '', ...(threadTs ? { thread_ts: threadTs } : {}) })
   const urls = (result?.files || []).map((f) => f.permalink || f.url_private).filter(Boolean)
   return { isError: false, text: `file sent to ${targetId}: ${path.basename(resolvedPath)}${urls.length ? `\nURL: ${urls.join('\n')}` : ''}${note ? `\n${note}` : ''}\ndelivered_channel=${targetId}` }
 }
@@ -368,14 +379,16 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   if (isLocalCall(name, args)) return handleLocalToolCall(name, args)
 
   if (name === 'reply') {
-    const { channelId, text } = ReplyArgs.parse(args || {})
+    const { channelId, text, thread_ts } = ReplyArgs.parse(args || {})
     // GPT-loop guard (2026-08-04): identical text to the same target within
     // the window is NOT re-posted; the receipt tells the model so. Returned
     // as a NORMAL result, never isError -- an error result invites exactly
     // the retry this exists to stop. See createOutboundDedup.
-    const dup = checkOutboundDup(channelId || 'current', text)
+    // thread_ts is part of the dedup key: the same text to the same channel
+    // but a DIFFERENT thread is a legitimate second send, not a loop.
+    const dup = checkOutboundDup(`${channelId || 'current'}${thread_ts ? `#${thread_ts}` : ''}`, text)
     if (dup.duplicate) return { content: [{ type: 'text', text: dup.receipt }] }
-    const resultText = await sendReply({ channelId, text })
+    const resultText = await sendReply({ channelId, text, thread_ts })
     return { content: [{ type: 'text', text: resultText }] }
   }
 
@@ -440,7 +453,16 @@ async function handleInboundMessage(event, opts = {}) {
   const sender = await resolveSender(event.user, opts)
   const text = (event.text || '').trim()
   const content = text ? text : '[empty message]'
-  const meta = { sender, channelId: event.channel, authorId: event.user || event.bot_id || '', timestamp: localNow() }
+  // messageTs/threadTs (2026-08-11, Mino): expose the raw Slack ts so the
+  // agent can thread replies. threadTs is set only when the inbound message
+  // itself lives in a thread -- reply targeting rule: use threadTs when
+  // present (stay in the existing thread), else messageTs (start a thread
+  // under the message that called you). ISO timestamp alone cannot identify
+  // a thread parent; chat.postMessage needs the ts string verbatim.
+  const meta = {
+    sender, channelId: event.channel, authorId: event.user || event.bot_id || '', timestamp: localNow(),
+    messageTs: event.ts || '', threadTs: event.thread_ts || '',
+  }
 
   await notify({ content, meta })
   return { content, meta }
@@ -635,6 +657,7 @@ export {
   handleInboundMessage, isBotEvent, isIgnorableSubtype,
   createLivenessGate,
   sendReply, sendFile, readHistory,
+  ReplyArgs, SLACK_TS_RE,
   toSlackTs,
   resolveSenderName,
   validateBotToken, validateAppToken,

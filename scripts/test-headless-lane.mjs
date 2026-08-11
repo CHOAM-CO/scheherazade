@@ -76,6 +76,17 @@ console.log('\n1. <channel> tag matches stop-reply-guard\'s exact parser')
   const evt = JSON.parse(renderUserEvent({ content: 'hello', meta: { channelId: 'in-app' } }))
   assert(evt.type === 'user' && evt.message.role === 'user' && evt.message.content[0].type === 'text',
     'renderUserEvent wraps the tag in a stream-json user event')
+
+  // Slack thread attrs (2026-08-11): rendered only when supplied, and the
+  // guard's parser must still extract channelId/body with them present.
+  const threaded = renderChannelTag({ content: 'in thread', meta: { channelId: 'C1', messageTs: '1786414200.000010', threadTs: '1786414183.323289' } })
+  assert(threaded.includes('messageTs="1786414200.000010"') && threaded.includes('threadTs="1786414183.323289"'),
+    'messageTs/threadTs render as tag attributes when supplied')
+  const pT = threaded.match(guardRegex)
+  assert(pT && pT[1] === 'C1' && pT[2] === 'in thread', 'guard regex still parses a tag carrying thread attrs')
+  const plain = renderChannelTag({ content: 'hi', meta: { channelId: 'C1' } })
+  assert(!plain.includes('messageTs') && !plain.includes('threadTs'),
+    'non-Slack tags are byte-identical: no thread attrs when meta lacks them')
 }
 
 // ── 2. lane E2E with a fake claude ─────────────────────────────────────────

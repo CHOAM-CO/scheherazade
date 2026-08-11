@@ -49,7 +49,7 @@ const {
   chunkText, REPLY_CHUNK_SIZE,
   handleInboundMessage, isBotEvent, isIgnorableSubtype,
   createLivenessGate,
-  sendReply, sendFile, readHistory,
+  sendReply, sendFile, readHistory, ReplyArgs,
   toSlackTs,
   resolveSenderName,
   validateBotToken, validateAppToken,
@@ -166,6 +166,42 @@ console.log('\n(c) reply chunking boundary (4000-char budget)')
   check('last chunk carries the remainder (1 char)', posted[2].text.length === 1, posted[2].text.length)
   check('result reports the chunk count', result.includes('(3 messages)'), result)
   check('result carries the delivered_channel= receipt line', result.includes(`delivered_channel=${HOME_ID}`), result)
+}
+
+// ── (c2) Slack thread support (2026-08-11, Mino: thread replies) ───────────
+console.log('\n(c2) thread_ts in/out')
+{
+  // inbound: raw Slack ts exposed; threadTs only when the message is threaded
+  let captured = null
+  const topLevel = { type: 'message', channel: HOME_ID, user: 'U123', text: 'top', ts: '1786414183.323289' }
+  await handleInboundMessage(topLevel, { resolveSender: async () => 'T', notify: async (p) => { captured = p } })
+  check('meta.messageTs carries the raw Slack ts', captured?.meta?.messageTs === '1786414183.323289', captured?.meta?.messageTs)
+  check('meta.threadTs empty for a top-level message', captured?.meta?.threadTs === '', JSON.stringify(captured?.meta?.threadTs))
+
+  const inThread = { type: 'message', channel: HOME_ID, user: 'U123', text: 'threaded', ts: '1786414200.000010', thread_ts: '1786414183.323289' }
+  await handleInboundMessage(inThread, { resolveSender: async () => 'T', notify: async (p) => { captured = p } })
+  check('meta.threadTs carries the thread parent ts', captured?.meta?.threadTs === '1786414183.323289', captured?.meta?.threadTs)
+  check('meta.messageTs is the reply message own ts', captured?.meta?.messageTs === '1786414200.000010', captured?.meta?.messageTs)
+}
+{
+  // outbound: thread_ts rides on EVERY chunk; absent when not passed
+  const posted = []
+  const seam = { postMessage: async (a) => { posted.push(a); return { ok: true } }, fetchFn: async (id) => id, lastId: null, homeId: HOME_ID }
+  const result = await sendReply({ channelId: undefined, text: 'y'.repeat(4001), thread_ts: '1786414183.323289' }, seam)
+  check('threaded reply posts once per chunk', posted.length === 2, posted.length)
+  check('every chunk carries the same thread_ts', posted.every((p) => p.thread_ts === '1786414183.323289'), JSON.stringify(posted.map((p) => p.thread_ts)))
+  check('receipt names the thread', result.includes('thread 1786414183.323289'), result)
+
+  posted.length = 0
+  await sendReply({ channelId: undefined, text: 'plain' }, seam)
+  check('un-threaded reply has NO thread_ts key at all', posted.length === 1 && !('thread_ts' in posted[0]), JSON.stringify(posted[0]))
+}
+{
+  // tool-boundary validation: ISO dates / invented values fail loud
+  check('ReplyArgs accepts a valid Slack ts', ReplyArgs.safeParse({ text: 'x', thread_ts: '1786414183.323289' }).success === true)
+  check('ReplyArgs rejects an ISO date as thread_ts', ReplyArgs.safeParse({ text: 'x', thread_ts: '2026-08-11T11:17:00+09:00' }).success === false)
+  check('ReplyArgs rejects a truncated ts', ReplyArgs.safeParse({ text: 'x', thread_ts: '1786414183' }).success === false)
+  check('ReplyArgs still fine with no thread_ts', ReplyArgs.safeParse({ text: 'x' }).success === true)
 }
 
 // ── (d) bad token -> failure marker distinguishes bot vs app ───────────────

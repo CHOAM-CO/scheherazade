@@ -214,8 +214,14 @@ export function renderChannelTag({ content, meta = {} }) {
     `channelId="${escapeAttr(meta.channelId || 'in-app')}"`,
     `authorId="${escapeAttr(meta.authorId || '')}"`,
     `timestamp="${escapeAttr(meta.timestamp || '')}"`,
-  ].join(' ')
-  return `<channel ${attrs}>${String(content == null ? '' : content)}</channel>`
+  ]
+  // Slack thread support (2026-08-11): raw Slack ts attrs, rendered only
+  // when the backend supplied them so Discord/Telegram/in-app tags are
+  // byte-identical to before. stop-reply-guard's [^>]* attribute scan is
+  // order/extra-attr tolerant, so appending is contract-safe.
+  if (meta.messageTs) attrs.push(`messageTs="${escapeAttr(meta.messageTs)}"`)
+  if (meta.threadTs) attrs.push(`threadTs="${escapeAttr(meta.threadTs)}"`)
+  return `<channel ${attrs.join(' ')}>${String(content == null ? '' : content)}</channel>`
 }
 
 export function renderUserEvent(payload) {
