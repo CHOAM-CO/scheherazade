@@ -22,7 +22,7 @@ npm run dist          # electron-builder --mac dmg --publish never
 ```
 
 - pre/postdist run `scripts/test-packaging.mjs`; postdist must be green now.
-- Artifact: `dist/Scheherazade-<version>-arm64.dmg`.
+- Artifact: `release/Scheherazade-<version>-arm64.dmg`.
 
 ## 2. Build — Windows (magi-win over ssh)
 
@@ -30,9 +30,9 @@ npm run dist          # electron-builder --mac dmg --publish never
 # sync exactly what git knows about (no working-tree strays):
 git archive HEAD | ssh -o ServerAliveInterval=15 magi-win "cd C:/Users/minom/sch-build && tar -xf -"
 ssh -o ServerAliveInterval=15 magi-win "cd C:/Users/minom/sch-build && npm install && npm run dist:win"
-scp magi-win:C:/Users/minom/sch-build/dist/Scheherazade-Setup-<version>.exe dist/
-scp "magi-win:C:/Users/minom/sch-build/dist/latest.yml" dist/
-scp "magi-win:C:/Users/minom/sch-build/dist/Scheherazade-Setup-<version>.exe.blockmap" dist/
+scp magi-win:C:/Users/minom/sch-build/release/Scheherazade-Setup-<version>.exe dist/
+scp "magi-win:C:/Users/minom/sch-build/release/latest.yml" dist/
+scp "magi-win:C:/Users/minom/sch-build/release/Scheherazade-Setup-<version>.exe.blockmap" dist/
 ```
 
 Gotchas learned in the field:
@@ -48,13 +48,13 @@ Two repos get the release, one gets the update feed:
 ```sh
 # canonical (private, code + provenance):
 gh release create v<version> --repo CHOAM-CO/scheherazade \
-  dist/Scheherazade-<version>-arm64.dmg dist/Scheherazade-Setup-<version>.exe \
+  release/Scheherazade-<version>-arm64.dmg release/Scheherazade-Setup-<version>.exe \
   --title "v<version>" --notes-file <notes>
 
 # distribution + UPDATE FEED (public — this is what installed apps poll):
 gh release create v<version> --repo Mino-is-me/scheherazade-releases \
-  dist/Scheherazade-<version>-arm64.dmg dist/Scheherazade-Setup-<version>.exe \
-  dist/latest.yml "dist/Scheherazade-Setup-<version>.exe.blockmap" \
+  release/Scheherazade-<version>-arm64.dmg release/Scheherazade-Setup-<version>.exe \
+  release/latest.yml "release/Scheherazade-Setup-<version>.exe.blockmap" \
   --title "v<version>" --notes-file <notes>
 ```
 
