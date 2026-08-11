@@ -477,8 +477,21 @@ function main() {
         setTimeout(() => { if (!childExited) child.kill('SIGKILL') }, 10_000).unref()
       }
     } else if (e.type === 'assistant') {
+      // Turn transcript in the log ring (0.1.4, Mino: "log는 log지 에러메세지
+      // 창이 아니야" -- the Logs page is where turn detail belongs, not an
+      // error banner). One line per tool call (name + a short arg preview)
+      // and per text block (first 200 chars): enough to follow what the
+      // agent actually did, without dumping whole messages into the ring.
+      // Local-only surface -- the ring lives in this process and the Logs
+      // page; nothing leaves the machine.
       for (const c of (e.message && e.message.content) || []) {
-        if (c.type === 'tool_use') debugLog(`tool: ${c.name}`)
+        if (c.type === 'tool_use') {
+          let argPreview = ''
+          try { argPreview = JSON.stringify(c.input).slice(0, 160) } catch { /* unserializable input */ }
+          log(`turn> tool: ${c.name} ${argPreview}`)
+        } else if (c.type === 'text' && c.text && c.text.trim()) {
+          log(`turn> agent: ${c.text.trim().replace(/\s*\n+\s*/g, ' ⏎ ').slice(0, 200)}`)
+        }
       }
     }
   })
@@ -534,6 +547,9 @@ function main() {
         // bracket a turn in the log, so "model was fast, app was slow"
         // becomes measurable instead of vibes.
         log(`inbound -> stdin (${content.length} chars, sender=${(payload.meta && payload.meta.sender) || '?'})`)
+        // Transcript symmetry (0.1.4): the user side of the turn, same
+        // 200-char preview discipline as the `turn> agent:` lines above.
+        log(`turn> user: ${String(content).trim().replace(/\s*\n+\s*/g, ' ⏎ ').slice(0, 200)}`)
       } catch (err) {
         log(`stdin write failed: ${err.message}`)
         return send(503, { error: 'stdin write failed' })

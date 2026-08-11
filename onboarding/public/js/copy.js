@@ -831,6 +831,9 @@ window.COPY = {
     attachNoVision: "Heads up: the current model can't view images, so the agent will only know a file was attached.",
     // Vision stand-in landed (0.0.56): same warning class, better outcome.
     attachCaptioned: "The current model can't view images, so a helper vision model described it for the agent.",
+    // Lane status chip (0.1.4): states capability, never apologizes for it.
+    laneChipVisionYes: 'sees images',
+    laneChipVisionNo: 'no image vision · helper describes',
   },
 
   // AUTHORED (v0.0.20) -- session log viewer (Mino 07-16: 개발 중 앱이

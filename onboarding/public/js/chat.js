@@ -523,9 +523,25 @@
   // could be stale, and a false block is worse than a soft warning.
   let visionState = 'unknown'
   let visionWarned = false
+  // Lane status chip (0.1.4, PO item #3): show which model/provider this
+  // chat is riding and whether it can see images. The chip is populated
+  // from the SAME resolve pass the markers use, so it can never disagree
+  // with the behavior it describes.
+  function renderLaneChip(spawn) {
+    const chip = $('ct-lane-chip')
+    if (!chip) return
+    const model = String((spawn && spawn.model) || '').replace(/:.*$/, '')
+    if (!model) { chip.hidden = true; return }
+    const provider = String((spawn && spawn.provider) || '')
+    const vis = visionState === 'yes' ? C.laneChipVisionYes : C.laneChipVisionNo
+    chip.textContent = `${model}${provider ? ` · ${provider}` : ''} · ${vis}`
+    chip.hidden = false
+  }
   async function resolveVisionState() {
+    let spawnSeen = null
     try {
       const spawn = (await window.api('/api/agent/spawn-info')).spawn
+      spawnSeen = spawn
       const provider = String((spawn && spawn.provider) || '')
       const model = String((spawn && spawn.model) || '').replace(/:.*$/, '') // strip :tag
       // Mirror of http-server.cjs's laneVision -- change both together.
@@ -533,10 +549,14 @@
       // else defaults to NO (server attaches a Gemma caption) unless the
       // model is on the known-vision list. No 'unknown' state -- its marker
       // invited a Read-tool image read that poisoned non-vision transcripts.
-      if (/^claude/.test(provider) || /^claude/.test(model) || provider === 'chatgpt') { visionState = 'yes'; return }
-      const VISION_YES = new Set(['kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'gemma4', 'qwen3.5', 'minimax-m3', 'mistral-large-3'])
-      visionState = VISION_YES.has(model) ? 'yes' : 'no'
+      if (/^claude/.test(provider) || /^claude/.test(model) || provider === 'chatgpt') {
+        visionState = 'yes'
+      } else {
+        const VISION_YES = new Set(['kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'gemma4', 'qwen3.5', 'minimax-m3', 'mistral-large-3'])
+        visionState = VISION_YES.has(model) ? 'yes' : 'no'
+      }
     } catch { visionState = 'unknown' }
+    renderLaneChip(spawnSeen)
   }
 
   function markerFor(att) {

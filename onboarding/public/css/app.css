@@ -997,6 +997,20 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
   color: var(--fg-faint);
 }
 .chat-attach-chip button { padding: 0 0.15rem; }
+/* Lane status chip (0.1.4): same pill language as attach chips, lives in
+   the page header next to the title. */
+.chat-lane-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  font-size: 0.8rem;
+  color: var(--fg-faint);
+  margin-left: 0.6rem;
+  vertical-align: middle;
+  white-space: nowrap;
+}
 .chat-attach-img {
   display: block;
   max-width: min(20rem, 100%);
