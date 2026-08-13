@@ -2744,6 +2744,14 @@ const APP_VERSION = (() => {
 // the gauge shows "82% (as of 17:42)" instead of degrading to a bare
 // HTTP 429 -- an error should annotate a gauge, not replace it.
 let usageCache = null // { at, payload } -- last GOOD reading only
+// Failure cooldown (2026-08-13, win-tester field: Claude row stuck on a bare
+// "HTTP 429" -- screenshot receipt in MAGI research notes). Success has a 60s
+// TTL but failures had NONE, so every page entry / refresh click hit the
+// rate-limited endpoint again while it was telling us to back off -- the one
+// caller pattern that keeps a 429 a 429. A failed read now also arms a
+// cooldown; inside it the cached verdict (stale-good or the error) is served
+// without touching the network. Cleared by any successful read.
+let usageFailCooldown = null // { until, payload }
 
 // CLI-session token fallback (2026-08-04, Mino field: gauge stuck on
 // "HTTP 403"). The app-captured `claude setup-token` carries user:inference
@@ -2791,9 +2799,19 @@ function readCliSessionToken() {
 async function fetchClaudeSubscriptionUsage(opts = {}) {
   const now = Date.now()
   if (!opts.force && usageCache && now - usageCache.at < 60_000) return usageCache.payload
-  const failWith = (branch, detail) => {
-    if (usageCache) return { ...usageCache.payload, stale: true, staleReason: detail || branch }
-    return { ok: false, branch, ...(detail ? { detail } : {}) }
+  // Failure cooldown honors force only PARTIALLY: a manual refresh may retry
+  // early, but never inside the first 15s -- a user hammering ↻ against a
+  // rate-limited endpoint must not be the reason it stays rate-limited.
+  if (usageFailCooldown && now < usageFailCooldown.until && (!opts.force || now < usageFailCooldown.hardUntil)) {
+    return usageFailCooldown.payload
+  }
+  const failWith = (branch, detail, retryAfterMs) => {
+    const payload = usageCache
+      ? { ...usageCache.payload, stale: true, staleReason: detail || branch }
+      : { ok: false, branch, ...(detail ? { detail } : {}) }
+    const backoffMs = Math.max(60_000, Number(retryAfterMs) || 0)
+    usageFailCooldown = { until: now + backoffMs, hardUntil: now + 15_000, payload }
+    return payload
   }
   const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
   const hit = async (token) => {
@@ -2817,19 +2835,35 @@ async function fetchClaudeSubscriptionUsage(opts = {}) {
   let out
   try {
     if (token) out = await hit(token)
-    // setup-token scope-refused (401/403) or absent -> CLI session fallback
-    if (!out || out.res.status === 401 || out.res.status === 403) {
+    // setup-token refused or absent -> CLI session fallback. Widened from
+    // 401/403-only to ANY non-ok (2026-08-13, win-tester stuck on "HTTP
+    // 429"): the endpoint's refusal status for a scope-limited token is an
+    // upstream detail that has already shifted once (403 field case
+    // 2026-08-04), and a 429 against the app token says nothing about the
+    // CLI session's own budget -- they are different credentials. The
+    // failure cooldown above keeps this from doubling traffic while the
+    // endpoint is genuinely down.
+    if (!out || !out.res.ok) {
       const cliToken = readCliSessionToken()
       if (cliToken) {
-        out = await hit(cliToken)
-        source = 'cli-session'
+        const retry = await hit(cliToken)
+        // keep the better answer: the fallback only replaces the app-login
+        // read if it actually succeeded (a 429 on both must report the
+        // FIRST credential's status, not hide it behind the second's).
+        if (retry.res.ok || !out) {
+          out = retry
+          source = 'cli-session'
+        }
       }
     }
   } catch (err) {
     return failWith('unreachable', err.message)
   }
   if (!out) return failWith('no_token')
-  if (!out.res.ok) return failWith('http_error', `HTTP ${out.res.status}`)
+  if (!out.res.ok) {
+    const ra = Number(out.res.headers && out.res.headers.get && out.res.headers.get('retry-after'))
+    return failWith('http_error', `HTTP ${out.res.status}`, Number.isFinite(ra) ? ra * 1000 : 0)
+  }
   const body = out.body || {}
   const payload = {
     ok: true,
@@ -2841,6 +2875,7 @@ async function fetchClaudeSubscriptionUsage(opts = {}) {
     asOf: new Date(now).toISOString(),
   }
   usageCache = { at: now, payload }
+  usageFailCooldown = null
   return payload
 }
 
