@@ -52,20 +52,27 @@
     $('conn-providers-label').textContent = C.providersLabel
     // (subtitle removed in the 대공사 — the section label carries it now)
 
-    let available = []
+    // available=null means the config READ failed -- distinct from an empty
+    // list (loaded, nothing connected). Conflating them painted every provider
+    // "Not connected" on a transient /api/config blip, a false disconnected
+    // state (UI audit 2026-08-13). On a read failure the rows show a neutral
+    // "Status unavailable" instead of lying, and the auth buttons still work.
+    let available = null
     try {
       const cfg = cfgIn || await api('/api/config')
       available = Array.isArray(cfg.availableProviders) ? cfg.availableProviders : []
     } catch (err) {
       console.error(err)
     }
+    const loadFailed = available === null
 
     for (const provider of AUTH_PROVIDERS) {
       $(`conn-provider-${provider}-name`).textContent = C.providerNames[provider]
-      const connected = available.includes(provider)
+      const connected = !loadFailed && available.includes(provider)
       const statusEl = $(`conn-provider-${provider}-status`)
       const btn = $(`conn-provider-${provider}-btn`)
-      setChip(statusEl, connected ? 'ok' : '', connected ? C.providerConnected : C.providerNotConnected)
+      if (loadFailed) setChip(statusEl, '', C.providerStatusUnknown)
+      else setChip(statusEl, connected ? 'ok' : '', connected ? C.providerConnected : C.providerNotConnected)
       btn.textContent = C.providerAuthButton
       btn.classList.toggle('hidden', connected)
       btn.onclick = () => startAuth(provider, statusEl, btn)
@@ -502,8 +509,12 @@
   function initClaudeSubRow(available) {
     $('conn-provider-claude-name').textContent = C.claudeSubName
     const statusEl = $('conn-provider-claude-status')
-    const connected = available.includes('claude-subscription')
-    setChip(statusEl, connected ? 'ok' : '', connected ? C.providerConnected : C.providerNotConnected)
+    // null available = config read failed -> neutral, not a false "Not
+    // connected" (same fix as the provider rows above).
+    const loadFailed = !Array.isArray(available)
+    const connected = !loadFailed && available.includes('claude-subscription')
+    if (loadFailed) setChip(statusEl, '', C.providerStatusUnknown)
+    else setChip(statusEl, connected ? 'ok' : '', connected ? C.providerConnected : C.providerNotConnected)
     const btn = $('conn-provider-claude-btn')
     const cancelBtn = $('conn-claude-cancel')
     const flow = $('conn-claude-flow')
@@ -1659,7 +1670,7 @@
     // triggered later by events still fetch their own fresh copy.
     let cfg = null
     try { cfg = await api('/api/config') } catch (err) { console.error(err) }
-    initClaudeSubRow(Array.isArray(cfg && cfg.availableProviders) ? cfg.availableProviders : [])
+    initClaudeSubRow(cfg && Array.isArray(cfg.availableProviders) ? cfg.availableProviders : null)
     renderChatgptReceipt()
     renderMcpConnectors()
 

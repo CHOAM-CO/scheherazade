@@ -1284,6 +1284,8 @@ window.COPY = {
     providerNames: { chatgpt: 'ChatGPT (Codex)', ollama: 'Ollama Cloud', custom: 'Custom proxy' },
     providerConnected: 'Connected',
     providerNotConnected: 'Not connected',
+    providerStatusUnknown: 'Status unavailable',
+    providerConfigLoadError: "Couldn't read connection status — check Logs and retry.",
     providerAuthButton: 'Authenticate',
     providerTestButton: 'Test',
     providerReloginButton: 'Re-login',

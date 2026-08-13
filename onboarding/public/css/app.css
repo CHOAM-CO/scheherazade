@@ -53,6 +53,16 @@
   --danger-hover: #c25850;
   --success: #5fae7c;
   --warn: #d9a15f;
+  /* Status-indicator palette (2026-08-13, Mino: green/orange/red only, and the
+     old --warn tan read jaundiced -- "좀 더 주황색으로, 애플 디자인시트 참고").
+     Tuned to Apple's dark-mode system colors so the traffic-light dots read
+     crisp on the dark shell. Kept SEPARATE from the muted --success/--danger
+     the filled buttons use (white text needs the muted greens/reds for
+     contrast); these are for the small dots + the busy state where vividness
+     is the point. */
+  --status-green: #30d158;   /* Apple systemGreen (dark) */
+  --status-orange: #ff9f0a;  /* Apple systemOrange (dark) */
+  --status-red: #ff453a;     /* Apple systemRed (dark) */
   /* Radius vocabulary — exactly three values (design-research 2026-08:
      "don't invent a 4th"). s = buttons/inputs, m = cards/panels, pill. */
   --radius-s: 6px;
@@ -257,20 +267,20 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
   background: var(--fg-faint); flex: none; transition: background 0.15s ease;
 }
 .nav-status .status-line.success::before {
-  background: var(--success); box-shadow: 0 0 0 3px rgb(95 174 124 / 0.18);
+  background: var(--status-green); box-shadow: 0 0 0 3px rgb(48 209 88 / 0.18);
 }
 .nav-status .status-line.failure::before {
-  background: var(--danger); box-shadow: 0 0 0 3px rgb(217 105 95 / 0.18);
+  background: var(--status-red); box-shadow: 0 0 0 3px rgb(255 69 58 / 0.18);
 }
 .nav-status .status-line.pending::before {
-  background: var(--warn); animation: status-dot-pulse 1.3s ease-in-out infinite;
+  background: var(--status-orange); animation: status-dot-pulse 1.3s ease-in-out infinite;
 }
 @keyframes status-dot-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgb(217 161 95 / 0.5); }
-  50% { box-shadow: 0 0 0 4px rgb(217 161 95 / 0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgb(255 159 10 / 0.5); }
+  50% { box-shadow: 0 0 0 4px rgb(255 159 10 / 0); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .nav-status .status-line.pending::before { animation: none; box-shadow: 0 0 0 3px rgb(217 161 95 / 0.18); }
+  .nav-status .status-line.pending::before { animation: none; box-shadow: 0 0 0 3px rgb(255 159 10 / 0.18); }
 }
 
 /* Agent lifecycle buttons: the ACTION must read at a glance, not just the
@@ -286,11 +296,12 @@ button.nav-ctl.is-stop {
 }
 button.nav-ctl.is-stop:hover:not(:disabled) { background: var(--danger); color: #fff; }
 button.nav-ctl.is-busy {
-  /* Amber, not blue: the status palette is green/red/orange only, and a blue
-     busy state next to a green Start reads ambiguous (Mino 2026-08-13). */
+  /* Apple systemOrange, not blue: the status palette is green/orange/red only,
+     and a blue busy state next to a green Start reads ambiguous (Mino
+     2026-08-13). Orange, not the old jaundiced tan. */
   opacity: 1; cursor: default; color: transparent !important;
-  background: var(--warn) !important; border-color: transparent !important;
-  box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.35), 0 0 0 2px rgb(217 161 95 / 0.4);
+  background: var(--status-orange) !important; border-color: transparent !important;
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.35), 0 0 0 2px rgb(255 159 10 / 0.4);
 }
 button.nav-ctl.is-busy::after {
   content: ''; position: absolute; inset: 0; margin: auto;
