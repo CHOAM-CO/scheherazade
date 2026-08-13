@@ -2689,6 +2689,81 @@ function createOnboardingServer(onOnboardingComplete, agentControls) {
   })
 }
 
+// ── dynamic Claude model catalog (2026-08-13, Mino: "모델 리스트 하드코딩
+// 말고 더 좋은 방법 없냐? 다이나믹하게 긁어오는법 있음 좋을듯") ────────────
+// The claude CLI binary carries its own model table as literal
+// `"<id>",context:{window:<n>...}` entries -- the same table the static
+// contextCapForModel pins below were hand-extracted from (2.1.211). Scanning
+// the binary at runtime makes the Claude model list AND its context caps
+// follow whatever CLI is actually installed: a new model ships in the next
+// CLI update, not in a Scheherazade release. Chunked scan (8MB + 256B
+// overlap) so a ~200MB binary never lands in memory whole; result cached by
+// (path, mtime) so the cost is one scan per binary version. Extraction
+// failure or an id-less binary returns [] -- callers fall back to the static
+// catalog/pins, never to an empty picker.
+let claudeBinModelsCache = null // { key, models: [{id, window}] }
+function extractClaudeModelsFromBin(binPath) {
+  if (!binPath) return []
+  let stat
+  try { stat = fs.statSync(binPath) } catch { return [] }
+  const key = `${binPath}:${stat.mtimeMs}:${stat.size}`
+  if (claudeBinModelsCache && claudeBinModelsCache.key === key) return claudeBinModelsCache.models
+  const found = new Map()
+  // window literals appear both expanded ("200000"/"200_000") and in
+  // exponent form ("1e6") -- the exponent tail must be INSIDE the capture
+  // or "1e6" reads as window:1 (caught live on the first scan, 2026-08-13).
+  // TWO record shapes coexist in the 2.1.x binary (both live-verified on
+  // this box the same day):
+  //   legacy: "claude-opus-5",context:{window:1e6,...
+  //   new:    {id:"claude-fable-5",family:"fable",...,context:{window:1e6,...
+  // The new-shape lookahead is bounded (records run ~600-800 chars) so an
+  // id whose record lacks a context block cannot steal the NEXT record's
+  // window from a kilobyte away.
+  const RES = [
+    /"(claude-[a-z0-9.-]+)",context:\{window:([0-9][0-9_]*(?:e[0-9]+)?)/g,
+    /id:"(claude-[a-z0-9.-]+)"[^]{0,900}?context:\{window:([0-9][0-9_]*(?:e[0-9]+)?)/g,
+  ]
+  try {
+    const fd = fs.openSync(binPath, 'r')
+    try {
+      const CHUNK = 8 * 1024 * 1024
+      const OVERLAP = 2048 // > one full new-shape record (~800 chars), so a boundary-split record still matches in the next chunk
+      const buf = Buffer.alloc(CHUNK + OVERLAP)
+      let pos = 0
+      while (pos < stat.size) {
+        const readStart = Math.max(0, pos - OVERLAP)
+        const n = fs.readSync(fd, buf, 0, buf.length, readStart)
+        if (n <= 0) break
+        const text = buf.toString('latin1', 0, n)
+        for (const re of RES) {
+          let m
+          while ((m = re.exec(text)) !== null) {
+            const raw = m[2]
+            const window = raw.includes('e') ? Number(raw) : Number(raw.replace(/_/g, ''))
+            // < 1000 = a mis-parse or a non-context entry, never a real window.
+            // Same id can appear in BOTH table shapes with DIFFERENT windows
+            // (live case: opus-4-6 = 1e6 in the legacy record, 200000 in a
+            // second one) -- keep the LARGEST seen, which matches the
+            // hand-verified claude-cli-table pins for every overlapping id.
+            if (Number.isFinite(window) && window >= 1000) {
+              found.set(m[1], Math.max(window, found.get(m[1]) || 0))
+            }
+          }
+          re.lastIndex = 0
+        }
+        pos = readStart + n
+        if (n < buf.length) break
+      }
+    } finally { fs.closeSync(fd) }
+  } catch (err) {
+    console.error(`[scheherazade/onboarding] claude binary model scan failed (static catalog stands): ${err.message}`)
+    return []
+  }
+  const models = [...found.entries()].map(([id, window]) => ({ id, window })).sort((a, b) => a.id.localeCompare(b.id))
+  claudeBinModelsCache = { key, models }
+  return models
+}
+
 // Model → context cap. Two provenance tiers, labeled honestly in the
 // payload (v0.0.22):
 //   - claude-cli-table: extracted from the claude CLI 2.1.211 binary's own
@@ -2704,8 +2779,16 @@ function createOnboardingServer(onOnboardingComplete, agentControls) {
 // Unknown model → cap null, UI shows occupancy without a percentage.
 function contextCapForModel(model) {
   if (typeof model !== 'string' || !model) return { cap: null, capSource: null }
-  const CLAUDE_1M = new Set(['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6'])
+  const CLAUDE_1M = new Set(['claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6'])
   const base = model.replace(/\[1m\]$/, '')
+  // Live tier first (2026-08-13): whatever the last binary scan saw is the
+  // installed CLI's own table -- fresher than any hand-pinned entry below.
+  // A '[1m]' suffix opts OUT of this tier (the scan does not carry the
+  // 1m-beta flags, and a scanned 200K base would under-report a 1M lane).
+  if (!/\[1m\]$/.test(model) && claudeBinModelsCache) {
+    const scanned = claudeBinModelsCache.models.find((m) => m.id === base)
+    if (scanned) return { cap: scanned.window, capSource: 'claude-cli-binary' }
+  }
   if (CLAUDE_1M.has(base)) return { cap: 1_000_000, capSource: 'claude-cli-table' }
   if (/^claude-(opus-4-[015]|sonnet-4-[05]|haiku-4-5)/.test(base)) return { cap: 200_000, capSource: 'claude-cli-table' }
   if (/^gpt-5\.6/.test(base)) return { cap: 372_000, capSource: 'codex-as-api-table' }
@@ -3163,6 +3246,7 @@ const staticCtx = {
   getSetupTokenSession,
   // usage gauge + update check (2026-08-04 tester requests)
   fetchClaudeSubscriptionUsage, fetchCodexUsage, fetchOllamaUsage, checkForUpdate,
+  extractClaudeModelsFromBin,
   readAppearance, writeAppearance, AppearanceModel,
   // vision stand-in captioning (0.0.56)
   laneVision, fetchImageCaption,
@@ -3211,6 +3295,8 @@ module.exports = {
   AGENT_NAME,
   DATA_HOME,
   contextCapForModel,
+  // Exported for test pins (dynamic model catalog, 2026-08-13).
+  extractClaudeModelsFromBin,
   // Exported for test pins (vision stand-in table, 0.0.56) -- pure fn.
   laneVision,
   readAgentConfig,

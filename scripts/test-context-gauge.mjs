@@ -144,6 +144,30 @@ console.log('cap table:')
     check(`cap(${model}) = ${cap}/${src}`, got.cap === cap && got.capSource === src, JSON.stringify(got))
   }
 
+  // ── dynamic model extraction from the CLI binary (2026-08-13) ─────────
+  // Pins both record shapes seen live in the 2.1.x binary, the 1e6 exponent
+  // parse (a bare [0-9] capture read window:1e6 as 1 on the first live
+  // scan), and the same-id-two-tables conflict (opus-4-6: 1e6 legacy /
+  // 200000 new -> largest wins, matching the hand-verified pins).
+  {
+    const { extractClaudeModelsFromBin } = require_(path.join(ROOT, 'onboarding', 'http-server.cjs'))
+    const fake = path.join(mem, "fake-claude-bin")
+    fs.writeFileSync(fake, [
+      'garbage"claude-opus-4-6",context:{window:1e6,native_1m:!0}garbage',
+      '"claude-opus-4-5",context:{window:200000,supports_1m_beta:!0}',
+      '{id:"claude-fable-5",family:"fable",display_name:"Fable 5",provider_ids:{first_party:"claude-fable-5"},context:{window:1e6,native_1m:!0}}',
+      '{id:"claude-opus-4-6",family:"opus",context:{window:200000}}', // conflicting second table
+      '"claude-bogus",context:{window:7}', // sub-1000 = mis-parse, dropped
+    ].join('\n'))
+    const models = extractClaudeModelsFromBin(fake)
+    const byId = Object.fromEntries(models.map((m) => [m.id, m.window]))
+    check('legacy-shape record extracted with 1e6 parsed', byId['claude-opus-4-5'] === 200000 && byId['claude-opus-4-6'] === 1000000)
+    check('new-shape (id:"...") record extracted', byId['claude-fable-5'] === 1000000)
+    check('same-id conflict resolves to the largest window', byId['claude-opus-4-6'] === 1000000)
+    check('sub-1000 window dropped as mis-parse', !('claude-bogus' in byId))
+    check('missing binary -> [] (static catalog stands)', extractClaudeModelsFromBin(path.join(mem, "nope")).length === 0)
+  }
+
   // ── every model the user can PICK resolves to a cap (2026-08-04) ──────
   // The list above is hand-written, which makes it a THIRD copy of the same
   // fact (connectors.js's MODEL_CATALOG, http-server.cjs's cap table, here) --
@@ -174,7 +198,11 @@ console.log('cap table:')
     // returning null. Asserting a cap for those would be inventing one, which
     // is the opposite of what this cap table is for. Only the two families we
     // have receipts for are required to resolve.
-    const receiptsBacked = id.startsWith('claude-') || id.startsWith('gpt-')
+    // gpt-oss is an OLLAMA catalog tag (default row 2026-08-13), not a
+    // codex-family id -- same '^gpt' ambiguity channel-slack's laneHasVision
+    // hit the same day (see its /^gpt-\d/ comment). Receipts-backed means
+    // first-party claude + codex gpt-<digit> only.
+    const receiptsBacked = id.startsWith('claude-') || /^gpt-\d/.test(id)
     if (!receiptsBacked) continue
     const got = contextCapForModel(id)
     check(`catalog model '${id}' resolves to a cap (else its gauge silently disappears)`, got.cap !== null, JSON.stringify(got))

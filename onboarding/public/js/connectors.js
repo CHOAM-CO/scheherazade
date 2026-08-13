@@ -718,6 +718,11 @@
   const OLLAMA_URL_SENTINEL = '__ollama_url__'
   const MODEL_CATALOG = [
     { id: 'claude-fable-5', label: 'Claude Fable 5', group: 'Claude', providers: CLAUDE_PROVIDERS },
+    // opus-5 added 2026-08-13 (Mino: "FABLE 말고 OPUS 5 쓰고 싶은데 옵션에
+    // 안보여서") -- id + 1M window verified against the installed CLI
+    // binary's own model table the same day (see /api/model-catalog/claude);
+    // the id also runs live in the MAGI fleet daily.
+    { id: 'claude-opus-5', label: 'Claude Opus 5', group: 'Claude', providers: CLAUDE_PROVIDERS },
     { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', group: 'Claude', providers: CLAUDE_PROVIDERS },
     { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', group: 'Claude', providers: CLAUDE_PROVIDERS },
     { id: 'claude-sonnet-5', label: 'Claude Sonnet 5', group: 'Claude', providers: CLAUDE_PROVIDERS },
@@ -848,6 +853,41 @@
     } finally {
       setAgentConfigDisabled(false)
     }
+  }
+
+  // Dynamic Claude rows (2026-08-13, Mino: "모델 리스트 하드코딩 말고
+  // 다이나믹하게"). The server scans the installed CLI binary's own model
+  // table; ids the static catalog does not know are spliced into the Claude
+  // group, so a model that ships in a CLI update appears here without an app
+  // release. Static rows keep their curated labels and order; dynamic rows
+  // get a generated label. One fetch per page load; every failure path
+  // leaves the static catalog exactly as it was.
+  let dynamicClaudeMerged = false
+  function claudeLabelOf(id) {
+    // claude-opus-4-8 -> "Claude Opus 4.8"; claude-haiku-4-5 -> "Claude Haiku 4.5"
+    const parts = id.replace(/^claude-/, '').split('-')
+    const words = []
+    for (let i = 0; i < parts.length; i++) {
+      if (/^\d/.test(parts[i])) { words.push(parts.slice(i).join('.')); break }
+      words.push(parts[i].charAt(0).toUpperCase() + parts[i].slice(1))
+    }
+    return `Claude ${words.join(' ')}`
+  }
+  async function mergeDynamicClaudeModels() {
+    if (dynamicClaudeMerged) return
+    dynamicClaudeMerged = true // one attempt per page load, success or not
+    let models = []
+    try {
+      const r = await api('/api/model-catalog/claude')
+      models = Array.isArray(r && r.models) ? r.models : []
+    } catch (err) { return } // route down = static catalog stands
+    const fresh = models.filter((m) => m && typeof m.id === 'string' && !MODEL_CATALOG.some((row) => row.id === m.id))
+    if (!fresh.length) return
+    // Splice after the last static Claude row so the group stays contiguous
+    // for the <optgroup> builder.
+    const lastClaudeIdx = MODEL_CATALOG.reduce((acc, row, i) => (row.group === 'Claude' ? i : acc), -1)
+    const rows = fresh.map((m) => ({ id: m.id, label: claudeLabelOf(m.id), group: 'Claude', providers: CLAUDE_PROVIDERS }))
+    MODEL_CATALOG.splice(lastClaudeIdx + 1, 0, ...rows)
   }
 
   function populateModelSelect(model) {
@@ -989,6 +1029,7 @@
     currentEffort = EFFORT_LEVELS.includes(cfg.EFFORT_LEVEL) ? cfg.EFFORT_LEVEL : EFFORT_DEFAULT
     availableProviders = Array.isArray(cfg.availableProviders) ? cfg.availableProviders.slice() : []
     if (currentProvider && !availableProviders.includes(currentProvider)) availableProviders.push(currentProvider)
+    await mergeDynamicClaudeModels() // no-op after the first call; static catalog stands on any failure
     populateModelSelect(currentModel)
     populateEffortSelect(currentEffort)
 

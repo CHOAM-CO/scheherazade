@@ -22,6 +22,7 @@ function createRoutes(staticCtx) {
     getBootstrapStatus, resolveBin, MANAGED_INSTALL_SUPPORTED, MANUAL_INSTALL_PAGES,
     getElectron, startBootstrap,
     fetchClaudeSubscriptionUsage, fetchCodexUsage, fetchOllamaUsage, checkForUpdate,
+    extractClaudeModelsFromBin,
     startClaudeCliInstall, getClaudeInstallStatus,
     readAppearance, writeAppearance, AppearanceModel,
     path, DATA_HOME,
@@ -146,6 +147,23 @@ function createRoutes(staticCtx) {
       // ollama = undocumented /api/usage probe (shape binds on first
       // real-key receipt). Each fetcher carries its own 60s cache +
       // stale-on-error; see their headers in http-server.cjs.
+      // Dynamic Claude model catalog (2026-08-13, Mino: "모델 리스트 하드코딩
+      // 말고 ... 다이나믹하게"). Scans the INSTALLED claude CLI binary's own
+      // model table (see extractClaudeModelsFromBin in http-server.cjs) --
+      // the picker's Claude group follows CLI updates instead of app
+      // releases. models:[] on any failure; the UI's static catalog is the
+      // fallback, so this route degrading NEVER empties the picker.
+      method: 'GET',
+      match: (pathname) => pathname === '/api/model-catalog/claude',
+      handler: async (req, res, callCtx) => {
+        const bin = callCtx && callCtx.agentControls && typeof callCtx.agentControls.resolveClaudeBin === 'function'
+          ? callCtx.agentControls.resolveClaudeBin()
+          : null
+        sendJson(res, 200, { ok: true, source: 'claude-cli-binary', bin: bin || null, models: extractClaudeModelsFromBin(bin) })
+        return
+      },
+    },
+    {
       method: 'GET',
       match: (pathname) => pathname === '/api/usage/claude',
       handler: async (req, res) => {
