@@ -125,10 +125,15 @@ console.log('cap table:')
   const require_ = createRequire(path.join(ROOT, 'package.json'))
   const { contextCapForModel } = require_(path.join(ROOT, 'onboarding', 'http-server.cjs'))
   const cases = [
-    ['gpt-5.6-luna', 372000, 'codex-as-api-table'],
-    ['gpt-5.6-sol', 372000, 'codex-as-api-table'],
-    ['gpt-5.6-terra', 372000, 'codex-as-api-table'],
+    // codex-as-api 0.6.5 table: every gpt-5.x slug is context_window 272000
+    // (re-verified live via /health, task #6 2026-08-13 — the old 372000 pin
+    // for the 5.6 family was unsubstantiated by any installed package).
+    ['gpt-5.6-luna', 272000, 'codex-as-api-table'],
+    ['gpt-5.6-sol', 272000, 'codex-as-api-table'],
+    ['gpt-5.6-terra', 272000, 'codex-as-api-table'],
+    ['gpt-5.6', 272000, 'codex-as-api-table'],
     ['gpt-5.5', 272000, 'codex-as-api-table'],
+    ['gpt-5.4', 272000, 'codex-as-api-table'],
     ['claude-fable-5', 1000000, 'claude-cli-table'],
     ['claude-opus-4-8', 1000000, 'claude-cli-table'],
     ['claude-opus-4-6', 1000000, 'claude-cli-table'],

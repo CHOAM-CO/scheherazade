@@ -2823,11 +2823,19 @@ function extractClaudeModelsFromBin(binPath) {
 //   - claude-cli-table: extracted from the claude CLI 2.1.211 binary's own
 //     model table (`"<id>",context:{window:...}` entries) — what the CLI
 //     ACTUALLY budgets autocompact against for these ids.
-//   - codex-as-api-table: the proxy's model table (openai/codex
-//     models.json@6ad0e943, codex-as-api 0.6.3) — the PROXY's real cap.
+//   - codex-as-api-table: the proxy's model table — the PROXY's real cap.
 //     The CLI does not know gpt ids, so its believed window (and therefore
 //     the autocompact trigger point) may be SMALLER than this; the gauge's
 //     occupancy number is exact either way, only pct is best-effort there.
+//     RE-VERIFIED against codex-as-api 0.6.5 (2026-08-13, task #6 upgrade):
+//     every gpt-5.x slug in model_capabilities_default now carries
+//     context_window: 272_000 (5.6 / 5.6-sol / 5.6-terra / 5.6-luna / 5.5 /
+//     5.4). Confirmed live, not just read: booting the 0.6.5 proxy in-process
+//     for gpt-5.6-sol and hitting /health returned {context_window: 272000,
+//     auto_compact_token_limit: 244800 (= 0.9 x 272k)}. The prior 372_000 pin
+//     for the 5.6 family was substantiated by NO installed package (0.5.2's
+//     table stopped at 5.5 and carried no window numbers at all) and made the
+//     gauge read ~27% emptier than the point the proxy actually compacts at.
 // Re-verify these pins on every codex-as-api upgrade (see docs/HISTORY.md
 // for the upgrade checklist) -- a version bump can silently move the table.
 // Unknown model → cap null, UI shows occupancy without a percentage.
@@ -2845,8 +2853,10 @@ function contextCapForModel(model) {
   }
   if (CLAUDE_1M.has(base)) return { cap: 1_000_000, capSource: 'claude-cli-table' }
   if (/^claude-(opus-4-[015]|sonnet-4-[05]|haiku-4-5)/.test(base)) return { cap: 200_000, capSource: 'claude-cli-table' }
-  if (/^gpt-5\.6/.test(base)) return { cap: 372_000, capSource: 'codex-as-api-table' }
-  if (/^gpt-5\.[245]/.test(base)) return { cap: 272_000, capSource: 'codex-as-api-table' }
+  // All gpt-5.x slugs codex-as-api 0.6.5 knows share context_window 272_000
+  // (see the provenance block above). Merged from the old split 5.6→372k /
+  // 5.[245]→272k pins once the 372k value was falsified against 0.6.5.
+  if (/^gpt-5\.[23456]/.test(base)) return { cap: 272_000, capSource: 'codex-as-api-table' }
   return { cap: null, capSource: null }
 }
 
@@ -3149,11 +3159,18 @@ let ollamaUsageCache = null // { at, payload } -- last GOOD reading only
 // stale-on-error: this is a dropdown filler, nothing here is worth a
 // per-page-load fetch or a hard failure -- [] on any error, the curated
 // static rows stand.
-// (Codex is deliberately NOT dynamic in this round: the installed
-// codex-as-api package (0.5.2) carries a model table that stops at
-// gpt-5.5 while the 5.6 family runs live via passthrough -- scanning it
-// would produce a WORSE list than the static catalog. Revisit when the
-// proxy package is upgraded.)
+// (Codex has NO dynamic catalog and structurally can't get one the way
+// Ollama does: codex-as-api (now 0.6.5, task #6) exposes no model list --
+// no JS export of its capability table, and the running proxy serves no
+// /v1/models route (only /health for the ONE configured model). The 0.5.2
+// "table stops at gpt-5.5" reason is gone -- 0.6.5's table now carries the
+// full 5.6 family -- but the table stays INTERNAL, so there is nothing to
+// fetch. The chatgpt rows therefore stay a curated static catalog
+// (connectors.js), and the context caps stay hand-pinned (contextCapForModel
+// above). What keeps the hand-pin from rotting on the next bump is a live
+// drift guard, NOT a runtime scan: scripts/test-codex-proxy-model.mjs boots
+// each catalog GPT model in-process and asserts the proxy's own /health
+// context_window still equals the pinned cap.)
 let ollamaCatalogCache = null // { at, names }
 async function fetchOllamaCloudCatalog(opts = {}) {
   const now = Date.now()

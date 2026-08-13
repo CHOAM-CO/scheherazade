@@ -14,6 +14,7 @@
 
 import { createRequire } from 'node:module'
 import path from 'node:path'
+import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -29,6 +30,20 @@ function ok(name, cond, detail = '') {
 function loadFresh() {
   try { delete require_.cache[require_.resolve('codex-as-api')] } catch {}
   return require_('codex-as-api')
+}
+
+async function healthOf(createApp) {
+  const srv = await new Promise((resolve, reject) => {
+    const s = createApp().listen(0, '127.0.0.1')
+    s.once('listening', () => resolve(s))
+    s.once('error', reject)
+  })
+  try {
+    const { port } = srv.address()
+    return await (await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(2000) })).json()
+  } finally {
+    await new Promise((resolve) => srv.close(resolve))
+  }
 }
 
 async function healthModel(createApp) {
@@ -87,6 +102,44 @@ ok('main.cjs sets CODEX_AS_API_MODEL BEFORE the require', mainSrc.indexOf('proce
 ok('main.cjs evicts the require cache per rebuild', mainSrc.includes("delete require.cache[require.resolve('codex-as-api')]"))
 ok('main.cjs gates on the /health model receipt (fail closed on mismatch)', mainSrc.includes('model passthrough FAILED'))
 ok('a model swap rebuilds the live proxy (codexProxyModel compared on ensure)', mainSrc.includes('codexProxyModel === desiredModel') && mainSrc.includes('codexProxyModel = desiredModel'))
+
+// ── context-cap drift guard (task #6, 2026-08-13) ───────────────────────────
+// codex-as-api ships no model-list export and no /v1/models route, so the
+// picker's GPT rows can't be fetched at runtime -- they stay a static catalog
+// (connectors.js) and the context caps stay hand-pinned (http-server.cjs
+// contextCapForModel). A hand-pin rots silently when a proxy bump moves the
+// table -- which is exactly what the old 372_000 pin did (0.5.2 had no window
+// numbers to check it against). This guard ties the pin to the LIVE proxy: it
+// boots each catalog GPT model in-process and asserts the proxy's OWN /health
+// context_window equals our pinned cap. CODEX_HOME points at an empty temp dir
+// so a machine's ~/.codex/config.toml (this dev Mac overrides model + effort)
+// can't skew the reading toward a per-machine override -- we want the package
+// default. No network, no ChatGPT call: /health reads config only.
+console.log('\n-- context-cap drift guard (proxy /health vs the hand-pinned cap)')
+{
+  const { contextCapForModel } = require_(path.join(ROOT, 'onboarding', 'http-server.cjs'))
+  const emptyHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-neutral-home-'))
+  const prevHome = process.env.CODEX_HOME
+  process.env.CODEX_HOME = emptyHome
+  try {
+    // Every gpt-* row the static catalog offers for the chatgpt provider.
+    const CATALOG_GPT = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']
+    for (const model of CATALOG_GPT) {
+      process.env.CODEX_AS_API_MODEL = model
+      const health = await healthOf(loadFresh().createApp)
+      const pinned = contextCapForModel(model)
+      ok(`${model}: proxy /health context_window === hand-pinned cap`,
+        health.context_window === pinned.cap,
+        `proxy=${health.context_window} pin=${pinned.cap} (a mismatch means the 0.6.x bump moved the table -- re-verify contextCapForModel)`)
+      ok(`${model}: cap source labeled codex-as-api-table`, pinned.capSource === 'codex-as-api-table', String(pinned.capSource))
+    }
+    delete process.env.CODEX_AS_API_MODEL
+  } finally {
+    if (prevHome === undefined) delete process.env.CODEX_HOME
+    else process.env.CODEX_HOME = prevHome
+    fs.rmSync(emptyHome, { recursive: true, force: true })
+  }
+}
 
 console.log(`\n${pass} passed, ${fail} failed`)
 // NOT process.exit() -- exitCode, and let the loop drain (2026-08-04).
