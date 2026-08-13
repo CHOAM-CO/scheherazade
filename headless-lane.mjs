@@ -454,6 +454,30 @@ async function main() {
       // usage keeps the previous sample instead of zeroing pressure.
       const u = e.message && e.message.usage
       if (u && (u.input_tokens != null || u.cache_read_input_tokens != null)) lastAssistantUsage = u
+      // Turn transcript in the log ring (0.1.4, Mino: "log는 log지 에러메세지
+      // 창이 아니야" -- the Logs page is where turn detail belongs, not an
+      // error banner). One line per tool call (name + a short arg preview)
+      // and per text block (first 200 chars): enough to follow what the
+      // agent actually did, without dumping whole messages into the ring.
+      // Local-only surface -- the ring lives in this process and the Logs
+      // page; nothing leaves the machine.
+      //
+      // Lives HERE since 2026-08-13: it shipped in 0.1.4 as a SECOND
+      // `else if (e.type === 'assistant')` further down this chain -- dead
+      // code from day one (this branch consumed every assistant event
+      // first), found because a healthy 27-sub-turn repro run printed zero
+      // turn> lines while a live mute was being diagnosed blind. The panel
+      // debugging story ("모델이 답을 만들어놨는데 메신저엔 안 온 거면 로그
+      // 링에서 보인다") was never true until now.
+      for (const c of (e.message && e.message.content) || []) {
+        if (c.type === 'tool_use') {
+          let argPreview = ''
+          try { argPreview = JSON.stringify(c.input).slice(0, 160) } catch { /* unserializable input */ }
+          log(`turn> tool: ${c.name} ${argPreview}`)
+        } else if (c.type === 'text' && c.text && c.text.trim()) {
+          log(`turn> agent: ${c.text.trim().replace(/\s*\n+\s*/g, ' ⏎ ').slice(0, 200)}`)
+        }
+      }
     } else if (e.type === 'system' && e.subtype === 'api_retry') {
       // Upstream retry storm made VISIBLE (2026-08-13, Mino field log: inbound
       // "님?" reaches stdin, then NOTHING). Mock-429 receipt (/tmp/sched-
@@ -578,24 +602,10 @@ async function main() {
         child.kill('SIGTERM')
         setTimeout(() => { if (!childExited) child.kill('SIGKILL') }, 10_000).unref()
       }
-    } else if (e.type === 'assistant') {
-      // Turn transcript in the log ring (0.1.4, Mino: "log는 log지 에러메세지
-      // 창이 아니야" -- the Logs page is where turn detail belongs, not an
-      // error banner). One line per tool call (name + a short arg preview)
-      // and per text block (first 200 chars): enough to follow what the
-      // agent actually did, without dumping whole messages into the ring.
-      // Local-only surface -- the ring lives in this process and the Logs
-      // page; nothing leaves the machine.
-      for (const c of (e.message && e.message.content) || []) {
-        if (c.type === 'tool_use') {
-          let argPreview = ''
-          try { argPreview = JSON.stringify(c.input).slice(0, 160) } catch { /* unserializable input */ }
-          log(`turn> tool: ${c.name} ${argPreview}`)
-        } else if (c.type === 'text' && c.text && c.text.trim()) {
-          log(`turn> agent: ${c.text.trim().replace(/\s*\n+\s*/g, ' ⏎ ').slice(0, 200)}`)
-        }
-      }
     }
+    // (the turn-transcript log ring lives in the FIRST assistant branch above
+    // -- a second assistant branch here was dead code for all of 0.1.4/0.1.5,
+    // see that branch's comment)
   })
 
   // ── ingest server ─────────────────────────────────────────────────────────
