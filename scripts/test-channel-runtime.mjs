@@ -230,11 +230,15 @@ for (const b of BACKENDS) {
   const logged = []
   const dedup = createOutboundDedup({ windowMs: 60_000, log: (l) => logged.push(l), now: () => clock })
 
+  // Commit contract (2026-08-13): a non-duplicate check returns commit(), and
+  // the key is recorded ONLY when the caller commits after a successful send.
   const first = dedup('C1', 'same message')
   check('first send passes through', first.duplicate === false)
+  check('a passing check hands back a commit()', typeof first.commit === 'function')
+  first.commit() // simulate a successful send
   clock += 5_000
   const second = dedup('C1', 'same message')
-  check('identical text within the window is suppressed', second.duplicate === true)
+  check('identical text within the window is suppressed after a committed send', second.duplicate === true)
   check('the receipt SAYS it was already delivered and forbids a retry', /already sent|DUPLICATE/.test(second.receipt) && /Do NOT retry/i.test(second.receipt))
   check('suppression is logged for the field debugger', logged.some((l) => l.includes('[outbound-dedup]')))
 
@@ -251,6 +255,20 @@ for (const b of BACKENDS) {
   clock += 61_000
   const later = dedup('C1', 'same message')
   check('after the window the same text sends again (legit repeat)', later.duplicate === false)
+
+  // THE FIX (2026-08-13): a send that never committed (target.send() threw)
+  // must NOT suppress the model's legitimate retry of a message that never
+  // landed -- the silent-loss bug this commit closes.
+  clock += 200_000 // fresh window for C3
+  const failAttempt = dedup('C3', 'delivery will fail')
+  check('first attempt on a new key passes', failAttempt.duplicate === false)
+  // deliberately do NOT call failAttempt.commit() -- the send threw
+  clock += 2_000
+  const retry = dedup('C3', 'delivery will fail')
+  check('retry after a FAILED (un-committed) send is NOT suppressed', retry.duplicate === false)
+  retry.commit() // this time the send lands
+  clock += 2_000
+  check('once committed, the next identical IS suppressed', dedup('C3', 'delivery will fail').duplicate === true)
 
   // pruning: expired keys do not accumulate
   for (let i = 0; i < 50; i++) dedup('C1', `bulk ${i}`)

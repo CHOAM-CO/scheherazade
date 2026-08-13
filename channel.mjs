@@ -343,12 +343,19 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     // the window is NOT re-posted; the receipt tells the model so. Normal
     // result, never isError -- an error invites exactly the retry this
     // exists to stop. See createOutboundDedup (channel-runtime.mjs).
-    const dup = checkOutboundDup(channelId || 'current', text)
-    if (dup.duplicate) return { content: [{ type: 'text', text: dup.receipt }] }
+    //
+    // Resolve BEFORE the dedup check so the key is the RESOLVED target id, not
+    // the literal 'current' (2026-08-13 fix): keying on 'current' let an
+    // identical line sent to two different conversations inside the window
+    // false-suppress the second. And commit the key only AFTER a successful
+    // send -- a throw in the send loop must leave the retry path open.
     const { target, note } = await resolveOutboundChannel(channelId)
+    const dup = checkOutboundDup(target.id, text)
+    if (dup.duplicate) return { content: [{ type: 'text', text: dup.receipt }] }
     const chunks = []
     for (let i = 0; i < text.length; i += 1900) chunks.push(text.slice(i, i + 1900))
     for (const chunk of chunks) await target.send({ content: chunk, allowedMentions: SAFE_MENTIONS })
+    dup.commit() // send succeeded: NOW the dedup key is live
     lastActivityMs = Date.now() // delivered reply = live conversation (note-cadence input)
     clearThinking(target.id).catch((err) => log('thinking reaction clear failed:', err.message))
     // delivered_channel= line: machine-readable delivery receipt for

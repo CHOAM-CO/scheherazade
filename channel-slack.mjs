@@ -399,6 +399,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     const dup = checkOutboundDup(`${channelId || 'current'}${thread_ts ? `#${thread_ts}` : ''}`, text)
     if (dup.duplicate) return { content: [{ type: 'text', text: dup.receipt }] }
     const resultText = await sendReply({ channelId, text, thread_ts })
+    dup.commit() // record the dedup key only AFTER the send succeeded (2026-08-13)
     return { content: [{ type: 'text', text: resultText }] }
   }
 

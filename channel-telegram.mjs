@@ -463,6 +463,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     const dup = checkOutboundDup(channelId || 'current', text)
     if (dup.duplicate) return { content: [{ type: 'text', text: dup.receipt }] }
     const { target, note, chunkCount } = await handleReplyCall({ channelId, text })
+    dup.commit() // record the dedup key only AFTER the send succeeded (2026-08-13)
     // delivered_channel= line: machine-readable delivery receipt for
     // hooks/stop-reply-guard.mjs, same fixed format channel.mjs stamps (that
     // guard greps this exact token regardless of which channel backend

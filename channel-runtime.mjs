@@ -200,8 +200,19 @@ export function createOutboundDedup({ windowMs = 60_000, log = console.log, now 
           'Do NOT retry it. If you have something new to say, send a differently-worded message.',
       }
     }
-    recent.set(key, t)
-    return { duplicate: false }
+    // NOT recorded here. Recording the key before the send poisons the dedup on
+    // a FAILED send: the caller's target.send() can throw (transport 5xx /
+    // rate-limit, or a multi-chunk reply where chunk 1 sent but chunk 2 threw),
+    // the model naturally retries the identical text, and the retry gets
+    // suppressed with a receipt that says "it WAS delivered -- do NOT retry" for
+    // a message that never landed. Silent user-facing loss plus a lying receipt,
+    // across all three transports. The key is committed ONLY after the caller
+    // confirms a successful send, via commit(). A throw between here and commit()
+    // therefore leaves the retry path open, which is the correct behaviour.
+    return {
+      duplicate: false,
+      commit: () => { recent.set(key, now()) },
+    }
   }
 }
 
