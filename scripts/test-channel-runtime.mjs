@@ -259,6 +259,67 @@ for (const b of BACKENDS) {
   check('expired entries are pruned on the next call (no unbounded growth)', true)
 }
 
+// ── mute-strike announcer (2026-08-13) ────────────────────────────────────
+// Non-model-mediated messenger notice when stop-reply-guard's ledger rises.
+// Baseline rule: pre-start strikes are history, only a rise announces; a
+// drop rebases silently; a failed send never throws out of tick.
+{
+  const { createMuteStrikeAnnouncer } = await import(pathToFileURL(path.join(ROOT, 'channel-runtime.mjs')).href)
+  const home = path.join(tmpDir, 'mute-home')
+  fs.mkdirSync(home, { recursive: true })
+  const strikesPath = path.join(home, '.mute-strikes.json')
+  const sent = []
+  let lastInbound = null
+  let fetchFails = false
+  const ann = createMuteStrikeAnnouncer({
+    dataHome: home,
+    homeId: 'HOME',
+    lastChannelStore: { load: async () => 'PERSISTED' },
+    getLastInboundId: () => lastInbound,
+    fetchTarget: async (id) => { if (fetchFails) throw new Error('transport down'); return { id } },
+    sendText: async (t, text) => { sent.push({ id: t.id, text }) },
+    log: () => {},
+  })
+
+  fs.writeFileSync(strikesPath, JSON.stringify({ strikes: 2 }))
+  await ann.start()
+  ann.stop() // ticks driven manually via the seam
+  await ann._tick()
+  check('pre-start strikes are baseline, not news (no announce)', sent.length === 0)
+
+  fs.writeFileSync(strikesPath, JSON.stringify({ strikes: 3 }))
+  await ann._tick()
+  check('a rise announces once', sent.length === 1 && sent[0].text.includes('3회차'))
+  check('with no inbound yet the ladder falls to the persisted channel', sent[0].id === 'PERSISTED')
+
+  await ann._tick()
+  check('same count again does not re-announce', sent.length === 1)
+
+  fs.writeFileSync(strikesPath, JSON.stringify({ strikes: 0 }))
+  await ann._tick()
+  check('a drop (guard reset / UI clear) rebases silently', sent.length === 1)
+
+  lastInbound = 'LIVE'
+  fs.writeFileSync(strikesPath, JSON.stringify({ strikes: 1 }))
+  await ann._tick()
+  check('next rise announces to the live inbound channel first', sent.length === 2 && sent[1].id === 'LIVE')
+
+  fetchFails = true
+  fs.writeFileSync(strikesPath, JSON.stringify({ strikes: 2 }))
+  let threw = false
+  try { await ann._tick() } catch { threw = true }
+  check('a failed send is swallowed (never crashes the backend)', !threw && sent.length === 2)
+
+  fetchFails = false
+  fs.writeFileSync(strikesPath, JSON.stringify({ strikes: 3 }))
+  await ann._tick()
+  check('failed announce rebased anyway -- no spam-retry, next rise still lands', sent.length === 3)
+
+  fs.rmSync(strikesPath)
+  await ann._tick()
+  check('ledger deletion reads as zero strikes (guard contract), no announce', sent.length === 3)
+}
+
 // ── cleanup ──────────────────────────────────────────────────────────────
 fs.rmSync(tmpDir, { recursive: true, force: true })
 

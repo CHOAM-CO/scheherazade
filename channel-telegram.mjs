@@ -29,7 +29,7 @@ import https from 'node:https'
 import { fileURLToPath } from 'node:url'
 import {
   installStdoutHygiene, resolveDataHome, localISO, localNow,
-  createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer,
+  createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer, createMuteStrikeAnnouncer,
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
   createInboundNotifier, createOutboundDedup,
 } from './channel-runtime.mjs'
@@ -674,6 +674,18 @@ const announceBoot = createBootAnnouncer({
   noun: 'chat',
 })
 
+// Mute visibility in the messenger itself -- see the factory's comment in
+// channel-runtime.mjs.
+const muteAnnouncer = createMuteStrikeAnnouncer({
+  dataHome: DATA_HOME,
+  homeId: HOME_CHANNEL_ID,
+  lastChannelStore,
+  getLastInboundId: () => lastInboundChannelId,
+  fetchTarget: fetchTelegramChat,
+  sendText: (chat, text) => telegramApi('sendMessage', { chat_id: chat.id, text }),
+  log,
+})
+
 // ── boot ─────────────────────────────────────────────────────────────────
 // Does NOT itself call process.exit() -- boot() does, after checking the
 // return value. Keeping the exit call out of this function is what makes it
@@ -739,6 +751,7 @@ async function boot() {
   }
 
   announceBoot().catch((err) => log(`boot announce failed: ${err.message}`))
+  muteAnnouncer.start().catch((err) => log(`mute announcer failed to start (feature disabled this session): ${err.message}`))
 
   await initializePollingOffset().catch((err) => log(`initial getUpdates offset peek failed (starting from 0): ${err.message}`))
   await startPolling() // runs forever; this is the main receive loop

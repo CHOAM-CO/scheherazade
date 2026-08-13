@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import {
   installStdoutHygiene, resolveDataHome, atomicWriteJson, localISO, localNow,
-  readAgentConfig, createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer,
+  readAgentConfig, createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer, createMuteStrikeAnnouncer,
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
   createInboundNotifier, createOutboundDedup,
 } from './channel-runtime.mjs'
@@ -454,6 +454,7 @@ discord.once(Events.ClientReady, (c) => {
     log(`routine ticker failed to start (feature disabled this session): ${err.message}`)
   }
   announceBoot().catch((err) => log(`boot announce failed: ${err.message}`))
+  muteAnnouncer.start().catch((err) => log(`mute announcer failed to start (feature disabled this session): ${err.message}`))
 })
 
 // ── graceful shutdown (v0.0.4, Mino 2026-07-13 19:33 directive) ─────────────
@@ -648,6 +649,19 @@ const announceBoot = createBootAnnouncer({
   notify: notifyInbound,
   log,
   noun: 'channel',
+})
+
+// Mute visibility in the messenger itself -- see the factory's comment in
+// channel-runtime.mjs (stop-reply-guard convicts, panel banners, but the
+// user watching Discord saw only silence).
+const muteAnnouncer = createMuteStrikeAnnouncer({
+  dataHome: DATA_HOME,
+  homeId: HOME_CHANNEL_ID,
+  lastChannelStore,
+  getLastInboundId: () => lastInboundChannelId,
+  fetchTarget: fetchTextChannel,
+  sendText: (ch, text) => ch.send({ content: text, allowedMentions: SAFE_MENTIONS }),
+  log,
 })
 
 // ── Session-note cadence (v0.0.16, Mino 07-16 12:25) ────────────────────────

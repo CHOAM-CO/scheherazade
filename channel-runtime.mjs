@@ -584,3 +584,74 @@ export function createInboundNotifier({ dataHome, mcpNotify, log = console.log, 
     await mcpNotify(params)
   }
 }
+
+// ── mute-strike announcer ──────────────────────────────────────────────────
+// The messenger-side half of the mute net (2026-08-13, Mino field case: kimi
+// turn ends success turns=5 dur=765s, no reply ever reaches the messenger,
+// "계속 답 못받는중"). stop-reply-guard already convicts the mute and writes
+// the .mute-strikes.json ledger, and the PANEL shows a banner + revert offer
+// (http-server /api/agent/mute-status) -- but the user lives in the
+// messenger, where a mute looks identical to being ignored. Same species as
+// createBootAnnouncer's direct line: visibility of a failing model must not
+// be mediated by that model. The backend watches the ledger and posts a
+// plain system line to the current conversation channel when strikes RISE.
+//
+// Baseline semantics: on start(), the current count is the baseline -- old
+// strikes are panel history, not news; only a rise AFTER the watcher is
+// alive announces. A drop (guard reset on a delivered reply, or the UI's
+// clear) just lowers the baseline silently. Every send failure is swallowed
+// into a log line: an announcer that can crash a backend over a strike
+// notice is worse than the mute it reports.
+//
+// Target ladder mirrors the omitted-id outbound rule (lastInbound || last
+// persisted channel || home) -- resolved at ANNOUNCE time, not start time,
+// so the notice lands where the conversation actually is.
+export function createMuteStrikeAnnouncer({ dataHome, homeId, lastChannelStore, getLastInboundId, fetchTarget, sendText, log = console.log, pollMs = 5_000 }) {
+  const STRIKES_PATH = path.join(dataHome, '.mute-strikes.json')
+  let baseline = null
+  let timer = null
+
+  async function readCount() {
+    try {
+      const v = JSON.parse(await fs.readFile(STRIKES_PATH, 'utf8'))
+      const n = Number(v && v.strikes)
+      return Number.isFinite(n) && n >= 0 ? n : 0
+    } catch {
+      return 0 // absent/unreadable ledger = no strikes (guard's own contract)
+    }
+  }
+
+  async function announce(count) {
+    const targetId = (getLastInboundId && getLastInboundId()) || (lastChannelStore && await lastChannelStore.load()) || homeId
+    if (!targetId) throw new Error('no channel to announce to (no inbound yet, no persisted channel, no home)')
+    const target = await fetchTarget(targetId)
+    await sendText(target,
+      `⚠️ 방금 턴에서 답장이 만들어지고도 전송되지 않았어 (뮤트 감지 ${count}회차). ` +
+      '모델이 메시지 도구 호출에 실패하고 있어 — 반복되면 Settings > Model에서 모델을 바꾸는 게 빨라. 상세 로그는 패널 Logs에 있어.')
+  }
+
+  async function tick() {
+    let count
+    try { count = await readCount() } catch { return }
+    if (baseline === null) { baseline = count; return } // first tick after a pre-start write race
+    if (count > baseline) {
+      try {
+        await announce(count)
+        log(`[mute-announcer] strike ${baseline} -> ${count} announced to the conversation channel`)
+      } catch (err) {
+        log(`[mute-announcer] strike ${baseline} -> ${count} but the notice could not be sent: ${err.message}`)
+      }
+    }
+    baseline = count // rise announced (or send failed -- do not spam-retry a broken transport); drop = silent rebase
+  }
+
+  return {
+    async start() {
+      baseline = await readCount()
+      timer = setInterval(() => { tick() }, pollMs)
+      if (timer.unref) timer.unref()
+    },
+    stop() { if (timer) clearInterval(timer); timer = null },
+    _tick: tick, // test seam
+  }
+}

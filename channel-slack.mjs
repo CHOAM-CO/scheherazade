@@ -30,7 +30,7 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import {
   installStdoutHygiene, resolveDataHome, localISO, localNow,
-  createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer,
+  createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer, createMuteStrikeAnnouncer,
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
   createInboundNotifier, createOutboundDedup,
 } from './channel-runtime.mjs'
@@ -687,6 +687,7 @@ socketModeClient.on('connected', () => {
   startLivenessHeartbeatOnce()
   startRoutineTickerOnce()
   announceBoot().catch((err) => log(`boot announce failed: ${err.message}`))
+  muteAnnouncer.start().catch((err) => log(`mute announcer failed to start (feature disabled this session): ${err.message}`))
 })
 socketModeClient.on('disconnected', () => {
   log('Slack Socket Mode disconnected')
@@ -712,6 +713,18 @@ const announceBoot = createBootAnnouncer({
   notify: notifyInbound,
   log,
   noun: 'channel',
+})
+
+// Mute visibility in the messenger itself -- see the factory's comment in
+// channel-runtime.mjs.
+const muteAnnouncer = createMuteStrikeAnnouncer({
+  dataHome: DATA_HOME,
+  homeId: HOME_CHANNEL_ID,
+  lastChannelStore,
+  getLastInboundId: () => lastInboundChannelId,
+  fetchTarget: fetchSlackChannelId,
+  sendText: (channelId, text) => slackWeb.chat.postMessage({ channel: channelId, text }),
+  log,
 })
 
 // ── Token validation (hard constraint #5: distinguish bot vs app token) ────
