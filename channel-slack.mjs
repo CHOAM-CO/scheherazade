@@ -471,7 +471,12 @@ const MAX_IMAGE_BYTES = 20 * 1024 * 1024 // same cap as channel.mjs downloadBuff
 const VISION_YES_MODELS = new Set(['kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'gemma4', 'qwen3.5', 'minimax-m3', 'mistral-large-3'])
 function laneHasVision(model = process.env.MODEL || '') {
   const base = String(model).replace(/:.*$/, '')
-  if (/^claude/.test(base) || /^gpt/.test(base)) return true
+  // /^gpt-\d/, NOT /^gpt/: first-party codex ids are gpt-<digit> (gpt-5.5,
+  // gpt-5.6-codex). A bare /^gpt/ also matched gpt-oss -- an ollama-lane
+  // open-weight model with NO vision (library pills: tools/thinking only,
+  // checked 2026-08-13 when it became a default row) -- and a false 'yes'
+  // here is the poisoned-transcript case this gate exists to prevent.
+  if (/^claude/.test(base) || /^gpt-\d/.test(base)) return true
   return VISION_YES_MODELS.has(base)
 }
 

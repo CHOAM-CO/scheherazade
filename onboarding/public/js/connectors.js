@@ -760,6 +760,27 @@
     // deepseek verified live by Mino on v0.0.40 ("딥시크 확인 완료, 잘
     // 붙는다", 11:46) and the 0731 tag confirmed present in today's catalog.
     { id: 'deepseek-v4-flash:0731', label: 'DeepSeek V4 Flash (0731)', group: 'Ollama', providers: ['ollama'] },
+    // Default-row expansion 2026-08-13 (Mino: "5개~7개까지 기본지원 모델로").
+    // Every id re-verified against the LIVE ollama.com /api/tags catalog the
+    // same day, AND live tool-call-probed through the Anthropic-compat lane
+    // (a send_reply tool definition; every row below returned a correct
+    // tool_use block -- the mute-agent failure mode this catalog guards
+    // against). Library capability pills read the same day. NOT picked,
+    // with grounds: kimi-k3 (paywalled -- "extra usage only" even on a
+    // signed-in account), nemotron-3-super (72s first token on the probe),
+    // nemotron-3-nano:30b (never called the tool), kimi-k2.6 /
+    // minimax-m2.7 / glm-5.1 (superseded in-family by k2.7 / m3 / 5.2),
+    // gemma4:31b (caption workhorse, too small for agent duty).
+    { id: 'qwen3.5:397b', label: 'Qwen 3.5 (397B)', group: 'Ollama', providers: ['ollama'] },
+    // minimax-m3: vision pill + 512K context; tool_use probe ok.
+    { id: 'minimax-m3', label: 'MiniMax M3', group: 'Ollama', providers: ['ollama'] },
+    // gpt-oss:120b: OpenAI open-weight lineage -- the one non-Chinese-lab
+    // frontier flavor in the catalog. NO vision (channel-slack laneHasVision
+    // was taught this the same day -- /^gpt/ no longer implies vision).
+    { id: 'gpt-oss:120b', label: 'GPT-OSS (120B)', group: 'Ollama', providers: ['ollama'] },
+    // mistral-large-3: vision pill, 1.1s probe, no thinking pill (fine --
+    // thinking is not a lane requirement).
+    { id: 'mistral-large-3:675b', label: 'Mistral Large 3 (675B)', group: 'Ollama', providers: ['ollama'] },
     // By-URL picker (Mino 19:17): paste https://ollama.com/library/{name}
     // to run any catalog model the three rows above don't list. ACTION row
     // like the Custom sentinel below -- reveals the URL field, never POSTs
