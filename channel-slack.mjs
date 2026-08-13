@@ -466,8 +466,8 @@ const MAX_IMAGE_BYTES = 20 * 1024 * 1024 // same cap as channel.mjs downloadBuff
 // vision-capable unlisted model to be honest about an image it could have
 // read; the old worst case (Read invitation on a non-vision lane) poisoned
 // the transcript with an image block the provider 400s on every turn.
-// Gemma caption parity for Slack needs an authenticated local endpoint
-// (readProviderKey is Electron-safeStorage-only) -- deferred, 0.1.5.
+// Gemma caption parity landed 0.1.7 via the app's authenticated caption
+// endpoint (fetchAppCaption below) -- the 0.1.5 deferral is closed.
 const VISION_YES_MODELS = new Set(['kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'gemma4', 'qwen3.5', 'minimax-m3', 'mistral-large-3'])
 function laneHasVision(model = process.env.MODEL || '') {
   const base = String(model).replace(/:.*$/, '')
@@ -478,6 +478,39 @@ function laneHasVision(model = process.env.MODEL || '') {
   // here is the poisoned-transcript case this gate exists to prevent.
   if (/^claude/.test(base) || /^gpt-\d/.test(base)) return true
   return VISION_YES_MODELS.has(base)
+}
+
+// Vision stand-in caption via the app process (0.1.7, closes the 0.1.5
+// deferral): this process cannot read the ollama key (Electron
+// safeStorage), so it POSTs the saved image to the app's caption endpoint
+// (.caption-endpoint.json: per-boot {port, token}, 0600 -- the askpass
+// contract's POST sibling) and the APP calls gemma with the stored key.
+// Every failure path returns null: no endpoint file (app not running /
+// write failed), dead port, 403 (stale token after an app restart), caption
+// model down -- the marker degrades to the honest no-vision text, exactly
+// the pre-0.1.7 behavior. Cap 3 captions per message: this annotates a
+// conversation, it is not a batch pipeline.
+async function fetchAppCaption(localPath) {
+  try {
+    const ep = JSON.parse(await fs.readFile(path.join(DATA_HOME, '.caption-endpoint.json'), 'utf8'))
+    const port = Number(ep.port)
+    if (!Number.isInteger(port) || port < 1 || port > 65535 || !ep.token) return null
+    const buf = await fs.readFile(localPath)
+    if (buf.length > 20 * 1024 * 1024) return null // same cap as the download path
+    const ext = localPath.toLowerCase().match(/\.\w+$/)?.[0] || ''
+    const mediaType = ext === '.png' ? 'image/png' : ext === '.gif' ? 'image/gif' : ext === '.webp' ? 'image/webp' : 'image/jpeg'
+    const res = await fetch(`http://127.0.0.1:${port}/api/agent/caption-image`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ep.token}` },
+      body: JSON.stringify({ imageBase64: buf.toString('base64'), mediaType }),
+      signal: AbortSignal.timeout(30_000),
+    })
+    const body = await res.json().catch(() => null)
+    if (res.ok && body && body.ok && body.caption) return { text: String(body.caption), model: String(body.model || 'vision stand-in') }
+    return null
+  } catch {
+    return null
+  }
 }
 
 function imageMarker(localPaths, hasVision = laneHasVision(), noun = 'image') {
@@ -577,7 +610,19 @@ async function handleInboundMessage(event, opts = {}) {
   }
   let content = text ? text : '[empty message]'
   const markers = []
-  if (byKind.image.length) markers.push(opts.imageMarker ? opts.imageMarker(byKind.image) : imageMarker(byKind.image))
+  if (byKind.image.length) {
+    markers.push(opts.imageMarker ? opts.imageMarker(byKind.image) : imageMarker(byKind.image))
+    // Vision stand-in (0.1.7): only the KNOWN-'no' lane pays the caption
+    // call -- same rule as the in-app chat (chat.cjs). Sequential, capped
+    // at 3; every failure silently keeps the honest no-vision marker.
+    if (!(opts.laneHasVision || laneHasVision)()) {
+      const captionFn = opts.fetchAppCaption || fetchAppCaption
+      for (const p of byKind.image.slice(0, 3)) {
+        const cap = await captionFn(p)
+        if (cap) markers.push(`[vision stand-in (${cap.model}) describes ${path.basename(p)}: ${cap.text}]`)
+      }
+    }
+  }
   if (byKind.pdf.length) markers.push(opts.imageMarker ? opts.imageMarker(byKind.pdf) : imageMarker(byKind.pdf, laneHasVision(), 'PDF'))
   if (byKind.text.length) markers.push(textFileMarker(byKind.text))
   if (markers.length) {

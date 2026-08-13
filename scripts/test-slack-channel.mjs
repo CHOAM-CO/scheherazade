@@ -83,6 +83,50 @@ console.log('(a) message event -> <channel source=...> tag meta')
   check('meta.timestamp is a non-empty string', typeof captured?.meta?.timestamp === 'string' && captured.meta.timestamp.length > 0)
 }
 {
+  // Vision stand-in caption (0.1.7): a no-vision lane folds the app-served
+  // caption into the markers; a failed caption (null) degrades to the
+  // honest no-vision marker alone; a vision lane never pays the call.
+  const imgEvent = () => ({
+    type: 'message', subtype: 'file_share', channel: HOME_ID, user: 'U123', text: '이거 봐',
+    ts: '1700000000.000150', files: [{ url_private: 'https://f/cap.png', mimetype: 'image/png' }],
+  })
+  const base = {
+    resolveSender: async () => 'TestUser',
+    downloadImage: async () => '/tmp/slack-cap-test.png',
+  }
+  let captured = null
+  let captionCalls = 0
+  await handleInboundMessage(imgEvent(), {
+    ...base,
+    notify: async (p) => { captured = p },
+    laneHasVision: () => false,
+    fetchAppCaption: async (p) => { captionCalls++; return { text: '고양이가 상자 안에 앉아 있다', model: 'gemma4:31b' } },
+  })
+  check('no-vision lane: caption folded into the markers',
+    captured?.content.includes('vision stand-in (gemma4:31b)') && captured.content.includes('고양이가 상자'), captured?.content)
+  check('...alongside the honest no-vision marker, not replacing it',
+    captured?.content.includes('cannot view image'), captured?.content)
+
+  captured = null
+  await handleInboundMessage(imgEvent(), {
+    ...base,
+    notify: async (p) => { captured = p },
+    laneHasVision: () => false,
+    fetchAppCaption: async () => null,
+  })
+  check('caption failure degrades to the marker alone (no fake caption line)',
+    captured?.content.includes('cannot view image') && !captured.content.includes('vision stand-in'), captured?.content)
+
+  captionCalls = 0
+  await handleInboundMessage(imgEvent(), {
+    ...base,
+    notify: async () => {},
+    laneHasVision: () => true,
+    fetchAppCaption: async () => { captionCalls++; return { text: 'x', model: 'y' } },
+  })
+  check('vision lane never pays the caption call', captionCalls === 0)
+}
+{
   // empty text -> '[empty message]' placeholder, same convention as channel.mjs
   let captured = null
   const event = { type: 'message', channel: HOME_ID, user: 'U123', text: '   ', ts: '1700000000.000200' }

@@ -88,6 +88,12 @@ const { createSetupTokenSession, killSetupTokenChildOnShutdown } = require('../s
 // the route handler and the listen callback live in different closures. null =
 // fail closed (endpoint refuses everything).
 let askpassToken = null
+// caption endpoint per-boot token (0.1.7): same contract as askpassToken --
+// generated in listen(), written to a 0600 endpoint file, checked
+// fail-closed in the route body. Exists so the SLACK channel process (no
+// Electron safeStorage, so it cannot read the ollama key itself) can ask
+// THIS process for a vision stand-in caption -- the key never leaves here.
+let captionToken = null
 const permissionProbes = require('./permission-probes.cjs')
 // Fresh-Mac dependency bootstrap (2026-07-07): app-managed download/install
 // of the codex/ollama CLIs into DATA_HOME/bin + sha256 manifest. See
@@ -2476,7 +2482,7 @@ function startMcpConnectorLogin(name, binPath) {
 //     a copied askpassToken would freeze the pre-listen() null forever
 //     (design §5 risk 3), so routes get a live getter.
 async function handleApi(req, res, pathname, onOnboardingComplete, agentControls) {
-  const callCtx = { agentControls, onOnboardingComplete, getAskpassToken: () => askpassToken }
+  const callCtx = { agentControls, onOnboardingComplete, getAskpassToken: () => askpassToken, getCaptionToken: () => captionToken }
   for (const entry of API_ROUTES) {
     if (entry.method && entry.method !== req.method) continue
     const m = entry.match(pathname)
@@ -2574,7 +2580,13 @@ function createOnboardingServer(onOnboardingComplete, agentControls) {
         // helper's curl -f turned into exit 22 (found live 2026-08-05, Mino
         // "sudo + 비밀번호 앱에서 에이전트한테 제대로 못 넘겨주는것같은데").
         const isAskpassFetch = req.method === 'GET' && pathname === '/api/sudo/password'
-        if ((isMutating || pathname.startsWith('/api/')) && !isAskpassFetch) {
+        // /api/agent/caption-image is the askpass exemption's POST sibling:
+        // its caller is the channel process (agent tree), which can never
+        // hold the served-page onboard token. It authenticates with its OWN
+        // per-boot token (.caption-endpoint.json, 0600), checked fail-closed
+        // in the route body.
+        const isCaptionFetch = req.method === 'POST' && pathname === '/api/agent/caption-image'
+        if ((isMutating || pathname.startsWith('/api/')) && !isAskpassFetch && !isCaptionFetch) {
           const origin = req.headers.origin
           if (origin) {
             const originHost = safeOriginHost(origin)
@@ -2683,6 +2695,18 @@ function createOnboardingServer(onOnboardingComplete, agentControls) {
       } catch (err) {
         askpassToken = null // fail closed: no token file -> endpoint refuses everything
         console.error('[scheherazade/onboarding] failed to write sudo-askpass endpoint file (sudo -A disabled this boot):', err.message)
+      }
+      // caption endpoint file (0.1.7): channel processes discover the port +
+      // per-boot token here. Failure just disables Slack captions this boot
+      // (markers degrade to the honest no-vision text) -- never fatal.
+      try {
+        captionToken = crypto.randomBytes(32).toString('hex')
+        const capPath = path.join(DATA_HOME, '.caption-endpoint.json')
+        try { fs.unlinkSync(capPath) } catch { /* absent = first boot */ }
+        fs.writeFileSync(capPath, JSON.stringify({ port, token: captionToken }) + '\n', { mode: 0o600 })
+      } catch (err) {
+        captionToken = null // fail closed: route refuses everything
+        console.error('[scheherazade/onboarding] failed to write caption endpoint file (Slack vision stand-in disabled this boot):', err.message)
       }
       resolve({ server, url })
     })

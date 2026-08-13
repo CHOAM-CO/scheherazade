@@ -22,7 +22,7 @@ function createRoutes(staticCtx) {
     getBootstrapStatus, resolveBin, MANAGED_INSTALL_SUPPORTED, MANUAL_INSTALL_PAGES,
     getElectron, startBootstrap,
     fetchClaudeSubscriptionUsage, fetchCodexUsage, fetchOllamaUsage, checkForUpdate,
-    extractClaudeModelsFromBin, fetchOllamaCloudCatalog,
+    extractClaudeModelsFromBin, fetchOllamaCloudCatalog, fetchImageCaption,
     startClaudeCliInstall, getClaudeInstallStatus,
     readAppearance, writeAppearance, AppearanceModel,
     path, DATA_HOME,
@@ -160,6 +160,39 @@ function createRoutes(staticCtx) {
           ? callCtx.agentControls.resolveClaudeBin()
           : null
         sendJson(res, 200, { ok: true, source: 'claude-cli-binary', bin: bin || null, models: extractClaudeModelsFromBin(bin) })
+        return
+      },
+    },
+    {
+      // Vision stand-in caption for CHANNEL processes (0.1.7 -- the Slack
+      // parity the 0.1.5 laneHasVision comment deferred). The channel
+      // process cannot read the ollama key (Electron safeStorage), so it
+      // POSTs the image here and THIS process captions it via
+      // fetchImageCaption; the key never leaves the app. Auth = the
+      // caption-endpoint per-boot Bearer token (askpass contract's POST
+      // sibling; the gate exempts exactly this path). Fail-closed on a
+      // null token; caption failure is an honest {ok:false}, never a 500.
+      method: 'POST',
+      match: (pathname) => pathname === '/api/agent/caption-image',
+      handler: async (req, res, callCtx) => {
+        const tok = callCtx && typeof callCtx.getCaptionToken === 'function' ? callCtx.getCaptionToken() : null
+        const got = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '')
+        if (!tok || !got || got.length !== tok.length || !require('node:crypto').timingSafeEqual(Buffer.from(got), Buffer.from(tok))) {
+          sendJson(res, 403, { ok: false, reason: 'bad caption token' })
+          return
+        }
+        let body
+        try { body = await readJsonBody(req, 30 * 1024 * 1024) } catch (err) {
+          sendJson(res, 400, { ok: false, reason: `bad body: ${err.message}` })
+          return
+        }
+        const imageBase64 = typeof body.imageBase64 === 'string' ? body.imageBase64 : ''
+        const mediaType = typeof body.mediaType === 'string' && body.mediaType ? body.mediaType : 'image/jpeg'
+        if (!imageBase64) {
+          sendJson(res, 400, { ok: false, reason: 'imageBase64 required' })
+          return
+        }
+        sendJson(res, 200, await fetchImageCaption(imageBase64, mediaType))
         return
       },
     },
