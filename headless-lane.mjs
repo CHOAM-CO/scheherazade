@@ -201,6 +201,78 @@ function readPriorSession() {
   }
 }
 
+// ── mute recovery (2026-08-13, Mino field report: in-app 0.1.7, Windows) ─────
+// The `-p` mute: a model composes reply text but never calls the reply tool,
+// so the answer sits in the transcript and never reaches the user.
+// hooks/stop-reply-guard.mjs is meant to catch this on Stop and force a resend
+// via exit 2 -- but Claude Code drops a Stop-hook's exit 2 as a NON-blocking
+// error in `claude -p` headless mode ("Failed with non-blocking status code"),
+// because there is no interactive turn for it to block into. Proven on Mino's
+// box: the guard fired 7x, every one logged non-blocking, the turns ended
+// silent, and the mute-strike ledger (which only advances behind the guard's
+// blocked-and-retried path) never moved. So the guard's decision moves HERE,
+// where the lane owns the live stream-json session and CAN inject a fresh turn.
+//
+// Pure decision (exported for tests): given what a just-finished turn did,
+//   - it delivered SOMETHING (reply / react / file) -> 'clear' (not mute)
+//   - a real user asked and it composed text but sent nothing -> 'nudge'
+//   - anything else (SYSTEM/rotation turn, silent no-text, etc.) -> 'none'
+// A reaction/file counts as delivery on purpose -- same as the guard's
+// REPLY_TOOLS -- so an emoji-only answer is never nudged into forced words.
+export function muteRecoveryDecision({ turnHadUserInbound, sawReply, sawText }) {
+  if (sawReply) return 'clear'
+  if (turnHadUserInbound && sawText) return 'nudge'
+  return 'none'
+}
+
+// A reply-class tool call is any backend's reply / send_file_to_discord /
+// react (mcp__agent-channel__* in the packaged app, mcp__idea__* in the idea
+// dev lane) -- matched by suffix so a backend/server rename can't silently
+// disarm mute detection, exactly as stop-reply-guard matches its REPLY_TOOLS.
+export const isReplyClassTool = (name) => /__(?:reply|send_file_to_discord|react)$/.test(String(name || ''))
+
+// mute-strike ledger: SAME file/shape/purpose as stop-reply-guard's ledger
+// (MEM/.mute-strikes.json {strikes, model, lastAt}); the UI model-revert offer
+// reads it (onboarding/http-server.cjs, threshold 2). The guard was its sole
+// writer, but its writes are gated behind exit-2-blocking, which `-p` drops --
+// so in headless the ledger never advanced. The lane writes it for the -p case:
+// increment on a mute, clear when the agent speaks. (http-server.cjs's "CODE
+// sites define this path" note counts THIS as the third writer.)
+const muteStrikesFile = () => path.join(MEM, '.mute-strikes.json')
+const agentConfigFile = () => path.join(MEM, '.agent-config')
+function laneCurrentModel() {
+  try {
+    const m = fs.readFileSync(agentConfigFile(), 'utf8').match(/^MODEL=(.*)$/m)
+    return m ? m[1].replace(/^"|"$/g, '') : ''
+  } catch { return '' }
+}
+function recordMuteStrike() {
+  try {
+    let cur = {}
+    try { cur = JSON.parse(fs.readFileSync(muteStrikesFile(), 'utf8')) || {} } catch { cur = {} }
+    const model = laneCurrentModel()
+    // A strike ledger belongs to ONE model (guard's rule): a model change under
+    // us starts the count over rather than inheriting another subject's tally.
+    const strikes = (cur.model === model && Number.isInteger(cur.strikes)) ? cur.strikes + 1 : 1
+    writeJsonAtomic(muteStrikesFile(), { strikes, model, lastAt: new Date().toISOString() }, 0o600)
+    return strikes
+  } catch { return 0 }
+}
+function clearMuteStrike() {
+  try {
+    if (!fs.existsSync(muteStrikesFile())) return
+    const cur = JSON.parse(fs.readFileSync(muteStrikesFile(), 'utf8'))
+    if (!cur || !cur.strikes) return // already clean -- don't churn on every healthy turn
+  } catch { /* corrupt -> overwrite clean below */ }
+  try { writeJsonAtomic(muteStrikesFile(), { strikes: 0, model: laneCurrentModel(), lastAt: new Date().toISOString() }, 0o600) } catch { /* best-effort */ }
+}
+
+// Session backstop against an unforeseen nudge loop -- reset to 0 on any
+// delivered reply, so it only bites a run of consecutive muted user turns that
+// never yield a reply (a genuinely stuck model, which the ledger's revert offer
+// already covers). Tunable but rarely relevant.
+const MUTE_NUDGE_SESSION_CAP = Math.max(1, Number(process.env.SCHEHERAZADE_MUTE_NUDGE_CAP) || 5)
+
 // ── the <channel> tag (contract: stop-reply-guard's parser) ────────────────
 // `>` matters as much as `<` here: stop-reply-guard scans attributes with
 // [^>]*, so a bare `>` inside an attr VALUE truncates the scan before the
@@ -404,6 +476,12 @@ async function main() {
   let lastTurnEndTs = Date.now()
   let lastAssistantUsage = null // newest assistant event's usage = standing context (v2.1)
 
+  // ── mute-recovery per-turn state (see muteRecoveryDecision) ───────────────
+  let sawReplyThisTurn = false
+  let sawTextThisTurn = false
+  let turnHadUserInbound = false // a real user question this turn -> mute check applies (SYSTEM/rotation/nudge turns do not set it)
+  let muteNudgeCount = 0         // consecutive nudges without a delivered reply (loop backstop; reset on any reply)
+
   // Redeliver messages stranded by a mid-turn recycle (F4). Runs before the
   // ingest server exists, so these precede any new inbound POST in stdin
   // order. Entries already redelivered once are dropped (no retry loops),
@@ -427,6 +505,9 @@ async function main() {
             meta: ev.meta || {},
           }))
           noteStdinWrite()
+          // A redelivered user message is still a user question awaiting an
+          // answer -- open the mute gate so a mute on it gets nudged too.
+          if (!/^\s*\[reaction\]/.test(ev.content || '')) turnHadUserInbound = true
         } catch (err) {
           log(`redelivery write failed: ${err.message}`)
         }
@@ -471,10 +552,12 @@ async function main() {
       // 링에서 보인다") was never true until now.
       for (const c of (e.message && e.message.content) || []) {
         if (c.type === 'tool_use') {
+          if (isReplyClassTool(c.name)) sawReplyThisTurn = true // delivered something -> not mute
           let argPreview = ''
           try { argPreview = JSON.stringify(c.input).slice(0, 160) } catch { /* unserializable input */ }
           log(`turn> tool: ${c.name} ${argPreview}`)
         } else if (c.type === 'text' && c.text && c.text.trim()) {
+          sawTextThisTurn = true // composed visible text -> if no reply lands, this is the mute
           log(`turn> agent: ${c.text.trim().replace(/\s*\n+\s*/g, ' ⏎ ').slice(0, 200)}`)
         }
       }
@@ -588,6 +671,34 @@ async function main() {
       if (!e.is_error) {
         const p = readPending()
         if (p.length) writePending(p.filter((ev) => (Number(ev.ts) || 0) > resultTs))
+        // ── mute recovery ────────────────────────────────────────────────────
+        // A user turn that composed text but called no reply-class tool is the
+        // -p mute (the guard's exit 2 cannot force a resend in headless). Nudge
+        // the SAME live session to send the answer it already wrote -- same
+        // stdin-injection primitive the rotation handoff uses. The ledger tracks
+        // persistence for the UI model-revert offer; muteNudgeCount backstops
+        // loops. clearMuteStrike fires on ANY delivered reply (incl. the nudge's
+        // own response) so a mute that recovers on the nudge nets a clean ledger.
+        const decision = muteRecoveryDecision({ turnHadUserInbound, sawReply: sawReplyThisTurn, sawText: sawTextThisTurn })
+        if (decision === 'clear') {
+          clearMuteStrike()
+          muteNudgeCount = 0
+        } else if (decision === 'nudge') {
+          const n = recordMuteStrike()
+          if (muteNudgeCount < MUTE_NUDGE_SESSION_CAP) {
+            muteNudgeCount += 1
+            log(`mute: turn composed text but called no reply tool -- nudging the live session to send it (ledger strike ${n}; nudge ${muteNudgeCount}/${MUTE_NUDGE_SESSION_CAP})`)
+            try {
+              child.stdin.write(renderUserEvent({
+                content: '[SYSTEM] 방금 사용자에게 보낼 답을 작성했지만 reply 도구를 호출하지 않아 실제로는 전달되지 않았다. 그 답을 새로 쓰지 말고 지금 mcp__agent-channel__reply(같은 channelId)로 그대로 전송하라. 정말로 보낼 내용이 없다고 판단했다면 그 판단을 한 줄로라도 답하라.',
+                meta: { source: 'system', sender: 'system', channelId: 'system' },
+              }))
+              noteStdinWrite()
+            } catch (err) { log(`mute nudge write failed: ${err.message}`) }
+          } else {
+            log(`mute persists past the session nudge cap (${MUTE_NUDGE_SESSION_CAP}) -- leaving it to the UI model-revert offer (ledger strike ${n})`)
+          }
+        }
       }
       // Context-pressure check (rotation rule 1: schedule, never cut here).
       // Last assistant usage = standing context; result usage = cumulative
@@ -615,6 +726,12 @@ async function main() {
         child.kill('SIGTERM')
         setTimeout(() => { if (!childExited) child.kill('SIGKILL') }, 10_000).unref()
       }
+      // Per-turn mute flags reset for the NEXT turn (runs for error turns too,
+      // so stale flags never leak forward). muteNudgeCount and the on-disk
+      // ledger persist across turns on purpose; the nudge turn re-arms detection.
+      sawReplyThisTurn = false
+      sawTextThisTurn = false
+      turnHadUserInbound = false
     }
     // (the turn-transcript log ring lives in the FIRST assistant branch above
     // -- a second assistant branch here was dead code for all of 0.1.4/0.1.5,
@@ -668,6 +785,15 @@ async function main() {
       try {
         child.stdin.write(renderUserEvent({ content, meta: payload.meta || {} }))
         noteStdinWrite()
+        // A real user question opens the mute-recovery gate for this turn;
+        // SYSTEM signals (rotation handoff, the mute nudge itself) and reactions
+        // do not -- muteness is "a user asked and got no reply", not "a
+        // housekeeping turn was quiet".
+        {
+          const sndr = String((payload.meta && payload.meta.sender) || '').toUpperCase()
+          const cid = String((payload.meta && payload.meta.channelId) || '')
+          if (sndr !== 'SYSTEM' && cid !== 'system' && !/^\s*\[reaction\]/.test(content)) turnHadUserInbound = true
+        }
         // Latency receipt (2026-08-05): this line + the result's dur=/api=
         // bracket a turn in the log, so "model was fast, app was slow"
         // becomes measurable instead of vibes.

@@ -89,6 +89,33 @@ console.log('\n1. <channel> tag matches stop-reply-guard\'s exact parser')
     'non-Slack tags are byte-identical: no thread attrs when meta lacks them')
 }
 
+// ── 1b. mute-recovery decision + reply-class matcher (pure) ─────────────────
+console.log('\n1b. muteRecoveryDecision + isReplyClassTool (pure)')
+{
+  const { muteRecoveryDecision, isReplyClassTool } = await import(pathToFileURL(path.join(ROOT, 'headless-lane.mjs')).href)
+  // the -p mute exactly: a user asked, the model composed text, sent nothing.
+  assert(muteRecoveryDecision({ turnHadUserInbound: true, sawReply: false, sawText: true }) === 'nudge',
+    'user asked + text + no reply = nudge (the -p mute)')
+  assert(muteRecoveryDecision({ turnHadUserInbound: true, sawReply: true, sawText: true }) === 'clear',
+    'a reply landed = clear, even with text')
+  assert(muteRecoveryDecision({ turnHadUserInbound: true, sawReply: true, sawText: false }) === 'clear',
+    'react-only (reply, no text) = clear')
+  assert(muteRecoveryDecision({ turnHadUserInbound: false, sawReply: false, sawText: true }) === 'none',
+    'a SYSTEM/rotation/nudge turn (no user inbound) is never nudged')
+  assert(muteRecoveryDecision({ turnHadUserInbound: true, sawReply: false, sawText: false }) === 'none',
+    'conservative: a silent turn with no composed text is not nudged (only composed-but-unsent is the mute)')
+  assert(muteRecoveryDecision({ turnHadUserInbound: false, sawReply: true, sawText: false }) === 'clear',
+    'any delivered reply clears the ledger, even off a non-user turn (recovery on the nudge turn)')
+  // reply-class matcher = guard REPLY_TOOLS parity, backend-name agnostic
+  assert(isReplyClassTool('mcp__agent-channel__reply') === true, 'agent-channel reply matches')
+  assert(isReplyClassTool('mcp__idea__reply') === true, 'idea dev-lane reply matches (suffix, not fixed server name)')
+  assert(isReplyClassTool('mcp__agent-channel__send_file_to_discord') === true, 'send_file matches (a file IS an answer)')
+  assert(isReplyClassTool('mcp__agent-channel__react') === true, 'react matches (an emoji IS an answer, guard parity)')
+  assert(isReplyClassTool('mcp__agent-channel__read_channel_history') === false, 'read_channel_history is NOT a reply')
+  assert(isReplyClassTool('Bash') === false, 'a non-channel tool is not a reply')
+  assert(isReplyClassTool(undefined) === false, 'undefined tool name is safe (no throw, not a reply)')
+}
+
 // ── 2. lane E2E with a fake claude ─────────────────────────────────────────
 console.log('\n2. lane ingest server E2E (fake claude child)')
 if (WIN) skipWin('lane ingest E2E')
@@ -184,6 +211,100 @@ process.on('SIGTERM', () => process.exit(0))
   await new Promise((r) => lane.on('exit', r))
   assert(!fs.existsSync(epPath), 'endpoint file removed when the lane exits')
   if (fail > 0) console.log(`  lane stderr for context:\n${laneErr.split('\n').map((l) => `    ${l}`).join('\n')}`)
+}
+
+// ── 2b. mute recovery E2E: composed text, no reply -> nudge + ledger ────────
+console.log('\n2b. mute recovery E2E (the -p mute: text composed, reply tool never called)')
+if (WIN) skipWin('mute recovery E2E')
+else {
+  const MEM = path.join(TMP, 'mem-mute')
+  fs.mkdirSync(MEM, { recursive: true })
+  // laneCurrentModel reads MEM/.agent-config MODEL= (same as the guard) --
+  // present so the ledger strike is keyed to a real model string.
+  fs.writeFileSync(path.join(MEM, '.agent-config'), 'MODEL="fake-model"\n')
+  // fake claude: on a REAL user inbound (channelId in-app) it composes TEXT but
+  // never calls the reply tool (the mute); it IGNORES the SYSTEM nudge, so the
+  // strike persists for the assertion (and the turnHadUserInbound gate is what
+  // stops the nudge turn from re-nudging in the lane, not the fake's silence).
+  const fakeClaude = path.join(TMP, 'fake-claude-mute.mjs')
+  fs.writeFileSync(fakeClaude, `
+import fs from 'node:fs'
+import { createInterface } from 'node:readline'
+const emit = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
+emit({ type: 'system', subtype: 'init', session_id: 'sess-mute-1', model: 'fake', mcp_servers: [] })
+const rl = createInterface({ input: process.stdin })
+rl.on('line', (l) => {
+  fs.appendFileSync(process.env.FAKE_SINK, l + '\\n')
+  let ev; try { ev = JSON.parse(l) } catch { return }
+  const text = (ev && ev.message && ev.message.content && ev.message.content[0] && ev.message.content[0].text) || ''
+  if (text.includes('channelId="in-app"')) {
+    emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '답은 여기 있는데 안 보냄' }], usage: { input_tokens: 10 } } })
+    emit({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, usage: { input_tokens: 10 } })
+  }
+})
+process.on('SIGTERM', () => process.exit(0))
+`)
+  const sink = path.join(TMP, 'sink-mute.jsonl')
+  const shim = path.join(TMP, 'claude-shim-mute.sh')
+  fs.writeFileSync(shim, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeClaude)} "$@"\n`, { mode: 0o755 })
+
+  const lane = spawn(process.execPath, [path.join(ROOT, 'headless-lane.mjs')], {
+    env: { ...process.env, MEM, MODEL: 'fake-model', CLAUDE_BIN: shim, FAKE_SINK: sink },
+    stdio: ['ignore', 'ignore', 'pipe'],
+  })
+  let laneErr = ''
+  lane.stderr.on('data', (d) => { laneErr += d })
+
+  const epPath = path.join(MEM, '.ingest-endpoint.json')
+  let dl = Date.now() + 8000
+  while (!fs.existsSync(epPath) && Date.now() < dl) await new Promise((r) => setTimeout(r, 50))
+  assert(fs.existsSync(epPath), 'mute lane: endpoint file appears')
+  if (fs.existsSync(epPath)) {
+    const ep = JSON.parse(fs.readFileSync(epPath, 'utf8'))
+    await fetch(`http://127.0.0.1:${ep.port}/inbound`, {
+      method: 'POST',
+      headers: { 'x-ingest-token': ep.token, 'content-type': 'application/json' },
+      body: JSON.stringify({ content: '이거 왜 안 돼?', meta: { sender: 'user', channelId: 'in-app' } }),
+    })
+    // the lane should detect the mute and inject a SYSTEM nudge into the SAME
+    // live session -- it lands in the fake claude's stdin sink. Parse each line
+    // (the raw sink bytes JSON-escape the quotes) exactly like section 2 does.
+    let nudged = false
+    dl = Date.now() + 5000
+    while (Date.now() < dl) {
+      if (fs.existsSync(sink)) {
+        const lines = fs.readFileSync(sink, 'utf8').split('\n').filter(Boolean)
+        nudged = lines.some((l) => {
+          try {
+            const t = (JSON.parse(l).message.content[0].text) || ''
+            return t.includes('channelId="system"') && t.includes('reply 도구를 호출하지 않아')
+          } catch { return false }
+        })
+        if (nudged) break
+      }
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    assert(nudged, 'a composed-text-no-reply turn injects a SYSTEM nudge into the live session (guard brain moved to the lane)')
+
+    // and the mute-strike ledger advanced (UI model-revert signal), keyed to model
+    const ledgerPath = path.join(MEM, '.mute-strikes.json')
+    let ledgered = false
+    dl = Date.now() + 3000
+    while (Date.now() < dl) {
+      if (fs.existsSync(ledgerPath)) {
+        try {
+          const led = JSON.parse(fs.readFileSync(ledgerPath, 'utf8'))
+          if (Number(led.strikes) >= 1 && led.model === 'fake-model') { ledgered = true; break }
+        } catch { /* mid-write */ }
+      }
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    assert(ledgered, 'the mute advances .mute-strikes.json (strikes>=1, keyed to the model) -- the UI revert signal the guard could no longer write')
+  }
+
+  lane.kill('SIGTERM')
+  await new Promise((r) => lane.on('exit', r))
+  if (fail > 0 && laneErr) console.log(`  mute lane stderr:\n${laneErr.split('\n').map((l) => `    ${l}`).join('\n')}`)
 }
 
 // ── 3. notifier routing ─────────────────────────────────────────────────────

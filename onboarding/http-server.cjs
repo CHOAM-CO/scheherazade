@@ -606,8 +606,10 @@ function writeAgentConfig(fields) {
 // it on a model swap. Path is duplicated (not imported) because the hook is an
 // ESM file spawned by the Claude CLI with no access to this CommonJS module;
 // both derive it from the same DATA_HOME constant shape. If DATA_HOME ever
-// moves: two CODE sites define this path (the const below, and STRIKES_PATH in
-// hooks/stop-reply-guard.mjs). A grep returns a third hit -- this sentence.
+// moves: THREE CODE sites define this path (the const below; STRIKES_PATH in
+// hooks/stop-reply-guard.mjs; muteStrikesFile in headless-lane.mjs, which
+// writes the ledger for the `-p` lane where the guard's exit-2-gated writes
+// never fire). A grep returns a fourth hit -- this sentence.
 const MUTE_STRIKES_PATH = path.join(CONFIG_DIR, '.mute-strikes.json')
 // 2 strikes = 4 failed attempts to speak (each strike already contains one
 // guard-forced retry) -- matches the original silent-turn incident shape.
