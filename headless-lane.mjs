@@ -250,10 +250,88 @@ export function buildArgs({ model, systemPromptFile, mcpConfigFile, resumeId }) 
   return args
 }
 
-function main() {
+// ── pre-spawn model preflight (2026-08-13) ──────────────────────────────────
+// Field case (Mino's box, "핑" → eternal silence): the panel held an ollama
+// model tag the endpoint did not have (`deepseek-v4-flash:0731`; the local
+// daemon's real tag is `:0731-cloud`). `claude -p` prints "There's an issue
+// with the selected model... may not exist" and exits 0 — NOT an error event,
+// so the 3-strike contamination breaker never trips, .last-turn-error.json is
+// never written, and the user sees nothing but silence. A bad model tag is a
+// CONFIG error and must fail loud at boot, not soft at turn time.
+//
+// Scope: only lanes with ANTHROPIC_BASE_URL set (ollama daemon / ollama.com /
+// chatgpt proxy / custom). Anthropic OAuth/API lanes are skipped: their model
+// ids come from the versioned catalog, and a probe there would spend real
+// Anthropic tokens per boot against auth shapes (OAuth) the probe can't
+// mirror. The probe MIRRORS the runtime lane exactly — same endpoint, same
+// auth header precedence (AUTH_TOKEN as Bearer, else API_KEY as x-api-key) —
+// per the 2026-08-04 lesson: a validator that authenticates differently from
+// the runtime vouches for a lane it never tested.
+//
+// Verdict is deliberately narrow: only a DEFINITIVE model-not-found blocks
+// the spawn (404 / Anthropic-shaped not_found_error — live receipt from the
+// local daemon 2026-08-13: HTTP 404 {"type":"error","error":{"type":
+// "not_found_error","message":"model '...' not found"}}). Auth errors, 5xx,
+// timeouts, and unreachable endpoints all fail OPEN — those are somebody
+// else's failure mode with their own loud paths (key validation, turn
+// watchdog), and blocking boot on a transient network blip would trade one
+// silence for another. Escape hatch: SCHEHERAZADE_SKIP_MODEL_PREFLIGHT=1.
+// (Not SKIP_MODEL_GUARD — provider-env sets that on the exact lane this
+// preflight exists to cover.)
+export function judgeModelProbe({ status, body }) {
+  let parsed = null
+  try { parsed = typeof body === 'string' ? JSON.parse(body) : body } catch { /* non-JSON body: judge on status alone */ }
+  const errType = parsed && parsed.error && parsed.error.type
+  const errMsg = (parsed && parsed.error && parsed.error.message) || ''
+  if (status === 404 || errType === 'not_found_error') {
+    return { verdict: 'bad_model', detail: errMsg || `endpoint answered HTTP ${status}` }
+  }
+  if (status >= 200 && status < 300) return { verdict: 'ok', detail: '' }
+  return { verdict: 'inconclusive', detail: `HTTP ${status}${errMsg ? ` -- ${errMsg}` : ''}` }
+}
+
+export async function preflightModel({ baseUrl, model, authToken, apiKey, timeoutMs = 20_000 }) {
+  const headers = { 'content-type': 'application/json', 'anthropic-version': '2023-06-01' }
+  if (authToken) headers.authorization = `Bearer ${authToken}`
+  else if (apiKey) headers['x-api-key'] = apiKey
+  try {
+    const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/v1/messages`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    const body = await res.text()
+    return judgeModelProbe({ status: res.status, body })
+  } catch (err) {
+    // Unreachable/timeout: fail open -- see the scope comment above.
+    return { verdict: 'inconclusive', detail: `probe failed: ${err && err.message ? err.message : err}` }
+  }
+}
+
+async function main() {
   if (!MEM || !MODEL) {
     log('FATAL: MEM and MODEL env vars are required (run.sh exports both)')
     process.exit(78) // EX_CONFIG
+  }
+  // Pre-spawn model preflight -- see judgeModelProbe's block comment for the
+  // field case and the fail-open/fail-closed boundary.
+  if (process.env.ANTHROPIC_BASE_URL && process.env.SCHEHERAZADE_SKIP_MODEL_PREFLIGHT !== '1') {
+    const probe = await preflightModel({
+      baseUrl: process.env.ANTHROPIC_BASE_URL,
+      model: MODEL,
+      authToken: process.env.ANTHROPIC_AUTH_TOKEN,
+      apiKey: process.env.ANTHROPIC_API_KEY,
+    })
+    if (probe.verdict === 'bad_model') {
+      const detail = `model tag "${MODEL}" does not exist at ${process.env.ANTHROPIC_BASE_URL} -- ${probe.detail}. ` +
+        'Fix the model name in Settings > Model (for a local ollama daemon the tag must appear in `ollama list`, e.g. pull it first).'
+      errLog(`FATAL: ${detail}`)
+      writeJsonAtomic(path.join(MEM, '.last-turn-error.json'), { ts: Date.now(), subtype: 'model_not_found', detail }, 0o600)
+      process.exit(78) // EX_CONFIG -- supervisor backoff + 3-fast-restart banner make this loud in the panel
+    }
+    if (probe.verdict === 'inconclusive') log(`model preflight inconclusive (${probe.detail}) -- proceeding; the lane's own watchdogs cover runtime failures`)
+    else log(`model preflight ok: "${MODEL}" answered at ${process.env.ANTHROPIC_BASE_URL}`)
   }
   const prior = readPriorSession()
   let resumeId = prior ? prior.sessionId : null
@@ -646,5 +724,8 @@ function main() {
 // lane silently exited 0 without booting — caught by the 0.57 win real-spawn
 // probe (lane exited code=0, no endpoint file, zero log lines).
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main()
+  main().catch((err) => {
+    errLog(`FATAL: unhandled boot error: ${err && err.stack ? err.stack : err}`)
+    process.exit(1)
+  })
 }
