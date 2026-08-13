@@ -65,12 +65,17 @@
         ]
       },
       {
-        "matcher": "Bash",
+        "matcher": "Bash|WebSearch|WebFetch|Agent|Task",
         "hooks": [
           {
             "type": "command",
             "command": "node {AGENT_DIR}/hooks/pre-tool-activity.mjs"
-          },
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
           {
             "type": "command",
             "command": "node {AGENT_DIR}/hooks/pre-tool-credential-guard.mjs"

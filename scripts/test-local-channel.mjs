@@ -377,6 +377,49 @@ console.log('\n10. boot announce: the greeting is the first thing the chat pane 
   fs.rmSync(tmp, { recursive: true, force: true })
 }
 
+// ── activity hook: per-tool labels (2026-08-13 widening) ───────────────────
+// The hook was Bash-only; a research turn of 20 WebSearch/WebFetch/subagent
+// calls showed NOTHING in the chat fold (Mino field report). Pins the label
+// each covered tool produces and that uncovered tools stay OFF the feed.
+{
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const fs = await import('node:fs')
+  const { spawnSync } = await import('node:child_process')
+  const { fileURLToPath } = await import('node:url')
+  const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+  const hookTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-activity-hook-'))
+  const seen = []
+  const { createServer } = await import('node:http')
+  const srv = createServer((req, res) => {
+    let b = ''
+    req.on('data', (c) => { b += c })
+    req.on('end', () => { seen.push(JSON.parse(b).label); res.end('{}') })
+  })
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r))
+  fs.writeFileSync(path.join(hookTmp, 'local-channel.json'), JSON.stringify({ port: srv.address().port, token: 't' }))
+  const fire = (tool_name, tool_input) => spawnSync(process.execPath, [path.join(ROOT, 'hooks', 'pre-tool-activity.mjs')], {
+    input: JSON.stringify({ tool_name, tool_input }),
+    env: { ...process.env, AGENT_DATA_HOME: hookTmp },
+    timeout: 5000,
+  })
+  fire('Bash', { description: 'Install package dependencies' })
+  fire('WebSearch', { query: 'GPT 5.6 SOL how to use' })
+  fire('WebFetch', { url: 'https://platform.openai.com/docs/codex?x=1' })
+  fire('Agent', { description: 'Codex research', subagent_type: 'researcher' })
+  fire('Task', { subagent_type: 'researcher' })
+  fire('Read', { file_path: '/etc/hosts' })
+  await new Promise((r) => setTimeout(r, 200))
+  srv.close()
+  assert(seen[0] === 'Install package dependencies', 'Bash label stays bare (model-written description)')
+  assert(seen[1] === 'WebSearch: GPT 5.6 SOL how to use', 'WebSearch label carries the query')
+  assert(seen[2] === 'WebFetch: platform.openai.com/docs/codex', 'WebFetch label is host+path, query string dropped')
+  assert(seen[3] === 'Subagent: Codex research', 'Agent spawn prefers the description')
+  assert(seen[4] === 'Subagent: researcher', 'Task (pre-2.1 tool name) falls back to subagent_type')
+  assert(seen.length === 5, 'uncovered tools (Read) stay OFF the feed')
+  fs.rmSync(hookTmp, { recursive: true, force: true })
+}
+
 // ── activity items: presence of WORK, not an answer (Codex §7 steal) ───────
 {
   resetQueueForTest()

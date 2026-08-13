@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-// pre-tool-activity.mjs — PreToolUse hook, Bash tool only.
+// pre-tool-activity.mjs — PreToolUse hook: Bash, WebSearch, WebFetch, and
+// subagent spawns (Agent/Task). Was Bash-only until 2026-08-13 (Mino: a
+// 20-call research turn showed NOTHING in the chat fold).
 //
 // WHY: the in-app chat's only mid-turn signal was the typing dots, capped at
 // 3 minutes by their own honesty rule. A turn that runs `npm test` for four
@@ -32,13 +34,32 @@ try {
   // fd 0, not '/dev/stdin' — the Windows lesson (2026-08-04, six hooks did
   // nothing on that platform because the path does not exist there).
   const payload = JSON.parse(readFileSync(0, 'utf8'))
-  if (payload.tool_name !== 'Bash') process.exit(0)
   const input = payload.tool_input || {}
-  // Prefer the model's own natural-language `description` ("Install package
-  // dependencies") over the raw command line: it is written for exactly this
-  // kind of surface. Fall back to the command, truncated hard — this is a
-  // status line, not a terminal.
-  const label = String(input.description || input.command || '').replace(/\s+/g, ' ').trim().slice(0, 160)
+  // Per-tool label builders (2026-08-13, Mino: "채팅창에서는 WebFetch /
+  // sub spawn같은 정보가 아예 안보이네" -- the panel log ring showed a
+  // 20-call research turn while the chat fold showed nothing, because this
+  // hook was Bash-only). Bash keeps its bare description (the model writes
+  // it for exactly this surface); the others carry a short tool prefix so a
+  // mixed fold still reads at a glance. Every other tool (Read/Edit/MCP...)
+  // stays OFF this feed on purpose: a busy turn fires dozens of them and
+  // the fold is a status line, not a transcript -- the log ring has the
+  // full record.
+  const trunc = (s, n = 140) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, n)
+  const hostPath = (u) => {
+    try { const p = new URL(String(u)); return p.hostname + (p.pathname === '/' ? '' : p.pathname) } catch { return String(u || '') }
+  }
+  let label = ''
+  if (payload.tool_name === 'Bash') {
+    label = trunc(input.description || input.command)
+  } else if (payload.tool_name === 'WebSearch') {
+    label = input.query ? `WebSearch: ${trunc(input.query)}` : ''
+  } else if (payload.tool_name === 'WebFetch') {
+    label = input.url ? `WebFetch: ${trunc(hostPath(input.url))}` : ''
+  } else if (payload.tool_name === 'Agent' || payload.tool_name === 'Task') {
+    // The subagent tool's name differs across CLI versions (Task pre-2.1,
+    // Agent current) -- the settings matcher names both, and so does this.
+    label = `Subagent: ${trunc(input.description || input.subagent_type || 'working')}`
+  }
   if (!label) process.exit(0)
 
   const portFile = JSON.parse(readFileSync(path.join(DATA_HOME, 'local-channel.json'), 'utf8'))
