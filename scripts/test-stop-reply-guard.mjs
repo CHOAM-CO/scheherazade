@@ -105,6 +105,43 @@ console.log('\n4. the pre-existing paths kept their behavior')
   assert(capped.code === 0, 'retry cap (stop_hook_active) still allows instead of looping')
 }
 
+console.log('\n5. dual-channel: a reply to the OTHER surface is not silent death (2026-08-13 storm fix)')
+{
+  // Newest trigger is in-app, but this turn the agent DELIVERED to Discord
+  // (explicit channelId). Before the fix: no delivered_channel=in-app and args
+  // id 999... !== in-app and !== '' -> exit 2 -> forced cross-channel reply ->
+  // with pings arriving on both channels, a re-convicting storm. After: a
+  // message landed somewhere -> the agent is not mute -> exit 0.
+  const answeredOther = runGuard([
+    userText(channelTag('1474334807344545877', '계속들어와?')),
+    userText(channelTag('in-app', '여기서도 보여?')),
+    toolUse('mcp__agent-channel__reply', { text: 'ㅇㅇ 보여', channelId: '1474334807344545877' }, 'tuD'),
+    toolResult('sent (#2)\ndelivered_channel=1474334807344545877', 'tuD'),
+  ])
+  assert(answeredOther.code === 0, 'trigger=in-app but a reply landed on Discord this turn -> not mute -> exit 0 (no storm)')
+  assert(/another channel/.test(answeredOther.stderr), 'the allow is logged as a dual-channel cross-answer, not silent')
+
+  // The trigger channel IS the one that got answered -> exact match still wins
+  // (unchanged), proving the relaxation did not swallow the precise path.
+  const answeredTrigger = runGuard([
+    userText(channelTag('in-app', '여기서도 보여?')),
+    userText(channelTag('1474334807344545877', '계속들어와?')),
+    toolUse('mcp__agent-channel__reply', { text: 'ㅇㅇ', channelId: '1474334807344545877' }, 'tuD2'),
+    toolResult('sent (#2)\ndelivered_channel=1474334807344545877', 'tuD2'),
+  ])
+  assert(answeredTrigger.code === 0, 'trigger=Discord and Discord was answered -> exact match still exit 0')
+
+  // Genuine silent death survives: newest trigger in-app, agent composed text
+  // but called NO reply tool and nothing landed anywhere -> still exit 2.
+  const trulyMute = runGuard([
+    userText(channelTag('1474334807344545877', '계속들어와?')),
+    toolUse('mcp__agent-channel__reply', { text: 'ㅇㅇ 보여', channelId: '1474334807344545877' }, 'tuD3'),
+    toolResult('sent (#2)\ndelivered_channel=1474334807344545877', 'tuD3'),
+    userText(channelTag('in-app', '야 보여?')), // newest trigger, arrived AFTER the only reply
+  ])
+  assert(trulyMute.code === 2, 'a NEW trigger after the last delivery, with no reply following it -> still convict (silent-death net intact)')
+}
+
 fs.rmSync(TMP, { recursive: true, force: true })
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

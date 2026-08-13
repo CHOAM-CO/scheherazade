@@ -218,7 +218,21 @@ async function main() {
   //    -- rarer and milder than convicting every correct omitted reply).
   const pendingReplyCalls = new Map() // tool_use id -> args channelId ('' if omitted)
   let replyFound = false
-  for (let i = triggerIdx + 1; i < entries.length && !replyFound; i++) {
+  // DUAL-CHANNEL storm guard (2026-08-13, Mino's live repro): when Discord AND
+  // in-app are both connected, inbound messages from the two surfaces interleave
+  // in the ONE headless transcript. The trigger is the single newest channel
+  // tag, but the agent may have just answered the OTHER surface (e.g. replied to
+  // Discord with an explicit channelId while the newest inbound is an in-app
+  // ping). Per-channel matching then convicts a turn where the agent DID speak
+  // to a human -> exit 2 injects "you never replied" -> the model resends ->
+  // and because pings keep arriving on both channels, every Stop re-convicts:
+  // a forced-reply storm (Mino: "계속 답장함", saw 4-5 dupes per message). The
+  // silent-death class this hook exists to block is "composed text, called NO
+  // tool" -- an agent that delivered a message to ANY channel is demonstrably
+  // NOT mute. So we track whether anything landed anywhere after the trigger and
+  // treat that as alive, without forcing a cross-channel reply.
+  let deliveredAnywhere = false
+  for (let i = triggerIdx + 1; i < entries.length; i++) {
     const e = entries[i]
     const content = e.message?.content
     if (!Array.isArray(content)) continue
@@ -241,9 +255,9 @@ async function main() {
         // pattern silently ignored every non-discord delivery receipt and
         // fell back to tool args — lower-authority evidence.
         const m = text.match(/^delivered_channel=([A-Za-z0-9_.-]+)$/m)
-        if (m && m[1] === triggerChannelId) {
-          replyFound = true
-          break
+        if (m) {
+          deliveredAnywhere = true // a message landed on SOME channel -> not mute
+          if (m[1] === triggerChannelId) replyFound = true
         }
       }
     }
@@ -258,6 +272,19 @@ async function main() {
   }
   if (replyFound) {
     clearStrikes() // the agent spoke -> whatever was wrong isn't wrong now
+    process.exit(0)
+  }
+  // The trigger channel itself went unanswered, but the agent DID deliver a
+  // message to another surface this turn: it is alive and speaking, just not to
+  // this exact channel. Forcing a reply here is the storm. Clear strikes (an
+  // agent that delivered is not mute) and let the turn end. NOTE: this
+  // deliberately does NOT chase the unanswered channel -- cross-channel
+  // completeness is not this guard's job; muteness detection is.
+  if (deliveredAnywhere) {
+    clearStrikes()
+    process.stderr.write(
+      `[stop-reply-guard] trigger channel ${triggerChannelId} unanswered but a reply landed on another channel this turn -- not mute, allowing (dual-channel; no forced cross-channel reply)\n`
+    )
     process.exit(0)
   }
 
