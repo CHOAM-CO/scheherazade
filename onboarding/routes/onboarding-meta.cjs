@@ -22,7 +22,7 @@ function createRoutes(staticCtx) {
     getBootstrapStatus, resolveBin, MANAGED_INSTALL_SUPPORTED, MANUAL_INSTALL_PAGES,
     getElectron, startBootstrap,
     fetchClaudeSubscriptionUsage, fetchCodexUsage, fetchOllamaUsage, checkForUpdate,
-    extractClaudeModelsFromBin,
+    extractClaudeModelsFromBin, fetchOllamaCloudCatalog,
     startClaudeCliInstall, getClaudeInstallStatus,
     readAppearance, writeAppearance, AppearanceModel,
     path, DATA_HOME,
@@ -160,6 +160,16 @@ function createRoutes(staticCtx) {
           ? callCtx.agentControls.resolveClaudeBin()
           : null
         sendJson(res, 200, { ok: true, source: 'claude-cli-binary', bin: bin || null, models: extractClaudeModelsFromBin(bin) })
+        return
+      },
+    },
+    {
+      // Ollama half of the dynamic catalog -- live ollama.com /api/tags,
+      // 10min cache, [] on failure (static rows stand).
+      method: 'GET',
+      match: (pathname) => pathname === '/api/model-catalog/ollama',
+      handler: async (req, res) => {
+        sendJson(res, 200, { ok: true, source: 'ollama.com/api/tags', models: await fetchOllamaCloudCatalog() })
         return
       },
     },

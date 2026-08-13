@@ -3039,6 +3039,34 @@ async function fetchCodexUsage(opts = {}) {
 // FIELD NAMES ONLY (never values -- could contain account data) so the
 // first real-key Refresh in the field tells us the schema to bind.
 let ollamaUsageCache = null // { at, payload } -- last GOOD reading only
+// ── dynamic Ollama model catalog (2026-08-13, same ask as the Claude scan:
+// "모델 리스트 하드코딩 말고 다이나믹하게") ────────────────────────────────
+// ollama.com's /api/tags answers 200 WITHOUT auth (probed 2026-08-04, same
+// endpoint the key-validate path reads for its modelPresent hint), so the
+// picker's Ollama group can carry the LIVE catalog. 10min success cache +
+// stale-on-error: this is a dropdown filler, nothing here is worth a
+// per-page-load fetch or a hard failure -- [] on any error, the curated
+// static rows stand.
+// (Codex is deliberately NOT dynamic in this round: the installed
+// codex-as-api package (0.5.2) carries a model table that stops at
+// gpt-5.5 while the 5.6 family runs live via passthrough -- scanning it
+// would produce a WORSE list than the static catalog. Revisit when the
+// proxy package is upgraded.)
+let ollamaCatalogCache = null // { at, names }
+async function fetchOllamaCloudCatalog(opts = {}) {
+  const now = Date.now()
+  if (!opts.force && ollamaCatalogCache && now - ollamaCatalogCache.at < 600_000) return ollamaCatalogCache.names
+  try {
+    const res = await fetch(`${OLLAMA_CLOUD_BASE_URL}/api/tags`, { signal: AbortSignal.timeout(OLLAMA_CLOUD_TIMEOUT_MS) })
+    const body = await res.json()
+    const names = Array.isArray(body.models) ? body.models.map((m) => String(m.name || '')).filter(Boolean).sort() : []
+    if (names.length) ollamaCatalogCache = { at: now, names }
+    return names
+  } catch (err) {
+    return ollamaCatalogCache ? ollamaCatalogCache.names : []
+  }
+}
+
 async function fetchOllamaUsage(opts = {}) {
   const now = Date.now()
   if (!opts.force && ollamaUsageCache && now - ollamaUsageCache.at < 60_000) return ollamaUsageCache.payload
@@ -3246,7 +3274,7 @@ const staticCtx = {
   getSetupTokenSession,
   // usage gauge + update check (2026-08-04 tester requests)
   fetchClaudeSubscriptionUsage, fetchCodexUsage, fetchOllamaUsage, checkForUpdate,
-  extractClaudeModelsFromBin,
+  extractClaudeModelsFromBin, fetchOllamaCloudCatalog,
   readAppearance, writeAppearance, AppearanceModel,
   // vision stand-in captioning (0.0.56)
   laneVision, fetchImageCaption,
@@ -3297,6 +3325,7 @@ module.exports = {
   contextCapForModel,
   // Exported for test pins (dynamic model catalog, 2026-08-13).
   extractClaudeModelsFromBin,
+  fetchOllamaCloudCatalog,
   // Exported for test pins (vision stand-in table, 0.0.56) -- pure fn.
   laneVision,
   readAgentConfig,

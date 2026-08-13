@@ -876,18 +876,34 @@
   async function mergeDynamicClaudeModels() {
     if (dynamicClaudeMerged) return
     dynamicClaudeMerged = true // one attempt per page load, success or not
-    let models = []
     try {
       const r = await api('/api/model-catalog/claude')
-      models = Array.isArray(r && r.models) ? r.models : []
-    } catch (err) { return } // route down = static catalog stands
-    const fresh = models.filter((m) => m && typeof m.id === 'string' && !MODEL_CATALOG.some((row) => row.id === m.id))
-    if (!fresh.length) return
-    // Splice after the last static Claude row so the group stays contiguous
-    // for the <optgroup> builder.
-    const lastClaudeIdx = MODEL_CATALOG.reduce((acc, row, i) => (row.group === 'Claude' ? i : acc), -1)
-    const rows = fresh.map((m) => ({ id: m.id, label: claudeLabelOf(m.id), group: 'Claude', providers: CLAUDE_PROVIDERS }))
-    MODEL_CATALOG.splice(lastClaudeIdx + 1, 0, ...rows)
+      const models = Array.isArray(r && r.models) ? r.models : []
+      const fresh = models.filter((m) => m && typeof m.id === 'string' && !MODEL_CATALOG.some((row) => row.id === m.id))
+      if (fresh.length) {
+        // Splice after the last static Claude row so the group stays
+        // contiguous for the <optgroup> builder.
+        const lastClaudeIdx = MODEL_CATALOG.reduce((acc, row, i) => (row.group === 'Claude' ? i : acc), -1)
+        MODEL_CATALOG.splice(lastClaudeIdx + 1, 0,
+          ...fresh.map((m) => ({ id: m.id, label: claudeLabelOf(m.id), group: 'Claude', providers: CLAUDE_PROVIDERS })))
+      }
+    } catch (err) { /* route down = static catalog stands */ }
+    // Ollama half (2026-08-13): the live ollama.com catalog rides the same
+    // merge -- curated rows keep their labels/order, everything else the
+    // catalog carries lands after them (before the by-URL sentinel, which
+    // stays the group's last row). Tags ARE the identity for ollama models,
+    // so dynamic rows use the raw tag as label.
+    try {
+      const r = await api('/api/model-catalog/ollama')
+      const names = Array.isArray(r && r.models) ? r.models : []
+      const fresh = names.filter((n) => typeof n === 'string' && n && !MODEL_CATALOG.some((row) => row.id === n))
+      if (fresh.length) {
+        const sentinelIdx = MODEL_CATALOG.findIndex((row) => row.id === OLLAMA_URL_SENTINEL)
+        const at = sentinelIdx === -1 ? MODEL_CATALOG.length : sentinelIdx
+        MODEL_CATALOG.splice(at, 0,
+          ...fresh.map((n) => ({ id: n, label: n, group: 'Ollama', providers: ['ollama'] })))
+      }
+    } catch (err) { /* route down = static catalog stands */ }
   }
 
   function populateModelSelect(model) {
