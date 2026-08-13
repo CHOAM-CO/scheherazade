@@ -140,19 +140,29 @@ async function writeTranscriptOnce() {
 // promise, whose drain loop rewrites until nothing changed underneath it.
 // (First draft returned early on the in-flight write; the test's await then
 // raced the rename and stat'd a file that wasn't there yet.)
+//
+// Resolves to a BOOLEAN: true when the last write reached disk, false when it
+// threw. The `reply` receipt gates on this so "sent" never out-promises the
+// durable record (2026-08-13 fix, below). No transcriptFile (tests, or
+// persistence not yet enabled) resolves true: nothing to persist, nothing to
+// lose across a restart.
 export function flushTranscript() {
-  if (!transcriptFile) return Promise.resolve()
+  if (!transcriptFile) return Promise.resolve(true)
   if (transcriptWritePromise) { transcriptDirty = true; return transcriptWritePromise }
   transcriptWritePromise = (async () => {
+    let ok = true
     do {
       transcriptDirty = false
       try {
         await writeTranscriptOnce()
+        ok = true
       } catch (err) {
+        ok = false
         log(`transcript persist failed (chat stays live, history at risk): ${err.message}`)
       }
     } while (transcriptDirty)
     transcriptWritePromise = null
+    return ok
   })()
   return transcriptWritePromise
 }
@@ -362,12 +372,30 @@ export async function handleToolCall(name, args) {
     const dup = checkOutboundDup('local', text)
     if (dup.duplicate) return { content: [{ type: 'text', text: dup.receipt }] }
     const n = enqueueOutbound(text)
+    // Wait for the durable write before reporting "sent". enqueueOutbound only
+    // puts the item in the in-memory queue and kicks a fire-and-forget flush;
+    // returning the receipt at that point told the model "sent" while the
+    // bytes were still in flight. Teardown (stdin EOF -> immediate
+    // process.exit in boot()) could then abandon the write AND drop the memory
+    // queue, losing a reply the model believed it had delivered -- and on
+    // restart the transcript restore has nothing to replay. Length-correlated
+    // because a larger payload widens the write window teardown can land in
+    // (Mino field report, Windows v0.1.7: msgs >=1KB lost 3/3; a short one
+    // lost too when teardown or a Windows rename-lock caught the window).
+    // Awaiting here closes the race: by the time "sent" returns, the item is
+    // on disk, so it survives any subsequent teardown.
+    const durable = await flushTranscript()
     // delivered_channel= line: machine-readable delivery receipt, same
     // contract as the platform backends (channel.mjs L354 note). The local
     // surface never emitted one, so hooks/stop-reply-guard.mjs had only its
     // lower-authority tool-args fallback for in-app replies (red-team
     // 2026-08-05 P1-4).
-    return { content: [{ type: 'text', text: `sent (#${n})\ndelivered_channel=${LOCAL_CHANNEL_ID}` }] }
+    const receipt = `sent (#${n})\ndelivered_channel=${LOCAL_CHANNEL_ID}`
+    // If the disk write failed, the item is still live in memory (the page
+    // will render it while this process lives), but we must NOT claim a
+    // durable "sent": say so, so the model does not treat a restart-fragile
+    // message as safely delivered.
+    return { content: [{ type: 'text', text: durable ? receipt : `${receipt}\nwarning: not yet saved to disk -- history at risk if the app closes now` }] }
   }
   if (name === 'send_file_to_discord') {
     const filePath = args && args.filePath
@@ -607,7 +635,19 @@ async function boot() {
   // and silently drops them: the exact deliver-then-lose failure this
   // backend exists to remove. Delete the port file first so the proxy reads
   // an honest not_running instead of probing a corpse.
-  const shutdown = () => {
+  // Drain any in-flight/pending transcript write before dying. Without this,
+  // stdin-EOF teardown called process.exit synchronously and abandoned the
+  // write kicked by the last enqueue -- losing an item that was already
+  // acknowledged. `reply` now awaits its own flush, but the inbound (user
+  // message), reaction, and boot-announce paths enqueue fire-and-forget and
+  // their HTTP handlers return before the write lands; a teardown right after
+  // one of those would drop the user's own half of the conversation. The guard
+  // makes the double-signal ('end' then 'close') drain exactly once.
+  let shuttingDown = false
+  const shutdown = async () => {
+    if (shuttingDown) return
+    shuttingDown = true
+    try { await flushTranscript() } catch { /* logged inside flush; die anyway */ }
     surface.stop()
     process.exit(0)
   }

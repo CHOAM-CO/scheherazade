@@ -515,6 +515,70 @@ console.log('\n10. boot announce: the greeting is the first thing the chat pane 
   fs.rmSync(tmp, { recursive: true, force: true })
 }
 
+// ── reply receipt gates on durability (Mino field report, Windows v0.1.7) ───
+// The bug: `reply` returned "sent (#n)" the instant the item hit the in-memory
+// queue, while the disk write was fire-and-forget. Teardown (stdin EOF ->
+// process.exit) could then abandon the write AND drop the memory queue, so a
+// reply the model was told it had sent vanished from both -- and the restart
+// restore had nothing to replay. Length-correlated (bigger write = wider race
+// window; 1KB+ lost 3/3). Fix: reply awaits the flush, so by the time "sent"
+// returns the item is already on disk and survives any later teardown.
+{
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-localchan-durable-'))
+  resetQueueForTest()
+  await enableTranscriptPersistence({ dataHome: tmp })
+  const file = path.join(tmp, 'chat-transcript.json')
+
+  // A long reply -- the size class Mino lost 3/3. The receipt must not come
+  // back until this is on disk.
+  const long = 'x'.repeat(4096)
+  const res = await handleToolCall('reply', { text: long })
+  const receipt = res.content[0].text
+  assert(receipt.startsWith('sent (#'), 'reply still reports sent on the happy path')
+  assert(receipt.includes(`delivered_channel=${LOCAL_CHANNEL_ID}`), 'reply still stamps delivered_channel')
+  assert(!receipt.includes('warning'), 'no not-saved warning when the disk write succeeded')
+  // The load-bearing assertion: the file ALREADY holds it the moment reply
+  // returned -- no await flushTranscript() in the test. This is exactly what a
+  // teardown-right-after-reply would restore from.
+  const onDisk = JSON.parse(fs.readFileSync(file, 'utf8'))
+  assert(onDisk.queue.some((m) => m.text === long), 'reply does not return "sent" until the message is durably on disk (no teardown-race loss)')
+
+  await flushTranscript()
+  resetQueueForTest()
+  fs.rmSync(tmp, { recursive: true, force: true })
+}
+
+// ── reply tells the truth when the durable write fails ──────────────────────
+// A failed write must NOT masquerade as a clean "sent". Point persistence at a
+// dataHome whose parent is a FILE, so writeTranscriptOnce's mkdir throws: the
+// item stays live in memory (the page still renders it this process), but the
+// receipt must carry the not-saved warning instead of a bare success the model
+// would treat as durably delivered.
+{
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-localchan-failwrite-'))
+  const asFile = path.join(base, 'iam-a-file')
+  fs.writeFileSync(asFile, 'not a directory')
+  resetQueueForTest()
+  // dataHome under a file -> mkdir(dataHome) fails inside writeTranscriptOnce.
+  await enableTranscriptPersistence({ dataHome: path.join(asFile, 'sub') })
+  const res = await handleToolCall('reply', { text: 'unwritable' })
+  const receipt = res.content[0].text
+  assert(receipt.startsWith('sent (#'), 'a failed-persist reply still reports the item entered the live queue')
+  assert(receipt.includes('warning: not yet saved to disk'), 'a failed durable write is reported honestly, not as a clean sent')
+  assert(!res.isError, 'the warning rides a normal result, not isError (an error would invite the retry loop)')
+  const replay = readOutbound(0)
+  assert(replay.items.some((m) => m.text === 'unwritable'), 'the item is still live in memory for the page despite the failed write')
+
+  resetQueueForTest()
+  fs.rmSync(base, { recursive: true, force: true })
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 // exitCode, not process.exit() -- see the long note at the bottom of
 // scripts/test-codex-proxy-model.mjs for the measured reason. Short version:
