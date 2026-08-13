@@ -71,9 +71,13 @@ chromux close ws-3f2a
 - **Chrome not installed**: chromux errors mentioning it cannot find Chrome.
   Tell the user plainly that web search needs Google Chrome installed, and
   fall back to WebFetch for any URL you already have. Do not retry in a loop.
-- **Bot-check / CAPTCHA page in the snapshot**: report it and try once more
-  with a different phrasing; if it persists, stop and say search is blocked
-  right now.
+- **Bot-check / CAPTCHA page in the snapshot** (Google's `/sorry` page):
+  do NOT retry Google with rephrased queries — switch engines. Bing takes the
+  same flow: `chromux open <id> "https://www.bing.com/search?q=<query>"` and
+  its results parse from the snapshot the same way. (Field-verified
+  2026-08-14: one machine got Google clean, another got `/sorry` twice and
+  Bing worked first try.) If both engines serve bot-checks, stop and say
+  search is blocked right now.
 - **Node missing**: the wrappers run via `node`, which the agent harness
   already requires; if `node` itself is missing, report that the install is
   broken rather than improvising.
