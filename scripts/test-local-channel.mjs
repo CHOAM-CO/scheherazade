@@ -404,6 +404,7 @@ console.log('\n10. boot announce: the greeting is the first thing the chat pane 
     timeout: 5000,
   })
   fire('Bash', { description: 'Install package dependencies' })
+  fire('PowerShell', { command: 'Get-Process Scheherazade' })
   fire('WebSearch', { query: 'GPT 5.6 SOL how to use' })
   fire('WebFetch', { url: 'https://platform.openai.com/docs/codex?x=1' })
   fire('Agent', { description: 'Codex research', subagent_type: 'researcher' })
@@ -412,11 +413,12 @@ console.log('\n10. boot announce: the greeting is the first thing the chat pane 
   await new Promise((r) => setTimeout(r, 200))
   srv.close()
   assert(seen[0] === 'Install package dependencies', 'Bash label stays bare (model-written description)')
-  assert(seen[1] === 'WebSearch: GPT 5.6 SOL how to use', 'WebSearch label carries the query')
-  assert(seen[2] === 'WebFetch: platform.openai.com/docs/codex', 'WebFetch label is host+path, query string dropped')
-  assert(seen[3] === 'Subagent: Codex research', 'Agent spawn prefers the description')
-  assert(seen[4] === 'Subagent: researcher', 'Task (pre-2.1 tool name) falls back to subagent_type')
-  assert(seen.length === 5, 'uncovered tools (Read) stay OFF the feed')
+  assert(seen[1] === 'Get-Process Scheherazade', 'PowerShell (Windows shell tool name) rides the Bash path, command fallback')
+  assert(seen[2] === 'WebSearch: GPT 5.6 SOL how to use', 'WebSearch label carries the query')
+  assert(seen[3] === 'WebFetch: platform.openai.com/docs/codex', 'WebFetch label is host+path, query string dropped')
+  assert(seen[4] === 'Subagent: Codex research', 'Agent spawn prefers the description')
+  assert(seen[5] === 'Subagent: researcher', 'Task (pre-2.1 tool name) falls back to subagent_type')
+  assert(seen.length === 6, 'uncovered tools (Read) stay OFF the feed')
   fs.rmSync(hookTmp, { recursive: true, force: true })
 }
 

@@ -65,7 +65,7 @@
         ]
       },
       {
-        "matcher": "Bash|WebSearch|WebFetch|Agent|Task",
+        "matcher": "Bash|PowerShell|WebSearch|WebFetch|Agent|Task",
         "hooks": [
           {
             "type": "command",

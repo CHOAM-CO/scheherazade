@@ -49,7 +49,10 @@ try {
     try { const p = new URL(String(u)); return p.hostname + (p.pathname === '/' ? '' : p.pathname) } catch { return String(u || '') }
   }
   let label = ''
-  if (payload.tool_name === 'Bash') {
+  if (payload.tool_name === 'Bash' || payload.tool_name === 'PowerShell') {
+    // PowerShell is what the shell tool is CALLED on native Windows (magi-win
+    // live repro 2026-08-14: matcher "Bash" meant the feed never fired there
+    // at all). Same shape, same bare-description treatment.
     label = trunc(input.description || input.command)
   } else if (payload.tool_name === 'WebSearch') {
     label = input.query ? `WebSearch: ${trunc(input.query)}` : ''

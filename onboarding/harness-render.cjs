@@ -286,25 +286,42 @@ function createHarnessRender(ctx) {
       })
     }
 
-    // v0.0.41: activity feed on Bash starts (PreToolUse) -- pushes "what is
+    // v0.0.41: activity feed on tool starts (PreToolUse) -- pushes "what is
     // about to run" into the local channel transcript so the chat page can
     // show work instead of silence. Advisory, fail-open, local backend only
-    // (the hook itself no-ops when no port file exists). Same additive-only
-    // contract as the blocks above.
+    // (the hook itself no-ops when no port file exists).
+    //
+    // MATCHER IS PINNED, NOT ADDITIVE (unlike the blocks above): the tool set
+    // widened twice after ship (WebSearch/WebFetch/subagents 2026-08-13;
+    // PowerShell -- the shell tool's name on native Windows -- 2026-08-14,
+    // magi-win live repro where matcher "Bash" never fired at all), and the
+    // add-if-missing contract cannot retrofit a matcher on an existing
+    // install -- that is exactly how magi-win stayed Bash-only through an app
+    // update that carried the wider template. If the hook shares a group with
+    // other hooks (the pre-fix migration parked it in the "Bash" group), it
+    // is extracted into its own group first so the pin never widens a
+    // neighbor's trigger.
     const ACTIVITY_HOOK = 'pre-tool-activity.mjs'
-    const hasActivity = settings.hooks.PreToolUse.some((group) =>
-      Array.isArray(group.hooks) && group.hooks.some((h) => typeof h.command === 'string' && h.command.includes(ACTIVITY_HOOK)))
-    if (!hasActivity) {
-      let preBashGroup = settings.hooks.PreToolUse.find((g) => g && g.matcher === 'Bash')
-      if (!preBashGroup) {
-        preBashGroup = { matcher: 'Bash', hooks: [] }
-        settings.hooks.PreToolUse.push(preBashGroup)
-      }
-      if (!Array.isArray(preBashGroup.hooks)) preBashGroup.hooks = []
-      preBashGroup.hooks.push({
-        type: 'command',
-        command: `node ${path.join(toUnpackedPath(REPO_ROOT), 'hooks', ACTIVITY_HOOK)}`,
+    const ACTIVITY_MATCHER = 'Bash|PowerShell|WebSearch|WebFetch|Agent|Task'
+    const isActivityHook = (h) => h && typeof h.command === 'string' && h.command.includes(ACTIVITY_HOOK)
+    const activityGroup = settings.hooks.PreToolUse.find((g) =>
+      g && Array.isArray(g.hooks) && g.hooks.some(isActivityHook))
+    if (!activityGroup) {
+      settings.hooks.PreToolUse.push({
+        matcher: ACTIVITY_MATCHER,
+        hooks: [{
+          type: 'command',
+          command: `node ${path.join(toUnpackedPath(REPO_ROOT), 'hooks', ACTIVITY_HOOK)}`,
+        }],
       })
+    } else if (activityGroup.matcher !== ACTIVITY_MATCHER) {
+      if (activityGroup.hooks.length === 1) {
+        activityGroup.matcher = ACTIVITY_MATCHER
+      } else {
+        const entry = activityGroup.hooks.find(isActivityHook)
+        activityGroup.hooks = activityGroup.hooks.filter((h) => !isActivityHook(h))
+        settings.hooks.PreToolUse.push({ matcher: ACTIVITY_MATCHER, hooks: [entry] })
+      }
     }
 
     // v0.0.41: AskUserQuestion redirect (Mino live repro 2026-08-04) -- the
