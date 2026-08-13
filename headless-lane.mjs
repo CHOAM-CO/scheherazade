@@ -574,8 +574,21 @@ async function main() {
       const resultTs = Date.now()
       openTurn = false // the watchdog stands down until the next stdin write
       lastTurnEndTs = resultTs
-      const p = readPending()
-      if (p.length) writePending(p.filter((ev) => (Number(ev.ts) || 0) > resultTs))
+      // Only a SUCCESS result pays for pending events (2026-08-13, the
+      // silent-death tail): an ERROR turn answered nobody, so clearing the
+      // FIFO here made every message that merged into a doomed turn (429
+      // storm, poisoned transcript) vanish without redelivery -- the user's
+      // question died with the turn and nothing ever said so. Left in the
+      // FIFO, the existing machinery does the right thing at each exit:
+      //   - next turn succeeds (resumed context still carries the messages,
+      //     the reply addresses them) -> that success result clears them;
+      //   - 3-strike breaker / watchdog recycles -> boot redelivery sends
+      //     them exactly once (redelivered:true already prevents loops, the
+      //     [redelivered] note already tells the model not to double-reply).
+      if (!e.is_error) {
+        const p = readPending()
+        if (p.length) writePending(p.filter((ev) => (Number(ev.ts) || 0) > resultTs))
+      }
       // Context-pressure check (rotation rule 1: schedule, never cut here).
       // Last assistant usage = standing context; result usage = cumulative
       // fallback only (v2.1 note atop the rotation constants).

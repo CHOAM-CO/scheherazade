@@ -504,6 +504,7 @@ const rl = createInterface({ input: process.stdin })
 rl.on('line', (l) => {
   fs.appendFileSync(process.env.FAKE_SINK, l + '\\n')
   if (l.includes('emit-result')) process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', num_turns: 1 }) + '\\n')
+  if (l.includes('emit-error')) process.stdout.write(JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'upstream fell over (fake)', num_turns: 1 }) + '\\n')
 })
 process.on('SIGTERM', () => process.exit(0))
 `)
@@ -568,6 +569,34 @@ process.on('SIGTERM', () => process.exit(0))
   }
   assert(!fs.existsSync(pendPath),
     'result pays off ALL entries written before it (merge semantics, probe 6)')
+
+  // an ERROR result pays for NOTHING (2026-08-13, the silent-death tail):
+  // a message that merged into a doomed turn stays in the FIFO for the
+  // recycle redelivery instead of vanishing unanswered.
+  await post('emit-error 스톰에 삼켜질 질문')
+  await waitSinkLines(3)
+  {
+    const d = Date.now() + 4000
+    let pend = null
+    while (Date.now() < d) {
+      try { pend = JSON.parse(fs.readFileSync(pendPath, 'utf8')) } catch { pend = null }
+      if (pend && pend.length) break
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    assert(pend && pend.some((ev) => String(ev.content).includes('삼켜질 질문')),
+      'an error result does NOT pay off pending (swallowed message survives for redelivery)')
+  }
+  await post('emit-result 이제 성공 턴')
+  await waitSinkLines(4)
+  {
+    const d = Date.now() + 4000
+    while (Date.now() < d) {
+      if (!fs.existsSync(pendPath)) break
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    assert(!fs.existsSync(pendPath),
+      'the NEXT success result pays for the error-turn survivors too (resumed context answered them)')
+  }
 
   // a message that never gets a result stays pending across the kill
   await post('답 없는 질문')
