@@ -776,6 +776,76 @@ function createHarnessRender(ctx) {
     }
   }
 
+  // v0.1.10: vendored chromux (zero-dep Chrome-over-CDP CLI, MIT,
+  // github.com/modakbul-gongbang/chromux) -- the web-search path for
+  // non-Anthropic backends, where Claude Code's WebSearch is a server-side
+  // Anthropic tool and silently returns empty (magi-win/deepseek live repro
+  // 2026-08-14). Same sync shape as syncTmuxPortable above, plus two extras:
+  //   - wrapper scripts in DATA_HOME/bin (chromux / chromux.cmd) so the agent
+  //     invokes it path-independently -- the lane's PATH has no npm global
+  //     bin, and `node <abs>/chromux.mjs` needs an absolute path the skill
+  //     text cannot know at template-write time
+  //   - chromux's own bundled skills (skills/chromux, skills/chromux-work)
+  //     seeded into .claude/skills, copy-if-missing like seedSkillDefinitions
+  function syncChromuxPortable() {
+    try {
+      const candidates = [
+        path.join(REPO_ROOT, '..', 'chromux'), // packaged: Resources/ sibling of app.asar
+        path.join(REPO_ROOT, 'vendor', 'chromux'), // dev / CLI deployment
+      ]
+      const src = candidates.find((p) => fs.existsSync(path.join(p, 'chromux.mjs')))
+      if (!src) return false // build predates vendoring -- nothing to sync
+      const dst = path.join(DATA_HOME, 'bin', 'chromux-portable')
+      const readVersion = (dir) => {
+        try { return fs.readFileSync(path.join(dir, 'VERSION'), 'utf8').trim() } catch { return null }
+      }
+      const srcVersion = readVersion(src)
+      const current = srcVersion && srcVersion === readVersion(dst) && fs.existsSync(path.join(dst, 'chromux.mjs'))
+      if (!current) {
+        const tmp = `${dst}.tmp`
+        fs.rmSync(tmp, { recursive: true, force: true })
+        fs.cpSync(src, tmp, { recursive: true })
+        fs.rmSync(dst, { recursive: true, force: true })
+        fs.renameSync(tmp, dst)
+        console.error(`[scheherazade/onboarding] chromux synced into DATA_HOME/bin (${srcVersion || 'unversioned'})`)
+      }
+      // Wrappers are rewritten every boot (cheap, and they carry an absolute
+      // path that must track DATA_HOME if it ever moves). `node` on PATH is
+      // already a harness-wide assumption -- every hook runs as `node
+      // hooks/*.mjs` (run.sh's own comment).
+      const entry = path.join(dst, 'chromux.mjs')
+      const binDir = path.join(DATA_HOME, 'bin')
+      fs.writeFileSync(path.join(binDir, 'chromux.cmd'), `@echo off\r\nnode "${entry}" %*\r\n`)
+      const shPath = path.join(binDir, 'chromux')
+      fs.writeFileSync(shPath, `#!/bin/sh\nexec node "${entry}" "$@"\n`)
+      fs.chmodSync(shPath, 0o755)
+      // Seed chromux's bundled skills (SKILL.md + topics/, so a plain
+      // recursive copy -- seedSkillDefinitions' single-file shape does not
+      // fit). Copy-if-missing: a user-edited skill survives updates.
+      for (const name of ['chromux', 'chromux-work']) {
+        const skillSrc = path.join(dst, 'skills', name)
+        const skillDst = path.join(SKILLS_DIR, name)
+        if (!fs.existsSync(path.join(skillSrc, 'SKILL.md'))) continue
+        if (fs.existsSync(path.join(skillDst, 'SKILL.md'))) continue
+        try {
+          const tmp = `${skillDst}.tmp`
+          fs.rmSync(tmp, { recursive: true, force: true })
+          fs.cpSync(skillSrc, tmp, { recursive: true })
+          fs.mkdirSync(path.dirname(skillDst), { recursive: true })
+          fs.rmSync(skillDst, { recursive: true, force: true })
+          fs.renameSync(tmp, skillDst)
+          log(`seeded skill ${name} into .claude/skills (from vendored chromux)`)
+        } catch (err) {
+          console.error(`[scheherazade/onboarding] seeding chromux skill ${name} failed (continuing): ${err.message}`)
+        }
+      }
+      return true
+    } catch (err) {
+      console.error('[scheherazade/onboarding] chromux sync failed (web-search skill may miss its CLI):', err.message)
+      return false
+    }
+  }
+
   function renderAgentSubstrate({ displayName, tone, primaryTask }) {
     for (const dir of ['session_notes/.archive', 'journals', 'dreams', 'logs', '.review']) {
       fs.mkdirSync(path.join(DATA_HOME, dir), { recursive: true })
@@ -846,6 +916,7 @@ function createHarnessRender(ctx) {
     renderAgentSubstrate,
     readHarnessFailure,
     syncTmuxPortable,
+    syncChromuxPortable,
     HARNESS_FAILURE_PATH,
   }
 }

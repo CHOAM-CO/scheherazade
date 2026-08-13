@@ -1,0 +1,40 @@
+{
+  "name": "@team-attention/chromux",
+  "version": "0.28.1",
+  "description": "tmux for Chrome tabs — zero-dependency parallel Chrome tab controller via raw CDP",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/modakbul-gongbang/chromux"
+  },
+  "bin": {
+    "chromux": "chromux.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "chromux.mjs",
+    "README.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "apps/macos-status-bar/README.md",
+    "apps/macos-status-bar/assets",
+    "apps/macos-status-bar/build.sh",
+    "apps/macos-status-bar/install-app.sh",
+    "apps/macos-status-bar/install-release-app.sh",
+    "apps/macos-status-bar/make-icon.sh",
+    "apps/macos-status-bar/package-release.sh",
+    "apps/macos-status-bar/src",
+    "skills",
+    "install.md",
+    "status-app",
+    "snippets/_builtin",
+    "benchmarks",
+    "extension"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}

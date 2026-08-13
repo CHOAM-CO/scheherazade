@@ -2552,6 +2552,7 @@ function createOnboardingServer(onOnboardingComplete, agentControls) {
   harnessRender.ensureClaudeOnboardingDone() // first-ever-claude-run only; no-op once ~/.claude.json already has it
   harnessRender.refreshHarnessIfOnboarded() // every boot: shipped harness fixes reach existing installs (no-op pre-onboarding)
   harnessRender.syncTmuxPortable() // every boot: vendored tmux -> DATA_HOME/bin (attach lane, 극한의 딸깍; no-op when stamp current)
+  harnessRender.syncChromuxPortable() // every boot: vendored chromux -> DATA_HOME/bin + wrappers + its bundled skills (web-search path for non-Anthropic backends)
 
   return new Promise((resolve, reject) => {
     let allowedHosts = null // populated once listen() resolves and the real ephemeral port is known
