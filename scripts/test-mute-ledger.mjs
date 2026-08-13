@@ -160,12 +160,22 @@ console.log('mute-strike ledger fixtures\n')
   check('receipt match resets strikes', ledger?.strikes === 0, JSON.stringify(ledger))
 }
 
-// 4e. Receipt delivered to a DIFFERENT channel, args also wrong -> still
-//     blocks: the trigger channel genuinely never got an answer.
+// 4e. Receipt delivered to a DIFFERENT channel, args also wrong -> the trigger
+//     channel wasn't answered, but the agent DID deliver a message somewhere,
+//     so it is demonstrably not mute -> allow (exit 0) and clear strikes.
+//     REVERSAL (2026-08-13, dual-channel storm fix, hooks/stop-reply-guard.mjs
+//     `deliveredAnywhere`): the old contract blocked here (exit 2) and forced a
+//     cross-channel resend. With Discord + in-app both live and pings
+//     interleaving, that re-convicted on every Stop and the agent spammed 4-5
+//     dupes per message (Mino's live repro). The guard's job is muteness, not
+//     cross-channel completeness: a delivery anywhere is proof of life. See the
+//     matching pins in test-stop-reply-guard.mjs section 5.
 {
   const home = makeHome()
-  const { code } = runHook(home, { replied: 'wrong', capHit: false, deliveredTo: '888888888888888888' })
-  check('receipt to a different channel still blocks (exit 2)', code === 2, `got exit ${code}`)
+  runHook(home, { replied: false, capHit: true }) // dirty the ledger first
+  const { code, ledger } = runHook(home, { replied: 'wrong', capHit: false, deliveredTo: '888888888888888888' })
+  check('receipt to a different channel is not mute -> exits 0', code === 0, `got exit ${code}`)
+  check('delivery elsewhere clears strikes (not mute)', ledger?.strikes === 0, JSON.stringify(ledger))
 }
 
 // 5. Model changed under a dirty ledger -> count restarts, does not inherit.

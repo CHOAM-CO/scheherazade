@@ -653,7 +653,7 @@ button.nav-ctl.is-busy::after {
   color: var(--fg-faint);
   text-decoration: none;
   font-size: 0.82rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid transparent;
 }
 .nav-subtab:hover { color: var(--fg-dim); background: var(--panel-raised); }
