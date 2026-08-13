@@ -729,6 +729,13 @@ window.COPY = {
     // tab order is meaning here: the messenger the agent lives through
     // outranks what it remembers and how it runs.
     tabs: { chat: 'Chat', channels: 'Channels', memory: 'Memory', connectors: 'Engine', settings: 'Settings', appearance: 'Appearance', logs: 'Logs' },
+    // IA v2 (2026-08-13): 7 flat tabs collapsed to 4 daily surfaces
+    // (Chat/Memory/Settings/Logs); the config-family pages (Channels, model &
+    // providers, Appearance) live under a Settings sub-nav. Labels below name
+    // the sub-nav rows -- "Model & Providers" replaces the ambiguous "Engine"/
+    // "Connectors" split the page had.
+    subGeneral: 'General',
+    subModel: 'Model & Providers',
     label: 'AGENT',
     states: { live: 'Running', connecting: 'Starting…', stopped: 'Stopped', failed: 'Failed', idle: 'Not started' },
     start: 'Start',

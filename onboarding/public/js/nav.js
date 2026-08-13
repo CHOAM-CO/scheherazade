@@ -104,27 +104,36 @@
   // shipped as page titles (memoryPane.title / settings.title / the new
   // connectors.title) rather than inventing new ones. Active tab is derived
   // from the URL, never hand-set, so it can't drift from reality.
+  // IA v2 (2026-08-13, Mino "너무 잡다하고 어디에 뭐있는지 모르겠음 ... GUI 붙어있는
+  // 에이전트들 참고해서 대공사"): 7 flat tabs read as an undifferentiated pile.
+  // Collapsed to FOUR daily surfaces -- Chat (talk), Memory (what it remembers),
+  // Settings (how it's set up), Logs (debug) -- with the config-family pages
+  // (Channels, Model & Providers, Appearance) demoted to a Settings sub-nav.
+  // This is the chat-primary + settings-cluster shape the referenced desktop
+  // agent apps use. Routing is UNCHANGED -- each page keeps its own URL; only
+  // the nav reflects the hierarchy, so the fold carries no reroute risk.
   const TABS = [
-    // chat first (in-app chat slice 4, 2026-07-30). NAMED DEVIATION from
-    // Mino 07-16 "맨 앞에 채널 섹션": that order was set when messengers
-    // were the only way to talk to the agent; this tab IS the talking.
-    // Flagged in the slice-4 report -- if Mino wants channels back first,
-    // this one line is the revert.
     { id: 'chat', href: '/chat', label: NAV.tabs.chat },
-    // channels next (multichannel v0.0.18, Mino 07-16 "맨 앞에 채널 섹션").
-    // '/' still lands on /memory -- tab ORDER changed, the home page didn't;
-    // changing the landing is a separate product call, not a ride-along.
-    { id: 'channels', href: '/channels', label: NAV.tabs.channels },
     { id: 'memory', href: '/memory', label: NAV.tabs.memory },
-    { id: 'connectors', href: '/connectors', label: NAV.tabs.connectors },
     { id: 'settings', href: '/settings', label: NAV.tabs.settings },
-    { id: 'appearance', href: '/appearance', label: NAV.tabs.appearance },
     // logs LAST, deliberately low-key (Mino 07-16: "버튼 어딘가에 짱박아놓고")
     // -- a dev/debug surface, not a daily destination.
     { id: 'logs', href: '/logs', label: NAV.tabs.logs },
   ]
 
-  function activeTabId() {
+  // The Settings cluster. When the current page is one of these, the primary
+  // "Settings" tab is active AND this second row renders beneath it. 'settings'
+  // itself is the "General" entry so the cluster always has a home to land on.
+  const SETTINGS_SUBTABS = [
+    { id: 'settings', href: '/settings', label: NAV.subGeneral },
+    { id: 'channels', href: '/channels', label: NAV.tabs.channels },
+    { id: 'connectors', href: '/connectors', label: NAV.subModel },
+    { id: 'appearance', href: '/appearance', label: NAV.tabs.appearance },
+  ]
+  const SETTINGS_FAMILY = new Set(['settings', 'channels', 'connectors', 'appearance'])
+
+  // The raw page identity from the URL (never hand-set, so it can't drift).
+  function rawPageId() {
     const path = window.location.pathname
     if (path.startsWith('/chat')) return 'chat'
     if (path.startsWith('/channels')) return 'channels'
@@ -134,6 +143,11 @@
     if (path.startsWith('/logs')) return 'logs'
     return 'memory' // '/memory' and '/' both read as home
   }
+  // Which PRIMARY tab lights up: settings-family pages roll up to 'settings'.
+  function activePrimaryId() {
+    const raw = rawPageId()
+    return SETTINGS_FAMILY.has(raw) ? 'settings' : raw
+  }
 
   // ── shell skeleton ──────────────────────────────────────────────────────
   // Was memory.html's static cat-agent-control markup; relocated into JS
@@ -142,7 +156,8 @@
   // mute-banner, status-line) so app.css's existing rules keep applying —
   // only .app-nav/.nav-status/.nav-tabs/.nav-tab are genuinely new classes.
   function renderSkeleton(root) {
-    const active = activeTabId()
+    const active = activePrimaryId()
+    const rawPage = rawPageId()
     root.innerHTML =
       '<div class="nav-status">' +
         '<span class="category-label" id="nav-agent-label"></span>' +
@@ -182,7 +197,8 @@
         '<div class="mute-banner-text" id="nav-turnerror-text"></div>' +
         '<button type="button" id="nav-turnerror-dismiss"></button>' +
       '</div>' +
-      '<div class="nav-tabs"></div>'
+      '<div class="nav-tabs"></div>' +
+      '<div class="nav-subtabs" hidden></div>'
     $('nav-agent-label').textContent = NAV.label
     const tabsEl = root.querySelector('.nav-tabs')
     for (const t of TABS) {
@@ -191,6 +207,19 @@
       a.className = 'nav-tab' + (t.id === active ? ' active' : '')
       a.textContent = t.label
       tabsEl.appendChild(a)
+    }
+    // Settings sub-nav: only on the config-family pages, and the specific
+    // sub-page (not the rolled-up 'settings') is the one marked active.
+    if (SETTINGS_FAMILY.has(rawPage)) {
+      const subEl = root.querySelector('.nav-subtabs')
+      subEl.hidden = false
+      for (const t of SETTINGS_SUBTABS) {
+        const a = document.createElement('a')
+        a.href = t.href
+        a.className = 'nav-subtab' + (t.id === rawPage ? ' active' : '')
+        a.textContent = t.label
+        subEl.appendChild(a)
+      }
     }
   }
 

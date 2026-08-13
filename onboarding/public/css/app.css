@@ -639,6 +639,30 @@ button.nav-ctl.is-busy::after {
 .nav-tab:hover { color: var(--fg-dim); }
 .nav-tab.active { color: var(--fg); border-bottom-color: var(--accent); }
 
+/* Settings sub-nav (IA v2): a lighter second row shown only on the
+   config-family pages. Pill-shaped rather than underlined so it reads as a
+   sub-level of the primary tabs above, not a competing row. */
+.nav-subtabs {
+  display: flex;
+  gap: 0.3rem;
+  margin-top: 0.6rem;
+  flex-wrap: wrap;
+}
+.nav-subtab {
+  padding: 0.32rem 0.75rem;
+  color: var(--fg-faint);
+  text-decoration: none;
+  font-size: 0.82rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+.nav-subtab:hover { color: var(--fg-dim); background: var(--panel-raised); }
+.nav-subtab.active {
+  color: var(--fg);
+  background: var(--panel-raised);
+  border-color: var(--border);
+}
+
 .entry-row {
   display: flex;
   justify-content: space-between;
