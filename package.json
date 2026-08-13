@@ -52,6 +52,7 @@
       "provider-env.cjs",
       "setup-token.cjs",
       "setup-token-session.cjs",
+      "oauth-usage-session.cjs",
       "tcc-probe.cjs",
       "run.sh",
       "supervisor.mjs",

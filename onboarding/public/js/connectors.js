@@ -251,13 +251,67 @@
     body = laneBody('conn-usage-lane-claude', C.usageLaneClaude)
     if (!u.ok) {
       laneNote(body, u.branch === 'no_token' ? C.usageNoToken : (u.detail || C.usageError))
+      // The real fix for the stuck "HTTP 429" (2026-08-13): the setup-token
+      // the app holds carries user:inference only, which the usage endpoint
+      // refuses. Offer a one-click full-scope login that mints a credential
+      // the meter can actually read. Shown on ANY failure -- a 429/403 here
+      // is exactly the scope-refusal case, and no_token means nothing is
+      // connected yet either.
+      usageConnectBtn(body, force)
       return
     }
     body.appendChild(gaugeSeg({ label: '5h', pctVal: u.fiveHourPct, meta: at(u.fiveHourResetsAt, false) }))
     body.appendChild(gaugeSeg({ label: C.usageWinWeekly, pctVal: u.weeklyPct, meta: at(u.weeklyResetsAt, true) }))
-    // cli-session fallback (403-scope fix): say whose login the meter reads.
-    const notes = [u.source === 'cli-session' ? C.usageCliSourceNote : '', staleNoteOf(u)].filter(Boolean)
+    // Name whose login the meter reads: cli-session = this machine's Claude
+    // CLI; app-login = the setup-token (scope-limited, may degrade); the
+    // full-scope usage-oauth credential needs no note (it is the intended one).
+    const srcNote = u.source === 'cli-session' ? C.usageCliSourceNote
+      : (u.source === 'app-login' ? C.usageSetupTokenSourceNote : '')
+    const notes = [srcNote, staleNoteOf(u)].filter(Boolean)
     if (notes.length) laneNote(body, notes.join(' · '))
+  }
+
+  // Full-scope usage-login flow (loopback OAuth). Starts the server session,
+  // opens the authorize URL in the browser (window.open -> shell.openExternal
+  // in the app), then polls status until a terminal state. On 'connected' it
+  // re-renders the gauge -- which now reads the fresh full-scope credential.
+  const USAGE_LOGIN_POLL_MS = 1500
+  function usageConnectBtn(body, force) {
+    const btn = document.createElement('button')
+    btn.className = 'secondary'
+    btn.style.marginTop = '0.4rem'
+    btn.textContent = C.usageConnectCta
+    const status = document.createElement('div')
+    status.className = 'usage-lane-note'
+    btn.onclick = async () => {
+      btn.disabled = true
+      status.textContent = C.usageConnectStarting
+      let r
+      try {
+        r = await api('/api/usage-login/start', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+        })
+      } catch (err) { btn.disabled = false; status.textContent = GEN(err.message); return }
+      if (r && r.authorizeUrl) window.open(r.authorizeUrl, '_blank', 'noopener')
+      status.textContent = C.usageConnectWaiting
+      pollUsageLogin(btn, status, force)
+    }
+    body.appendChild(btn)
+    body.appendChild(status)
+  }
+
+  function pollUsageLogin(btn, status, force) {
+    setTimeout(async () => {
+      let s
+      try { s = await api('/api/usage-login/status') } catch (err) { status.textContent = GEN(err.message); btn.disabled = false; return }
+      if (s.state === 'connected') { status.textContent = C.usageConnectDone; renderClaudeUsageLine(true); return }
+      if (s.state === 'failed' || s.state === 'cancelled') {
+        btn.disabled = false
+        status.textContent = s.reason === 'timeout' ? C.usageConnectTimeout : C.usageConnectFailed
+        return
+      }
+      pollUsageLogin(btn, status, force) // awaiting_authorize / exchanging -> keep polling
+    }, USAGE_LOGIN_POLL_MS)
   }
 
   async function renderCodexUsageLine(force) {

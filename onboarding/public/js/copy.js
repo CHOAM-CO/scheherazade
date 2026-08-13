@@ -946,6 +946,14 @@ window.COPY = {
     // Usage gauge cli-session source label (403-scope fix): honest about
     // WHICH login the number describes.
     usageCliSourceNote: 'via this Mac\'s Claude CLI login',
+    usageSetupTokenSourceNote: 'via the setup-token — may not read usage; connect below for accuracy',
+    // Full-scope usage-login CTA (2026-08-13, the real fix for the stuck 429).
+    usageConnectCta: 'Connect Claude usage',
+    usageConnectStarting: 'Opening a login window…',
+    usageConnectWaiting: 'Finish signing in in the browser — this updates on its own.',
+    usageConnectDone: 'Connected — reading usage.',
+    usageConnectFailed: 'Login did not finish. Try again.',
+    usageConnectTimeout: 'Login timed out. Try again.',
     dangerLabel: 'Delete the app and everything it made',
     dangerNote: "Removes the agent, its memory and journals, saved credentials, caches, and the app itself — everything, without Terminal. Your personal Claude Code settings (~/.claude.json) are left untouched.",
     dangerButton: 'Delete everything…',
@@ -1326,6 +1334,13 @@ window.COPY = {
     // (the old code referenced a key that only existed in settings and
     // rendered "undefined" on the cli-session branch; latent until 08-05).
     usageCliSourceNote: "via this machine's Claude CLI login",
+    usageSetupTokenSourceNote: 'via the setup-token — may not read usage; connect below for accuracy',
+    usageConnectCta: 'Connect Claude usage',
+    usageConnectStarting: 'Opening a login window…',
+    usageConnectWaiting: 'Finish signing in in the browser — this updates on its own.',
+    usageConnectDone: 'Connected — reading usage.',
+    usageConnectFailed: 'Login did not finish. Try again.',
+    usageConnectTimeout: 'Login timed out. Try again.',
     usageNoToken: 'no Claude login on file',
     usageCodexNoLogin: 'no Codex login on this Mac (~/.codex)',
     usageOllamaNoKey: 'no ollama.com API key on file',

@@ -83,6 +83,14 @@ const attachTopology = require('../attach-topology.cjs') // /api/topology read s
 // boot on a box where the native module did not build.
 const { createSetupTokenSession, killSetupTokenChildOnShutdown } = require('../setup-token-session.cjs')
 
+// Full-scope OAuth capture for the usage gauge (2026-08-13, Mino: the win
+// tester's gauge is stuck on HTTP 429 because setup-token's user:inference
+// scope cannot read the usage endpoint). Loopback flow, no native module.
+const {
+  createUsageOAuthSession, killUsageOAuthChildOnShutdown, refreshUsageCredential,
+  PROVIDER_ID: USAGE_PROVIDER_ID,
+} = require('../oauth-usage-session.cjs')
+
 // sudo askpass per-boot token (0.1.0 prep): generated in createOnboardingServer's
 // listen callback, checked by GET /api/sudo/password. Module-level on purpose --
 // the route handler and the listen callback live in different closures. null =
@@ -1951,6 +1959,24 @@ function getSetupTokenSession(agentControls) {
   return setupTokenSession
 }
 
+// ── full-scope OAuth capture for the usage gauge ──────────────────────────
+// Sibling to the setup-token session above, same single-flight rationale
+// (one loopback callback port at a time). This one needs no CLI binary -- it
+// runs the OAuth code exchange in-process -- so it is not gated on
+// agentControls and can be built at first request unconditionally. The stored
+// credential is 'claude-usage', kept separate from the setup-token so the
+// agent lane and the meter never share a token.
+let usageOAuthSession = null
+function getUsageOAuthSession() {
+  if (!usageOAuthSession) {
+    usageOAuthSession = createUsageOAuthSession({
+      storeUsageCredential: (json) => storeProviderKeyVerified(USAGE_PROVIDER_ID, json),
+      log,
+    })
+  }
+  return usageOAuthSession
+}
+
 // Parser for `claude mcp list`: real output has a health-check preamble
 // line and local servers marked "⏸ Pending approval", not just the doc's two
 // states. Line-based match naturally skips the preamble; we keep ONLY
@@ -2272,6 +2298,10 @@ function killAllLoginChildren(signal = 'SIGTERM') {
   // print a 1-year token into a pty whose owner is gone. Rides the same
   // before-quit/fatal wiring in main.cjs rather than adding a second export.
   killSetupTokenChildOnShutdown()
+  // The usage-gauge OAuth flow holds the same class of loopback /callback
+  // listener (no child process, but a live socket that could still complete a
+  // token exchange). Close it on the same shutdown path.
+  killUsageOAuthChildOnShutdown()
   // Claude CLI install-assist child: same detached-child class. An orphaned
   // installer finishing after the app is gone is harmless-ish (it just
   // installs), but supervision-less children are exactly the pattern this
@@ -2898,6 +2928,39 @@ function readCliSessionToken() {
   } catch { return null }
 }
 
+// The full-scope usage credential ('claude-usage'), minted by the OAuth login
+// flow. Unlike the setup-token this one is short-lived (8h) but carries a
+// refresh token (~29d), so the gauge refreshes it transparently: if the
+// stored access token is within a 5-minute skew of expiry, run the refresh
+// grant, re-store the rotated credential, and return the fresh access token.
+// Every failure path returns null so the caller falls through to the next
+// credential -- a transient refresh failure must NOT delete the stored
+// credential (the refresh token may still be good next time).
+const USAGE_REFRESH_SKEW_MS = 5 * 60 * 1000
+async function readUsageOAuthToken() {
+  let raw
+  try { raw = readProviderKey(USAGE_PROVIDER_ID) } catch { return null }
+  if (!raw) return null
+  let cred
+  try { cred = JSON.parse(raw) } catch { return null }
+  if (!cred || !cred.accessToken) return null
+  const stillFresh = !cred.expiresAt || cred.expiresAt - Date.now() > USAGE_REFRESH_SKEW_MS
+  if (stillFresh) return cred.accessToken
+  // Expiring or expired -> refresh. Never throws.
+  const refreshed = await refreshUsageCredential(raw)
+  if (!refreshed) {
+    // Refresh failed. If the access token has not YET expired, use it anyway
+    // (a refresh outage should not blind a still-valid meter); if it has,
+    // return null and let the next credential answer.
+    if (cred.expiresAt && cred.expiresAt < Date.now()) return null
+    return cred.accessToken
+  }
+  try { storeProviderKeyVerified(USAGE_PROVIDER_ID, refreshed) } catch (err) {
+    log(`usage-gauge: refreshed credential store failed: ${err.message}`)
+  }
+  try { return JSON.parse(refreshed).accessToken } catch { return null }
+}
+
 // force (2026-08-05, Mino: 수동 리프레시는 진짜 파싱이어야 함): the Refresh
 // button passes ?force=1 to bypass the 60s read-cache -- without it a manual
 // refresh inside the window is a silent no-op. The cache still gets WRITTEN
@@ -2932,35 +2995,50 @@ async function fetchClaudeSubscriptionUsage(opts = {}) {
     })
     return { res, body: await res.json().catch(() => null) }
   }
-  let token = null
+  // Credential priority (2026-08-13, the real fix for the win tester's stuck
+  // 429). The FIRST credential the app can hold that actually reads the
+  // endpoint is the full-scope 'claude-usage' OAuth token minted by the usage
+  // login flow. The old app credential -- the setup-token -- carries
+  // user:inference only and the endpoint refuses it (403, promoting to a
+  // persistent 429 under polling), so it now sits BELOW the full-scope token
+  // and above the machine's CLI session:
+  //   1. claude-usage  (full-scope app OAuth, refreshed on the fly)
+  //   2. claude-subscription  (setup-token; kept for boxes that only have it)
+  //   3. this machine's Claude CLI login (macOS keychain / ~/.claude)
+  let usageToken = null
   try {
-    token = readProviderKey('claude-subscription')
+    usageToken = await readUsageOAuthToken()
   } catch (err) {
-    return failWith('token_unreadable', err.message)
+    log(`usage-gauge: usage-oauth read failed: ${err.message}`)
   }
-  let source = 'app-login'
+  let subToken = null
+  try {
+    subToken = readProviderKey('claude-subscription')
+  } catch (err) {
+    // A setup-token that cannot be decrypted is not fatal here: the
+    // full-scope token or the CLI session may still answer.
+    if (!usageToken) return failWith('token_unreadable', err.message)
+  }
+  let source = usageToken ? 'usage-oauth' : 'app-login'
   let out
   try {
-    if (token) out = await hit(token)
-    // setup-token refused or absent -> CLI session fallback. Widened from
-    // 401/403-only to ANY non-ok (2026-08-13, win-tester stuck on "HTTP
-    // 429"): the endpoint's refusal status for a scope-limited token is an
-    // upstream detail that has already shifted once (403 field case
-    // 2026-08-04), and a 429 against the app token says nothing about the
-    // CLI session's own budget -- they are different credentials. The
-    // failure cooldown above keeps this from doubling traffic while the
-    // endpoint is genuinely down.
+    const firstToken = usageToken || subToken
+    if (firstToken) out = await hit(firstToken)
+    // Fall through on ANY non-ok. Each fallback is a DIFFERENT credential, so
+    // one's 403/429 says nothing about the next's budget; the failure
+    // cooldown above keeps this from doubling traffic while the endpoint is
+    // genuinely down. "keep the better answer": a fallback only replaces the
+    // prior read if it actually succeeded, so a total failure still reports
+    // the FIRST credential's real status rather than hiding it.
+    if ((!out || !out.res.ok) && usageToken && subToken) {
+      const retry = await hit(subToken)
+      if (retry.res.ok || !out) { out = retry; source = 'app-login' }
+    }
     if (!out || !out.res.ok) {
       const cliToken = readCliSessionToken()
       if (cliToken) {
         const retry = await hit(cliToken)
-        // keep the better answer: the fallback only replaces the app-login
-        // read if it actually succeeded (a 429 on both must report the
-        // FIRST credential's status, not hide it behind the second's).
-        if (retry.res.ok || !out) {
-          out = retry
-          source = 'cli-session'
-        }
+        if (retry.res.ok || !out) { out = retry; source = 'cli-session' }
       }
     }
   } catch (err) {
@@ -3296,6 +3374,8 @@ const staticCtx = {
   startMcpConnectorLogin, MCP_CONNECTOR_SPEC,
   // in-app setup-token capture (claude-subscription)
   getSetupTokenSession,
+  // full-scope OAuth capture for the usage gauge (claude-usage)
+  getUsageOAuthSession,
   // usage gauge + update check (2026-08-04 tester requests)
   fetchClaudeSubscriptionUsage, fetchCodexUsage, fetchOllamaUsage, checkForUpdate,
   extractClaudeModelsFromBin, fetchOllamaCloudCatalog,
@@ -3333,6 +3413,7 @@ const API_ROUTES = [
   ...require('./routes/setup-token.cjs').createRoutes(staticCtx), // G10
   ...require('./routes/chat.cjs').createRoutes(staticCtx), // G11
   ...require('./routes/migrate.cjs').createRoutes(staticCtx), // G12 (design-0022)
+  ...require('./routes/oauth-usage.cjs').createRoutes(staticCtx), // G13 (usage-gauge full-scope OAuth)
 ]
 
 module.exports = {
