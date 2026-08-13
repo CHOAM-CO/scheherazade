@@ -34,6 +34,20 @@ const SELF_PATH = fileURLToPath(import.meta.url)
 const SCRIPT_DIR = path.dirname(SELF_PATH)
 const IS_WIN = process.platform === 'win32'
 
+// Absolute powershell path (2026-08-13, magi-win log: "orphan sweep failed
+// (spawnSync powershell.exe ENOENT)"). The supervisor spawns with a scrubbed
+// PATH (ensureNodeShim rebuilds it for the CLI child, but the supervisor's own
+// execFileSync calls run in the parent env, which on Windows does not
+// guarantee System32 is on PATH). A bare 'powershell.exe' then ENOENTs and the
+// CommandLine read + orphan sweep both silently no-op. Resolve against
+// %SystemRoot% when we can; fall back to the bare name (which still works
+// wherever PATH is intact) so a missing env var never makes this worse.
+const POWERSHELL_EXE = IS_WIN
+  ? (process.env.SystemRoot
+    ? path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    : 'powershell.exe')
+  : 'powershell.exe'
+
 // ── auto-answer layer: REMOVED (design-0020, headless topology) ─────────────
 // The expect-parity dialog matcher (trust / confirm / local development /
 // text style / BYOK "1"-no-CR) answered TUI dialogs that `claude -p` never
@@ -321,7 +335,7 @@ function defaultReadCommandLine(pid) {
     // CommandLine present and matching -- receipts in
     // docs/supervisor-design.md (Architecture). Fail-safe posture stands:
     // an error here just reads as "not verified".
-    return execFileSync('powershell.exe', ['-NoProfile', '-Command',
+    return execFileSync(POWERSHELL_EXE, ['-NoProfile', '-Command',
       `(Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}").CommandLine`], { encoding: 'utf8' }).trim()
   }
   return execFileSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8' })
@@ -344,7 +358,7 @@ function sweepOrphansDefault(pkillPattern, log) {
       // defaultReadCommandLine above). Verify the sweep itself when a live
       // win session exists to leave a real orphan behind.
       const escaped = pkillPattern.replace(/'/g, "''")
-      execFileSync('powershell.exe', ['-NoProfile', '-Command',
+      execFileSync(POWERSHELL_EXE, ['-NoProfile', '-Command',
         `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${escaped}*' -and $_.ProcessId -ne ${process.pid} } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`],
         { encoding: 'utf8' })
     } else {
@@ -660,13 +674,19 @@ function spawnHeadlessChild(cfg, { now = () => Date.now(), log, watchdogBounces 
   }
   // STALL_TIMEOUT=0 disables the whole watchdog (spark F2): one knob, no
   // half-disabled surprises for an operator opting out of bounces.
-  const watchdogOn = cfg.stallTimeoutSec > 0 && !IS_WIN
-  if (cfg.stallTimeoutSec > 0 && IS_WIN) {
-    // Intentional fail-quiet made loud (review S3a): the transcript munge is
-    // unverified on Windows, so the watchdog stays off there -- but silently
-    // off IS the silent-detector class, so say it at every spawn.
-    log('watchdog: disabled on Windows (transcript path munge unverified) -- stall protection is NOT active')
-  }
+  //
+  // Windows: ENABLED as of 2026-08-13. The transcript munge is now verified on
+  // magi-win -- DATA_HOME C:\Users\minom\Documents\Scheherazade produced the
+  // real CLI project dir C--Users-minom-Documents-Scheherazade, exactly what
+  // transcriptDirFor's `[^a-zA-Z0-9] -> '-'` rule yields (pinned in
+  // test-supervisor.mjs). The tester runs Windows, and leaving the ONE OS
+  // where the silent-dead reports originated with no stall protection was the
+  // gap. Carried-over caveat, honest: killHandle's Windows taskkill /T /F was
+  // verified against a synthetic 3-level node tree (2026-08-01) but not yet
+  // against a live CLI+MCP tree on a real stall -- so the first real Windows
+  // bounce is the receipt still owed. The bounce budget bounds any misfire to
+  // 3 kills/6h before degrading to advisory.
+  const watchdogOn = cfg.stallTimeoutSec > 0
   // Same reasoning, the OTHER way off. The "not active" line used to live only
   // under the IS_WIN branch, so an operator (or a config typo) that zeroed
   // STALL_TIMEOUT on mac got no line at all -- silently off, which is the

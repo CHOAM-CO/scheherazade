@@ -555,10 +555,10 @@ console.log('\n-- stall watchdog: transcript tail verdicts (teardown Root B)')
     // 2026-08-01 magi-win first run: these two assert the POSIX munge rule
     // with POSIX fixtures; win path.resolve prefixes a drive letter
     // ('C:\...' -> 'C--Users-...'), so they test node's win path handling,
-    // not the munge. The watchdog is OFF on win anyway (supervisor.mjs
-    // watchdogOn gate: munge unverified there) -- same honesty as the
-    // integration SKIP: NOT a pass.
-    console.log('  SKIP  posix-fixture transcriptDirFor munge tests on win32 -- win munge rule unverified, watchdog off there; NOT a pass')
+    // not the munge. The full transcriptDirFor (realpathSync + join) is still
+    // only exercisable on win32; the munge RULE itself is now pinned
+    // platform-neutrally below against the verified magi-win receipt.
+    console.log('  SKIP  posix-fixture transcriptDirFor munge tests on win32 -- see the platform-neutral munge-rule pin below')
   } else {
     ok('transcriptDirFor munges cwd the way Claude Code does',
       transcriptDirFor('/Users/cto/Documents/Scheherazade', '/Users/cto')
@@ -569,6 +569,16 @@ console.log('\n-- stall watchdog: transcript tail verdicts (teardown Root B)')
       transcriptDirFor('/Users/x/My_Agent.data', '/h')
         .endsWith(path.join('.claude', 'projects', '-Users-x-My-Agent-data')))
   }
+  // Windows munge receipt (magi-win 2026-08-13): the CLI turned DATA_HOME
+  // C:\Users\minom\Documents\Scheherazade into the project dir
+  // C--Users-minom-Documents-Scheherazade -- exactly transcriptDirFor's
+  // `[^a-zA-Z0-9] -> '-'` rule (the drive colon and each backslash become a
+  // dash). The Windows watchdog is now ON on the strength of this; pin the
+  // rule itself, platform-neutrally, so a regex tweak cannot silently
+  // re-break the path the watchdog watches.
+  ok('Windows munge rule matches the magi-win receipt',
+    'C:\\Users\\minom\\Documents\\Scheherazade'.replace(/[^a-zA-Z0-9]/g, '-')
+      === 'C--Users-minom-Documents-Scheherazade')
   // spark F1: a trailing slash must not mint a different (never-written)
   // watch dir -- that fails quiet, the silent-detector class itself.
   // (platform-neutral: compares two calls, no posix fixture expectation)
