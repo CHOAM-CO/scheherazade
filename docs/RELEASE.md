@@ -43,6 +43,17 @@ Gotchas learned in the field:
 
 ## 3. Publish
 
+**Push the release commit FIRST.** `gh release create` with no `--target` tags
+the remote default branch's CURRENT head — so an unpushed version bump lands the
+tag on the PREVIOUS release's commit. The artifacts are still correct (they
+build from your working tree), but `git checkout v<version>` on the canonical
+repo then gives the wrong source. Caught live on 0.1.9 (Idea); the fix was a
+`git push` + delete-and-recreate of the canonical release. Do the push here:
+
+```sh
+git push origin master
+```
+
 Two repos get the release, one gets the update feed:
 
 ```sh
