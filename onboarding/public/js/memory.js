@@ -314,7 +314,7 @@
       del.className = 'secondary journal-del'
       del.textContent = J.del
       del.addEventListener('click', async () => {
-        const ok = await confirmDialog(J.delConfirm(row.date), J.delOk)
+        const ok = await confirmDialog(J.delConfirm(row.date), J.delOk, NAV.cancel)
         if (!ok) return
         del.disabled = true
         try {

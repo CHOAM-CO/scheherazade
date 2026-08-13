@@ -80,7 +80,7 @@
       showToast(C.autonomySaved)
       await loadAutonomy() // re-read from the server, never trust the form
     } catch (err) {
-      statusEl.textContent = /HH:MM|window/.test(err.message) ? C.autonomyInvalidWindow : (GEN.body || err.message)
+      statusEl.textContent = /HH:MM|window/.test(err.message) ? C.autonomyInvalidWindow : GEN(err.message)
       statusEl.classList.remove('hidden')
     } finally {
       btn.disabled = false

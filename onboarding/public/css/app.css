@@ -246,6 +246,60 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
 .status-line.success { color: var(--success); }
 .status-line.failure { color: var(--danger); }
 
+/* Status "bean" dot (2026-08-13, Mino: "Running같은 인디케이터는 텍스트 말고
+   빨간콩/초록콩으로"). The agent status bar gets a colored dot as the primary,
+   at-a-glance signal; the state word stays beside it as a quiet label. Scoped
+   to .nav-status so provider/other status-lines keep their existing rendering.
+   green=live, amber(pulsing)=connecting/idle, red=failed, grey=stopped. */
+.nav-status .status-line { display: inline-flex; align-items: center; gap: 0.45rem; }
+.nav-status .status-line::before {
+  content: ''; width: 0.62rem; height: 0.62rem; border-radius: 50%;
+  background: var(--fg-faint); flex: none; transition: background 0.15s ease;
+}
+.nav-status .status-line.success::before {
+  background: var(--success); box-shadow: 0 0 0 3px rgb(95 174 124 / 0.18);
+}
+.nav-status .status-line.failure::before {
+  background: var(--danger); box-shadow: 0 0 0 3px rgb(217 105 95 / 0.18);
+}
+.nav-status .status-line.pending::before {
+  background: var(--warn); animation: status-dot-pulse 1.3s ease-in-out infinite;
+}
+@keyframes status-dot-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(217 161 95 / 0.5); }
+  50% { box-shadow: 0 0 0 4px rgb(217 161 95 / 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .nav-status .status-line.pending::before { animation: none; box-shadow: 0 0 0 3px rgb(217 161 95 / 0.18); }
+}
+
+/* Agent lifecycle buttons: the ACTION must read at a glance, not just the
+   label (Mino 2026-08-13: "Stop/Restart 눌림/안눌림 비주얼적으로 바로 보이게").
+   Start = go (green), Stop = danger (red), Restart = neutral. A fired button
+   shows a busy/pressed state (inset + ring + spinner) until the status poll
+   settles, so a click is never ambiguous. */
+button.nav-ctl { position: relative; }
+button.nav-ctl.is-start { background: var(--success); color: #fff; border-color: transparent; }
+button.nav-ctl.is-start:hover:not(:disabled) { background: #55a072; }
+button.nav-ctl.is-stop {
+  background: transparent; color: var(--danger); border: 1px solid var(--danger);
+}
+button.nav-ctl.is-stop:hover:not(:disabled) { background: var(--danger); color: #fff; }
+button.nav-ctl.is-busy {
+  /* Amber, not blue: the status palette is green/red/orange only, and a blue
+     busy state next to a green Start reads ambiguous (Mino 2026-08-13). */
+  opacity: 1; cursor: default; color: transparent !important;
+  background: var(--warn) !important; border-color: transparent !important;
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.35), 0 0 0 2px rgb(217 161 95 / 0.4);
+}
+button.nav-ctl.is-busy::after {
+  content: ''; position: absolute; inset: 0; margin: auto;
+  width: 0.85rem; height: 0.85rem; border-radius: 50%;
+  border: 2px solid rgb(255 255 255 / 0.35); border-top-color: #fff;
+  animation: nav-ctl-spin 0.7s linear infinite;
+}
+@keyframes nav-ctl-spin { to { transform: rotate(360deg); } }
+
 .tutorial-step {
   border: 1px solid var(--border);
   border-radius: var(--radius);

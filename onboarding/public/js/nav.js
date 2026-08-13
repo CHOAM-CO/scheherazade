@@ -157,8 +157,8 @@
         '<span class="nav-status-detail" id="nav-status-context"></span>' +
         '<span class="nav-status-detail" id="nav-status-autonomy"></span>' +
         '<div class="agent-control-actions">' +
-          '<button class="secondary" id="nav-btn-startstop"></button>' +
-          '<button class="secondary hidden" id="nav-btn-restart"></button>' +
+          '<button class="secondary nav-ctl" id="nav-btn-startstop"></button>' +
+          '<button class="secondary nav-ctl hidden" id="nav-btn-restart"></button>' +
           '<button class="secondary hidden" id="nav-btn-discord"></button>' +
         '</div>' +
       '</div>' +
@@ -304,6 +304,13 @@
     const toggle = $('nav-btn-startstop')
     toggle.textContent = running ? NAV.stop : NAV.start
     toggle.dataset.action = running ? 'stop' : 'start'
+    // Semantic color so the action reads before the label does: Stop = danger,
+    // Start = go. Skipped while a control is busy so the spinner state isn't
+    // repainted mid-flight by a status poll.
+    if (!controlsBusy) {
+      toggle.classList.toggle('is-stop', running)
+      toggle.classList.toggle('is-start', !running)
+    }
     $('nav-btn-restart').classList.toggle('hidden', !running)
     renderRealityDetails(state)
   }
@@ -314,11 +321,22 @@
       busyStartState = lastPolledState
       busySawChange = false
       busyDeadline = Date.now() + MAX_DISABLE_MS
+    } else {
+      // Settled: clear the spinner/pressed state from whichever button fired.
+      $('nav-btn-startstop').classList.remove('is-busy')
+      $('nav-btn-restart').classList.remove('is-busy')
     }
     $('nav-btn-startstop').disabled = disabled
     $('nav-btn-restart').disabled = disabled
     const revert = $('nav-mute-revert')
     if (revert) revert.disabled = disabled
+  }
+
+  // Map a lifecycle action to the button that triggers it, so the busy/pressed
+  // spinner lands on the exact control the user clicked (not both).
+  function ctlButtonFor(action) {
+    if (action === 'restart') return $('nav-btn-restart')
+    return $('nav-btn-startstop') // start / stop / model-revert all ride this
   }
 
   async function pollAgentStatusOnce() {
@@ -349,6 +367,9 @@
   async function fireControl(action, body) {
     if (controlsBusy) return false
     setControlsDisabled(true)
+    // Pressed/busy spinner on the exact button that fired (start/stop/restart).
+    const fired = ctlButtonFor(action)
+    if (fired && fired.classList.contains('nav-ctl')) fired.classList.add('is-busy')
     try {
       await window.api(`/api/agent/${action}`, {
         method: 'POST',
