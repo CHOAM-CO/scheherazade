@@ -690,6 +690,13 @@ console.log('\n-- stall watchdog: transcript tail verdicts (teardown Root B)')
       newestTranscript(sub, { eraStart: Date.now() - 3600_000 }) === path.join(sub, 's.jsonl'))
     ok('no eraStart keeps the legacy pick-newest behavior',
       newestTranscript(sub) === path.join(sub, 's.jsonl'))
+    // admitName: our own resumed <id>.jsonl is admitted past the birthtime
+    // gate that would otherwise blind the watchdog on the resume path, while a
+    // foreign prior-era file with a different name stays excluded.
+    ok('resumed session file is admitted by name despite an old birthtime',
+      newestTranscript(sub, { eraStart: Date.now() + 3600_000, admitName: 's.jsonl' }) === path.join(sub, 's.jsonl'))
+    ok('a DIFFERENT prior-era file is still excluded (foreign hole not widened)',
+      newestTranscript(sub, { eraStart: Date.now() + 3600_000, admitName: 'someone-else.jsonl' }) === null)
   }
 
   // (f) tail window: entry buried past the tail window is still found via

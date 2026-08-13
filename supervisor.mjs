@@ -418,7 +418,19 @@ export function transcriptDirFor(mem, home = os.homedir()) {
 // session parked stalled in our cwd costs at most 3 kills per 6h before the
 // watchdog degrades to advisory logging -- a bounded nuisance, not an
 // unbounded kill loop. (history: docs/HISTORY.md)
-export function newestTranscript(dir, { eraStart = null } = {}) {
+// admitName (2026-08-13): the birthtime era filter is CORRECT against a
+// foreign session, but it also excluded OUR OWN resumed session. `claude -p
+// --resume <id>` appends to the pre-existing <id>.jsonl, whose birthtime is
+// from an earlier era, so after the first respawn every poll saw born <
+// spawnedAt, dropped the file, and returned null -- the transcript watchdog
+// (autocompact-thrash + stall) went silently blind on the DEFAULT (resume)
+// path. Proven live: our own transcript files carry birth->mtime gaps of
+// hours-to-days from being appended across respawns. We persist our resumed
+// id ourselves (.headless-session.json), so identity-by-name is the handshake
+// the era comment said the CLI does not expose: a file named exactly
+// `${admitName}` bypasses the birthtime gate. This does NOT widen the foreign
+// hole -- a foreign session has a different id and still faces the era filter.
+export function newestTranscript(dir, { eraStart = null, admitName = null } = {}) {
   let best = null
   let entries
   try { entries = fs.readdirSync(dir) } catch { return null }
@@ -427,7 +439,7 @@ export function newestTranscript(dir, { eraStart = null } = {}) {
     const full = path.join(dir, name)
     let st
     try { st = fs.statSync(full) } catch { continue }
-    if (eraStart !== null) {
+    if (eraStart !== null && name !== admitName) {
       const born = st.birthtimeMs > 0 ? st.birthtimeMs : st.mtimeMs
       if (born < eraStart - 1000) continue // 1s slack for clock granularity
     }
@@ -510,10 +522,18 @@ export function createStallLane({
   now = () => Date.now(), log = () => {},
   userStallMs = stallMs * 2,
   thrashWindowMs = 1_800_000, thrashThreshold = 3,
+  // Reads the CURRENTLY-live resumed session id (or null). Called every poll,
+  // not captured once: the id changes when the lane mints a fresh session
+  // mid-life (rotation/poison recovery updates .headless-session.json). The
+  // matching <id>.jsonl is admitted past the birthtime era filter so the
+  // watchdog keeps watching our own resumed transcript. Injectable for tests.
+  readSessionId = () => null,
 }) {
   let noTranscriptLogged = false
   return function poll() {
-    const file = newestTranscript(transcriptDir, { eraStart: spawnedAt })
+    const sid = readSessionId()
+    const admitName = sid ? `${sid}.jsonl` : null
+    const file = newestTranscript(transcriptDir, { eraStart: spawnedAt, admitName })
     if (!file) {
       // Say it ONCE: a watchdog watching a directory that never fills is
       // fail-quiet, and quiet detectors are how the 429-min stall lived.
@@ -655,10 +675,22 @@ function spawnHeadlessChild(cfg, { now = () => Date.now(), log, watchdogBounces 
     log('watchdog: disabled by STALL_TIMEOUT=0 -- stall protection is NOT active')
   }
   if (watchdogOn) {
+    // Our own resumed session id, read fresh each poll from the lane's
+    // .headless-session.json ({sessionId, ts, bornTs}, written by
+    // headless-lane.mjs on every session_id capture). Lets the watchdog admit
+    // the resumed <id>.jsonl past the birthtime era filter -- see
+    // newestTranscript's admitName.
+    const sessionFilePath = path.join(cfg.mem, '.headless-session.json')
+    const readSessionId = () => {
+      try {
+        const v = JSON.parse(fs.readFileSync(sessionFilePath, 'utf8'))
+        return v && typeof v.sessionId === 'string' && v.sessionId ? v.sessionId : null
+      } catch { return null }
+    }
     const poll = createStallLane({
       transcriptDir: transcriptDirFor(cfg.mem),
       stallMs: cfg.stallTimeoutSec * 1000,
-      spawnedAt, now, log,
+      spawnedAt, now, log, readSessionId,
     })
     stallTimer = setInterval(() => {
       const reason = poll()
