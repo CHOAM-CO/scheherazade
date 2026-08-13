@@ -625,9 +625,15 @@ export function createMuteStrikeAnnouncer({ dataHome, homeId, lastChannelStore, 
     const targetId = (getLastInboundId && getLastInboundId()) || (lastChannelStore && await lastChannelStore.load()) || homeId
     if (!targetId) throw new Error('no channel to announce to (no inbound yet, no persisted channel, no home)')
     const target = await fetchTarget(targetId)
+    // Copy is strike-count-aware: the panel's one-click revert banner only
+    // exists from MUTE_STRIKE_THRESHOLD (2) onward -- promising a button
+    // that is not there yet would be its own small silent-death.
+    const fix = count >= 2
+      ? '앱 패널을 열면 상단에 이전 모델로 되돌리는 원클릭 버튼이 떠 있어. Settings > Model에서 직접 바꿔도 되고.'
+      : '한 번 더 반복되면 앱 패널에 이전 모델로 되돌리는 원클릭 버튼이 떠. 지금 바꾸려면 Settings > Model에서.'
     await sendText(target,
       `⚠️ 방금 턴에서 답장이 만들어지고도 전송되지 않았어 (뮤트 감지 ${count}회차). ` +
-      '모델이 메시지 도구 호출에 실패하고 있어 — 반복되면 Settings > Model에서 모델을 바꾸는 게 빨라. 상세 로그는 패널 Logs에 있어.')
+      `모델이 메시지 도구 호출에 실패하고 있어 — ${fix} 상세 로그는 패널 Logs에.`)
   }
 
   async function tick() {
