@@ -454,6 +454,30 @@ async function main() {
       // usage keeps the previous sample instead of zeroing pressure.
       const u = e.message && e.message.usage
       if (u && (u.input_tokens != null || u.cache_read_input_tokens != null)) lastAssistantUsage = u
+    } else if (e.type === 'system' && e.subtype === 'api_retry') {
+      // Upstream retry storm made VISIBLE (2026-08-13, Mino field log: inbound
+      // "님?" reaches stdin, then NOTHING). Mock-429 receipt (/tmp/sched-
+      // silentdead): the CLI answers 429 with up to max_retries=10 silent
+      // retries at retry_delay_ms=60000 -- ten minutes of dead air per turn --
+      // and the only trace is this stream event, which this handler used to
+      // fall through and drop. Worse, the event line itself reset the turn
+      // watchdog's activity clock, so the one net built for silent turns was
+      // disarmed by the very signal of the stall. The process is genuinely
+      // alive (waiting, not wedged), so the watchdog reset stands; the fix is
+      // honesty -- every retry logs, and from the second consecutive retry
+      // the error banner tells the user the lane is quota-walled instead of
+      // letting the panel look healthy through a ten-minute storm.
+      const waitS = Math.round((Number(e.retry_delay_ms) || 0) / 1000)
+      errLog(`upstream ${e.error_status || '?'} (${e.error || 'api error'}): retry ${e.attempt}/${e.max_retries}${waitS ? ` in ${waitS}s` : ''} -- provider rate/quota wall; the turn is WAITING, not dead`)
+      if (Number(e.attempt) >= 2) {
+        try {
+          writeJsonAtomic(path.join(MEM, '.last-turn-error.json'), {
+            ts: Date.now(),
+            subtype: 'rate_limited',
+            detail: `provider keeps answering ${e.error_status || 429} (${e.error || 'rate limit'}) -- retry ${e.attempt}/${e.max_retries}, ~${waitS}s apart. The turn resumes by itself if the quota window reopens; otherwise it errors out after the last retry. Heavy tasks burn provider quota fastest (each sub-turn re-sends the full prompt on no-cache lanes).`,
+          }, 0o600)
+        } catch (err) { log(`rate-limit marker write failed: ${err.message}`) }
+      }
     } else if (e.type === 'system' && e.subtype === 'init') {
       sawInit = true
       if (typeof e.session_id === 'string' && e.session_id) {
