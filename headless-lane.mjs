@@ -231,6 +231,21 @@ export function muteRecoveryDecision({ turnHadUserInbound, sawReply, sawText }) 
 // disarm mute detection, exactly as stop-reply-guard matches its REPLY_TOOLS.
 export const isReplyClassTool = (name) => /__(?:reply|send_file_to_discord|react)$/.test(String(name || ''))
 
+// Does a turn's inbound open the mute-recovery gate? EXACTLY stop-reply-guard's
+// exemptions and no more: channelId 'system' (the lane's OWN housekeeping turns
+// -- the rotation handoff and the mute nudge below; guard :197) and a
+// [reaction] injection (guard :186) are exempt. Deliberately NOT sender===
+// 'SYSTEM': an autonomy brief / routine tick / note-cadence reminder rides a
+// REAL home channel with sender SYSTEM, and the guard forces it to actually
+// send (its comment at :188-197 warns precisely against a sender/[SYSTEM]-prefix
+// match here) -- so those mutes must be policed in -p too. Excluding by sender
+// was a coverage gap on the default Discord backend (red-team 2026-08-13).
+export function opensMuteGate({ channelId, content } = {}) {
+  if (String(channelId || '') === 'system') return false
+  if (/^\s*\[reaction\]/.test(String(content || ''))) return false
+  return true
+}
+
 // mute-strike ledger: SAME file/shape/purpose as stop-reply-guard's ledger
 // (MEM/.mute-strikes.json {strikes, model, lastAt}); the UI model-revert offer
 // reads it (onboarding/http-server.cjs, threshold 2). The guard was its sole
@@ -238,6 +253,14 @@ export const isReplyClassTool = (name) => /__(?:reply|send_file_to_discord|react
 // so in headless the ledger never advanced. The lane writes it for the -p case:
 // increment on a mute, clear when the agent speaks. (http-server.cjs's "CODE
 // sites define this path" note counts THIS as the third writer.)
+//
+// On the shared THRESHOLD=2 rationale ("4 failed attempts" -- each guard strike
+// contains one retry): a LANE strike is one muted turn, but clearMuteStrike
+// fires on the very next delivered reply INCLUDING the nudge's own response, so
+// a mute that recovers on the nudge nets zero. A strike only PERSISTS when the
+// nudge failed to recover it -- i.e. a persisting strike already carries "one
+// nudge-and-still-mute", the same shape the guard's strike had. Threshold 2
+// therefore still means "asked twice, nudged, still silent", not two flukes.
 const muteStrikesFile = () => path.join(MEM, '.mute-strikes.json')
 const agentConfigFile = () => path.join(MEM, '.agent-config')
 function laneCurrentModel() {
@@ -505,9 +528,9 @@ async function main() {
             meta: ev.meta || {},
           }))
           noteStdinWrite()
-          // A redelivered user message is still a user question awaiting an
-          // answer -- open the mute gate so a mute on it gets nudged too.
-          if (!/^\s*\[reaction\]/.test(ev.content || '')) turnHadUserInbound = true
+          // A redelivered user message is still a question awaiting an answer --
+          // open the mute gate (same exemptions) so a mute on it gets nudged too.
+          if (opensMuteGate({ channelId: (ev.meta || {}).channelId, content: ev.content })) turnHadUserInbound = true
         } catch (err) {
           log(`redelivery write failed: ${err.message}`)
         }
@@ -785,15 +808,10 @@ async function main() {
       try {
         child.stdin.write(renderUserEvent({ content, meta: payload.meta || {} }))
         noteStdinWrite()
-        // A real user question opens the mute-recovery gate for this turn;
-        // SYSTEM signals (rotation handoff, the mute nudge itself) and reactions
-        // do not -- muteness is "a user asked and got no reply", not "a
-        // housekeeping turn was quiet".
-        {
-          const sndr = String((payload.meta && payload.meta.sender) || '').toUpperCase()
-          const cid = String((payload.meta && payload.meta.channelId) || '')
-          if (sndr !== 'SYSTEM' && cid !== 'system' && !/^\s*\[reaction\]/.test(content)) turnHadUserInbound = true
-        }
+        // A real user question (or an autonomy/routine turn on a real channel)
+        // opens the mute-recovery gate; only the lane's own channelId 'system'
+        // housekeeping and reactions are exempt (see opensMuteGate = guard parity).
+        if (opensMuteGate({ channelId: (payload.meta || {}).channelId, content })) turnHadUserInbound = true
         // Latency receipt (2026-08-05): this line + the result's dur=/api=
         // bracket a turn in the log, so "model was fast, app was slow"
         // becomes measurable instead of vibes.

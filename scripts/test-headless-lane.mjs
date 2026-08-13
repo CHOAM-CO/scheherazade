@@ -92,7 +92,7 @@ console.log('\n1. <channel> tag matches stop-reply-guard\'s exact parser')
 // ── 1b. mute-recovery decision + reply-class matcher (pure) ─────────────────
 console.log('\n1b. muteRecoveryDecision + isReplyClassTool (pure)')
 {
-  const { muteRecoveryDecision, isReplyClassTool } = await import(pathToFileURL(path.join(ROOT, 'headless-lane.mjs')).href)
+  const { muteRecoveryDecision, isReplyClassTool, opensMuteGate } = await import(pathToFileURL(path.join(ROOT, 'headless-lane.mjs')).href)
   // the -p mute exactly: a user asked, the model composed text, sent nothing.
   assert(muteRecoveryDecision({ turnHadUserInbound: true, sawReply: false, sawText: true }) === 'nudge',
     'user asked + text + no reply = nudge (the -p mute)')
@@ -114,6 +114,16 @@ console.log('\n1b. muteRecoveryDecision + isReplyClassTool (pure)')
   assert(isReplyClassTool('mcp__agent-channel__read_channel_history') === false, 'read_channel_history is NOT a reply')
   assert(isReplyClassTool('Bash') === false, 'a non-channel tool is not a reply')
   assert(isReplyClassTool(undefined) === false, 'undefined tool name is safe (no throw, not a reply)')
+  // opensMuteGate: EXACTLY the guard's exemptions (channelId 'system' + [reaction]),
+  // NOT sender==='SYSTEM' (red-team 2026-08-13 coverage-gap fix).
+  assert(opensMuteGate({ channelId: 'in-app', content: '안녕' }) === true, 'a real in-app user turn opens the mute gate')
+  assert(opensMuteGate({ channelId: 'system', content: 'flush checkpoint' }) === false, "the lane's own channelId 'system' housekeeping (rotation/nudge) does NOT open the gate")
+  assert(opensMuteGate({ channelId: 'in-app', content: '[reaction] user put 👍 on ...' }) === false, 'a reaction injection does NOT open the gate (a tap is a signal, not a question)')
+  assert(opensMuteGate({ channelId: '1495311473847828652', content: '[SYSTEM] autonomy morning brief' }) === true,
+    'an autonomy/routine SYSTEM turn on a REAL home channel DOES open the gate (guard forces it to send; sender==="SYSTEM" must NOT exempt it)')
+  assert(opensMuteGate({ channelId: 'in-app', content: '[SYSTEM] routine reminder' }) === true,
+    'a "[SYSTEM]"-prefixed content on a real channel is not exempt (prefix match is the bug the guard warns against)')
+  assert(opensMuteGate({}) === true, 'a missing channelId defaults to open (fail toward policing, not toward a silent gap)')
 }
 
 // ── 2. lane E2E with a fake claude ─────────────────────────────────────────

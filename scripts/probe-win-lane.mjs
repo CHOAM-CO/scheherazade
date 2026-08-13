@@ -1,18 +1,25 @@
-// probe-win-lane.mjs — ONE real claude.exe turn through headless-lane.mjs.
+// probe-win-lane.mjs — TWO real claude turns through headless-lane.mjs.
 //
 // Why this exists: the win suite cannot run the lane E2E (the fake-claude
 // shim is a #!/bin/sh script Windows cannot exec, and node refuses shell-less
 // .cmd spawns), so those sections SKIP on win32. This probe is the win-side
-// receipt: the real lane spawning the real claude.exe, one cheap turn.
-// Run it ON the windows box, deliberately, with a cost reason — never in CI.
+// receipt: the real lane spawning the real claude, cheap turns.
+// Run it deliberately, with a cost reason — never in CI. Runs on Mac too
+// (resolves 'claude' via command -v); the second turn's proof is platform-
+// generic, the win32 spawn reality is the extra thing a win run confirms.
 //
 //   node scripts/probe-win-lane.mjs
 //   env: PROBE_MODEL (default claude-opus-4-6 — the app's shipped default),
-//        PROBE_CLAUDE (default: resolve 'claude' via where.exe)
+//        PROBE_CLAUDE (default: resolve 'claude' via where.exe / command -v)
 //
 // PASS = endpoint file appears (ingest server up) + init captured to
-// .headless-session.json + a `turn result: success` lane log. Artifacts,
-// not exit codes.
+// .headless-session.json + TWO `turn result: success` lane logs. The second
+// one is the load-bearing proof for the mute-recovery nudge: a user event
+// written to the SAME live child AFTER the first turn's `result` already
+// landed must be processed as a fresh turn (that IS the nudge's mechanism, and
+// the rotation handoff's). If real claude -p stopped reading stdin post-result,
+// this stays at one success and the nudge would silently no-op. Artifacts, not
+// exit codes.
 
 import { spawn, execSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -47,6 +54,7 @@ const lane = spawn(process.execPath, [path.join(ROOT, 'headless-lane.mjs')], {
 })
 let out = ''
 const feed = (d) => { out += d; process.stdout.write(d) }
+const countSuccess = () => (out.match(/turn result: success/g) || []).length
 lane.stdout.on('data', feed)
 lane.stderr.on('data', feed)
 let laneExited = false
@@ -81,15 +89,39 @@ const res = await fetch(`http://127.0.0.1:${e.port}/inbound`, {
 })
 console.log(`probe: ingest POST -> ${res.status}`)
 
+// Turn 1 must complete first.
 {
   const deadline = Date.now() + 300_000
-  while (Date.now() < deadline && !laneExited &&
-    !/turn result: /.test(out)) await sleep(500)
+  while (Date.now() < deadline && !laneExited && countSuccess() < 1) await sleep(500)
 }
-const success = /turn result: success/.test(out)
+const turn1 = countSuccess() >= 1
+console.log(`probe: turn 1 result-success=${turn1}`)
+
+// Turn 2 — the load-bearing proof for the mute nudge: a SECOND user event
+// written to the SAME live child AFTER turn 1's result already landed. If real
+// claude keeps reading stdin and processes it as a fresh turn, the nudge's
+// injection primitive is real; if it no-ops post-result, this stays at 1.
+let turn2 = false
+if (turn1) {
+  const res2 = await fetch(`http://127.0.0.1:${e.port}/inbound`, {
+    method: 'POST',
+    headers: { 'x-ingest-token': e.token, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      content: 'Second turn, injected AFTER the first result. Reply with exactly the single word: WINPROBE-TWO',
+      meta: { sender: 'probe', channelId: 'probe', timestamp: new Date().toISOString() },
+    }),
+  })
+  console.log(`probe: turn-2 ingest POST -> ${res2.status}`)
+  const deadline = Date.now() + 300_000
+  while (Date.now() < deadline && !laneExited && countSuccess() < 2) await sleep(500)
+  turn2 = countSuccess() >= 2
+}
+console.log(`probe: turn 2 (post-result stdin injection) result-success=${turn2}`)
+
 const sess = fs.existsSync(path.join(MEM, '.headless-session.json'))
 const errFile = path.join(MEM, '.last-turn-error.json')
 if (fs.existsSync(errFile)) console.log(`probe: last-turn-error: ${fs.readFileSync(errFile, 'utf8')}`)
-console.log(`PROBE ${success && sess ? 'PASS' : 'FAIL'}: result-success=${success} session-file=${sess}`)
+const ok = turn1 && turn2 && sess
+console.log(`PROBE ${ok ? 'PASS' : 'FAIL'}: turn1=${turn1} turn2-post-result-inject=${turn2} session-file=${sess}`)
 lane.kill('SIGTERM')
-process.exit(success && sess ? 0 : 1)
+process.exit(ok ? 0 : 1)
