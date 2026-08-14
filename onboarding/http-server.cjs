@@ -300,11 +300,30 @@ function computeAgentStatus() {
   if (proc.state === 'connecting') {
     const connectingSince = Date.parse(proc.since)
     if (Number.isFinite(connectingSince) && Date.now() - connectingSince > TIMEOUT_MS) {
-      return {
-        state: 'failed',
-        code: 'timeout',
-        detail: `agent did not reach a confirmed live state within ${TIMEOUT_MS}ms of the last spawn attempt`,
-        lastHeartbeat: marker ? marker.lastHeartbeat : null,
+      // Sleep/wake false-fail fix (2026-08-15, Mino field report): proc.state
+      // never leaves 'connecting' after a SUCCESSFUL boot -- "live" is derived
+      // purely from marker freshness above. So this backstop used to fire for
+      // an agent that had been live for HOURS whenever the marker merely went
+      // stale (macOS system sleep freezes the heartbeat timer; local-model
+      // reload after wake can add minutes): since was hours old, the stale
+      // read instantly synthesized failed:timeout, and the UI showed a dead
+      // session for an agent that was about to heartbeat again. The timeout
+      // is only meant for "this spawn attempt NEVER came up". A marker whose
+      // lastHeartbeat is newer than `since` is durable proof the agent DID go
+      // live after this spawn attempt (survives app restarts and does not
+      // depend on poll cadence, unlike an in-memory latch) -- in that case
+      // stay 'connecting' (reconnecting, in truth) and let the next fresh
+      // heartbeat flip it back to 'live'. A genuinely dead process is still
+      // caught by the other paths (main.cjs exit handler / failure markers).
+      const lastBeat = marker ? Date.parse(marker.lastHeartbeat) : NaN
+      const wentLiveSinceSpawn = Number.isFinite(lastBeat) && lastBeat >= connectingSince
+      if (!wentLiveSinceSpawn) {
+        return {
+          state: 'failed',
+          code: 'timeout',
+          detail: `agent did not reach a confirmed live state within ${TIMEOUT_MS}ms of the last spawn attempt`,
+          lastHeartbeat: marker ? marker.lastHeartbeat : null,
+        }
       }
     }
   }
@@ -3438,6 +3457,11 @@ const API_ROUTES = [
 
 module.exports = {
   createOnboardingServer,
+  // Exported for scripts/test-agent-status-read.mjs (sleep/wake false-fail
+  // fix, 2026-08-15): the READ side of liveness (marker freshness + timeout
+  // backstop) finally gets its own unit test. Pure fs/Date logic, no
+  // Electron dependency.
+  computeAgentStatus,
   // Page-scrape fix (2026-08-07): main.cjs and dev-serve-ui.mjs load the
   // window/browser through /boot so it acquires the UI session cookie that
   // HTML serving now requires. SERVER_TOKEN is exported for the IN-PROCESS
