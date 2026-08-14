@@ -38,6 +38,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const os = require('node:os')
 const crypto = require('node:crypto')
+const agentIdentity = require('./agent-identity.cjs')
 
 // Tone as a bare English word ("formal") was too weak an instruction for
 // non-frontier models: a real tester picked Formal and got 반말 anyway
@@ -739,6 +740,26 @@ function createHarnessRender(ctx) {
     // Content carries no secret (it fetches at run time); 0700 anyway.
     renderHarness(path.join('onboarding', 'templates', 'sudo-askpass.sh'), 'sudo-askpass.sh', 0o700)
 
+    // Identity firewall + update self-awareness (2026-08-15, design doc:
+    // docs/design-identity-firewall-and-selfops.md). Both are COURTESY
+    // blocks: each is computed best-effort inside its own try/catch and
+    // degrades to '' — a broken identity file or changes list must never
+    // fail the harness render (which would block spawn entirely).
+    let predecessorNote = ''
+    try {
+      const identity = agentIdentity.readIdentity(DATA_HOME)
+      const names = (identity && identity.predecessors || [])
+        .map((p) => p.name).filter(Boolean)
+      if (names.length) {
+        predecessorNote =
+          `Known predecessor identities on this machine: ${[...new Set(names)].join(', ')}. ` +
+          'Their records remain in the journal and archives — historical data, never you.'
+      }
+    } catch (err) {
+      console.error('[scheherazade/onboarding] predecessor note skipped:', err.message)
+    }
+    const updateBrief = computeUpdateBrief(readFileFn)
+
     const promptSrc = readFileFn(
       path.join(REPO_ROOT, 'onboarding', 'templates', 'agent-system-prompt.md'),
       'utf8'
@@ -749,7 +770,9 @@ function createHarnessRender(ctx) {
         .replaceAll('{DISPLAY_NAME}', displayName)
         .replaceAll('{TONE}', tone)
         .replaceAll('{TONE_GUIDANCE}', TONE_GUIDANCE[tone] || TONE_GUIDANCE.casual)
-        .replaceAll('{PRIMARY_TASK}', primaryTask || '일상 대화와 기록'),
+        .replaceAll('{PRIMARY_TASK}', primaryTask || '일상 대화와 기록')
+        .replaceAll('{PREDECESSOR_NOTE}', predecessorNote)
+        .replaceAll('{UPDATE_BRIEF}', updateBrief.block),
     })
 
     // Every source read and rendered. Only now does anything touch the harness.
@@ -760,6 +783,72 @@ function createHarnessRender(ctx) {
       if (mode !== undefined) fs.chmodSync(tmp, mode)
       fs.renameSync(tmp, dst)
     }
+    // Stamp only AFTER the harness writes landed: a failed render must not
+    // burn the one-shot briefing (the block would be lost without ever
+    // reaching a system prompt).
+    updateBrief.commit()
+  }
+
+  // Post-update briefing (Phase B of the 2026-08-15 design; red-teamed to
+  // its minimal form — see the design doc's YAGNI verdict). Compares the
+  // app version against DATA_HOME/.last-briefed-version:
+  //   - stamp missing  -> fresh install or pre-feature upgrade: stamp now,
+  //     no brief (an install is not an update).
+  //   - stamp == current -> nothing new, no brief.
+  //   - stamp != current -> render a one-boot block telling the agent to
+  //     mention the update ONCE, with the user-facing lines from
+  //     templates/user-changes.md for the versions in between. The stamp
+  //     bumps when the render SUCCEEDS (commit()), so respawns don't
+  //     re-brief (the spam trap the red team caught) and a failed render
+  //     doesn't burn the briefing.
+  // Best-effort throughout: any error -> empty block, logged, never thrown.
+  function computeUpdateBrief(readFileFn) {
+    const noop = { block: '', commit: () => {} }
+    try {
+      const version = JSON.parse(
+        readFileFn(path.join(REPO_ROOT, 'package.json'), 'utf8')
+      ).version
+      if (!version) return noop
+      const stampPath = path.join(DATA_HOME, '.last-briefed-version')
+      let prev = null
+      try { prev = fs.readFileSync(stampPath, 'utf8').trim() } catch { /* first run */ }
+      const stamp = () => {
+        try { fs.writeFileSync(stampPath, version + '\n') } catch (err) {
+          console.error('[scheherazade/onboarding] briefed-version stamp failed:', err.message)
+        }
+      }
+      if (!prev) { stamp(); return noop }
+      if (prev === version) return noop
+
+      let changes = ''
+      try {
+        const src = readFileFn(path.join(REPO_ROOT, 'onboarding', 'templates', 'user-changes.md'), 'utf8')
+        const cmp = (a, b) => {
+          const pa = String(a).split('.').map(Number)
+          const pb = String(b).split('.').map(Number)
+          for (let i = 0; i < 3; i++) { if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0) }
+          return 0
+        }
+        const sections = [...src.matchAll(/^## +(\d+\.\d+\.\d+)\n([\s\S]*?)(?=^## |\n*$(?![\s\S]))/gm)]
+        changes = sections
+          .filter(([, v]) => cmp(v, prev) > 0 && cmp(v, version) <= 0)
+          .map(([, v, body]) => `- v${v}: ${body.trim().replace(/\s*\n\s*/g, ' ')}`)
+          .join('\n')
+      } catch { /* no changes file in this build -- brief as a bare bump */ }
+
+      const block = [
+        '## App update notice (one-time)',
+        '',
+        `This app was updated from v${prev} to v${version} since your last boot.`,
+        'In your NEXT reply — and only that one — mention the update briefly and',
+        'naturally, one or two sentences, never a changelog dump. Then drop it.',
+        changes ? `\nWhat changed for your person:\n${changes}` : '',
+      ].join('\n')
+      return { block, commit: stamp }
+    } catch (err) {
+      console.error('[scheherazade/onboarding] update brief skipped:', err.message)
+      return noop
+    }
   }
 
   // Boot-time harness refresh for already-onboarded installs. Fail-loud in
@@ -769,6 +858,13 @@ function createHarnessRender(ctx) {
     try {
       const config = readAgentConfig()
       if (!config.ONBOARDING_COMPLETE) return false
+      // Identity firewall: create/sync .agent-identity at every boot.
+      // Best-effort — provenance must never block a spawn.
+      try {
+        agentIdentity.ensureIdentity(DATA_HOME, config.DISPLAY_NAME || AGENT_NAME)
+      } catch (err) {
+        console.error('[scheherazade/onboarding] identity ensure failed:', err.message)
+      }
       renderHarnessFiles({
         displayName: config.DISPLAY_NAME || AGENT_NAME,
         tone: config.TONE || 'casual',

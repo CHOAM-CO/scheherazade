@@ -797,6 +797,18 @@ function initDb() {
   // alone does not clean the -wal file).
   db.exec('PRAGMA secure_delete = ON')
   db.exec(DDL)
+  // Identity firewall (2026-08-15, Artaban bug — design:
+  // docs/design-identity-firewall-and-selfops.md): the journal is a
+  // first-person surface and DISPLAY_NAME is renameable, so every entry now
+  // carries its writer's identity. Idempotent ALTER (duplicate-column throws
+  // on every boot after the first — swallowed on purpose). Backfill stamps
+  // pre-migration rows with the CURRENT name: for every install that never
+  // renamed, those rows really are the current agent's own voice; an install
+  // renamed BEFORE this feature keeps its contamination no worse than today
+  // and is covered by the standing system-prompt identity line (we never
+  // guess a predecessor's name — see the design doc's backfill reasoning).
+  try { db.exec('ALTER TABLE journal_entries ADD COLUMN author TEXT') } catch { /* already migrated */ }
+  db.prepare('UPDATE journal_entries SET author = ? WHERE author IS NULL').run(currentAuthor())
   // AFTER the DDL, not before: journal_mode=WAL and the first write are what
   // create the -wal/-shm siblings, so hardening earlier would find nothing to
   // chmod and silently leave them world-readable.
@@ -831,6 +843,28 @@ function localToday(now = new Date()) {
   const m = String(now.getMonth() + 1).padStart(2, '0')
   const d = String(now.getDate()).padStart(2, '0')
   return `${y}-${m}-${d}`
+}
+
+// Identity firewall (2026-08-15): the journal writer's identity, read from
+// the .agent-config sitting NEXT TO the DB (http-server's CONFIG_DIR ===
+// DATA_HOME, and tests that point SCHEHERAZADE_MEMORY_DB at a tmp dir get
+// the fallback — deliberately DB-relative, not DATA_HOME-hardcoded, so the
+// two never disagree). Tiny line-parse of the one key we need, matching
+// http-server's readAgentConfig() quoting; requiring http-server from here
+// for it would drag the whole Electron-adjacent module into the MCP child.
+function currentAuthor() {
+  try {
+    const text = fs.readFileSync(path.join(path.dirname(DB_PATH), '.agent-config'), 'utf8')
+    const m = text.match(/^DISPLAY_NAME=(.*)$/m)
+    if (m) {
+      let v = m[1]
+      if (v.startsWith('"') && v.endsWith('"')) {
+        v = v.slice(1, -1).replace(/\\"/g, '"').replace(/\\\$/g, '$').replace(/\\`/g, '`').replace(/\\\\/g, '\\')
+      }
+      if (v.trim()) return v.trim()
+    }
+  } catch { /* no config next to this DB (tests, pre-onboarding) */ }
+  return 'scheherazade'
 }
 
 function journalWriteImpl(db, args) {
@@ -868,12 +902,17 @@ function journalWriteImpl(db, args) {
       .prepare('UPDATE journal_entries SET body = ?, updated_at = ? WHERE id = ? RETURNING id, date, body, created_at, updated_at')
       .get(merged, at, existing.id)
   } else {
+    // author = identity at row CREATION. An append after a mid-day rename
+    // keeps the original author (the seam timestamp already marks the
+    // boundary); a whole-day row cannot honestly carry two identities, and
+    // splitting rows would break the one-entry-per-day contract. Known,
+    // accepted edge — see the design doc.
     row = db
       .prepare(
-        'INSERT INTO journal_entries (date, body, created_at, updated_at) VALUES (?, ?, ?, ?) ' +
+        'INSERT INTO journal_entries (date, body, created_at, updated_at, author) VALUES (?, ?, ?, ?, ?) ' +
           'RETURNING id, date, body, created_at, updated_at',
       )
-      .get(day, body.trim(), at, at)
+      .get(day, body.trim(), at, at, currentAuthor())
   }
 
   // Read-back-verify, same contract as every other write in this file: a write
@@ -899,11 +938,27 @@ function journalReadImpl(db, args) {
   const n = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 120) : 14
 
   const sql =
-    'SELECT id, date, body, created_at, updated_at FROM journal_entries' +
+    'SELECT id, date, body, created_at, updated_at, author FROM journal_entries' +
     (where.length ? ` WHERE ${where.join(' AND ')}` : '') +
     ' ORDER BY date DESC LIMIT ?'
   const rows = db.prepare(sql).all(...params, n)
-  return { rows, count: rows.length }
+  // Identity firewall (2026-08-15): an entry written under a different
+  // identity is served TAGGED, never hidden — the past stays readable (the
+  // product's history promise), it just cannot masquerade as self. The tag
+  // rides inside body so every consumer sees it without schema knowledge.
+  const me = currentAuthor()
+  const tagged = rows.map((r) =>
+    r.author && r.author !== me
+      ? {
+          ...r,
+          inherited: true,
+          body:
+            `[inherited record — written by "${r.author}", a previous agent on this ` +
+            `machine. Historical data, not your voice.]\n${r.body}`,
+        }
+      : r,
+  )
+  return { rows: tagged, count: tagged.length }
 }
 
 // ═══ Singleton-backed public API ══════════════════════════════════════════

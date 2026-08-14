@@ -15,6 +15,7 @@
 const os = require('node:os')
 const nodePath = require('node:path')
 const { spawn } = require('node:child_process')
+const agentIdentity = require('../agent-identity.cjs')
 
 // ── clean uninstall plan (v0.0.35, Task: 클린테스트 in-app) ────────────────
 // Exported separately so scripts/test-uninstall-plan.mjs can attack the plan
@@ -74,6 +75,16 @@ function createRoutes(staticCtx) {
         if (!displayName || !displayName.trim()) {
           sendJson(res, 400, { error: 'displayName is required' })
           return
+        }
+        // Identity firewall (2026-08-15, Artaban bug): the outgoing name is
+        // recorded as a predecessor in .agent-identity in the same request
+        // that rewrites DISPLAY_NAME — first-person records written under
+        // the old name stay attributable. Best-effort: a provenance-write
+        // failure must not block the rename itself (logged, not silent).
+        try {
+          agentIdentity.recordRename(DATA_HOME, displayName.trim())
+        } catch (err) {
+          console.error('[scheherazade/onboarding] rename provenance write failed:', err.message)
         }
         const merged = writeAgentConfig({ DISPLAY_NAME: displayName.trim() })
         sendJson(res, 200, { ok: true, config: merged })

@@ -8,6 +8,9 @@ every installed Windows copy's update check — so it gets a checked-in runbook.
 ## 0. Preflight
 
 - [ ] `package.json` version bumped (single source of truth for the tag).
+- [ ] `onboarding/templates/user-changes.md` gained a `## <version>` section
+      (one or two user-facing Korean lines — the agent briefs these in-chat
+      after the update lands; a missing section briefs as a bare version bump).
 - [ ] Full suite green: `for t in scripts/test-*.mjs; do node "$t" || echo "FAIL $t"; done`
       — `test-packaging.mjs` checks the require graph against the LAST built
       artifact, so a brand-new required file legitimately fails here until the
