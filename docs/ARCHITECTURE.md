@@ -41,9 +41,9 @@ needs before it can pick up work.
 
 ## Hook System
 
-Sixteen hook commands across four lifecycle stages, wired in
+Seventeen hook commands across four lifecycle stages, wired in
 `.claude/settings.local.json` (shipped as
-`onboarding/templates/claude-settings.local.json`). **Five of them can
+`onboarding/templates/claude-settings.local.json`). **Six of them can
 block.** This section used to say "three hooks, all advisory"; that was true
 of the original spec and stopped being true as hooks were added, which is the
 failure `scripts/test-hook-lifecycle-doc.mjs` now exists to prevent -- it
@@ -65,6 +65,7 @@ end.
 | `pre-reply-negation-check.mjs` | `PreToolUse` | `mcp__agent-channel__reply` | a reply whose denial/negation reads as unsupported |
 | `stop-reply-guard.mjs` | `Stop` | all | ending a turn that owed a channel reply and never sent one |
 | `pre-tool-credential-guard.mjs` | `PreToolUse` | `Bash`, `Read\|Glob\|Grep` | any read of another agent tool's credential store (`.credentials.json`, `auth.json`, `~/.claude.json`, OpenClaw `credentials/`, Hermes `.env`/`state.db`) or the macOS keychain — always on, not just during migration sweeps (design-0022 layer 3) |
+| `pre-tool-vision-guard.mjs` | `PreToolUse` | `Read` | an image/PDF `Read` when the spawn env says the lane's model has no vision (`SCHEHERAZADE_LANE_VISION=no`) — one such read poisons the transcript and 400s every later turn until restart; the deny redirects to the attachment caption or an honest "this model cannot view images". Stands down entirely (fail-open) on vision lanes and pre-0.1.11 spawns |
 
 ### Advisory hooks
 
@@ -88,7 +89,7 @@ blocker by accident.
 
 `context-gauge.mjs` is registered at both `SessionStart` and `Stop`, and
 the credential guard at two `PreToolUse` matchers (`Bash` and
-`Read|Glob|Grep`), so the sixteen commands cover fourteen distinct hook
+`Read|Glob|Grep`), so the seventeen commands cover fifteen distinct hook
 files. (Two former Stop hooks,
 felt-check and stop-skill-extraction-nudge, were cut in the 2026-07-28
 boot-context diet -- advisory nags whose disciplines live on in CLAUDE.md

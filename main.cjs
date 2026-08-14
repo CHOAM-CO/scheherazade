@@ -49,6 +49,7 @@ const {
   readHomeChannelId,
   readProviderKey,
   readHarnessFailure,
+  laneVision,
   toUnpackedPath,
   killAllLoginChildren,
   AGENT_NAME: FIXED_AGENT_NAME,
@@ -1324,6 +1325,19 @@ async function spawnRealAgentChildLocked() {
   // token + settings toggle) in http-server.cjs. Attach lane gets the same
   // var baked into its bootstrap command (attach-bootstrap.sh template).
   supervisorEnv.SUDO_ASKPASS = path.join(DATA_HOME, 'sudo-askpass.sh')
+  // v0.1.11: lane vision verdict, exported to the agent child so
+  // hooks/pre-tool-vision-guard.mjs can hard-block image/PDF Reads on
+  // no-vision lanes BEFORE they poison the transcript (the GLM5.2+ollama
+  // 400-every-turn wedge -- see the 0.1.4 adoption-path post-mortem
+  // earlier in spawnRealAgentChildLocked). Same
+  // laneVision() policy the chat upload route applies to attachments;
+  // supervisorEnv.MODEL is read AFTER the provider-env spread, so an
+  // ollama lane's real model tag (not the generic Anthropic default)
+  // decides. Read AT SPAWN on purpose -- a provider flip respawns the
+  // agent, so env staleness cannot outlive the lane it described.
+  supervisorEnv.SCHEHERAZADE_LANE_VISION = laneVision({
+    provider: config.PROVIDER, model: supervisorEnv.MODEL || config.MODEL,
+  })
   // SUPERVISOR_LANE seam (Windows-port Phase 1): identical env, stdio, and
   // detached process-group contract in both lanes -- only the runtime
   // differs (bash running run.sh vs Electron-as-node running
@@ -1976,6 +1990,14 @@ app.whenReady().then(async () => {
   // throws by contract (see updater.cjs); win=auto-install, mac=notify-only
   // (unsigned build), dev=off. First check fires ~15s after boot.
   require('./updater.cjs').initAutoUpdate({ app, dialog, shell, log })
+
+  // OS notification on agent replies landing while the window is unfocused
+  // (0.1.11). Same placement contract as the updater: outside the boot try,
+  // never throws, and a failure only costs the notification, never the chat
+  // (see notify-agent-reply.cjs).
+  require('./notify-agent-reply.cjs').initReplyNotifications({
+    app, Notification: require('electron').Notification, BrowserWindow, DATA_HOME, log,
+  })
 
   app.on('activate', () => {
     // macOS convention: clicking the dock icon with no windows open

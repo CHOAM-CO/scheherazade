@@ -92,6 +92,15 @@
         ]
       },
       {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node {AGENT_DIR}/hooks/pre-tool-vision-guard.mjs"
+          }
+        ]
+      },
+      {
         "matcher": "mcp__agent-channel__reply",
         "hooks": [
           {
