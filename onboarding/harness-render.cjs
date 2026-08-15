@@ -429,10 +429,31 @@ function createHarnessRender(ctx) {
       }
     }
 
+    // v0.1.14 (Artaban bug, vector #2 — 2026-08-16 magi-win live repro): the
+    // claude CLI auto-loads the USER-GLOBAL ~/.claude/CLAUDE.md memory into
+    // every session. This app deliberately spawns against the user's real
+    // config dir (auth reuse — provider-env.cjs sets no CLAUDE_CONFIG_DIR),
+    // so a persona living in that file (magi-win: a retired agent's "나는
+    // 아르타반" identity block) rides into the agent session and BEATS the
+    // rendered system-prompt identity line — the 0.1.13 journal firewall
+    // never saw this vector. claudeMdExcludes patterns are matched against
+    // absolute paths; both slash forms are appended because Windows path
+    // normalization inside the matcher is undocumented (setting verified
+    // present in CLI bundles 2.1.220 win / 2.1.233 mac). Additive-only:
+    // user-added patterns survive, ours append once. The agent's own
+    // project CLAUDE.md (DATA_HOME) is untouched by design — this excludes
+    // exactly one file, the machine-global one that belongs to whoever else
+    // uses claude on this machine, never to this agent.
+    if (!Array.isArray(settings.claudeMdExcludes)) settings.claudeMdExcludes = []
+    const userClaudeMd = path.join(os.homedir(), '.claude', 'CLAUDE.md')
+    for (const p of new Set([userClaudeMd, userClaudeMd.split(path.sep).join('/')])) {
+      if (!settings.claudeMdExcludes.includes(p)) settings.claudeMdExcludes.push(p)
+    }
+
     const afterText = JSON.stringify(settings, null, 2)
     if (afterText !== beforeText) {
       fs.writeFileSync(SETTINGS_LOCAL_PATH, afterText + '\n')
-      log('settings.local.json additive migration applied (send_file permission / stop-reply-guard hook / bash-hook .mjs port)')
+      log('settings.local.json additive migration applied (send_file permission / stop-reply-guard hook / bash-hook .mjs port / user-CLAUDE.md exclusion)')
     }
   }
 

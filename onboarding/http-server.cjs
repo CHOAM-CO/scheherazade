@@ -3500,6 +3500,10 @@ module.exports = {
   readHarnessFailure: harnessRender.readHarnessFailure,
   HARNESS_FAILURE_PATH: harnessRender.HARNESS_FAILURE_PATH,
   refreshHarnessIfOnboarded: harnessRender.refreshHarnessIfOnboarded,
+  // Exported for scripts/test-identity-firewall.mjs (vector #2): the
+  // settings.local.json seed + additive migration path, which boot runs via
+  // startOnboardingServer rather than the harness refresh above.
+  seedConfigFromTemplates: harnessRender.seedConfigFromTemplates,
   // Exported for scripts/test-credential-store.mjs (pure, no Electron
   // dependency): getElectron() requires 'electron' lazily precisely so
   // this file stays testable outside an Electron main process, so the

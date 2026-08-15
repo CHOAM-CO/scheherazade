@@ -135,6 +135,31 @@ const STAMP = path.join(SANDBOX, '.last-briefed-version')
   assert(prompt.includes('Known predecessor identities'), 'predecessor note is standing, not one-time')
 }
 
+// ── vector #2: user-global ~/.claude/CLAUDE.md exclusion (2026-08-16) ─────
+// The 08-15 firewall guarded the journal; the live magi-win repro showed the
+// operative vector was the machine-global user memory file (a retired
+// agent's persona) auto-loaded by the claude CLI into every session. The
+// migration must append claudeMdExcludes for that one file, idempotently,
+// without disturbing user-added patterns.
+{
+  const SETTINGS = path.join(SANDBOX, '.claude', 'settings.local.json')
+  const userClaudeMd = path.join(os.homedir(), '.claude', 'CLAUDE.md')
+  server.seedConfigFromTemplates() // boot's settings seed + additive migration
+  const s1 = JSON.parse(fs.readFileSync(SETTINGS, 'utf8'))
+  assert(Array.isArray(s1.claudeMdExcludes) && s1.claudeMdExcludes.includes(userClaudeMd),
+    'refresh appends claudeMdExcludes for the user-global CLAUDE.md')
+  const countBefore = s1.claudeMdExcludes.length
+  s1.claudeMdExcludes.push('/custom/user/pattern.md')
+  fs.writeFileSync(SETTINGS, JSON.stringify(s1, null, 2) + '\n')
+  server.seedConfigFromTemplates() // second boot over an edited config
+  const s2 = JSON.parse(fs.readFileSync(SETTINGS, 'utf8'))
+  assert(s2.claudeMdExcludes.includes('/custom/user/pattern.md'),
+    'user-added exclude pattern survives the migration')
+  assert(s2.claudeMdExcludes.filter((p) => p === userClaudeMd).length === 1 &&
+    s2.claudeMdExcludes.length === countBefore + 1,
+    'migration is idempotent (no duplicate entries on re-run)')
+}
+
 fs.rmSync(SANDBOX, { recursive: true, force: true })
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)
