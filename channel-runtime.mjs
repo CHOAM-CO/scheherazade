@@ -524,6 +524,84 @@ export function routineInjectContent(r) {
   return `[routine ${r.id}] 사용자가 등록한 루틴 시간이다${late}. 지시: ${r.prompt}`
 }
 
+// ── schedules: generic recurring/one-off prompts ────────────────────────────
+// Replaces the pattern where every background behavior is its own bespoke
+// setInterval: an entry in DATA_HOME/schedules.json IS a background
+// behavior, authored by the user, the system (shipped defaults), or the
+// agent itself (it may edit schedules.json directly -- its CLAUDE.md
+// already gives it DATA_HOME write freedom; no new MCP tool for this).
+// Inspired by Gemini Spark's Tasks/Schedules split.
+//
+// Rule lives in cadence/schedule-tick.cjs (pure, tested by
+// scripts/test-schedule-tick.mjs); THIS is only the IO, shared by every
+// backend the same way startRoutineTicker is -- so a backend that forgets
+// to call it is missing a wiring line, not missing an implementation.
+//
+// One difference from startRoutineTicker worth naming: this ticker guards
+// against overlapping ticks (`inFlight`). Routines' own dueNow()/markFired()
+// happen to be safe under overlap (markFired is idempotent-by-day); a
+// schedule's write-back is a single read-modify-write of the whole store,
+// which is not, so the guard is added rather than copied away.
+export function startScheduleTicker({ dataHome, readConfig, fire, activityMsProvider = () => Infinity, log = console.log, intervalMs = 60_000, now = () => new Date() }) {
+  const scheduleTick = require(path.join(MODULE_DIR, 'cadence', 'schedule-tick.cjs'))
+  const storePath = path.join(dataHome, 'schedules.json')
+  let inFlight = false
+
+  const tick = async () => {
+    if (inFlight) return
+    inFlight = true
+    try {
+      const config = await readConfig()
+      let store = null
+      try {
+        store = JSON.parse(await fs.readFile(storePath, 'utf8'))
+      } catch {} // missing (nothing registered yet) or corrupt -- schedule-tick.cjs
+                 // reports corrupt-but-present as a warning; a missing file is silent.
+
+      const plan = scheduleTick.planScheduleTick({ now: now(), config, store, agentActiveMs: activityMsProvider() })
+
+      for (const w of plan.warnings) log(`schedules: ${w}`)
+
+      const fired = []
+      for (const entry of plan.due) {
+        try {
+          await fire(entry)
+          fired.push(entry.id)
+          log(`schedules: fired ${entry.id}`)
+        } catch (err) {
+          // Not delivered -- do NOT mark lastRunISO. Next poll retries, same
+          // "advance only on success" rule the shutdown/note-cadence
+          // watchers already pay for elsewhere in this codebase.
+          log(`schedules: fire failed for ${entry.id} (will retry next poll): ${err.message}`)
+        }
+      }
+
+      if (fired.length) {
+        // store is guaranteed non-null here: plan.due can only be non-empty
+        // when planScheduleTick was handed a real { schedules: [...] } array.
+        const nowISO = new Date().toISOString()
+        for (const raw of store.schedules) {
+          if (fired.includes(raw.id)) raw.lastRunISO = nowISO
+        }
+        await atomicWriteJson(storePath, store) // tmp+rename, same convention as .autonomy-state.json
+      }
+    } catch (err) {
+      log(`schedule tick failed: ${err.message}`)
+    } finally {
+      inFlight = false
+    }
+  }
+  const timer = setInterval(tick, intervalMs)
+  timer.unref()
+  return { timer, tick } // tick exported for tests
+}
+
+// The line the agent receives at fire time -- shared so every backend
+// injects the identical shape, mirroring routineInjectContent's role.
+export function scheduleInjectContent(entry) {
+  return `[SYSTEM] Scheduled task "${entry.id}": ${entry.prompt}`
+}
+
 // ── inbound notifier (design-0020, headless topology) ──────────────────────
 // One seam for how a backend delivers an inbound message to the agent.
 // Two lanes exist because two topologies exist:

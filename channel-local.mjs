@@ -50,9 +50,10 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import {
-  installStdoutHygiene, resolveDataHome, localNow,
+  installStdoutHygiene, resolveDataHome, localNow, readAgentConfig,
   createMarkerStore, createBootAnnouncer,
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
+  startScheduleTicker, scheduleInjectContent,
   createInboundNotifier, createOutboundDedup,
 } from './channel-runtime.mjs'
 
@@ -244,6 +245,23 @@ export function transcriptState() {
     since = m.ts
   }
   return { awaitingReplySince: since }
+}
+
+// Last conversation activity, either direction -- the local-channel
+// equivalent of channel.mjs's `lastActivityMs` variable (inbound message OR
+// delivered outbound reply both count there; here it's the same rule read
+// off the transcript queue instead of a separately-tracked variable, since
+// the queue already IS that record). Reaction and activity ('thinking...')
+// items are conversation NOISE for this purpose -- an emoji tap or a
+// tool-progress ping must not hold a schedule's activity-suppression gate
+// open the way an actual message exchange does, so only kind 'message'
+// counts. Returns null on a fresh boot (no message yet); the schedule
+// ticker's activityMsProvider treats that as "long idle", not "just active".
+export function lastActivityMs() {
+  for (let i = queue.length - 1; i >= 0; i--) {
+    if (queue[i].kind === 'message') return queue[i].ts
+  }
+  return null
 }
 
 export function readOutbound(since = 0) {
@@ -670,6 +688,33 @@ async function boot() {
     })
   } catch (err) {
     log(`routine ticker failed to start (feature disabled this session): ${err.message}`)
+  }
+
+  // Schedules: same optional-feature contract -- a broken ticker degrades to
+  // a log line, never takes the channel down. Shared IO lives in
+  // channel-runtime's startScheduleTicker (same split as startRoutineTicker
+  // above); this backend supplies DATA_HOME, an .agent-config reader bound
+  // to it, the fire callback (notifyInbound on the one local conversation),
+  // and lastActivityMs() (above) as the activity signal -- this backend has
+  // no separately-tracked "last activity" variable the way channel.mjs does,
+  // but the transcript queue already records exactly that, so it is read
+  // from there rather than adding a second, redundant tracker.
+  try {
+    startScheduleTicker({
+      dataHome: DATA_HOME,
+      readConfig: () => readAgentConfig(DATA_HOME),
+      fire: (entry) => notifyInbound({
+          content: scheduleInjectContent(entry),
+          meta: { sender: 'SYSTEM', channelId: LOCAL_CHANNEL_ID, authorId: '', timestamp: localNow() },
+        }),
+      activityMsProvider: () => {
+        const ts = lastActivityMs()
+        return ts == null ? Infinity : Date.now() - ts
+      },
+      log,
+    })
+  } catch (err) {
+    log(`schedule ticker failed to start (feature disabled this session): ${err.message}`)
   }
 
   // Boot announce, same unit as the other backends (channel-runtime): direct
