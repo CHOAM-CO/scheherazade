@@ -246,12 +246,64 @@
       }
     }
 
+    renderRemember()
     renderJournal()
     renderPointers()
     await loadSessionGroup()
     for (const table of ['user_facts', 'open_threads', 'corrections', 'preferences']) {
       loadCategory(table)
     }
+  }
+
+  // "What I remember" (Dreaming feature, 2026-08-16). Read-only: this pane
+  // never writes -- the agent rewrites memory-summary.md itself, overnight,
+  // by following procedures/memory-consolidation.md. Markdown goes through
+  // window.renderMarkdown (markdown.js), the SAME textContent-only renderer
+  // chat.js uses for model output -- this string is model-authored prose
+  // too, and must never ride innerHTML.
+  async function renderRemember() {
+    const R = window.COPY.memoryPane.remember
+    $('remember-label').textContent = R.label
+    const refreshBtn = $('remember-refresh')
+    refreshBtn.textContent = R.refreshLabel
+    const bodyEl = $('remember-body')
+    const statusEl = $('remember-status')
+
+    async function load() {
+      statusEl.textContent = ''
+      statusEl.className = 'status-line'
+      let data
+      try {
+        data = await api('/api/memory/summary')
+      } catch (err) {
+        bodyEl.textContent = ''
+        statusEl.className = 'status-line failure'
+        statusEl.textContent = R.loadError(err.message)
+        return
+      }
+      if (!data.exists) {
+        bodyEl.textContent = ''
+        const empty = document.createElement('div')
+        empty.className = 'empty-state'
+        empty.textContent = R.empty(displayName)
+        bodyEl.appendChild(empty)
+        return
+      }
+      renderMarkdown(bodyEl, data.markdown)
+      const when = data.updatedISO ? `${isoDate(data.updatedISO)} ${localTime(data.updatedISO)}` : ''
+      statusEl.textContent = when ? R.updated(when) : ''
+    }
+
+    refreshBtn.onclick = async () => {
+      refreshBtn.disabled = true
+      try {
+        await load()
+      } finally {
+        refreshBtn.disabled = false
+      }
+    }
+
+    await load()
   }
 
   // The journal (v0.0.5). The four tables below are what the agent knows ABOUT

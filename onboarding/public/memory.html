@@ -19,6 +19,19 @@
       </div>
       <p class="subtitle" id="m-subtitle"></p>
 
+      <!-- "What I remember" (Dreaming feature, 2026-08-16). The agent's own
+           nightly synthesis (procedures/memory-consolidation.md), not a
+           table of raw rows -- placed first because it's the one thing on
+           this page meant to be read as prose, not scanned as a list. -->
+      <div class="category" id="cat-remember">
+        <div class="category-header">
+          <div class="category-label" id="remember-label"></div>
+          <button class="secondary" id="remember-refresh"></button>
+        </div>
+        <div class="status-line" id="remember-status"></div>
+        <div class="chat-msg" id="remember-body"></div>
+      </div>
+
       <div id="m-session-group" class="session-group hidden">
         <div class="category-label" id="m-session-label"></div>
         <div id="m-session-list"></div>
@@ -83,6 +96,7 @@
 
     <script src="/js/copy.js"></script>
     <script src="/js/nav.js"></script>
+    <script src="/js/markdown.js"></script>
     <script src="/js/memory.js"></script>
   </body>
 </html>

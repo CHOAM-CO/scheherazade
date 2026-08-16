@@ -707,6 +707,16 @@ window.COPY = {
       false: 'Off',
     },
     eventLabels: { insert: 'Added', update: 'Updated', confirm: 'Confirmed', delete: 'Deleted' },
+    // "What I remember" (Dreaming feature, 2026-08-16) -- AUTHORED, not in
+    // the copy file (this UI is new). The agent's own nightly synthesis of
+    // memory-summary.md, written by following procedures/memory-consolidation.md.
+    remember: {
+      label: 'What I remember',
+      refreshLabel: 'Refresh',
+      updated: (t) => `Last updated ${t}`,
+      empty: (name) => `${name} hasn't written this yet. It's rewritten overnight, during a scheduled memory-consolidation pass — that requires autonomy to be turned on in Settings, and at least one night to have gone by since.`,
+      loadError: (msg) => `Couldn't load this (${msg}).`,
+    },
     deleteDialog: (name) => `This can't be undone. ${name} will no longer remember this. Only a record that it was deleted will remain.`,
     deleteConfirm: 'Delete',
     deleteCancel: 'Cancel',

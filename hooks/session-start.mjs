@@ -20,6 +20,43 @@ for (const dir of ['session_notes', 'journals', 'dreams', 'logs']) {
   fs.mkdirSync(path.join(MEM, dir), { recursive: true })
 }
 
+// Default nightly memory-consolidation schedule (Dreaming feature, 2026-08-16).
+// Generic Schedules (schedules.json, read every 60s by channel.mjs) ships
+// with no entries at all -- this is the one default the app seeds, and only
+// once: absence-only, never touched again once the file exists, because
+// after that the file belongs to the user/agent (hand edits, added/removed
+// entries) and a re-seed would silently fight them. createdBy MUST stay
+// "agent" -- cadence/schedule-tick.cjs's consent gate only lets an
+// agent-authored entry fire once AUTONOMY=yes is set in .agent-config;
+// "system" would bypass that gate, which a nightly unsupervised model turn
+// must never do. tmp+rename, same convention as the other DATA_HOME seeders
+// (onboarding/harness-render.cjs's seedAgentDefinitions/seedSkillDefinitions)
+// -- a JSON file is worth protecting from a truncated write in a way a plain
+// session note is not: a half-written schedules.json would fail every
+// planScheduleTick() parse, silently killing every OTHER schedule the user
+// or agent added, not just this one.
+const schedulesFile = path.join(MEM, 'schedules.json')
+if (!fs.existsSync(schedulesFile)) {
+  const defaultStore = {
+    version: 1,
+    schedules: [
+      {
+        id: 'memory-consolidation',
+        enabled: true,
+        kind: 'recurring',
+        everyMinutes: 1440,
+        window: '03:00-06:00',
+        prompt: 'Read procedures/memory-consolidation.md and follow it.',
+        createdBy: 'agent',
+        lastRunISO: null,
+      },
+    ],
+  }
+  const tmp = `${schedulesFile}.tmp-${process.pid}`
+  fs.writeFileSync(tmp, JSON.stringify(defaultStore, null, 2) + '\n')
+  fs.renameSync(tmp, schedulesFile)
+}
+
 const notesFile = path.join(MEM, 'session_notes', `${TODAY}.md`)
 let noteStatus = 'found'
 if (!fs.existsSync(notesFile)) {
