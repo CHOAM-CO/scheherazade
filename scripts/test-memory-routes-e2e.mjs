@@ -129,6 +129,23 @@ try {
   chk('GET /api/memory/session-events is 200', se.status === 200, se.status)
   const seBody = await se.json()
   chk('session-events has the {date, events[]} shape (collapse semantics are test-session-feed.mjs\'s pin, not this one)', Array.isArray(seBody.events) && ('date' in seBody), JSON.stringify(seBody).slice(0, 200))
+
+  // ── "What I remember" (Dreaming feature, 2026-08-16) ─────────────────────
+  const noTokSummary = await fetch(`${base}/api/memory/summary`)
+  chk('GET /api/memory/summary without a token is REFUSED', noTokSummary.status === 403, noTokSummary.status)
+
+  const absent = await fetch(`${base}/api/memory/summary`, { headers: auth })
+  chk('GET /api/memory/summary is 200 even when memory-summary.md does not exist yet', absent.status === 200, absent.status)
+  const absentBody = await absent.json()
+  chk('absent file reports {exists:false}, not a 404 (consolidation just hasn\'t run yet)', absentBody.exists === false, JSON.stringify(absentBody))
+
+  const summaryMd = '# What I remember\n\n## About the user\n\n- likes tests that actually run\n'
+  fs.writeFileSync(path.join(process.env.AGENT_DATA_HOME, 'memory-summary.md'), summaryMd)
+  const present = await fetch(`${base}/api/memory/summary`, { headers: auth })
+  chk('GET /api/memory/summary is 200 once the file exists', present.status === 200, present.status)
+  const presentBody = await present.json()
+  chk('returns the markdown verbatim', presentBody.exists === true && presentBody.markdown === summaryMd, JSON.stringify(presentBody).slice(0, 200))
+  chk('updatedISO is a real, parseable timestamp', typeof presentBody.updatedISO === 'string' && Number.isFinite(Date.parse(presentBody.updatedISO)), presentBody.updatedISO)
 } finally {
   srv.server.close()
   service.close()

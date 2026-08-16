@@ -73,6 +73,25 @@ function main() {
   // Credential stores of the migration source tools + our own lane's.
   // Path-shaped: <tool home>/<credential name>. Windows separators and a
   // ~ or $HOME prefix are all normalized by the regexes themselves.
+  //
+  // 2026-08-16 extension (scalex.dev field data: humans catch destructive
+  // commands 88% of the time but MISS credential-exfil reads 33-35% of the
+  // time -- prompt-and-wait is a weak guard for exfil specifically, so this
+  // adds pattern-based auto-block for the common OS/CLI credential stores
+  // beyond the migration-source tools above). Same match-by-path-shape
+  // approach, same hard-block action.
+  //
+  // .env is deliberately NOT covered here beyond the existing tool-home
+  // shapes (~/.hermes/.env etc. above). The brief for this extension was
+  // "block .env reads outside the agent's DATA_HOME" -- but AGENT_DATA_HOME
+  // is this persona's memory/config home, not the coding-project cwd this
+  // hook's Bash/Read calls actually operate in, and this hook has no
+  // reliable signal for "the agent's own project directory" to diff a read
+  // against. A path-shape match on bare ".env" with no such anchor would
+  // block ordinary project .env reads constantly (the false positive the
+  // file's own header comment already warns against). Skipped per the
+  // brief's own fallback: "if the hook can't tell DATA_HOME, skip .env and
+  // say so."
   const RULES = [
     [/\.claude[\\/]+\.credentials\.json/i, "Claude Code's credential file"],
     [/\.claude\.json\b/i, "Claude Code's app-state file (embeds MCP tokens)"],
@@ -81,7 +100,37 @@ function main() {
     [/opencode[\\/]+auth\.json/i, "OpenCode's credential file"],
     [/\.openclaw[\\/]+credentials\b/i, "OpenClaw's credentials directory"],
     [/openclaw-agent\.sqlite/i, "OpenClaw's agent auth database"],
-    [/find-generic-password|security\s+find/i, 'the macOS keychain'],
+
+    // -- cloud / CLI credential files --
+    [/\.aws[\\/]+(credentials|config)\b/i, "the AWS credentials/config file"],
+    [/\.netrc\b/i, 'the netrc credentials file'],
+    [/\.npmrc\b/i, "npm's rc file (may embed an auth token)"],
+    [/\.pypirc\b/i, "PyPI's rc file (embeds upload credentials)"],
+    [/\.docker[\\/]+config\.json\b/i, "Docker's config file (embeds registry auth)"],
+    [/\.kube[\\/]+config\b/i, 'the kubeconfig file (cluster credentials)'],
+    [/\.gnupg[\\/]/i, 'the GnuPG keyring directory'],
+
+    // SSH: named private keys explicitly, plus a catch-all for anything else
+    // under ~/.ssh EXCEPT known_hosts and public keys (*.pub) -- those two
+    // carry no secret material and must stay readable. The lookaheads test
+    // the remainder of the path token right after ".ssh/", so "ssh host" (no
+    // ".ssh" substring at all) and "cat ~/.ssh/id_rsa.pub" / "~/.ssh/known_hosts"
+    // (excluded shapes) both pass through untouched.
+    [/\.ssh[\\/]+(?!known_hosts\b)(?!\S*\.pub\b)\S+/i, 'an SSH private key or other non-public file under ~/.ssh'],
+
+    // macOS keychain. `security dump-keychain` added alongside the existing
+    // find-* coverage. `security list-keychains` is deliberately NOT matched:
+    // it only enumerates keychain names/paths on disk, never secret material,
+    // so blocking it would be a pure false positive under the "match
+    // specific paths/commands, not broad words" discipline this file follows.
+    [/find-generic-password|security\s+(find|dump-keychain)/i, 'the macOS keychain'],
+
+    // Browser-saved passwords / session cookies. Matched by folder-shape
+    // (Application Support/<browser vendor dir>) AND target filename
+    // together so an unrelated file merely named "Cookies" elsewhere doesn't
+    // trip this.
+    [/Application Support[\\/][\s\S]*?(Google[\\/]+Chrome|BraveSoftware|Microsoft Edge)[\s\S]*?(Login Data|Cookies)\b/i, "a browser's saved-password/cookie store"],
+    [/(Firefox|\.mozilla)[\s\S]*?(logins\.json|key4\.db)\b/i, "Firefox's saved-password store"],
   ]
   for (const [re, label] of RULES) {
     if (hays.some((hay) => re.test(hay))) {

@@ -139,11 +139,12 @@ const TOOLS = [
   },
   {
     name: 'memory_recall_material',
-    description: 'Session-start helper. Returns top open threads (status=open, ordered by salience+recency) + recent user_facts + active corrections (capped at 20) + total row counts per table. Includes a bloat_advisory when any table exceeds its size threshold.',
+    description: 'Session-start helper. Returns top open threads (status=open, ordered by salience+recency) + recent user_facts + active corrections (capped at 20) + total row counts per table. Includes a bloat_advisory when any table exceeds its size threshold. When "topic" is given, also runs it through the zero-model-call entity index (mechanical string heuristics, no LLM tokens spent) and — if any indexed entity matches — appends related_entities / related_entities_md ("## Related entities") linking back to the memory rows that mentioned them.',
     inputSchema: {
       type: 'object',
       properties: {
         session: { type: 'string', description: 'Current session identifier (for the returned payload; not used to filter)' },
+        topic: { type: 'string', description: 'Optional free text (e.g. the current user message or session topic) to look up against the entity index. No model call — mechanical extraction + lookup only.' },
       },
       required: [],
     },
@@ -155,6 +156,22 @@ async function main() {
   // Eager open: create the DB and fail fast at boot (same behavior the old
   // in-file initDb()-at-main() had), without ever holding the handle here.
   service.open()
+
+  // Zero-model-call entity index (Zero-Mem-inspired, arXiv:2607.29377):
+  // full rebuild at boot. Fire-and-forget (NOT awaited) — measured at
+  // 21-146ms even on seeded corpora far past the app's own bloat
+  // thresholds, but this must never be allowed to delay MCP stdio
+  // readiness, so it runs concurrently with server.connect() below rather
+  // than gating it.
+  ;(async () => {
+    try {
+      const entityIndex = await import('./entity-index.mjs')
+      const stats = entityIndex.rebuildEntityIndex(service.getDb())
+      log(`entity index rebuilt: ${stats.rows} rows -> ${stats.links} links, ${stats.entities} entities (${stats.ms}ms)`)
+    } catch (err) {
+      log(`entity index boot rebuild skipped: ${err.message}`)
+    }
+  })()
 
   const server = new Server(
     { name: `${AGENT_NAME}-memory`, version: '1.0.0' },

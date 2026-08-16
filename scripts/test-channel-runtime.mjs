@@ -223,6 +223,130 @@ for (const b of BACKENDS) {
   check('the tool name is the frozen string the allowlist matches', ROUTINE_TOOL.name === 'routine')
 }
 
+// ── schedules: generic recurring/one-off prompts, ticker IO (2026-08-16) ───
+// Mirrors the routine-ticker coverage directly above -- same "drive tick()
+// manually, no real setInterval waits" seam, same shape of assertions
+// (fires-once, failure-does-not-consume, restart/persistence). The pure
+// decision math (window wrap, floor, consent gate, activity suppression,
+// malformed entries) already has its own dedicated attacker in
+// scripts/test-schedule-tick.mjs; what's missing there -- and what belongs
+// here, next to the routine ticker it mirrors -- is the IO: does the ticker
+// actually read/write schedules.json correctly, does a thrown fire() leave
+// lastRunISO alone, does an overlapping tick get skipped, does a missing or
+// corrupt store degrade instead of crashing.
+{
+  const { startScheduleTicker, scheduleInjectContent } =
+    await import(pathToFileURL(path.join(ROOT, 'channel-runtime.mjs')).href)
+
+  // There is no store abstraction for schedules the way routines have
+  // createRoutineStore -- startScheduleTicker owns schedules.json's
+  // read/write itself, so the test writes/reads the flat file directly.
+  const writeStore = (dir, schedules) => {
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'schedules.json'), JSON.stringify({ version: 1, schedules }))
+  }
+  const readStore = (dir) => JSON.parse(fs.readFileSync(path.join(dir, 'schedules.json'), 'utf8'))
+  const clock = new Date(2026, 7, 3, 7, 5, 0) // Mon 2026-08-03 07:05 local
+
+  // 1. a due schedule fires exactly once, and lastRunISO lands in the
+  //    ATOMICALLY WRITTEN-BACK file (read from disk, not from memory).
+  {
+    const dir = path.join(tmpDir, 'schedules-fire-once')
+    writeStore(dir, [{ id: 's1', kind: 'once', enabled: true, prompt: 'do it', createdBy: 'system', atISO: '2026-08-03T07:00:00', lastRunISO: null }])
+    const fired = []
+    const { tick } = startScheduleTicker({ dataHome: dir, readConfig: async () => ({}), fire: async (e) => { fired.push(e.id) }, activityMsProvider: () => Infinity, log: () => {}, now: () => clock })
+    await tick()
+    check('due schedule fires exactly once', fired.length === 1 && fired[0] === 's1', JSON.stringify(fired))
+    const after = readStore(dir)
+    check('lastRunISO is stamped in the written-back store file on disk', after.schedules[0].lastRunISO !== null, JSON.stringify(after))
+    await tick()
+    check('a "once" schedule that already fired does not fire again on the next tick', fired.length === 1)
+  }
+
+  // 2. fire() throwing -> lastRunISO is NOT stamped; the same schedule is
+  //    retried (and succeeds) on the next tick.
+  {
+    const dir = path.join(tmpDir, 'schedules-fire-fail')
+    writeStore(dir, [{ id: 's2', kind: 'once', enabled: true, prompt: 'will fail once', createdBy: 'system', atISO: '2026-08-03T07:00:00', lastRunISO: null }])
+    let attempts = 0
+    const { tick } = startScheduleTicker({
+      dataHome: dir,
+      readConfig: async () => ({}),
+      fire: async () => { attempts += 1; if (attempts === 1) throw new Error('boom') },
+      activityMsProvider: () => Infinity,
+      log: () => {},
+      now: () => clock,
+    })
+    await tick()
+    check('fire() throwing does NOT stamp lastRunISO', readStore(dir).schedules[0].lastRunISO === null)
+    await tick()
+    check('the same schedule is retried and fires (and IS stamped) on the next tick', attempts === 2 && readStore(dir).schedules[0].lastRunISO !== null)
+  }
+
+  // 3. missing schedules.json -> no fire, no crash, no file gets created.
+  {
+    const dir = path.join(tmpDir, 'schedules-missing')
+    fs.mkdirSync(dir, { recursive: true }) // dir exists, schedules.json does not
+    const fired = []
+    const { tick } = startScheduleTicker({ dataHome: dir, readConfig: async () => ({}), fire: async (e) => { fired.push(e.id) }, activityMsProvider: () => Infinity, log: () => {}, now: () => clock })
+    await tick()
+    check('missing schedules.json -> no fire', fired.length === 0)
+    check('missing schedules.json -> no file is created (nothing fired, so no write-back)', !fs.existsSync(path.join(dir, 'schedules.json')))
+  }
+
+  // 4. corrupt schedules.json -> a warning is logged, never a throw.
+  {
+    const dir = path.join(tmpDir, 'schedules-corrupt')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'schedules.json'), '{ not valid json')
+    const logs = []
+    const fired = []
+    const { tick } = startScheduleTicker({ dataHome: dir, readConfig: async () => ({}), fire: async (e) => { fired.push(e.id) }, activityMsProvider: () => Infinity, log: (m) => logs.push(m), now: () => clock })
+    await tick()
+    check('corrupt schedules.json -> no fire', fired.length === 0)
+    check('corrupt schedules.json -> a warning is logged, not a throw', logs.some((l) => l.includes('schedules:') && l.toLowerCase().includes('malformed')), JSON.stringify(logs))
+  }
+
+  // 5. inFlight guard: a tick that overlaps a still-running previous tick is
+  //    skipped outright, rather than firing the same due schedule twice.
+  {
+    const dir = path.join(tmpDir, 'schedules-inflight')
+    writeStore(dir, [{ id: 's5', kind: 'once', enabled: true, prompt: 'slow fire', createdBy: 'system', atISO: '2026-08-03T07:00:00', lastRunISO: null }])
+    let release
+    const gate = new Promise((res) => { release = res })
+    let calls = 0
+    const { tick } = startScheduleTicker({
+      dataHome: dir,
+      readConfig: async () => ({}),
+      fire: async () => { calls += 1; await gate }, // holds the tick open until released below
+      activityMsProvider: () => Infinity,
+      log: () => {},
+      now: () => clock,
+    })
+    const first = tick() // will reach fire() and suspend on `gate`
+    const second = tick() // must be a no-op: the first tick is still in flight
+    // Give the first tick's async chain (readConfig -> fs.readFile -> fire)
+    // real turns of the event loop to actually reach fire() and suspend on
+    // the gate BEFORE releasing it -- a genuine overlap, not just two
+    // synchronous calls that happened to queue back to back.
+    await new Promise((r) => setTimeout(r, 10))
+    check('fire() was entered exactly once before release (the second tick truly did nothing)', calls === 1, calls)
+    release()
+    await Promise.all([first, second])
+    check('an overlapping tick is skipped by the inFlight guard (fire still called exactly once)', calls === 1, calls)
+    check('the in-flight tick still completed the write-back once released', readStore(dir).schedules[0].lastRunISO !== null)
+  }
+
+  // 6. inject content carries the schedule's id and prompt, and reads as a
+  //    [SYSTEM] turn -- the exact shape every backend's fire() sends through.
+  {
+    const line = scheduleInjectContent({ id: 'sched-x', prompt: 'read the thing' })
+    check('scheduleInjectContent carries the schedule id', line.includes('sched-x'))
+    check('scheduleInjectContent carries the prompt', line.includes('read the thing'))
+    check('scheduleInjectContent is a [SYSTEM] turn (stop-reply-guard / downstream consumers match on this)', line.startsWith('[SYSTEM]'))
+  }
+}
+
 // ── outbound dedup: GPT-loop guard (2026-08-04, Mino field report) ────────
 {
   const { createOutboundDedup } = await import(pathToFileURL(path.join(ROOT, 'channel-runtime.mjs')).href)

@@ -18,7 +18,7 @@
 
 function createRoutes(staticCtx) {
   const {
-    sendJson, getSessionEvents, getMemoryService, CATEGORY_TABLES,
+    fs, path, sendJson, getSessionEvents, getMemoryService, CATEGORY_TABLES, DATA_HOME,
   } = staticCtx
   return [
     {
@@ -27,6 +27,32 @@ function createRoutes(staticCtx) {
       handler: async (req, res, callCtx) => {
         const result = await getSessionEvents()
         sendJson(res, 200, result)
+        return
+      },
+    },
+    // ── "What I remember" (Dreaming feature, 2026-08-16) ──────────────────
+    // Read-only over DATA_HOME/memory-summary.md, the file
+    // procedures/memory-consolidation.md rewrites in full during the
+    // nightly schedule turn. Missing file is not an error -- it means
+    // consolidation hasn't run yet (fresh install, or autonomy never
+    // enabled) -- so this returns 200/{exists:false}, never 404, same
+    // "absence is a fact, not a fault" contract as the pointer/journal
+    // routes above. Deliberately never writes: this page is a window onto
+    // what the agent already wrote for itself, not a place the UI edits.
+    {
+      method: 'GET',
+      match: (pathname) => pathname === '/api/memory/summary',
+      handler: async (req, res, callCtx) => {
+        const summaryPath = path.join(DATA_HOME, 'memory-summary.md')
+        let stat
+        try {
+          stat = fs.statSync(summaryPath)
+        } catch {
+          sendJson(res, 200, { exists: false })
+          return
+        }
+        const markdown = fs.readFileSync(summaryPath, 'utf8')
+        sendJson(res, 200, { exists: true, markdown, updatedISO: stat.mtime.toISOString() })
         return
       },
     },

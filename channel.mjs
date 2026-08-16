@@ -25,6 +25,7 @@ import {
   installStdoutHygiene, resolveDataHome, atomicWriteJson, localISO, localNow,
   readAgentConfig, createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer, createMuteStrikeAnnouncer,
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
+  startScheduleTicker, scheduleInjectContent,
   createInboundNotifier, createOutboundDedup,
 } from './channel-runtime.mjs'
 // Always-on in-app chat (2026-08-05): this backend HOSTS the local chat
@@ -459,6 +460,26 @@ discord.once(Events.ClientReady, (c) => {
     })
   } catch (err) {
     log(`routine ticker failed to start (feature disabled this session): ${err.message}`)
+  }
+  // Schedules: same optional-feature contract -- a broken watcher degrades
+  // to a log line, never takes Discord down. Shared IO lives in
+  // channel-runtime's startScheduleTicker (same split as startRoutineTicker
+  // above); this backend only supplies DATA_HOME, the config reader, the
+  // fire callback (notifyInbound on the home channel), and the activity
+  // signal driving the suppression gate.
+  try {
+    startScheduleTicker({
+      dataHome: DATA_HOME,
+      readConfig: readAgentConfigFile,
+      fire: (entry) => notifyInbound({
+          content: scheduleInjectContent(entry),
+          meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() },
+        }),
+      activityMsProvider: () => Date.now() - lastActivityMs,
+      log,
+    })
+  } catch (err) {
+    log(`schedule ticker failed to start (feature disabled this session): ${err.message}`)
   }
   announceBoot().catch((err) => log(`boot announce failed: ${err.message}`))
   muteAnnouncer.start().catch((err) => log(`mute announcer failed to start (feature disabled this session): ${err.message}`))

@@ -43,6 +43,7 @@ import { DatabaseSync } from 'node:sqlite'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import * as entityIndex from './entity-index.mjs'
 
 // ── Config ──────────────────────────────────────────────────────────────
 // DATA_HOME: fixed, product-keyed data directory -- matches
@@ -692,7 +693,7 @@ const BLOAT_THRESHOLDS = {
 const CORRECTIONS_RECALL_LIMIT = BLOAT_THRESHOLDS.corrections_active
 
 function memoryRecallMaterial(db, args) {
-  const { session } = args || {}
+  const { session, topic } = args || {}
   const open_threads = db
     .prepare(`SELECT * FROM open_threads WHERE status = 'open' ORDER BY salience DESC, last_touched_at DESC LIMIT 5`)
     .all()
@@ -719,7 +720,7 @@ function memoryRecallMaterial(db, args) {
       }
     : null
 
-  return {
+  const result = {
     session: session ?? null,
     generated_at: nowISO(),
     open_threads,
@@ -728,6 +729,23 @@ function memoryRecallMaterial(db, args) {
     counts,
     bloat_advisory,
   }
+
+  // Zero-model-call entity index (Zero-Mem-inspired, arXiv:2607.29377): a
+  // purely mechanical layer, wired in ONLY when the caller supplies a topic
+  // to look entities up against. Must degrade silently — entity_links/
+  // entities may not exist yet (fresh db, pre-first-rebuild), and that must
+  // never be allowed to break ordinary recall.
+  if (typeof topic === 'string' && topic.trim()) {
+    try {
+      const { entities } = entityIndex.entityRecall(db, topic)
+      if (entities.length > 0) {
+        result.related_entities = entities
+        result.related_entities_md = entityIndex.formatRelatedEntitiesMarkdown(entities)
+      }
+    } catch { /* entity index absent or not yet built — omit the section */ }
+  }
+
+  return result
 }
 
 // ── DB init ────────────────────────────────────────────────────────────
@@ -920,6 +938,18 @@ function journalWriteImpl(db, args) {
   if (!row || !row.id) throw new Error(`journal_write: read-back failed for ${day} — nothing was persisted`)
   logEvent(db, existing ? 'journal_append' : 'journal_create', 'journal_entries', row.id, session)
 
+  // Zero-model-call entity index refresh (2026-08-16): FULL rebuild, not
+  // incremental — measured at 21-30ms on a 790-row seeded corpus and
+  // 111-146ms on an extreme 3860-row corpus (scripts/test-entity-index.mjs
+  // and the ad hoc bench both under this cap), comfortably under the 200ms
+  // budget for any corpus size this app's own BLOAT_THRESHOLDS would ever
+  // let a user reach before nagging them to clean up. A full rebuild also
+  // means no incremental-diff bugs and Korean corpus-frequency gating stays
+  // exact (indexRow's self-frequency fallback is strictly weaker). Must
+  // degrade silently — a journal entry that persisted must never be
+  // reported as failed because this optional, mechanical layer errored.
+  try { entityIndex.rebuildEntityIndex(db) } catch (err) { log(`entity index rebuild after journal_write skipped: ${err.message}`) }
+
   return { id: row.id, date: row.date, appended: Boolean(existing), chars: row.body.length }
 }
 
@@ -979,6 +1009,16 @@ function ensureDb() {
 function open() {
   ensureDb()
   return { dbPath: DB_PATH }
+}
+
+// The one deliberate exception to "no db handle ever crosses a module
+// boundary" (see the header comment): the entity index's boot-time rebuild
+// (server.mjs main()) needs the raw connection to hand to
+// entity-index.mjs's rebuildEntityIndex(db), which is itself a (db, ...)
+// function by design (matching this file's own legacy-surface shape) so it
+// can be unit-tested against a throwaway db without touching the singleton.
+function getDb() {
+  return ensureDb()
 }
 
 // Test teardown ONLY. Closes and forgets the singleton so a later call
@@ -1095,6 +1135,7 @@ export {
   // singleton-backed public API (args only, no db threading)
   open,
   close,
+  getDb,
   write,
   query,
   confirm,
