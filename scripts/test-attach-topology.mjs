@@ -265,7 +265,9 @@ console.log('template + wiring tripwires:')
   const mainSrc = fs.readFileSync(path.join(ROOT, 'main.cjs'), 'utf8')
   check('spawn path branches to attachStartFromSession on attach topology', /=== 'attach'\)\s*{\s*return attachStartFromSession\(config\)/.test(mainSrc))
   check('app quit leaves the external agent alive in attach mode', /agentTopologyIsAttach\(\)\)\s*{\s*log\('app quit: attach topology/.test(mainSrc))
-  check('stop/restart use attach-aware death confirmation', (mainSrc.match(/agentTopologyIsAttach\(\) \? await waitForSupervisorDeath\(\) : await waitForAgentHandleCleared\(\)/g) || []).length === 2)
+  // 3 sites: stopAgent, restartAgent, newConversation (0.1.16) — bump the
+  // count when a new kill-then-respawn path adopts the guard.
+  check('stop/restart/new-conversation use attach-aware death confirmation', (mainSrc.match(/agentTopologyIsAttach\(\) \? await waitForSupervisorDeath\(\) : await waitForAgentHandleCleared\(\)/g) || []).length === 3)
   check('spawn lane injects SUDO_ASKPASS', mainSrc.includes("supervisorEnv.SUDO_ASKPASS"))
   // Adopt-identity guard (design-0016 §Review card 1): session name alone
   // must not be adoption proof, and a null pane pid must never reach PIDFILE.
