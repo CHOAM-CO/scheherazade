@@ -155,6 +155,28 @@ function createRoutes(staticCtx) {
         return
       },
     },
+    // POST /api/agent/new-conversation -- "New conversation" clean break
+    // (2026-08-18): drops the headless session id (fresh context), clears the
+    // in-app transcript, and respawns the lane WITHOUT a checkpoint handoff --
+    // memory.db is left intact. Same fire-and-forget + 202 + status-poll
+    // contract as /api/agent/restart above; the irreversibility confirm is the
+    // UI's job (chat.js), and the load-bearing safety (awaiting CONFIRMED
+    // process death before any respawn or on-disk clear) lives in main.cjs's
+    // newConversation. Delegates to it via agentControls.
+    {
+      method: 'POST',
+      match: (pathname) => pathname === '/api/agent/new-conversation',
+      handler: async (req, res, callCtx) => {
+        const { agentControls } = callCtx // per-call value from createOnboardingServer, never staticCtx
+        if (!agentControls || typeof agentControls.newConversation !== 'function') {
+          sendJson(res, 500, { error: 'agent controls not wired' })
+          return
+        }
+        agentControls.newConversation().catch((err) => console.error('[scheherazade/onboarding] newConversation threw:', err))
+        sendJson(res, 202, { ok: true })
+        return
+      },
+    },
     // POST /api/agent/model {model, provider?} -- #4 model swap: write MODEL
     // (and, when the model lives under a different provider, PROVIDER) to
     // config then restart so the fresh spawn picks it up. Pattern-validated as

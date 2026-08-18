@@ -277,6 +277,20 @@ export function readOutbound(since = 0) {
 
 export function resetQueueForTest() { seq = 0; queue = []; transcriptFile = null }
 
+// Deliberate transcript clear -- the "New conversation" clean break (2026-08-18).
+// Empties the queue but keeps `seq` MONOTONIC on purpose: a page holding a
+// cursor across the clear must still tell "nothing new yet" from "you fell
+// behind and lost some" (the same contract the trim relies on, header above),
+// so it re-seeds honestly instead of silently rewinding. Persists the empty
+// state so the clear SURVIVES a reload/restart (the whole point -- the user
+// asked to forget this thread). Unlike resetQueueForTest(), transcriptFile is
+// left intact so persistence stays ON. Resolves to flushTranscript()'s
+// durability boolean so a caller can gate on the empty state reaching disk.
+export function clearTranscript() {
+  queue = []
+  return flushTranscript()
+}
+
 // ── MCP server ────────────────────────────────────────────────────────────
 const INSTRUCTIONS = `You are ${AGENT_NAME}. The user talks to you in the app's own chat window.
 
@@ -588,6 +602,18 @@ export function createRequestHandler({ notify, token, onInbound = () => {} }) {
         await deliverReaction(emoji, target, { notify })
         enqueueReaction('user', emoji, target.seq)
         return send(202, { ok: true })
+      }
+      if (url.pathname === '/clear' && req.method === 'POST') {
+        // "New conversation" clean break (2026-08-18): empty the transcript
+        // and persist the empty state (seq stays monotonic -- see
+        // clearTranscript). No body, no notification -- this is a local
+        // surface reset, not a message to the agent. Awaits the flush so the
+        // 200 never out-promises the durable empty state a restart restores
+        // from (same durability rule as /in). Dropping the headless session id
+        // and respawning the lane fresh is main.cjs's job
+        // (agentControls.newConversation); this route owns only the transcript.
+        const durable = await clearTranscript()
+        return send(200, { ok: true, durable })
       }
       return send(404, { error: 'not found' })
     } catch (err) {

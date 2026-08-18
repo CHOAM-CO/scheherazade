@@ -1877,6 +1877,102 @@ async function restartAgent() {
   await spawnRealAgentChild()
 }
 
+// Clear the in-app transcript through the local chat surface's loopback
+// endpoint (channel-local.mjs POST /clear). main.cjs runs in the Electron main
+// process; the transcript store lives in the SUPERVISED agent child, so it is
+// unreachable by a direct call -- the loopback surface is the only seam. The
+// child owns the port + bearer token in DATA_HOME/local-channel.json (0600).
+// Best-effort: returns false if the child is down or the file is stale; the
+// caller then falls back to a direct disk clear (see newConversation).
+async function clearLocalTranscriptViaLoopback() {
+  let info
+  try {
+    info = JSON.parse(fs.readFileSync(path.join(DATA_HOME, 'local-channel.json'), 'utf8'))
+  } catch {
+    return false // no surface file: child down or never wrote it
+  }
+  if (!info || !info.port || !info.token) return false
+  try {
+    const res = await fetch(`http://127.0.0.1:${info.port}/clear`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${info.token}` },
+      signal: AbortSignal.timeout(2500),
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+// Disk fallback for the transcript clear when the live surface is unreachable
+// (child already dead by the time we clear). Rewrites the persisted transcript
+// to an empty queue while PRESERVING seq -- the exact invariant clearTranscript
+// keeps, reimplemented here because main.cjs cannot import the ESM store. Read
+// the existing seq so a page cursor held across the clear still reads "nothing
+// new" instead of rewinding. Fail-soft: a missing/corrupt file just becomes an
+// empty {seq:0,queue:[]}, which is the honest fresh-start state anyway. MUST
+// run only while the child is confirmed dead (no writer to race the rename).
+function clearLocalTranscriptOnDisk() {
+  const file = path.join(DATA_HOME, 'chat-transcript.json')
+  let priorSeq = 0
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'))
+    if (Number.isFinite(raw.seq)) priorSeq = raw.seq
+  } catch { /* absent/corrupt: seq 0 is the correct fresh baseline */ }
+  try {
+    const tmp = `${file}.${process.pid}.tmp`
+    fs.writeFileSync(tmp, JSON.stringify({ seq: priorSeq, queue: [] }, null, 1), { mode: 0o600 })
+    fs.renameSync(tmp, file)
+  } catch (err) {
+    log(`new-conversation: on-disk transcript clear failed (chat may replay old history): ${err.message}`)
+  }
+}
+
+// "New conversation" — a genuine fresh session with a CLEAN BREAK (2026-08-18,
+// owner-confirmed). Unlike restartAgent (which RESUMES via the session file),
+// this forgets the current thread entirely:
+//   1. Fresh context   -- drop DATA_HOME/.headless-session.json so the next
+//      spawn carries NO --resume (headless-lane readPriorSession -> null).
+//   2. Empty transcript -- clear the in-app chat, durably (survives reload).
+//   3. CLEAN BREAK      -- deliberately does NOT fire the context-pressure
+//      checkpoint-flush handoff turn. That flush is fired ONLY by the running
+//      lane's rotateTimer when its in-memory rotatePending is set; killing the
+//      lane (stopAgentAwaited -> SIGTERM -> shutdown(), which only ends stdin
+//      and kills) fires nothing, and a fresh boot consumes any on-disk rotate
+//      marker BEFORE rotatePending is read (headless-lane.mjs: unlink at the
+//      boot check precedes the existsSync at spawn), so rotatePending is false.
+//      No [SYSTEM] handoff turn is ever sent. The user asked to forget, so
+//      nothing is handed off.
+//   4. Memory INTACT    -- the memory MCP db (memory.db: user_facts /
+//      open_threads / corrections / preferences) is never touched. Only the
+//      conversation session pointer and the in-app transcript are cleared.
+// Requires a UI confirm (irreversible) -- enforced at the button.
+async function newConversation() {
+  log('control panel: NEW conversation -- clean break (fresh session, transcript cleared, memory.db untouched, NO checkpoint handoff)')
+  // Clear the live transcript through the surface before the lane dies: keeps
+  // seq monotonic and flushes the empty state to disk (channel-local /clear).
+  const clearedLive = await clearLocalTranscriptViaLoopback()
+  if (!clearedLive) log('new-conversation: loopback /clear did not confirm (child may be down); disk fallback runs after stop')
+  intentionalStopMode = 'restart'
+  await stopAgentAwaited()
+  // Same attach-aware confirmation as restartAgent(): never touch on-disk state
+  // or respawn until the prior lane's death is CONFIRMED.
+  const cleared = agentTopologyIsAttach() ? await waitForSupervisorDeath() : await waitForAgentHandleCleared()
+  if (!cleared) {
+    intentionalStopMode = null
+    setAgentStatus('failed', 'stop_unconfirmed', 'new conversation aborted: prior agent did not confirm exit')
+    return
+  }
+  // The lane is DOWN now -- it cannot rewrite either file. Drop the session id
+  // (fresh context) and, if the live clear did not confirm, clear the on-disk
+  // transcript directly so the empty state is guaranteed before the respawn's
+  // boot restore reads it. memory.db is NOT among these paths.
+  try { fs.unlinkSync(path.join(DATA_HOME, '.headless-session.json')) } catch { /* already gone */ }
+  if (!clearedLive) clearLocalTranscriptOnDisk()
+  intentionalStopMode = null
+  await spawnRealAgentChild()
+}
+
 // BUG 1 fix (agent-lifecycle, 2026-07-03): passed to every
 // startOnboardingServer() call below. spawnRealAgentChild() is itself a
 // no-op-with-a-clear-log-line if onboarding isn't complete / no token yet /
@@ -1938,6 +2034,7 @@ const agentControls = {
   stopAgent,
   startAgent,
   restartAgent,
+  newConversation,
   proxyHealth,
   spawnInfo: () => lastSpawnInfo,
   resolveClaudeBin: () => { const r = resolveClaudeBin(); return r ? r.bin : null },

@@ -17,7 +17,7 @@ import {
   enqueueOutbound, enqueueInbound, enqueueReaction, enqueueActivity, readOutbound, resetQueueForTest,
   deliverInbound, deliverReaction, transcriptState, handleToolCall,
   createRequestHandler, LOCAL_CHANNEL_ID, MAX_QUEUE, USER_REACTIONS,
-  enableTranscriptPersistence, flushTranscript,
+  enableTranscriptPersistence, flushTranscript, clearTranscript,
 } from '../channel-local.mjs'
 
 let pass = 0
@@ -460,6 +460,74 @@ console.log('\n10. boot announce: the greeting is the first thing the chat pane 
     const tail = readOutbound(0).items.at(-1)
     assert(tail.kind === 'activity' && tail.text.length === 160, 'oversized labels are truncated to 160, not rejected')
   }
+}
+
+console.log('\n10b. clearTranscript: the "New conversation" clean break (2026-08-18)')
+{
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-localchan-clear-'))
+  resetQueueForTest()
+  await enableTranscriptPersistence({ dataHome: tmp })
+  enqueueInbound('one')
+  enqueueOutbound('two')
+  enqueueInbound('three')
+  await flushTranscript()
+  const before = readOutbound(0)
+  assert(before.items.length === 3, 'precondition: three items queued')
+  assert(before.latest === 3, 'precondition: cursor at 3')
+
+  const durable = await clearTranscript()
+  assert(durable === true, 'clearTranscript resolves to the durability boolean (empty state reached disk)')
+  const after = readOutbound(0)
+  assert(after.items.length === 0, 'clearTranscript empties the in-memory queue')
+  assert(after.latest === 3, 'clearTranscript keeps seq MONOTONIC (no rewind for a page holding a cursor)')
+
+  const file = path.join(tmp, 'chat-transcript.json')
+  const onDisk = JSON.parse(fs.readFileSync(file, 'utf8'))
+  assert(Array.isArray(onDisk.queue) && onDisk.queue.length === 0, 'the cleared state is persisted (empty queue survives a reload)')
+  assert(onDisk.seq === 3, 'the persisted seq stays monotonic across the clear')
+
+  // A restart-style restore reads back the empty transcript, and the next
+  // message continues the sequence past the pre-clear high-water mark.
+  resetQueueForTest()
+  const { restored } = await enableTranscriptPersistence({ dataHome: tmp })
+  assert(restored === 0, 'a restart after clear restores an empty conversation')
+  const next = enqueueInbound('fresh')
+  assert(next === 4, `post-clear enqueue continues at seq 4 (monotonic), got ${next}`)
+
+  await flushTranscript()
+  resetQueueForTest()
+  fs.rmSync(tmp, { recursive: true, force: true })
+}
+
+console.log('\n10c. HTTP /clear: token-gated, empties the transcript, keeps seq')
+{
+  resetQueueForTest()
+  const handler = createRequestHandler({ notify: () => {}, token: TOKEN })
+  enqueueInbound('keep the cursor honest')
+  enqueueOutbound('sure')
+  assert(readOutbound(0).items.length === 2, 'precondition: two items before clear')
+
+  // Auth gate: a tokenless /clear must be refused like every other mutating route.
+  const noAuth = await call(handler, { method: 'POST', url: '/clear', token: null })
+  assert(noAuth.code === 401, '/clear without a token is rejected (401)')
+  assert(readOutbound(0).items.length === 2, 'a rejected /clear does NOT touch the transcript')
+
+  const ok = await call(handler, { method: 'POST', url: '/clear' })
+  assert(ok.code === 200, 'authorized POST /clear returns 200')
+  assert(ok.json && ok.json.ok === true, '/clear reports ok')
+  const after = readOutbound(0)
+  assert(after.items.length === 0, 'POST /clear empties the transcript')
+  assert(after.latest === 2, 'POST /clear keeps seq monotonic')
+
+  // Only POST clears; a stray GET /clear is a 404, not an accidental wipe.
+  enqueueOutbound('still here')
+  const getClear = await call(handler, { method: 'GET', url: '/clear' })
+  assert(getClear.code === 404, 'GET /clear is not a route (404), only POST clears')
+  assert(readOutbound(0).items.length === 1, 'GET /clear left the transcript intact')
+  resetQueueForTest()
 }
 
 // ── transcript persistence: the app-relaunch path (Mino, 2026-08-04) ───────

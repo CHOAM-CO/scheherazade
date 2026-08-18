@@ -76,6 +76,8 @@
     sendBtn.textContent = C.send
     input.placeholder = C.placeholder
     $('ct-status').textContent = C.statusChecking
+    const newConvoBtn = $('ct-new-convo')
+    if (newConvoBtn) newConvoBtn.textContent = C.newConversation
     jumpBtn.textContent = C.jumpToLatest
     jumpBtn.onclick = () => { pane.scrollTop = pane.scrollHeight; hideJump() }
     // reaching the bottom by hand retires the pill too
@@ -500,6 +502,59 @@
     pollOnce()
   }
 
+  // ── new conversation (clean break, 2026-08-18) ────────────────────────────
+  // Blow away everything the pane drew for the OLD thread so the next poll
+  // re-seeds from the (server-cleared) transcript at cursor 0. Mirrors every
+  // render variable init/pollOnce/appendMsg/showActivity/updatePresence keep --
+  // leaving any of them pointing at a removed node would strand a badge, a
+  // typing dot, or a run fold on top of the fresh conversation. nextSeq=null
+  // forces the seed branch (since=0) on the next poll, which now returns an
+  // empty transcript (seq preserved server-side, so no cursor rewind).
+  function resetClientRenderState() {
+    pane.textContent = ''
+    bubbles = new Map()
+    msgCount = 0
+    emptyEl = null
+    lastUserBubble = null
+    typingEl = null
+    readEl = null
+    runEl = null
+    runSummary = null
+    activityLog = []
+    awaitingSince = null
+    nextSeq = null
+    hideJump()
+  }
+
+  // Irreversible, so it confirms first (repo idiom: window.confirmDialog, the
+  // same modal settings.js uses for its destructive actions -- richer and more
+  // reliable in the Electron window than a bare confirm()). On accept: fire
+  // POST /api/agent/new-conversation (202 = the server cleared the transcript,
+  // dropped the session id, and is respawning the lane with NO checkpoint
+  // handoff and memory.db untouched), empty the pane immediately, and let the
+  // status line narrate the brief respawn via refreshStatus. The failed-send
+  // rule does not apply here (nothing typed is at stake), so a failure is just
+  // a toast.
+  async function startNewConversation() {
+    const ok = await window.confirmDialog(C.newConversationConfirm, C.newConversationConfirmOk, window.COPY.nav.cancel)
+    if (!ok) return
+    const btn = $('ct-new-convo')
+    if (btn) btn.disabled = true
+    try {
+      await window.api('/api/agent/new-conversation', { method: 'POST' })
+      resetClientRenderState()
+      channelUp = false // the lane is respawning; the next poll re-confirms
+      window.showToast(C.newConversationStarting)
+      refreshStatus() // narrate the respawn immediately (Connecting…/isn't answering)
+      pollNow()       // re-seed the empty transcript as soon as the lane is back
+    } catch (err) {
+      console.error('new conversation failed:', err)
+      window.showToast(C.newConversationFailed)
+    } finally {
+      if (btn) btn.disabled = false
+    }
+  }
+
   // ── image attachments (2026-08-04, Mino "인앱챗에 이미지 업로드할수
   // 있는 방법이 없음") ─────────────────────────────────────────────────
   // Flow: pick/paste -> POST /api/chat/upload (base64 JSON) -> pending
@@ -669,6 +724,8 @@
   function init() {
     setStatics()
     sendBtn.onclick = send
+    const newConvoBtn = $('ct-new-convo')
+    if (newConvoBtn) newConvoBtn.onclick = startNewConversation
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault()

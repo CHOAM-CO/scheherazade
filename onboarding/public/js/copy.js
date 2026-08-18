@@ -851,6 +851,16 @@ window.COPY = {
     // Lane status chip (0.1.4): states capability, never apologizes for it.
     laneChipVisionYes: 'sees images',
     laneChipVisionNo: 'no image vision · helper describes',
+    // "New conversation" clean break (2026-08-18): a genuine fresh session.
+    // The button is low-key; the confirm carries the weight because the action
+    // is irreversible. The copy is honest about the exact split -- this thread
+    // is forgotten, but what the agent LEARNED about you (its memory) stays.
+    newConversation: 'New conversation',
+    newConversationConfirm:
+      'Start a new conversation? This clears the chat here and the agent forgets everything in this thread — its next reply starts fresh. What it has learned about you (its saved memory) is kept. This cannot be undone.',
+    newConversationConfirmOk: 'Start fresh',
+    newConversationStarting: 'Starting a fresh conversation…',
+    newConversationFailed: "Couldn't start a new conversation — try again.",
   },
 
   // AUTHORED (v0.0.20) -- session log viewer (Mino 07-16: 개발 중 앱이

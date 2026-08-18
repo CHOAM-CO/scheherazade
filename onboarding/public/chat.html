@@ -16,6 +16,11 @@
              actually riding and whether it can see images -- the 2026-08-11
              field bug would have been self-evident with this visible. -->
         <span class="chat-lane-chip" id="ct-lane-chip" hidden></span>
+        <!-- "New conversation" clean break (2026-08-18): fresh session +
+             empty transcript, no checkpoint handoff, memory kept. Irreversible,
+             so it confirms first (chat.js). secondary like the other controls;
+             the destructive emphasis lives in the confirm dialog. -->
+        <button class="secondary chat-new-convo" id="ct-new-convo" type="button"></button>
       </div>
       <p class="subtitle" id="ct-subtitle"></p>
 

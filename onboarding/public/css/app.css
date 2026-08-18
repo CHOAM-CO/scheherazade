@@ -1100,6 +1100,12 @@ button.nav-ctl.is-busy::after {
   vertical-align: middle;
   white-space: nowrap;
 }
+/* "New conversation" clean-break control (2026-08-18): sits at the header's
+   right edge next to the lane chip; the gap keeps it off the chip. */
+.chat-new-convo {
+  margin-left: 0.6rem;
+  white-space: nowrap;
+}
 .chat-attach-img {
   display: block;
   max-width: min(20rem, 100%);
