@@ -847,13 +847,44 @@ async function boot() {
   // not_running from the missing port file). stdin EOF = parent death; drop
   // the port file so the proxy never probes a corpse (channel-local's own
   // boot has the full story on this guard).
+  let localSurface = null
   try {
-    const surface = await startLocalChatSurface({ notify: (n) => notifyInbound(n.params), log })
-    process.stdin.on('end', surface.stop)
-    process.stdin.on('close', surface.stop)
+    localSurface = await startLocalChatSurface({ notify: (n) => notifyInbound(n.params), log })
   } catch (err) {
     log(`in-app chat surface failed to start (chat page off this session): ${err.message}`)
   }
+
+  // ── parent-death exit (Windows orphan fix, 2026-08-18) ─────────────────────
+  // An MCP stdio server's stdin is its lifeline to the parent (claude): when
+  // the parent dies, stdin emits 'end'/'close'. The MCP transport reads stdin
+  // but does NOT exit on its end, and the Discord gateway socket keeps the
+  // event loop alive forever -- so the OLD handler (surface.stop only) left this
+  // process ORPHANED on parent death. On Windows there are no POSIX process
+  // groups, so the app's tree-kill cannot reach a grandchild either: every
+  // mid-session recycle and every quit would strand a live channel server still
+  // holding the Discord token. Stop cleanly (drop the port file, log out of
+  // Discord) then force-exit, with a safety timeout so a hung gateway teardown
+  // still exits. Only this stdin-EOF path exits; normal (parent-alive) operation
+  // is untouched.
+  let shuttingDown = false
+  const onParentGone = () => {
+    if (shuttingDown) return
+    shuttingDown = true
+    log('stdin closed (parent gone) -- shutting down channel MCP server')
+    // Safety net: a hung Discord disconnect must not hold the exit hostage.
+    // .unref() so the timer itself never keeps the process alive.
+    setTimeout(() => {
+      log('graceful shutdown timed out -- forcing exit')
+      process.exit(0)
+    }, 2500).unref()
+    ;(async () => {
+      try { localSurface?.stop() } catch (err) { log(`surface stop failed during shutdown: ${err.message}`) }
+      try { await discord.destroy() } catch (err) { log(`discord destroy failed during shutdown: ${err.message}`) }
+      process.exit(0)
+    })()
+  }
+  process.stdin.on('end', onParentGone)
+  process.stdin.on('close', onParentGone)
 
   try {
     await discord.login(DISCORD_TOKEN)

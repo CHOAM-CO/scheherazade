@@ -221,6 +221,31 @@ async function main() {
 
   await server.connect(new StdioServerTransport())
   log(`MCP server up (${AGENT_NAME}-memory), db=${service.DB_PATH}`)
+
+  // ── parent-death exit (Windows orphan fix, 2026-08-18) ─────────────────────
+  // stdin is this stdio server's lifeline to the parent (claude). The MCP
+  // transport reads stdin (server.connect -> transport.start attaches the
+  // 'data' listener, putting stdin in flowing mode) but NEVER exits when stdin
+  // ends -- so a dead parent would otherwise leave this process lingering. On
+  // Windows there are no POSIX process groups, so the app's tree-kill cannot
+  // reach a grandchild: every recycle/quit would orphan this memory server
+  // still holding the SQLite handle. Close the DB (WAL checkpoint) and exit; a
+  // safety timeout forces exit if close() ever hangs. Only this stdin-EOF path
+  // exits; normal (parent-alive) operation is untouched.
+  let shuttingDown = false
+  const onParentGone = () => {
+    if (shuttingDown) return
+    shuttingDown = true
+    log('stdin closed (parent gone) -- shutting down memory MCP server')
+    setTimeout(() => {
+      log('graceful shutdown timed out -- forcing exit')
+      process.exit(0)
+    }, 2000).unref()
+    try { service.close() } catch (err) { log(`db close failed during shutdown: ${err.message}`) }
+    process.exit(0)
+  }
+  process.stdin.on('end', onParentGone)
+  process.stdin.on('close', onParentGone)
 }
 
 // Only boot the MCP stdio server when run directly (`node server.mjs`), not

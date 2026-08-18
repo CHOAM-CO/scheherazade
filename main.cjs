@@ -1682,8 +1682,15 @@ function killAgentSupervisor(signal = 'SIGTERM') {
       // signaling -- time may have passed since discovery, and a bare
       // isPidAlive() re-check alone would still be identity-blind to a
       // since-recycled pid.
-      process.kill(agentSupervisorPid, signal)
-      log(`sent ${signal} to discovered agent supervisor (pid=${agentSupervisorPid}, identity re-verified via ps) -- best-effort fast path`)
+      // killTree (not a bare process.kill): on win32 a single-process kill
+      // leaves the supervisor -> headless-lane -> claude -> MCP subtree alive
+      // (no POSIX process groups), orphaning the MCP stdio children on quit.
+      // killTree does taskkill /PID /T /F on win32 and a POSIX process-group
+      // signal (-pid) on mac/Linux -- the same teardown the agentChild fast
+      // path above already uses, and the discovered supervisor is the same
+      // detached run.sh __loop group leader.
+      killTree(agentSupervisorPid, signal)
+      log(`sent ${signal} to discovered agent supervisor process tree (pid=${agentSupervisorPid}, identity re-verified via ps) -- best-effort fast path`)
     } else {
       log(`skipping direct signal to agentSupervisorPid=${agentSupervisorPid}: no longer verifiable as our supervisor (dead, or pid recycled) -- relying on the 'run.sh stop' cleanup path below instead, which is identity-safe via PKILL_PATTERN command-line matching`)
     }
