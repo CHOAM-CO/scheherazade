@@ -73,6 +73,37 @@ for (const b of BACKENDS) {
   check(`${b.file} imports ./channel-runtime.mjs`, src.includes("from './channel-runtime.mjs'"))
   check(`${b.file} carries no local console-reroute copy`, !src.includes('console[method]'))
   check(`${b.file} carries no local atomic-write copy`, !src.includes('async function atomicWriteJson'))
+  check(`${b.file} sweeps stale atomic tmps at boot`, src.includes('sweepStaleAtomicTmp(DATA_HOME, log)'))
+}
+
+// ── 2b. stale atomic-tmp boot sweep (0.1.17) ────────────────────────────────
+// atomicWriteJson's tmp survives a kill between writeFile and rename; the
+// sweep removes ONLY files matching `<name>.<pid>.<ts>.tmp` older than 1h.
+console.log('\nsweepStaleAtomicTmp: shape-pinned, age-gated, never boot-blocking')
+{
+  const { sweepStaleAtomicTmp } = await import(pathToFileURL(path.join(ROOT, 'channel-runtime.mjs')).href)
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scheherazade-tmp-sweep-'))
+  const OLD = Date.now() / 1000 - 2 * 3600 // utimesSync takes seconds
+  const mk = (name, old) => {
+    const p = path.join(dir, name)
+    fs.writeFileSync(p, 'x')
+    if (old) fs.utimesSync(p, OLD, OLD)
+    return p
+  }
+  const staleTmp = mk('.agent-live.1234.1786000000000.tmp', true)
+  const freshTmp = mk('.agent-live.5678.1786000000001.tmp', false)
+  const wrongShape1 = mk('notes.tmp', true)
+  const wrongShape2 = mk('.agent-live.tmp', true)
+  const userFile = mk('important.1234.5678.tmp.txt', true)
+  const logs = []
+  const swept = await sweepStaleAtomicTmp(dir, (m) => logs.push(m))
+  check('stale atomic tmp removed', !fs.existsSync(staleTmp))
+  check('fresh tmp (possible in-flight write) kept', fs.existsSync(freshTmp))
+  check('non-matching names untouched', fs.existsSync(wrongShape1) && fs.existsSync(wrongShape2) && fs.existsSync(userFile))
+  check('returns swept count + logs once', swept === 1 && logs.length === 1)
+  const swept2 = await sweepStaleAtomicTmp(path.join(dir, 'no-such-dir'), (m) => logs.push(m))
+  check('missing dataHome: returns 0, no throw, no log', swept2 === 0 && logs.length === 1)
+  fs.rmSync(dir, { recursive: true, force: true })
 }
 
 // ── 3. unified resolver contract: {target, note} + fail-closed ─────────────

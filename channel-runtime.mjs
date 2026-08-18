@@ -97,6 +97,40 @@ export async function readAgentConfig(dataHome) {
   return out
 }
 
+// ── stale atomic-write tmp sweep ───────────────────────────────────────────
+// atomicWriteJson's tmp+rename leaves `<name>.<pid>.<ts>.tmp` behind when the
+// process dies between writeFile and rename — a hard kill or OS reboot
+// landing inside any write window. The liveness heartbeat writes every 60s,
+// so that window recurs constantly, and the orphans accumulate forever
+// (magi-win 2026-08-18: three .agent-live.*.tmp from prior unclean
+// shutdowns). Swept at backend boot (createMarkerStore — every transport
+// builds one) rather than per-write: one directory scan per boot.
+// Age gate (1h) protects a concurrent process's in-flight write; matching is
+// pinned to the exact atomicWriteJson shape so user files are untouchable.
+const STALE_TMP_RE = /\.\d+\.\d+\.tmp$/
+const STALE_TMP_MAX_AGE_MS = 60 * 60 * 1000
+export async function sweepStaleAtomicTmp(dataHome, log = () => {}) {
+  let names = []
+  try {
+    names = await fs.readdir(dataHome)
+  } catch {
+    return 0 // no dataHome yet — nothing to sweep
+  }
+  let swept = 0
+  for (const name of names) {
+    if (!STALE_TMP_RE.test(name)) continue
+    const p = path.join(dataHome, name)
+    try {
+      const st = await fs.stat(p)
+      if (!st.isFile() || Date.now() - st.mtimeMs < STALE_TMP_MAX_AGE_MS) continue
+      await fs.unlink(p)
+      swept++
+    } catch {} // raced away or unreadable — never boot-blocking
+  }
+  if (swept) log(`boot sweep: removed ${swept} stale atomic-write tmp file(s)`)
+  return swept
+}
+
 // ── liveness + failure markers ─────────────────────────────────────────────
 // ONE base schema for every backend, poller-facing field names fixed:
 //   liveness  DATA_HOME/.agent-live         {status:'live', lastHeartbeat, pid}

@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import {
   installStdoutHygiene, resolveDataHome, atomicWriteJson, localISO, localNow,
+  sweepStaleAtomicTmp,
   readAgentConfig, createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer, createMuteStrikeAnnouncer,
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
   startScheduleTicker, scheduleInjectContent,
@@ -69,6 +70,7 @@ const HOME_CHANNEL_ID = process.env.HOME_CHANNEL_ID
 // regardless of which layer detected the problem first. (history: docs/HISTORY.md)
 const DATA_HOME = resolveDataHome(AGENT_NAME)
 const markers = createMarkerStore({ dataHome: DATA_HOME })
+void sweepStaleAtomicTmp(DATA_HOME, log) // boot hygiene: tmp orphans from unclean shutdowns (never boot-blocking)
 // User-requested scheduled prompts ("매일 아침 메일 브리핑"), shared logic in
 // channel-runtime. Ticker starts on ClientReady below.
 const routineStore = createRoutineStore({ dataHome: DATA_HOME, log: (...a) => log(...a) })

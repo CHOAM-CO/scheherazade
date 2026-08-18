@@ -51,6 +51,7 @@ import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import {
   installStdoutHygiene, resolveDataHome, localNow, readAgentConfig,
+  sweepStaleAtomicTmp,
   createMarkerStore, createBootAnnouncer,
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
   startScheduleTicker, scheduleInjectContent,
@@ -62,6 +63,7 @@ const log = installStdoutHygiene()
 const AGENT_NAME = process.env.AGENT_NAME || 'agent'
 const DATA_HOME = resolveDataHome(AGENT_NAME)
 const markers = createMarkerStore({ dataHome: DATA_HOME })
+void sweepStaleAtomicTmp(DATA_HOME, log) // boot hygiene: tmp orphans from unclean shutdowns (never boot-blocking)
 // User-requested scheduled prompts, shared logic in channel-runtime.
 // Ticker starts in boot(); tool surface is wired into handleToolCall.
 const routineStore = createRoutineStore({ dataHome: DATA_HOME, log })

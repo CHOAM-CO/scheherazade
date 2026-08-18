@@ -30,6 +30,7 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import {
   installStdoutHygiene, resolveDataHome, localISO, localNow,
+  sweepStaleAtomicTmp,
   createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer, createMuteStrikeAnnouncer,
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
   createInboundNotifier, createOutboundDedup,
@@ -61,6 +62,7 @@ const HOME_CHANNEL_ID = process.env.HOME_CHANNEL_ID
 // regardless of which transport is live.
 const DATA_HOME = resolveDataHome(AGENT_NAME)
 const markers = createMarkerStore({ dataHome: DATA_HOME })
+void sweepStaleAtomicTmp(DATA_HOME, log) // boot hygiene: tmp orphans from unclean shutdowns (never boot-blocking)
 const routineStore = createRoutineStore({ dataHome: DATA_HOME, log: (...a) => log(...a) })
 const { LIVENESS_MARKER_PATH, FAILURE_MARKER_PATH, LIVENESS_HEARTBEAT_MS } = markers
 const writeLivenessMarker = () => markers.writeLiveness()
