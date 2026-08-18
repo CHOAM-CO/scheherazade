@@ -537,6 +537,15 @@ export function createRequestHandler({ notify, token, onInbound = () => {} }) {
         // this line: the client gets its error and keeps the input text, and
         // the transcript never claims a delivery that didn't happen.
         enqueueInbound(delivered)
+        // Durability parity with the reply path (handleToolCall, 5b024ba):
+        // enqueueInbound only puts the item in memory and kicks a fire-and-
+        // forget flush. Returning 202 at that point ACKed the user's message
+        // while its bytes were still in flight -- a hard kill in that window
+        // dropped the message from the transcript, and the restart restore had
+        // nothing to replay. Await the flush so the ACK never out-promises the
+        // durable record. deliverInbound (the notify) has already resolved
+        // above, so this only defers the HTTP ACK, not delivery to the agent.
+        await flushTranscript()
         onInbound(delivered)
         return send(202, { ok: true })
       }

@@ -58,12 +58,25 @@ console.log('\n2. isLocalCall routing predicate (channel.mjs)')
 const { isLocalCall } = discord
 assert(isLocalCall('reply', { channelId: 'in-app', text: 'x' }) === true, 'reply + in-app routes local')
 assert(isLocalCall('reply', { channelId: '123456789012345678', text: 'x' }) === false, 'reply + snowflake stays platform')
-assert(isLocalCall('reply', { text: 'x' }) === false, 'reply without channelId stays platform (current-conversation contract)')
+assert(isLocalCall('reply', { text: 'x' }) === false, 'reply without channelId stays platform (default surface is discord)')
 assert(isLocalCall('read_channel_history', { channelId: 'in-app' }) === true, 'history + in-app routes local')
 assert(isLocalCall('send_file_to_discord', { channelId: 'in-app', filePath: '/tmp/x' }) === true, 'file + in-app routes local')
 assert(isLocalCall('react', { emoji: '👍' }) === true, 'react routes local even without channelId (no other surface has reactions)')
 assert(isLocalCall('routine', { action: 'list' }) === false, 'routine never routes local (host owns the ticker/store)')
 assert(isLocalCall('reply', null) === false, 'null args never routes (and never throws)')
+
+console.log('\n2b. omitted-channelId routing follows the last-inbound SURFACE (H1 in-app-render fix)')
+// isLocalCall takes an explicit `surface` param (defaults to module state) so
+// the decision is unit-testable without driving a real inbound through the
+// HTTP surface. Before this fix, an omitted-channelId reply after an in-app
+// message fell through to the Discord resolver and the chat window rendered
+// nothing.
+assert(isLocalCall('reply', { text: 'x' }, 'in-app') === true, 'omitted channelId + in-app surface routes LOCAL (the bug)')
+assert(isLocalCall('reply', { text: 'x' }, 'discord') === false, 'omitted channelId + discord surface stays platform')
+assert(isLocalCall('send_file_to_discord', { filePath: '/tmp/x' }, 'in-app') === true, 'omitted channelId file + in-app surface routes local')
+// Explicit channelId is honored exactly regardless of surface -- never hijacked.
+assert(isLocalCall('reply', { channelId: '123456789012345678', text: 'x' }, 'in-app') === false, 'explicit snowflake stays platform even when surface is in-app')
+assert(isLocalCall('reply', { channelId: 'in-app', text: 'x' }, 'discord') === true, 'explicit in-app routes local even when surface is discord')
 
 console.log('\n3. twin wiring pins on all three platform backends')
 for (const f of ['channel.mjs', 'channel-slack.mjs', 'channel-telegram.mjs']) {

@@ -133,6 +133,12 @@ async function fetchSlackChannel(channelId, opts = {}) {
 
 // ── Current-conversation channel tracking (channel.mjs parity) ─────────────
 let lastInboundChannelId = null
+// Surface of the last REAL user inbound ('slack' | 'in-app'). This backend
+// hosts both Slack and the always-on in-app chat window; an omitted-channelId
+// reply must route to whichever surface the user last spoke on (H1 in-app-render
+// fix, channel.mjs parity). SYSTEM injects to HOME do NOT touch this. Defaults
+// 'slack' (pre-fix behavior before any inbound).
+let lastInboundSurface = 'slack'
 
 // ── Persisted last-conversation channel (channel-runtime) ──────────────────
 const lastChannelStore = createLastChannelStore({ dataHome: DATA_HOME, log })
@@ -268,10 +274,13 @@ const TOOLS = [
 // Local-surface routing, twin of channel.mjs's: deterministic on the "in-app"
 // channelId; react has no other valid surface.
 const LOCAL_ROUTED_TOOLS = new Set(['reply', 'send_file_to_discord', 'read_channel_history', 'react'])
-function isLocalCall(name, args) {
+function isLocalCall(name, args, surface = lastInboundSurface) {
   if (!LOCAL_ROUTED_TOOLS.has(name)) return false
   if (name === 'react') return true
-  return Boolean(args && args.channelId === LOCAL_CHANNEL_ID)
+  // Explicit channelId honored exactly ('in-app' -> local, else platform);
+  // omitted channelId follows the last real-inbound surface (H1 fix, channel.mjs parity).
+  if (args && args.channelId != null) return args.channelId === LOCAL_CHANNEL_ID
+  return surface === 'in-app'
 }
 
 // thread_ts: Slack ts format only ("1786414183.323289"). Validated here so a
@@ -593,6 +602,7 @@ async function handleInboundMessage(event, opts = {}) {
   if (!isDm && event.channel !== HOME_CHANNEL_ID) return { skipped: true, reason: 'not_home_channel_or_dm' }
 
   lastInboundChannelId = event.channel
+  lastInboundSurface = 'slack' // real user inbound arrived on Slack (H1 surface tracking)
   lastChannelStore.persist(event.channel)
   lastActivityMs = Date.now()
 
@@ -816,7 +826,7 @@ async function boot() {
 
   // Always-on in-app chat surface, fail-soft (see channel.mjs's twin block).
   try {
-    const surface = await startLocalChatSurface({ notify: (n) => notifyInbound(n.params), log })
+    const surface = await startLocalChatSurface({ notify: (n) => { lastInboundSurface = 'in-app'; return notifyInbound(n.params) }, log })
     process.stdin.on('end', surface.stop)
     process.stdin.on('close', surface.stop)
   } catch (err) {

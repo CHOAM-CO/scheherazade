@@ -235,6 +235,12 @@ async function fetchTelegramChat(chatId, opts = {}) {
 // {target, note} where target is a Telegram chat object ({id}); ladder,
 // fail-closed semantics, and opts test seams live in channel-runtime.mjs.
 let lastInboundChannelId = null
+// Surface of the last REAL user inbound ('telegram' | 'in-app'). This backend
+// hosts both Telegram and the always-on in-app chat window; an omitted-channelId
+// reply must route to whichever surface the user last spoke on (H1 in-app-render
+// fix, channel.mjs parity). SYSTEM injects to HOME do NOT touch this. Defaults
+// 'telegram' (pre-fix behavior before any inbound).
+let lastInboundSurface = 'telegram'
 
 const lastChannelStore = createLastChannelStore({ dataHome: DATA_HOME, log })
 
@@ -390,10 +396,13 @@ const TOOLS = [
 // Local-surface routing, twin of channel.mjs's: deterministic on the "in-app"
 // channelId; react has no other valid surface.
 const LOCAL_ROUTED_TOOLS = new Set(['reply', 'send_file_to_discord', 'read_channel_history', 'react'])
-function isLocalCall(name, args) {
+function isLocalCall(name, args, surface = lastInboundSurface) {
   if (!LOCAL_ROUTED_TOOLS.has(name)) return false
   if (name === 'react') return true
-  return Boolean(args && args.channelId === LOCAL_CHANNEL_ID)
+  // Explicit channelId honored exactly ('in-app' -> local, else platform);
+  // omitted channelId follows the last real-inbound surface (H1 fix, channel.mjs parity).
+  if (args && args.channelId != null) return args.channelId === LOCAL_CHANNEL_ID
+  return surface === 'in-app'
 }
 
 const ReplyArgs = z.object({ channelId: z.string().min(1).optional(), text: z.string().min(1) })
@@ -593,6 +602,7 @@ async function handleUpdate(update, opts = {}) {
   if (!shouldProcessMessage(message, HOME_CHANNEL_ID)) return
 
   lastInboundChannelId = String(message.chat.id)
+  lastInboundSurface = 'telegram' // real user inbound arrived on Telegram (H1 surface tracking)
   lastChannelStore.persist(lastInboundChannelId)
   lastActivityMs = Date.now()
 
@@ -722,7 +732,7 @@ async function boot() {
 
   // Always-on in-app chat surface, fail-soft (see channel.mjs's twin block).
   try {
-    const surface = await startLocalChatSurface({ notify: (n) => notifyInbound(n.params), log })
+    const surface = await startLocalChatSurface({ notify: (n) => { lastInboundSurface = 'in-app'; return notifyInbound(n.params) }, log })
     process.stdin.on('end', surface.stop)
     process.stdin.on('close', surface.stop)
   } catch (err) {

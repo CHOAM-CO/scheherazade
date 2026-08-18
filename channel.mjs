@@ -194,6 +194,20 @@ async function fetchTextChannel(channelId) {
 // 구조로 옮기는 픽스.
 let lastInboundChannelId = null
 
+// ── Current-conversation SURFACE tracking (2026-08-18 H1 in-app-render fix) ──
+// This default Discord backend HOSTS BOTH surfaces: Discord AND the always-on
+// in-app chat window. lastInboundChannelId above only ever tracks a Discord
+// snowflake (it is set solely in the messageCreate handler), so an omitted-
+// channelId reply routed only ever to Discord -- after an IN-APP message, that
+// reply posted to Discord and NEVER reached the in-app queue, so the chat
+// window rendered nothing. This tracks which surface the last REAL user inbound
+// arrived on so isLocalCall() can send an omitted-channelId reply back to it.
+// SYSTEM injects (routine/schedule/note-cadence/shutdown, all to HOME) do NOT
+// touch this on purpose: they must not drag an in-app conversation to Discord.
+// Values: 'discord' | 'in-app'. Defaults 'discord' (pre-fix behavior: before
+// any inbound, and for a Discord-only install, omitted-channelId -> Discord).
+let lastInboundSurface = 'discord'
+
 // ── Persisted last-conversation channel (channel-runtime) ──────────────────
 // Cross-restart memory of where the conversation lives -- the boot announce
 // of a DM-only/home-deleted install has nowhere else to go.
@@ -301,10 +315,19 @@ const TOOLS = [
 // belong to channel-local's handler. react has no other valid surface, so it
 // routes local even without a channelId.
 const LOCAL_ROUTED_TOOLS = new Set(['reply', 'send_file_to_discord', 'read_channel_history', 'react'])
-function isLocalCall(name, args) {
+// `surface` defaults to the live module state; passed explicitly only by unit
+// tests (the decision is otherwise pure given name/args/surface).
+function isLocalCall(name, args, surface = lastInboundSurface) {
   if (!LOCAL_ROUTED_TOOLS.has(name)) return false
   if (name === 'react') return true
-  return Boolean(args && args.channelId === LOCAL_CHANNEL_ID)
+  // An EXPLICIT channelId is honored exactly, as before: 'in-app' -> local,
+  // any Discord id -> platform. Never hijacked by the surface state.
+  if (args && args.channelId != null) return args.channelId === LOCAL_CHANNEL_ID
+  // OMITTED channelId (the "current conversation" contract): route to the
+  // surface the last real inbound came from. This is the H1 fix -- an omitted-
+  // channelId reply after an in-app message now goes back to the in-app queue
+  // instead of falling through to the Discord outbound resolver.
+  return surface === 'in-app'
 }
 
 const ReplyArgs = z.object({ channelId: z.string().min(1).optional(), text: z.string().min(1) })
@@ -789,6 +812,7 @@ discord.on(Events.MessageCreate, async (message) => {
     // that last spoke to us IS the conversation, so outbound calls no longer
     // need the model to carry (and possibly confabulate) the id.
     lastInboundChannelId = message.channelId
+    lastInboundSurface = 'discord' // this real user inbound arrived on Discord (H1 surface tracking)
     lastChannelStore.persist(message.channelId) // cross-restart memory for the boot announce
     lastActivityMs = Date.now() // inbound message = live conversation (note-cadence input)
 
@@ -849,7 +873,10 @@ async function boot() {
   // boot has the full story on this guard).
   let localSurface = null
   try {
-    localSurface = await startLocalChatSurface({ notify: (n) => notifyInbound(n.params), log })
+    // Every in-app inbound (a /in message OR a user reaction) flows through
+    // this one notify callback -- mark the surface here so an omitted-channelId
+    // reply routes back to the chat window (H1 surface tracking).
+    localSurface = await startLocalChatSurface({ notify: (n) => { lastInboundSurface = 'in-app'; return notifyInbound(n.params) }, log })
   } catch (err) {
     log(`in-app chat surface failed to start (chat page off this session): ${err.message}`)
   }
