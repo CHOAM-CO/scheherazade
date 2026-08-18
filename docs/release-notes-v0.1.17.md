@@ -1,4 +1,8 @@
-# v0.1.16
+# v0.1.17
+
+(v0.1.16 was built but never published; this release ships its content —
+everything below through "Security hardening" — plus the clean-boot fixes
+at the end.)
 
 ## In-app chat: replies actually render
 
@@ -41,3 +45,26 @@ their parent dies — so no orphan survives either path.
   via `SCHEHERAZADE_LOG_MESSAGE_BODY=1`.
 - Scheduled user-authored prompts are labeled `[SCHEDULED TASK]` instead
   of `[SYSTEM]`.
+
+## Clean boot after unclean shutdown
+
+Three fixes for the reboot/force-quit path (0.1.17 additions — v0.1.16 was
+never published; this release carries everything above plus these):
+
+- **The Windows boot-time orphan sweep never actually worked.** The sweep's
+  own PowerShell command line contains the search pattern, so it matched
+  itself and Stop-Process killed the sweep mid-pipeline — "orphan sweep
+  failed" twice on every boot, and no real orphan was ever cleaned. It now
+  excludes itself ($PID) — verified on a real Windows machine including a
+  planted decoy orphan getting swept.
+- **Stale temp files from hard kills are cleaned at boot.** Atomic writes
+  (liveness heartbeat every 60s, schedules, autonomy state) leave a
+  `.tmp` file behind when the process is killed mid-write; these
+  accumulated forever. All four backends now sweep them at boot (1-hour
+  age gate protects in-flight writes).
+- **Quit no longer waits 75s for a ghost.** The graceful-quit grace window
+  exists so a live agent can flush its checkpoint before shutdown — but
+  when the agent process is dead or mid-restart, nothing can ever answer,
+  and the app waited the full window for nothing. It now checks the
+  liveness heartbeat and skips the wait when no one is there to answer. A
+  healthy idle agent still gets its flush turn.
