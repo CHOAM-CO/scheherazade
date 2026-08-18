@@ -2169,6 +2169,26 @@ try { fs.unlinkSync(SHUTDOWN_REQUEST_PATH) } catch { /* absent = normal boot */ 
 try { fs.unlinkSync(SHUTDOWN_ACK_PATH) } catch { /* absent = normal boot */ }
 
 async function requestAgentShutdownGrace() {
+  // No-acker fast path (0.1.17, magi-win live receipt 2026-08-18): the ack
+  // comes from a [SYSTEM] turn the CHANNEL process injects after seeing
+  // .shutdown-request — so when no channel process is alive (lane dead or
+  // mid-respawn at quit time), nothing can ever ack and the full grace
+  // window is waited for nothing (observed: 75s against a lane that was
+  // between respawns). The channel heartbeats DATA_HOME/.agent-live every
+  // 60s; stale/absent (same 150s freshness the status poller uses, one
+  // missed beat tolerated) ⇒ skip the grace entirely. A healthy IDLE agent
+  // still gets the window on purpose: the flush turn (checkpoint/session
+  // notes) is the feature, not the wait.
+  try {
+    const live = JSON.parse(fs.readFileSync(path.join(DATA_HOME, '.agent-live'), 'utf8'))
+    if (Date.now() - Date.parse(live.lastHeartbeat) > 150_000) {
+      log('graceful quit: liveness marker stale -- no channel process to ack, skipping grace window')
+      return
+    }
+  } catch {
+    log('graceful quit: no liveness marker -- no channel process to ack, skipping grace window')
+    return
+  }
   // Stale ack from a previous cycle must not satisfy this cycle instantly.
   try { fs.unlinkSync(SHUTDOWN_ACK_PATH) } catch { /* absent = fine */ }
   fs.writeFileSync(SHUTDOWN_REQUEST_PATH, JSON.stringify({ requested_at: new Date().toISOString() }) + '\n')

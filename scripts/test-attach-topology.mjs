@@ -265,6 +265,14 @@ console.log('template + wiring tripwires:')
   const mainSrc = fs.readFileSync(path.join(ROOT, 'main.cjs'), 'utf8')
   check('spawn path branches to attachStartFromSession on attach topology', /=== 'attach'\)\s*{\s*return attachStartFromSession\(config\)/.test(mainSrc))
   check('app quit leaves the external agent alive in attach mode', /agentTopologyIsAttach\(\)\)\s*{\s*log\('app quit: attach topology/.test(mainSrc))
+  // No-acker fast path (0.1.17): the shutdown ack comes from a channel-
+  // process-injected turn, so a stale/absent .agent-live means nothing can
+  // ever ack and the grace window is pure dead wait (75s observed live,
+  // magi-win 2026-08-18). A healthy idle agent still gets the window — the
+  // flush turn is the feature.
+  check('graceful quit skips the grace window when no channel process can ack',
+    mainSrc.includes('skipping grace window') &&
+    /Date\.now\(\) - Date\.parse\(live\.lastHeartbeat\) > 150_000/.test(mainSrc))
   // 3 sites: stopAgent, restartAgent, newConversation (0.1.16) — bump the
   // count when a new kill-then-respawn path adopts the guard.
   check('stop/restart/new-conversation use attach-aware death confirmation', (mainSrc.match(/agentTopologyIsAttach\(\) \? await waitForSupervisorDeath\(\) : await waitForAgentHandleCleared\(\)/g) || []).length === 3)
