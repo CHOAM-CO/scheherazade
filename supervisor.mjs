@@ -352,14 +352,20 @@ function defaultReadCommandLine(pid) {
 function sweepOrphansDefault(pkillPattern, log) {
   try {
     if (IS_WIN) {
-      // Sweep action (Where-Object -like + Stop-Process) still UNVERIFIED on
-      // magi-win; its premise -- CIM CommandLine visibility for node-spawned
-      // children -- got receipts in the 2026-08-01 spike (see
-      // defaultReadCommandLine above). Verify the sweep itself when a live
-      // win session exists to leave a real orphan behind.
+      // VERIFIED BY EXECUTION 2026-08-18 (Idea repro on magi-win): the sweep
+      // powershell's OWN command line contains `*<pattern>*`, so the
+      // Where-Object matched the sweep process itself and Stop-Process
+      // -Force killed it mid-pipeline -- exit 0xFFFFFFFF, empty
+      // stdout/stderr, "orphan sweep failed" on EVERY win boot, and no
+      // orphan was ever actually swept. `-ne ${process.pid}` excludes the
+      // supervisor (node), not this powershell child; POSIX pkill never
+      // matches itself, which is why only win32 broke. Fix: also exclude
+      // $PID (powershell's own-process automatic variable). Receipts:
+      // repro matrix 2026-08-18, current shape FAIL -1 / +$PID OK, and a
+      // planted fake-cmdline orphan still gets swept.
       const escaped = pkillPattern.replace(/'/g, "''")
       execFileSync(POWERSHELL_EXE, ['-NoProfile', '-Command',
-        `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${escaped}*' -and $_.ProcessId -ne ${process.pid} } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`],
+        `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${escaped}*' -and $_.ProcessId -ne ${process.pid} -and $_.ProcessId -ne $PID } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`],
         { encoding: 'utf8' })
     } else {
       execFileSync('pkill', ['-f', '--', pkillPattern], { encoding: 'utf8' })

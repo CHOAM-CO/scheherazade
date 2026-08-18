@@ -98,6 +98,13 @@ console.log('\n-- headless lane parity: both lanes exec headless-lane.mjs')
   ok('supervisor reaper patterns mirror run.sh (full path)',
     supSrc.includes("pkillPattern: path.join(path.dirname(SELF_PATH), 'headless-lane.mjs')") &&
     supSrc.includes("pkillLeafPattern: `--mcp-config ${path.join(mem, '.mcp.json')}`"))
+  // win sweep self-kill regression (2026-08-18, magi-win live repro): the
+  // sweep powershell's own command line contains `*<pattern>*`, so without
+  // excluding $PID the Where-Object matches the sweep itself and
+  // Stop-Process kills it mid-pipeline (exit -1, empty output, every boot).
+  // POSIX pkill self-excludes; win32 must do it explicitly.
+  ok('win orphan sweep excludes its own powershell ($PID) -- self-kill regression',
+    supSrc.includes('-and $_.ProcessId -ne $PID }'))
 }
 
 // ── 2b. the lane's claude argv (the ONE argv builder) ──────────────────────
