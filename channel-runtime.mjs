@@ -599,7 +599,9 @@ export function startScheduleTicker({ dataHome, readConfig, fire, activityMsProv
 // The line the agent receives at fire time -- shared so every backend
 // injects the identical shape, mirroring routineInjectContent's role.
 export function scheduleInjectContent(entry) {
-  return `[SYSTEM] Scheduled task "${entry.id}": ${entry.prompt}`
+  // Not [SYSTEM]: the prompt is user-authored, and labeling it as system
+  // authority lets a scheduled prompt assert privileges the user does not have.
+  return `[SCHEDULED TASK] (user-authored) "${entry.id}": ${entry.prompt}`
 }
 
 // ── inbound notifier (design-0020, headless topology) ──────────────────────

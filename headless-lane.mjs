@@ -141,15 +141,20 @@ function readPending() {
     return Array.isArray(v) ? v : []
   } catch { return [] }
 }
+// Returns true when the pending FIFO is durable on disk, false when the write
+// failed. Existing best-effort callers ignore the return; the ingest path uses
+// it to refuse (500) a delivery it could not make crash-recoverable.
 function writePending(list) {
   try {
     if (!list.length) {
       try { fs.unlinkSync(pendingFile()) } catch { /* already gone */ }
-      return
+      return true
     }
     writeJsonAtomic(pendingFile(), list.slice(-20), 0o600)
+    return true
   } catch (err) {
     log(`pending write failed (a mid-turn recycle could strand this message): ${err.message}`)
+    return false
   }
 }
 
@@ -301,6 +306,13 @@ const MUTE_NUDGE_SESSION_CAP = Math.max(1, Number(process.env.SCHEHERAZADE_MUTE_
 // [^>]*, so a bare `>` inside an attr VALUE truncates the scan before the
 // real channelId — a hostile display name could unparse its own message.
 const escapeAttr = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+// escapeAttr minus the quote handling: for the tag BODY, where `"` is
+// harmless but `<`/`>` are the breakout vectors. A raw body containing
+// `</channel><channel source="...">` would otherwise forge a second envelope
+// and impersonate any source/sender. Boundary-integrity hardening: the
+// tradeoff is that literal `<`/`>`/`&` in genuine user content arrive to the
+// model as HTML entities, which it reads back fine.
+const escapeText = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
 export function renderChannelTag({ content, meta = {} }) {
   const attrs = [
@@ -316,7 +328,7 @@ export function renderChannelTag({ content, meta = {} }) {
   // order/extra-attr tolerant, so appending is contract-safe.
   if (meta.messageTs) attrs.push(`messageTs="${escapeAttr(meta.messageTs)}"`)
   if (meta.threadTs) attrs.push(`threadTs="${escapeAttr(meta.threadTs)}"`)
-  return `<channel ${attrs.join(' ')}>${String(content == null ? '' : content)}</channel>`
+  return `<channel ${attrs.join(' ')}>${escapeText(content)}</channel>`
 }
 
 export function renderUserEvent(payload) {
@@ -805,6 +817,16 @@ async function main() {
       const content = String(payload.content == null ? '' : payload.content).trim()
       if (!content) return send(400, { error: 'content required' })
       if (childExited || !child.stdin.writable) return send(503, { error: 'agent not running' })
+      // Crash-recovery FIFO must be durable BEFORE the message reaches claude's
+      // stdin: if the process dies in the window between the stdin write and the
+      // persist, the turn is lost with no redelivery record -- yet the request
+      // had already returned 200 (writePending swallowed its own failures).
+      // Persist first; if that fails, refuse with 500 rather than acknowledge a
+      // delivery we cannot make crash-recoverable. Removal semantics are
+      // unchanged: the result event still pays for entries whose ts precedes it.
+      if (!writePending([...readPending(), { content, meta: payload.meta || {}, ts: Date.now() }])) {
+        return send(500, { error: 'pending persist failed' })
+      }
       try {
         child.stdin.write(renderUserEvent({ content, meta: payload.meta || {} }))
         noteStdinWrite()
@@ -818,12 +840,15 @@ async function main() {
         log(`inbound -> stdin (${content.length} chars, sender=${(payload.meta && payload.meta.sender) || '?'})`)
         // Transcript symmetry (0.1.4): the user side of the turn, same
         // 200-char preview discipline as the `turn> agent:` lines above.
-        log(`turn> user: ${String(content).trim().replace(/\s*\n+\s*/g, ' ⏎ ').slice(0, 200)}`)
+        // The body is PII -- gated behind SCHEHERAZADE_LOG_MESSAGE_BODY=1
+        // (default OFF). The length-only line above still confirms arrival.
+        if (process.env.SCHEHERAZADE_LOG_MESSAGE_BODY === '1') {
+          log(`turn> user: ${String(content).trim().replace(/\s*\n+\s*/g, ' ⏎ ').slice(0, 200)}`)
+        }
       } catch (err) {
         log(`stdin write failed: ${err.message}`)
         return send(503, { error: 'stdin write failed' })
       }
-      writePending([...readPending(), { content, meta: payload.meta || {}, ts: Date.now() }])
       send(200, { ok: true })
     })
   })

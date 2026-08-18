@@ -106,6 +106,14 @@ function downloadBuffer(url, maxBytes = 20 * 1024 * 1024, depth = 0) {
   })
 }
 
+// Telegram file URLs embed the FULL bot token as a path segment
+// (https://<host>/file/bot<TOKEN>/<path>). Strip it before the URL can ever
+// reach a log sink -- the /logs redactor is a backstop, not the first line of
+// defense; a credential-bearing URL must not be handed to log() at all.
+function sanitizeTelegramUrl(url) {
+  return String(url).replace(/\/bot[^/]+\//, '/bot<REDACTED>/')
+}
+
 async function downloadImageToTmp(url, mime) {
   try {
     const buf = await downloadBuffer(url)
@@ -115,7 +123,7 @@ async function downloadImageToTmp(url, mime) {
     await fs.writeFile(dest, buf)
     return dest
   } catch (err) {
-    log(`image download failed (${url}): ${err.message}`)
+    log(`image download failed (${sanitizeTelegramUrl(url)}): ${err.message}`)
     return null
   }
 }

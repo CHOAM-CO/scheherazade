@@ -42,8 +42,12 @@ const REDACT_PATTERNS = [
   /[A-Za-z\d_-]{23,28}\.[A-Za-z\d_-]{6,7}\.[A-Za-z\d_-]{25,}/g,
   // Slack tokens: xoxb-/xoxp-/xoxa-/xoxr-/xapp-
   /\bx(?:oxb|oxp|oxa|oxr|app)-[A-Za-z0-9-]{10,}/g,
-  // Telegram bot token: numeric bot id ":" 30+ char secret
-  /\b\d{6,12}:[A-Za-z0-9_-]{30,}\b/g,
+  // Telegram bot token: numeric bot id ":" 30+ char secret. No \b anchors:
+  // the token routinely appears glued to a "bot" prefix (the file URL
+  // .../file/bot<TOKEN>/...), where a leading \b never matches ("bot"+digits
+  // are both word chars) and the token survived. Over-redaction is the safe
+  // failure for a credential filter, so both boundaries are dropped.
+  /\d{6,12}:[A-Za-z0-9_-]{30,}/g,
   // Provider keys (sk-ant-..., sk-proj-..., plain sk-...)
   /\bsk-[A-Za-z0-9_-]{16,}\b/g,
   // Anything already riding an Authorization header shape

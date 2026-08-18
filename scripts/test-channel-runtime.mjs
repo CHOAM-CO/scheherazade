@@ -337,13 +337,16 @@ for (const b of BACKENDS) {
     check('the in-flight tick still completed the write-back once released', readStore(dir).schedules[0].lastRunISO !== null)
   }
 
-  // 6. inject content carries the schedule's id and prompt, and reads as a
-  //    [SYSTEM] turn -- the exact shape every backend's fire() sends through.
+  // 6. inject content carries the schedule's id and prompt, and preserves the
+  //    provenance of the prompt (user-authored, NOT [SYSTEM] authority).
+  //    stop-reply-guard matches scheduled turns on the CHANNEL, not this text
+  //    prefix (see its :192-196 comment), so the label is free to be honest.
   {
     const line = scheduleInjectContent({ id: 'sched-x', prompt: 'read the thing' })
     check('scheduleInjectContent carries the schedule id', line.includes('sched-x'))
     check('scheduleInjectContent carries the prompt', line.includes('read the thing'))
-    check('scheduleInjectContent is a [SYSTEM] turn (stop-reply-guard / downstream consumers match on this)', line.startsWith('[SYSTEM]'))
+    check('scheduleInjectContent does not claim [SYSTEM] authority for user content', !line.startsWith('[SYSTEM]'))
+    check('scheduleInjectContent marks the prompt as user-authored', line.includes('user-authored'))
   }
 }
 

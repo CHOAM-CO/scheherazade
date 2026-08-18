@@ -50,6 +50,16 @@ for (const [name, secret] of SECRETS) {
 }
 check('plain text untouched', redact('agent spawn skipped: no token yet') === 'agent spawn skipped: no token yet')
 check('iso timestamp untouched', redact('[2026-07-16T08:00:00.000Z] boot') === '[2026-07-16T08:00:00.000Z] boot')
+// Regression (2026-08-18): the token glued to a "bot" prefix inside a Telegram
+// file URL is the shape channel-telegram.mjs's download-failure path could
+// leak. The old /\b\d{6,12}:.../\b/ never matched here ("bot"+digits are both
+// word chars, so the leading \b failed) and the token survived redaction.
+{
+  const tgToken = '8123456789:AAHfake_fake_fake_fake_fake_fake_12'
+  const tgUrl = `https://api.telegram.org/file/bot${tgToken}/photos/a.jpg`
+  const out = redact(`image download failed (${tgUrl}): timeout`)
+  check('telegram token glued to bot-prefix redacted', !out.includes(tgToken) && out.includes('[REDACTED]'), out)
+}
 
 // ── 2. buffer + cursor semantics ───────────────────────────────────────────
 console.log('cursor semantics:')
