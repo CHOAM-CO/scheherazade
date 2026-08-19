@@ -1155,13 +1155,16 @@ async function validateProviderKey(provider, key, opts = {}) {
         let errBody = ''
         try { errBody = JSON.stringify(await res.json()).slice(0, 300) } catch (err) { /* keep '' */ }
         if (/not.?found|invalid.?model|no such model/i.test(errBody) || res.status === 404) {
-          return { ok: true, reachable: true, modelPresent: false, detail: `ollama.com accepted the key, but model "${probeModel}" was refused (HTTP ${res.status}). Pick a name from the ollama.com model list${names.length ? ` (e.g. ${names.slice(0, 8).join(', ')})` : ''}.` }
+          return { ok: true, reachable: true, modelPresent: false, detail: `ollama.com accepted the key, but model "${probeModel}" was refused (HTTP ${res.status}). Pick a name from the ollama.com model list${names.length ? ` (${names.length} available, first 8: ${names.slice(0, 8).join(', ')})` : ''}.` }
         }
         return { ok: false, reason: `ollama.com answered HTTP ${res.status}: ${errBody || 'no body'}` }
       }
       const modelPresent = wanted ? names.length ? names.includes(wanted) : probeModel === wanted : undefined
       if (wanted && modelPresent === false) {
-        return { ok: true, reachable: true, modelPresent: false, detail: `ollama.com accepted the key, but model "${wanted}" is not in its model list (${names.slice(0, 8).join(', ')}). Check the name on ollama.com.${normNote}` }
+        // Name the truncation: showing 8 of N unlabeled reads as "this IS the
+        // catalog" -- that misread cost a wrong "glm-5.2 is gone" report on
+        // 2026-08-19 (Mino caught it against the live library page).
+        return { ok: true, reachable: true, modelPresent: false, detail: `ollama.com accepted the key, but model "${wanted}" is not in its model list (${names.length} available, first 8: ${names.slice(0, 8).join(', ')}). Check the name on ollama.com.${normNote}` }
       }
       return { ok: true, reachable: true, modelPresent, detail: (wanted ? `ollama.com accepted the key and model "${wanted}" answered.` : 'ollama.com accepted the key.') + normNote }
     } catch (err) {
