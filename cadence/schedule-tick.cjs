@@ -189,8 +189,16 @@ function planScheduleTick({ now, config, store, agentActiveMs }) {
   const skipped = []
   const due = []
 
-  if (!store || !Array.isArray(store.schedules)) {
-    warnings.push('schedules.json missing or malformed (expected { schedules: [...] })')
+  // store == null means the file does not exist -- nothing registered yet.
+  // That is the NORMAL state of a fresh install, not a fault: warn-on-null
+  // spammed the app log every 60s on every fresh 0.2.x DATA_HOME (measured
+  // on Mino's box, 2026-08-19) until this was split. A store that EXISTS
+  // but has the wrong shape is still a fault and still warns below.
+  if (store == null) {
+    return { due, warnings, skipped }
+  }
+  if (!Array.isArray(store.schedules)) {
+    warnings.push('schedules.json malformed (expected { schedules: [...] })')
     return { due, warnings, skipped }
   }
 
@@ -242,8 +250,36 @@ function planScheduleTick({ now, config, store, agentActiveMs }) {
   return { due, warnings, skipped }
 }
 
+// The one default schedule the app seeds (Dreaming feature, 2026-08-16).
+// Single source of truth shared by BOTH seed sites: hooks/session-start.mjs
+// (headless lane, Claude Code SessionStart hook) and channel-runtime's
+// startScheduleTicker (dsh lane, where Claude Code hooks never run -- without
+// the ticker-side seed the Dreaming default silently never existed on 0.2.x,
+// found 2026-08-19 on Mino's box). Seeding is absence-only everywhere: once
+// the file exists it belongs to the user/agent. createdBy MUST stay "agent"
+// -- the consent gate above only lets agent-authored entries fire once
+// AUTONOMY=yes; "system" would bypass that gate.
+function defaultScheduleStore() {
+  return {
+    version: 1,
+    schedules: [
+      {
+        id: 'memory-consolidation',
+        enabled: true,
+        kind: 'recurring',
+        everyMinutes: 1440,
+        window: '03:00-06:00',
+        prompt: 'Read procedures/memory-consolidation.md and follow it.',
+        createdBy: 'agent',
+        lastRunISO: null,
+      },
+    ],
+  }
+}
+
 module.exports = {
   planScheduleTick,
+  defaultScheduleStore,
   MIN_EVERY_MINUTES,
   ACTIVITY_SUPPRESS_MS,
   parseHM,

@@ -314,15 +314,19 @@ for (const b of BACKENDS) {
     check('the same schedule is retried and fires (and IS stamped) on the next tick', attempts === 2 && readStore(dir).schedules[0].lastRunISO !== null)
   }
 
-  // 3. missing schedules.json -> no fire, no crash, no file gets created.
+  // 3. missing schedules.json -> ticker start seeds the shipped default
+  //    (2026-08-19: on the dsh lane the session-start hook never runs, so
+  //    the ticker is the only seed site there), and the seeded default
+  //    does NOT fire without AUTONOMY=yes (createdBy: agent consent gate).
   {
     const dir = path.join(tmpDir, 'schedules-missing')
     fs.mkdirSync(dir, { recursive: true }) // dir exists, schedules.json does not
     const fired = []
     const { tick } = startScheduleTicker({ dataHome: dir, readConfig: async () => ({}), fire: async (e) => { fired.push(e.id) }, activityMsProvider: () => Infinity, log: () => {}, now: () => clock })
+    const seeded = fs.existsSync(path.join(dir, 'schedules.json'))
     await tick()
-    check('missing schedules.json -> no fire', fired.length === 0)
-    check('missing schedules.json -> no file is created (nothing fired, so no write-back)', !fs.existsSync(path.join(dir, 'schedules.json')))
+    check('missing schedules.json -> seeded with the shipped default at ticker start', seeded && readStore(dir).schedules[0].id === 'memory-consolidation')
+    check('seeded agent-authored default does not fire without AUTONOMY=yes', fired.length === 0)
   }
 
   // 4. corrupt schedules.json -> a warning is logged, never a throw.

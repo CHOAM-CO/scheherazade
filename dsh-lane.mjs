@@ -230,6 +230,13 @@ function buildPatch () {
     model: ${yamlQuote(DSH_MODEL)}
 - id: hmr
   disabled: true
+- id: tool-ask-user
+  # ask_user_question resolves through the dsh WEB UI's question provider,
+  # which no Scheherazade user ever opens -- the tool call awaits an answer
+  # forever and the turn hangs (measured: Mino's box 2026-08-19 17:55, turn
+  # never completed after ask_user_question). A channel-mediated agent asks
+  # questions through the reply tool instead.
+  disabled: true
 - id: llm-pi-ai
   config:
     providers:

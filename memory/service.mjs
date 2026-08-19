@@ -448,6 +448,16 @@ function memoryWriteInsertOrUpsert(db, table, cleanData, cols) {
     if (cleanData[col] == null && cols.has(col)) cleanData[col] = now
   }
 
+  // Session-attribution default (2026-08-19): every table's sessionField is
+  // NOT NULL by DDL, but weaker models routinely omit it and then flail on
+  // the constraint error (measured: deepseek-v4-flash failed memory_write
+  // twice in a row on Mino's box before landing a valid call). The column is
+  // provenance, not content -- an honest "unattributed" placeholder beats a
+  // failed write that costs the model a retry loop.
+  if (cfg.sessionField && cleanData[cfg.sessionField] == null && cols.has(cfg.sessionField)) {
+    cleanData[cfg.sessionField] = 'unattributed'
+  }
+
   const boundCols = Object.keys(cleanData).filter((c) => cols.has(c))
   if (boundCols.length === 0) throw new Error(`memory_write: no valid columns for table "${table}".`)
   const values = boundCols.map((c) => cleanData[c])

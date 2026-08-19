@@ -168,10 +168,14 @@ const storeOf = (...schedules) => ({ version: 1, schedules })
 
 // ── malformed file (not JSON.parse-able / wrong shape) ────────────────────
 {
+  // null = file missing = normal fresh-install state. Warning here spammed
+  // the app log every 60s on every fresh DATA_HOME (2026-08-19, Mino's box).
   const r1 = planScheduleTick({ now: at(3), config: {}, store: null, agentActiveMs: IDLE })
-  ok('store null (JSON.parse failed upstream) -> warning, never throws', r1.due.length === 0 && r1.warnings.length === 1)
+  ok('store null (file missing -- nothing registered) -> SILENT, never throws', r1.due.length === 0 && r1.warnings.length === 0)
   const r2 = planScheduleTick({ now: at(3), config: {}, store: { schedules: 'not-an-array' }, agentActiveMs: IDLE })
   ok('schedules not an array -> warning, never throws', r2.due.length === 0 && r2.warnings.length === 1)
+  const r3 = planScheduleTick({ now: at(3), config: {}, store: { schedules: 'unparseable' }, agentActiveMs: IDLE })
+  ok('corrupt-file sentinel from channel-runtime -> warning', r3.due.length === 0 && r3.warnings.length === 1)
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

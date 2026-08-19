@@ -16,6 +16,7 @@
 // (history: docs/HISTORY.md)
 
 import fs from 'node:fs/promises'
+import fsSync from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -581,6 +582,22 @@ export function startScheduleTicker({ dataHome, readConfig, fire, activityMsProv
   const storePath = path.join(dataHome, 'schedules.json')
   let inFlight = false
 
+  // Absence-only seed of the one shipped default (Dreaming). The headless
+  // lane also seeds via hooks/session-start.mjs; on the dsh lane Claude Code
+  // hooks never run, so without THIS seed the default silently never
+  // existed there (2026-08-19). Same tmp+rename convention as the hook --
+  // a half-written store would fail every parse and kill every schedule.
+  try {
+    if (!fsSync.existsSync(storePath)) {
+      const tmp = `${storePath}.tmp-${process.pid}`
+      fsSync.writeFileSync(tmp, JSON.stringify(scheduleTick.defaultScheduleStore(), null, 2) + '\n')
+      fsSync.renameSync(tmp, storePath)
+      log('schedules: seeded default store (memory-consolidation)')
+    }
+  } catch (err) {
+    log(`schedules: default-store seed failed (non-fatal): ${err.message}`)
+  }
+
   const tick = async () => {
     if (inFlight) return
     inFlight = true
@@ -589,8 +606,13 @@ export function startScheduleTicker({ dataHome, readConfig, fire, activityMsProv
       let store = null
       try {
         store = JSON.parse(await fs.readFile(storePath, 'utf8'))
-      } catch {} // missing (nothing registered yet) or corrupt -- schedule-tick.cjs
-                 // reports corrupt-but-present as a warning; a missing file is silent.
+      } catch (err) {
+        // Missing file (nothing registered yet) stays null -> silent in
+        // schedule-tick.cjs. A file that EXISTS but won't parse is a fault
+        // the user should hear about, so hand the planner a malformed
+        // sentinel that trips its shape warning instead of the silent path.
+        if (err && err.code !== 'ENOENT') store = { schedules: 'unparseable' }
+      }
 
       const plan = scheduleTick.planScheduleTick({ now: now(), config, store, agentActiveMs: activityMsProvider() })
 

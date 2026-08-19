@@ -53,7 +53,9 @@ const TOOLS = [
       'user_facts on subject+predicate, preferences on key). Read-back-verified — throws on silent field-drop. ' +
       'Also throws if data contains any key that is not a real column on the table (fail loud on typos, e.g. ' +
       '"last_tuoched_at"), instead of silently dropping it. The write and its memory_events audit row commit or ' +
-      'roll back together as one transaction.',
+      'roll back together as one transaction. Session attribution: include the current session id in data as ' +
+      'source_session (user_facts, preferences), opened_session (open_threads), or corrected_session (corrections); ' +
+      'if omitted on insert it defaults to "unattributed".',
     inputSchema: {
       type: 'object',
       properties: {

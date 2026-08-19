@@ -12,6 +12,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { createRequire } from 'node:module'
 
 const MEM = process.env.MEM || process.cwd()
 const TODAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
@@ -35,23 +36,14 @@ for (const dir of ['session_notes', 'journals', 'dreams', 'logs']) {
 // session note is not: a half-written schedules.json would fail every
 // planScheduleTick() parse, silently killing every OTHER schedule the user
 // or agent added, not just this one.
+// Default store definition now lives in cadence/schedule-tick.cjs
+// (defaultScheduleStore) so the dsh lane's ticker-side seed and this hook
+// can never drift apart (2026-08-19).
 const schedulesFile = path.join(MEM, 'schedules.json')
 if (!fs.existsSync(schedulesFile)) {
-  const defaultStore = {
-    version: 1,
-    schedules: [
-      {
-        id: 'memory-consolidation',
-        enabled: true,
-        kind: 'recurring',
-        everyMinutes: 1440,
-        window: '03:00-06:00',
-        prompt: 'Read procedures/memory-consolidation.md and follow it.',
-        createdBy: 'agent',
-        lastRunISO: null,
-      },
-    ],
-  }
+  const require = createRequire(import.meta.url)
+  const { defaultScheduleStore } = require('../cadence/schedule-tick.cjs')
+  const defaultStore = defaultScheduleStore()
   const tmp = `${schedulesFile}.tmp-${process.pid}`
   fs.writeFileSync(tmp, JSON.stringify(defaultStore, null, 2) + '\n')
   fs.renameSync(tmp, schedulesFile)
