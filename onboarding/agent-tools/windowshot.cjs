@@ -75,8 +75,11 @@ for (let i = 0; i < ns.count; i++) {
 out.join("\\n")`
 
 // EnumWindows + PrintWindow. PrintWindow(...,2) = PW_RENDERFULLCONTENT --
-// needed for DWM-composited apps (Chrome, Discord, Electron). UNVERIFIED on
-// magi-win as of 2026-08-19 -- the skill says so and the mac lane is primary.
+// needed for DWM-composited apps (Chrome, Discord, Electron). VERIFIED live
+// on magi-win 2026-08-19 (interactive session via schtasks /IT -- a plain
+// ssh session sees NO windows, that is Windows session isolation, not a
+// bug): list enumerated 6 windows with correct owners, shoot captured the
+// running Scheherazade Electron window with readable content.
 const PS_LIST = `
 Add-Type @"
 using System; using System.Runtime.InteropServices; using System.Text;
@@ -96,8 +99,11 @@ $rows = New-Object System.Collections.Generic.List[string]
   if (-not [WS]::IsWindowVisible($h)) { return $true }
   $len = [WS]::GetWindowTextLength($h); if ($len -eq 0) { return $true }
   $sb = New-Object System.Text.StringBuilder ($len + 1); [void][WS]::GetWindowText($h, $sb, $sb.Capacity)
-  $pid = 0; [void][WS]::GetWindowThreadProcessId($h, [ref]$pid)
-  $app = try { (Get-Process -Id $pid -ErrorAction Stop).ProcessName } catch { "?" }
+  # $procId, NOT $pid: $PID is PowerShell's read-only automatic variable for
+  # the CURRENT process -- using it made every row report app="powershell"
+  # (live catch on magi-win, 2026-08-19).
+  $procId = 0; [void][WS]::GetWindowThreadProcessId($h, [ref]$procId)
+  $app = try { (Get-Process -Id $procId -ErrorAction Stop).ProcessName } catch { "?" }
   $r = New-Object WS+RECT; [void][WS]::GetWindowRect($h, [ref]$r)
   $w = $r.Right - $r.Left; $ht = $r.Bottom - $r.Top
   if ($w -lt 40 -or $ht -lt 40) { return $true }

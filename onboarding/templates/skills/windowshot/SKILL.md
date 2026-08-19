@@ -63,8 +63,12 @@ version predates 같이보기 — and do not improvise with raw `screencapture`.
   Screen Recording, then try again once.
 - **`shoot` fails on Windows**: PrintWindow cannot capture some minimized or
   GPU-composited windows. Ask the user to un-minimize the window; if it still
-  fails, say that this window resists capture. (The Windows lane is newer
-  than the mac lane — report failures rather than working around them.)
+  fails, say that this window resists capture — report failures rather than
+  working around them.
+- **`list` returns nothing on Windows over a remote/service session**: window
+  enumeration only sees the interactive desktop. This is session isolation,
+  not a permission problem — say the capture needs to run in the user's
+  desktop session.
 - Never screenshot the whole desktop as a fallback unless the user explicitly
   asks for the full screen.
 
