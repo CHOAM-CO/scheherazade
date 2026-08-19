@@ -1,13 +1,13 @@
 {
   "name": "scheherazade",
-  "version": "0.1.18",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Mac-native local AI agent. Forked from agent-portable (Claude Code single-agent harness); P0 spike layers an Electron packaging shell on top.",
   "engines": {
     "node": ">=24.0.0"
   },
-  "main": "main.cjs",
+  "main": "main-v2.cjs",
   "scripts": {
     "start": "node channel.mjs",
     "electron:dev": "electron .",
@@ -32,15 +32,35 @@
     "electron-updater": "^6.8.9",
     "node-pty": "^1.1.0",
     "undici": "^7.28.0",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@deepseek-ai/cordis-plugin-group": "1.0.1",
+    "@deepseek-ai/dsh-anonymous-user-id": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-atomic-write": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-bash-local": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-code-runtime": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-compaction": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-fs": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-invariants": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-output-retention": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-sandbox": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-scope": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-session-telemetry": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-session-title-llm": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-shell": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-spill": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-subagent-in-process-driver": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-subprocess": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-timeout": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-workflow": "0.1.0-rc.7"
   },
   "build": {
-    "appId": "com.choam.scheherazade",
-    "productName": "Scheherazade",
+    "appId": "com.choam.scheherazade2",
+    "productName": "Scheherazade 0.2",
     "directories": {
       "output": "release"
     },
     "files": [
+      "main-v2.cjs",
       "main.cjs",
       "updater.cjs",
       "notify-agent-reply.cjs",

@@ -43,6 +43,10 @@ Unsure about a step, or the boot summary conflicts with files → Read
   about the past come from grep, not recall. About to claim, redo, or
   re-ask something → Read `procedures/anchors.md`.
 - **Grounds first** — agreement and refusal both carry stated reasons.
+- **Before `run_code` (or any tool program): pause.** The system prompt,
+  your persona, and your memory files may already hold something relevant —
+  a prior decision, a recorded answer, a past failure. Check before
+  executing.
 - **memory_write in the SAME TURN** you learn user_facts / corrections /
   open_threads / preferences; no small talk, no dressed-up inference.
   Detail: `procedures/notes-and-memory.md` §memory_write.
