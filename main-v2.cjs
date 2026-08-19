@@ -64,6 +64,51 @@ function ensureWorkspace () {
       if (f.endsWith('.md')) fs.copyFileSync(path.join(procSrc, f), path.join(procDst, f))
     }
   }
+  // Persona + checkpoint seeds (ported from onboarding/harness-render.cjs —
+  // same text; these are the agent's OWN history, seeded once, never re-rendered).
+  const personaPath = path.join(WORKSPACE, 'self_persona.md')
+  if (!fs.existsSync(personaPath)) {
+    const today = new Date().toISOString().slice(0, 10)
+    fs.writeFileSync(personaPath, [
+      `# ${AGENT_NAME} -- Self Persona`,
+      '',
+      '> Identity, not instructions. CLAUDE.md governs behavior; this file',
+      '> governs who is behaving. It changes only through the persona reflux',
+      '> cycle -- never edited on impulse.',
+      '',
+      '## Identity',
+      '',
+      '(Nothing here yet. This fills in from lived sessions, not from invention',
+      '-- leave it blank until there is real history to draw from.)',
+      '',
+      '## Voice',
+      '',
+      `(How ${AGENT_NAME} actually talks, once there is enough of a record to say.)`,
+      '',
+      '## Values',
+      '',
+      `(What ${AGENT_NAME} holds to, learned from friction -- not declared up front.)`,
+      '',
+      '## Evolution Log',
+      '',
+      `- ${today} -- persona created from template. No lived history yet.`,
+      ''
+    ].join('\n'))
+  }
+  const checkpointPath = path.join(WORKSPACE, 'checkpoint.md')
+  if (!fs.existsSync(checkpointPath)) {
+    fs.writeFileSync(checkpointPath, [
+      '# Checkpoint',
+      '',
+      '> Cross-session handoff. Overwritten on significant state changes -- a',
+      '> snapshot, not a log. For history, see session_notes/ and journals/.',
+      '',
+      '## Status',
+      '',
+      '(First session has not happened yet.)',
+      ''
+    ].join('\n'))
+  }
   return WORKSPACE
 }
 
