@@ -73,17 +73,19 @@ console.log('\n-- headless lane parity: both lanes exec headless-lane.mjs')
 {
   const runSh = fs.readFileSync(path.join(ROOT, 'run.sh'), 'utf8')
   const supSrc = fs.readFileSync(path.join(ROOT, 'supervisor.mjs'), 'utf8')
-  ok('run.sh spawns the lane under the timeout ceiling',
-    runSh.includes('"$NODE_BIN" "$SCRIPT_DIR/headless-lane.mjs"'))
+  ok('run.sh spawns the lane under the timeout ceiling (LANE_SCRIPT: headless default, dsh via LANE_KIND)',
+    runSh.includes('"$NODE_BIN" "$SCRIPT_DIR/$LANE_SCRIPT"') &&
+    runSh.includes('LANE_SCRIPT="headless-lane.mjs"') &&
+    runSh.includes('LANE_SCRIPT="dsh-lane.mjs"'))
   ok('run.sh carries NO expect script anymore', !runSh.includes('/usr/bin/expect'))
   ok('run.sh exports the env contract (AGENT_NAME MEM CLAUDE_BIN MODEL)',
     runSh.includes('export AGENT_NAME MEM CLAUDE_BIN MODEL'))
   ok('run.sh guards SYSTEM_PROMPT_FILE / MCP_CONFIG_FILE on existence',
     runSh.includes('export SYSTEM_PROMPT_FILE="$MEM/system_prompt.md"') &&
     runSh.includes('export MCP_CONFIG_FILE="$MEM/.mcp.json"'))
-  ok('supervisor spawns the SAME lane script on its own runtime',
+  ok('supervisor spawns the SAME lane script on its own runtime (dsh lane switched by cfg.laneKind, 0.2.1)',
     supSrc.includes("new URL('./headless-lane.mjs', import.meta.url)") &&
-    supSrc.includes('cpSpawn(process.execPath, [HEADLESS_LANE_PATH]'))
+    supSrc.includes("cpSpawn(process.execPath, [cfg.laneKind === 'dsh' ? DSH_LANE_PATH : HEADLESS_LANE_PATH]"))
   for (const key of ['AGENT_NAME: cfg.agentName', 'MEM: cfg.mem', 'CLAUDE_BIN: cfg.claudeBin', 'MODEL: cfg.model']) {
     ok(`supervisor child env carries ${key.split(':')[0]}`, supSrc.includes(key))
   }
@@ -95,9 +97,10 @@ console.log('\n-- headless lane parity: both lanes exec headless-lane.mjs')
   ok('run.sh reaper patterns: FULL lane path + --mcp-config leaf (basename alone cross-matches editors/greps -- live bite 2026-08-04)',
     runSh.includes('PKILL_PATTERN="${SCRIPT_DIR}/headless-lane.mjs"') &&
     runSh.includes('PKILL_LEAF_PATTERN="--mcp-config ${MEM}/.mcp.json"'))
-  ok('supervisor reaper patterns mirror run.sh (full path)',
-    supSrc.includes("pkillPattern: path.join(path.dirname(SELF_PATH), 'headless-lane.mjs')") &&
-    supSrc.includes("pkillLeafPattern: `--mcp-config ${path.join(mem, '.mcp.json')}`"))
+  ok('supervisor reaper patterns mirror run.sh (full path; dsh lane keys on its --patch argv)',
+    supSrc.includes("laneKind === 'dsh' ? 'dsh-lane.mjs' : 'headless-lane.mjs'") &&
+    supSrc.includes("`--mcp-config ${path.join(mem, '.mcp.json')}`") &&
+    supSrc.includes("`--patch ${path.join(mem, '.dsh-lane-home', 'lane.patch.yml')}`"))
   // win sweep self-kill regression (2026-08-18, magi-win live repro): the
   // sweep powershell's own command line contains `*<pattern>*`, so without
   // excluding $PID the Where-Object matches the sweep itself and

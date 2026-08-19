@@ -124,6 +124,10 @@ export function resolveConfig(env = process.env, scriptDir = SCRIPT_DIR) {
     throw new Error(`no .agent-config found at ${configFile}, and AGENT_NAME is not already set in the environment -- run ./setup.sh first, or invoke with AGENT_NAME (and optionally CLAUDE_BIN/MODEL/AGENT_DATA_HOME) pre-exported`)
   }
   const merged = { ...env, ...fileVals }
+  // Lane switch (0.2.1 harness swap): provider-env.cjs's 'dsh' row rides
+  // LANE_KIND into the supervisor env; anything but the exact value 'dsh'
+  // (including absence -- every pre-swap config) stays on headless-lane.
+  const laneKind = merged.LANE_KIND === 'dsh' ? 'dsh' : 'headless'
   const agentName = merged.AGENT_NAME
   if (!agentName) throw new Error('AGENT_NAME missing from config/env')
   const mem = merged.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', agentName)
@@ -148,8 +152,14 @@ export function resolveConfig(env = process.env, scriptDir = SCRIPT_DIR) {
     // post-spawn-mutable fields like MODEL, the 2026-07-03 lesson). Here
     // they only serve the orphan sweep; live kills go through the child
     // handle.
-    pkillPattern: path.join(path.dirname(SELF_PATH), 'headless-lane.mjs'),
-    pkillLeafPattern: `--mcp-config ${path.join(mem, '.mcp.json')}`,
+    laneKind,
+    pkillPattern: path.join(path.dirname(SELF_PATH), laneKind === 'dsh' ? 'dsh-lane.mjs' : 'headless-lane.mjs'),
+    // dsh leaf: an orphaned dsh web engine is matched by its --patch argv
+    // (stable per-agent path under MEM, written by dsh-lane's buildPatch) --
+    // same never-key-on-mutable-fields rule as the --mcp-config leaf.
+    pkillLeafPattern: laneKind === 'dsh'
+      ? `--patch ${path.join(mem, '.dsh-lane-home', 'lane.patch.yml')}`
+      : `--mcp-config ${path.join(mem, '.mcp.json')}`,
     sessionTimeoutSec: Number(merged.SESSION_TIMEOUT) > 0 ? Number(merged.SESSION_TIMEOUT) : 43200,
     // v0.0.15 stall watchdog window (seconds). 0 disables. Default 15 min
     // (see the stall/thrash watchdog block below for why).
@@ -616,6 +626,11 @@ export function createBounceBudget({ ledger = [], budget = 3, windowMs = 6 * 360
 // so a timeout recycle is graceful and the next spawn resumes the session
 // (.headless-session.json).
 const HEADLESS_LANE_PATH = fileURLToPath(new URL('./headless-lane.mjs', import.meta.url))
+// dsh lane (0.2.1 harness swap): same spawn/env/timeout/reaper contract,
+// different engine inside -- the lane owns `dsh web` instead of `claude -p`.
+// Selected per-config via cfg.laneKind (resolveConfig reads LANE_KIND, which
+// provider-env.cjs's 'dsh' row exports).
+const DSH_LANE_PATH = fileURLToPath(new URL('./dsh-lane.mjs', import.meta.url))
 
 function spawnHeadlessChild(cfg, { now = () => Date.now(), log, watchdogBounces = [] }) {
   // Windows env can carry 'Path'/'path' case-variants; spreading process.env
@@ -627,7 +642,7 @@ function spawnHeadlessChild(cfg, { now = () => Date.now(), log, watchdogBounces 
   for (const k of Object.keys(baseEnv)) {
     if (k !== 'PATH' && k.toUpperCase() === 'PATH') delete baseEnv[k]
   }
-  const child = cpSpawn(process.execPath, [HEADLESS_LANE_PATH], {
+  const child = cpSpawn(process.execPath, [cfg.laneKind === 'dsh' ? DSH_LANE_PATH : HEADLESS_LANE_PATH], {
     cwd: cfg.mem, // run.sh run_loop `cd "$MEM"` parity
     // stdin unused by the lane; stdout/stderr flow through to the
     // supervisor's own stdout (-> logfile), replacing expect's log_user 1.

@@ -794,6 +794,56 @@ const PROVIDER_ROWS = [
       CLAUDE_CONFIG_DIR: undefined, // see the claude-cli row: cleared on EVERY row (harness-render seeds ~/.claude.json for all modes)
     }),
   },
+  {
+    // dsh lane (0.2.1 harness swap, Mino 2026-08-19 "클로드코드가 해주던거
+    // DSV로 갈아낸다"): the supervisor spawns dsh-lane.mjs instead of
+    // headless-lane.mjs (LANE_KIND is the switch -- supervisor.mjs
+    // resolveConfig reads it from this env). The lane owns a pinned
+    // @deepseek-ai/dsh rc-7 web engine against the LOCAL ollama daemon
+    // (localhost:11434/v1 openai-completions), models fixed by the lane's
+    // patch layer: glm-5.2:cloud text default / qwen3.5:cloud vision.
+    //
+    // credential 'none': the local daemon takes any bearer value; the lane
+    // exports a dummy OLLAMA_API_KEY because pi-ai refuses a route whose
+    // apiKeyEnv resolves to nothing (PI_AI_ERROR, measured 2026-08-19) --
+    // the header itself is ignored by ollama. Note this is NOT the 'ollama'
+    // row's ollama.com key mode; nothing here touches the credential store.
+    //
+    // config.MODEL is honored ONLY when it names a model the lane's patch
+    // layer actually serves (DSH_LANE_MODELS below) -- a provider flip from
+    // claude/chatgpt leaves MODEL=claude-opus-*/gpt-* in .agent-config, and
+    // sending that to the lane's ollama route would fail every turn, the
+    // exact silent-fallback trap the ollama row's comment warns about, in
+    // mirror image. Not-served tags fall back to the lane's text default
+    // rather than failing loud, because unlike ollama.com this lane HAS a
+    // designed default (Mino 08-19: glm-5.2 text / effort max). DSH_MODEL
+    // config field overrides unconditionally (hand-edit lane until the
+    // settings page grows dsh fields). MODEL is still set in the returned
+    // env so spawn-info/laneVision sees the real tag (glm-5.2 -> vision
+    // 'no' -> caption fallback route, correct).
+    id: 'dsh',
+    credential: 'none',
+    env: ({ config }) => {
+      const configured = (config.MODEL && String(config.MODEL).trim()) || ''
+      const model = (config.DSH_MODEL && String(config.DSH_MODEL).trim())
+        || (DSH_LANE_MODELS.includes(configured) ? configured : 'glm-5.2:cloud')
+      return {
+        LANE_KIND: 'dsh',
+        DSH_PROVIDER: 'ollama',
+        DSH_MODEL: model,
+        DSH_EFFORT: (config.DSH_EFFORT && String(config.DSH_EFFORT).trim()) || 'max',
+        OLLAMA_BASE_URL: (config.OLLAMA_BASE_URL && String(config.OLLAMA_BASE_URL).trim()) || 'http://localhost:11434/v1',
+        OLLAMA_API_KEY: 'ollama-local', // dummy -- see row comment
+        MODEL: model, // laneVision/spawn-info truth, not a harness arg
+        SKIP_MODEL_GUARD: '1', // not an Anthropic model id
+        ANTHROPIC_BASE_URL: undefined, // dsh lane never talks Anthropic wire -- clear all 4 auth-shaped fields like every row
+        ANTHROPIC_API_KEY: undefined,
+        ANTHROPIC_AUTH_TOKEN: undefined,
+        CLAUDE_CODE_OAUTH_TOKEN: undefined,
+        CLAUDE_CONFIG_DIR: undefined,
+      }
+    },
+  },
 ]
 
 // Local-daemon-era cloud tags do not exist on ollama.com (field receipt:
@@ -822,13 +872,19 @@ function requiredModel(config) {
   return config.MODEL && String(config.MODEL).trim() ? String(config.MODEL).trim() : ''
 }
 
+// The models the dsh lane's patch layer serves (dsh-lane.mjs buildPatch:
+// llm-pi-ai ollama providers block). The 'dsh' row above honors config.MODEL
+// only when it is one of these; keep in sync with the lane's patch when a
+// model joins/leaves.
+const DSH_LANE_MODELS = ['glm-5.2:cloud', 'qwen3.5:cloud']
+
 const PROVIDER_ROWS_BY_ID = new Map(PROVIDER_ROWS.map((row) => [row.id, row]))
 
 // The order the `provider_not_wired` message lists, preserved verbatim from
 // the pre-table if-chain's message (claude, claude-cli, claude-subscription,
 // chatgpt, ollama, custom) rather than derived from PROVIDER_ROWS order --
 // this string is user-visible and one test pins its shape.
-const PROVIDER_IDS_FOR_MESSAGE = ['claude', 'claude-cli', 'claude-subscription', 'chatgpt', 'ollama', 'custom']
+const PROVIDER_IDS_FOR_MESSAGE = ['claude', 'claude-cli', 'claude-subscription', 'chatgpt', 'ollama', 'custom', 'dsh']
 
 function buildProviderEnv(provider, config, deps) {
   const { readProviderKey } = deps

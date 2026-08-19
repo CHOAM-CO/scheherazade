@@ -111,6 +111,18 @@ FAILFILE="$MEM/.agent-failed.json"
 #     is no channel to orphan, so the gap before .mcp.json exists is moot.
 PKILL_PATTERN="${SCRIPT_DIR}/headless-lane.mjs"
 PKILL_LEAF_PATTERN="--mcp-config ${MEM}/.mcp.json"
+# dsh lane switch (0.2.1 harness swap): LANE_KIND=dsh rides in from
+# main.cjs's provider env (provider-env.cjs 'dsh' row; supervisor.mjs
+# resolveConfig mirrors this exact check). Same lane contract, different
+# engine inside -- and the orphan leaf is the dsh web engine, matched by
+# its --patch argv (stable per-agent path under MEM; never a post-spawn-
+# mutable field, same 2026-07-03 rule as the --mcp-config leaf).
+LANE_SCRIPT="headless-lane.mjs"
+if [ "${LANE_KIND:-}" = "dsh" ]; then
+  LANE_SCRIPT="dsh-lane.mjs"
+  PKILL_PATTERN="${SCRIPT_DIR}/dsh-lane.mjs"
+  PKILL_LEAF_PATTERN="--patch ${MEM}/.dsh-lane-home/lane.patch.yml"
+fi
 
 # Session timeout: forces the lane-wrapped claude process to exit after
 # SESSION_TIMEOUT seconds (default 12h) even if the stream is stuck but
@@ -268,11 +280,11 @@ run_headless() {
   # supervisor.mjs's node-shim covers the PATH-less-node case on the node
   # lane, and this bash lane keeps the same PATH assumption it always had.
   if [ -n "$TIMEOUT_BIN" ]; then
-    "$TIMEOUT_BIN" --kill-after=10 --signal=TERM "$SESSION_TIMEOUT" "$NODE_BIN" "$SCRIPT_DIR/headless-lane.mjs"
+    "$TIMEOUT_BIN" --kill-after=10 --signal=TERM "$SESSION_TIMEOUT" "$NODE_BIN" "$SCRIPT_DIR/$LANE_SCRIPT"
     return $?
   fi
 
-  "$NODE_BIN" "$SCRIPT_DIR/headless-lane.mjs" &
+  "$NODE_BIN" "$SCRIPT_DIR/$LANE_SCRIPT" &
   local cmd_pid=$!
   (
     sleep "$SESSION_TIMEOUT"

@@ -352,7 +352,7 @@ function computeAgentStatus() {
 // /api/agent/model. See provider-env.cjs's buildProviderEnv() 'custom'
 // branch for the env-building contract (base URL + model both required,
 // fail loud; API key optional with a placeholder fallback).
-const PROVIDERS = ['claude', 'claude-cli', 'claude-subscription', 'chatgpt', 'ollama', 'custom']
+const PROVIDERS = ['claude', 'claude-cli', 'claude-subscription', 'chatgpt', 'ollama', 'custom', 'dsh']
 
 // The artifact that proves a Claude Code CLI login exists on this machine.
 // Checked for EXISTENCE ONLY and never opened (see computeAvailableProviders).
@@ -2069,6 +2069,19 @@ function computeAvailableProviders() {
     if (readAgentConfig().CUSTOM_BASE_URL) out.push('custom')
   } catch (err) {
     console.error('[scheherazade/onboarding] availableProviders: custom-provider config check failed (treating as unavailable):', err.message)
+  }
+  // dsh (0.2.1 harness swap): no credential of its own (provider-env.cjs
+  // 'dsh' row is credential:'none' -- local ollama daemon, dummy bearer).
+  // Availability gate = the pinned engine actually being installed in this
+  // build; existence-only, same stance as claude-cli above. A running
+  // ollama daemon is NOT probed here: that is a spawn-time truth the lane
+  // reports loudly itself, and probing :11434 from a config GET would make
+  // availability flap with the daemon.
+  try {
+    require.resolve('@deepseek-ai/dsh/package.json')
+    out.push('dsh')
+  } catch {
+    // engine not bundled in this build -- silently unavailable, by design
   }
   return out
 }

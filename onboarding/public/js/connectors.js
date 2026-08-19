@@ -857,6 +857,14 @@
     // its own value. Gated on the ollama provider being authed (unlike
     // Custom, which opts out of gating entirely).
     { id: OLLAMA_URL_SENTINEL, label: S.ollamaUrlCatalogLabel, group: 'Ollama', providers: ['ollama'] },
+    // dsh lane (0.2.1 harness swap): these ids are the models the lane's
+    // OWN patch layer serves against the LOCAL ollama daemon -- keep in
+    // sync with dsh-lane.mjs buildPatch AND provider-env.cjs's
+    // DSH_LANE_MODELS (which is the server-side gate on config.MODEL for
+    // this provider). Availability rides computeAvailableProviders()'s
+    // 'dsh' entry (engine bundled in this build), no credential involved.
+    { id: 'glm-5.2:cloud', label: 'GLM 5.2 (dsh)', group: 'DSH', providers: ['dsh'] },
+    { id: 'qwen3.5:cloud', label: 'Qwen 3.5 (dsh · vision)', group: 'DSH', providers: ['dsh'] },
     // (old single 'gpt' Codex entry replaced by the versioned GPT group above)
     // Custom (custom-provider addition, 2026-07-25): NOT a real model id --
     // an ACTION entry, not a switchable state. Selecting it never fires the
