@@ -258,6 +258,16 @@ chromux profile prune    # idle profiles worth deleting (add --yes to delete)
 
 ## Live Mode: The User's Real Chrome
 
+> **SCHEHERAZADE BUNDLE NOTE (do not skip): live mode is UNAVAILABLE in this
+> deployment.** This bundle ships chromux WITHOUT the companion extension, so
+> the `live` profile can never connect — `chromux pair` starts a bridge that
+> waits forever, and instructing the user to "install the extension and run
+> `chromux pair`" sends them on an errand that cannot be completed. If a task
+> truly needs the user's own logged-in session, say plainly that this
+> deployment cannot attach to their real browser, and offer the isolated
+> profile route (fresh login in the agent's Chrome) instead. The rest of this
+> section is upstream documentation kept for reference only.
+
 Two routes reach a browser: isolated profiles (the "agent's browser", default)
 and the reserved `live` profile (the "user's browser", via the chromux
 extension). Choose `live` only when the task needs the user's own logged-in

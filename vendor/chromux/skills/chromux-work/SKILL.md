@@ -125,7 +125,8 @@ Pick a profile in this order:
 - a new profile: only for a genuinely untrusted or destructive site where
   reusing `default`'s cookies would be unsafe, and only after the user agrees
 - the user's own live session is required (SSO/2FA, an already-open page, or
-  "do it on the page I'm looking at"): use the reserved `live` profile
+  "do it on the page I'm looking at"): NOT possible in this deployment — see
+  the bundle note below; say so and offer an isolated profile instead
 
 When several plausible profiles exist, ask the user to choose, showing running
 profiles from `chromux ps` with mode and tab count, plus stopped profiles that
@@ -134,6 +135,13 @@ look relevant.
 Old throwaway profiles pile up. `chromux profile prune` lists idle ones with
 their disk usage (dry run); `--yes` deletes them. It skips running profiles,
 `default`, `live`, and anything holding cookie data.
+
+> **SCHEHERAZADE BUNDLE NOTE: the `live` profile is UNAVAILABLE here.** The
+> companion extension is not shipped in this bundle, so live commands can
+> never connect and `chromux pair` waits forever. Never instruct the user to
+> install the extension or run `chromux pair`. If the user's own session is
+> genuinely required, say this deployment cannot do it and offer the isolated
+> profile route. The paragraph below is upstream reference only.
 
 The `live` profile is a second route: instead of an isolated Chrome, the
 chromux extension bridges the user's real, logged-in Chrome. It shares the
