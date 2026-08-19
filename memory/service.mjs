@@ -58,7 +58,8 @@ import * as entityIndex from './entity-index.mjs'
 // redirect DB_PATH; that's exactly what memory/smoke.mjs still uses to
 // point at a disposable temp db. Read ONCE, at import time — callers that
 // override it (smoke, tests) must set the env var BEFORE importing.
-const DATA_HOME = path.join(os.homedir(), 'Documents', 'Scheherazade')
+// 0.2 track: '02' isolation -- see onboarding/http-server.cjs DATA_HOME.
+const DATA_HOME = path.join(os.homedir(), 'Documents', 'Scheherazade02')
 const DB_PATH = process.env.SCHEHERAZADE_MEMORY_DB || path.join(DATA_HOME, 'memory.db')
 
 const log = (msg) => process.stderr.write(`[memory] ${msg}\n`)

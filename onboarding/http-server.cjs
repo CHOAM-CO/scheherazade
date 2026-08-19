@@ -136,7 +136,14 @@ const AGENT_NAME = 'scheherazade'
 // honored this env var; production is unaffected -- main.cjs passes
 // AGENT_DATA_HOME into the env of the children it spawns, never into its
 // own process.env, and http-server runs inside main. (history: docs/HISTORY.md)
-const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', 'Scheherazade')
+// 0.2 track (v0.2-dsh branch): 'Scheherazade02', NOT 'Scheherazade' -- the
+// 0.2.x testbed installs BESIDE a live 0.1.x agent, and sharing the data
+// root would mean two apps fighting over one .agent-config, memory.db, and
+// channel token (same isolation 0.2.0-test had via SCHZ2_WORKSPACE). The
+// other two fixed resolutions (onboarding/bootstrap.cjs, memory/service.mjs)
+// carry the same 02 -- change all three together. Revert/migrate when the
+// dsh track becomes the main line.
+const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', 'Scheherazade02')
 
 // CONFIG_DIR: where every *writable* runtime config file lives -- the same
 // directory as DATA_HOME/memory.db, kept as a separate name below purely

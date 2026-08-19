@@ -1,13 +1,13 @@
 {
   "name": "scheherazade",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "description": "Mac-native local AI agent. Forked from agent-portable (Claude Code single-agent harness); P0 spike layers an Electron packaging shell on top.",
   "engines": {
     "node": ">=24.0.0"
   },
-  "main": "main-v2.cjs",
+  "main": "main.cjs",
   "scripts": {
     "start": "node channel.mjs",
     "electron:dev": "electron .",
@@ -79,6 +79,8 @@
       "run.sh",
       "supervisor.mjs",
       "headless-lane.mjs",
+      "dsh-client.cjs",
+      "dsh-lane.mjs",
       ".mcp.json",
       "onboarding/**/*",
       "hooks/**/*",
@@ -118,6 +120,8 @@
       "run.sh",
       "supervisor.mjs",
       "headless-lane.mjs",
+      "dsh-client.cjs",
+      "dsh-lane.mjs",
       "hooks/**",
       "scripts/**",
       "autonomy/**",

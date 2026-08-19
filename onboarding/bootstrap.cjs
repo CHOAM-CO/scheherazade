@@ -47,7 +47,8 @@ const { pipeline } = require('node:stream/promises')
 const { Readable } = require('node:stream')
 const { execFile } = require('node:child_process')
 
-const DATA_HOME = path.join(os.homedir(), 'Documents', 'Scheherazade')
+// 0.2 track: '02' isolation -- see onboarding/http-server.cjs DATA_HOME.
+const DATA_HOME = path.join(os.homedir(), 'Documents', 'Scheherazade02')
 const MANAGED_BIN_DIR = path.join(DATA_HOME, 'bin')
 const MANIFEST_PATH = path.join(MANAGED_BIN_DIR, '.manifest.json')
 const STAGING_DIR = path.join(DATA_HOME, 'bootstrap-staging')
