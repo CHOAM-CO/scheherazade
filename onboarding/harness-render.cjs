@@ -1058,6 +1058,41 @@ function createHarnessRender(ctx) {
     }
   }
 
+  // v0.1.18: first-party agent-side helpers (같이보기 windowshot, 2026-08-19
+  // Mino). Same shape as syncChromuxPortable, minus VERSION gating: the tree
+  // is a handful of small first-party .cjs files, so it re-copies every boot
+  // (tmp+rename) instead of carrying a version stamp -- cheaper than getting
+  // a stamp wrong. Ships unpacked via build.extraResources ("agent-tools")
+  // because the agent child is plain node and cannot read inside app.asar
+  // (the exact reason chromux ships unpacked). Wrappers bake --data-home in:
+  // the skill text cannot know DATA_HOME at template-write time.
+  function syncAgentTools() {
+    try {
+      const candidates = [
+        path.join(REPO_ROOT, '..', 'agent-tools'), // packaged: Resources/ sibling of app.asar
+        path.join(REPO_ROOT, 'onboarding', 'agent-tools'), // dev / CLI deployment
+      ]
+      const src = candidates.find((p) => fs.existsSync(path.join(p, 'windowshot.cjs')))
+      if (!src) return false // build predates agent-tools -- nothing to sync
+      const dst = path.join(DATA_HOME, 'bin', 'agent-tools')
+      const tmp = `${dst}.tmp`
+      fs.rmSync(tmp, { recursive: true, force: true })
+      fs.cpSync(src, tmp, { recursive: true })
+      fs.rmSync(dst, { recursive: true, force: true })
+      fs.renameSync(tmp, dst)
+      const binDir = path.join(DATA_HOME, 'bin')
+      const entry = path.join(dst, 'windowshot.cjs')
+      fs.writeFileSync(path.join(binDir, 'windowshot.cmd'), `@echo off\r\nnode "${entry}" %* --data-home "${DATA_HOME}"\r\n`)
+      const shPath = path.join(binDir, 'windowshot')
+      fs.writeFileSync(shPath, `#!/bin/sh\nexec node "${entry}" --data-home "${DATA_HOME}" "$@"\n`)
+      fs.chmodSync(shPath, 0o755)
+      return true
+    } catch (err) {
+      console.error('[scheherazade/onboarding] agent-tools sync failed (windowshot skill may miss its CLI):', err.message)
+      return false
+    }
+  }
+
   function renderAgentSubstrate({ displayName, tone, primaryTask }) {
     for (const dir of ['session_notes/.archive', 'journals', 'dreams', 'logs', '.review']) {
       fs.mkdirSync(path.join(DATA_HOME, dir), { recursive: true })
@@ -1129,6 +1164,7 @@ function createHarnessRender(ctx) {
     readHarnessFailure,
     syncTmuxPortable,
     syncChromuxPortable,
+    syncAgentTools,
     HARNESS_FAILURE_PATH,
   }
 }

@@ -227,7 +227,8 @@ function mountedAsarEntries() {
     // extraResources ride NEXT TO app.asar, so asar listing never sees them --
     // check the vendored chromux (v0.1.10 web-search path) directly.
     const chromuxShipped = fs.existsSync(path.join(mnt, 'Scheherazade.app', 'Contents', 'Resources', 'chromux', 'chromux.mjs'))
-    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^\/+/, ''))), chromuxShipped }
+    const agentToolsShipped = fs.existsSync(path.join(mnt, 'Scheherazade.app', 'Contents', 'Resources', 'agent-tools', 'windowshot.cjs'))
+    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^\/+/, ''))), chromuxShipped, agentToolsShipped }
   } catch (e) {
     // A DMG that EXISTS but will not mount / list is fail-CLOSED, never a skip.
     // (Skia fail-open catch: the old null-collapse let an hdiutil failure pass
@@ -272,7 +273,8 @@ function stagedWinAsarEntries() {
     // extraResources ride NEXT TO app.asar (win-unpacked/resources/), invisible
     // to the asar listing -- check the vendored chromux directly.
     const chromuxShipped = fs.existsSync(path.join(ROOT, 'release', 'win-unpacked', 'resources', 'chromux', 'chromux.mjs'))
-    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^[/\\]+/, '').split('\\').join('/'))), chromuxShipped }
+    const agentToolsShipped = fs.existsSync(path.join(ROOT, 'release', 'win-unpacked', 'resources', 'agent-tools', 'windowshot.cjs'))
+    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^[/\\]+/, '').split('\\').join('/'))), chromuxShipped, agentToolsShipped }
   } catch (e) {
     // fail-CLOSED, same as the dmg lane: an artifact that exists but cannot be
     // listed is an UNVERIFIED artifact, never a skip.
@@ -315,6 +317,9 @@ if (lifecycle.startsWith('predist')) {
     ok('vendored chromux ships as an extraResource next to app.asar (web-search path for non-Anthropic backends)',
       asarResult.chromuxShipped === true,
       'build.extraResources should carry vendor/chromux -> chromux; without it syncChromuxPortable() no-ops and the websearch skill points at nothing')
+    ok('agent-tools ship as an extraResource next to app.asar (같이보기 windowshot helper)',
+      asarResult.agentToolsShipped === true,
+      'build.extraResources should carry onboarding/agent-tools -> agent-tools; without it syncAgentTools() no-ops on packaged installs (dev lane still finds the repo copy, so only packaged apps break) and the windowshot skill points at nothing')
     for (const m of [...rootModules].sort()) {
       ok(`${m} is a real member of the shipped app.asar (${WIN_LANE ? 'staged win-unpacked, version-pinned' : 'mounted DMG, not staging'})`,
         asarEntries.has(m),

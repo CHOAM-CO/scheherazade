@@ -1,6 +1,6 @@
 {
   "name": "scheherazade",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "private": true,
   "type": "module",
   "description": "Mac-native local AI agent. Forked from agent-portable (Claude Code single-agent harness); P0 spike layers an Electron packaging shell on top.",
@@ -80,6 +80,10 @@
       {
         "from": "vendor/chromux",
         "to": "chromux"
+      },
+      {
+        "from": "onboarding/agent-tools",
+        "to": "agent-tools"
       }
     ],
     "asarUnpack": [
