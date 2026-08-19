@@ -41,7 +41,7 @@ needs before it can pick up work.
 
 ## Hook System
 
-Seventeen hook commands across four lifecycle stages, wired in
+Eighteen hook commands across four lifecycle stages, wired in
 `.claude/settings.local.json` (shipped as
 `onboarding/templates/claude-settings.local.json`). **Six of them can
 block.** This section used to say "three hooks, all advisory"; that was true
@@ -83,13 +83,14 @@ blocker by accident.
 | `pre-tool-activity.mjs` | `PreToolUse` | `Bash` | push what is about to run into the local channel's transcript (kind:'activity'), so the chat page shows work instead of silence; no-ops on non-local backends |
 | `post-bash-permission-translator.mjs` | `PostToolUse` | `Bash` | turn a raw permission denial into an actionable message |
 | `post-bash-receipt-ledger.mjs` | `PostToolUse` | `Bash` | record one JSONL row per Bash result, so the rumination gate can hold a reply against what the turn actually ran (design 0017) |
+| `post-tool-file-ledger.mjs` | `PostToolUse` | `Write\|Edit\|MultiEdit\|NotebookEdit` | record one JSONL row per file-writing tool result, feeding the memory page's recently-touched-files panel via `/api/files/recent` (같이보기 batch, 2026-08-19) |
 | `pre-reply-corrections-context.mjs` | `PreToolUse` | `mcp__agent-channel__reply` | surface prior corrections relevant to the reply being sent |
 | `pre-reply-time-adverb-guard.mjs` | `PreToolUse` | `mcp__agent-channel__reply` | flag unverified time expressions ("yesterday", "an hour ago") |
 | `checkpoint-nudge.mjs` | `Stop` | all | warn when `checkpoint.md` is 30+ minutes stale, throttled to once per 30 min |
 
 `context-gauge.mjs` is registered at both `SessionStart` and `Stop`, and
 the credential guard at two `PreToolUse` matchers (`Bash` and
-`Read|Glob|Grep`), so the seventeen commands cover fifteen distinct hook
+`Read|Glob|Grep`), so the eighteen commands cover sixteen distinct hook
 files. (Two former Stop hooks,
 felt-check and stop-skill-extraction-nudge, were cut in the 2026-07-28
 boot-context diet -- advisory nags whose disciplines live on in CLAUDE.md

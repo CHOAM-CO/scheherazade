@@ -450,6 +450,25 @@ function createHarnessRender(ctx) {
       if (!settings.claudeMdExcludes.includes(p)) settings.claudeMdExcludes.push(p)
     }
 
+    // v0.1.18 (같이보기 batch, Mino 2026-08-19: "최근에 건드린 파일들 리스트"):
+    // file ledger on the file-writing tools. New matcher group — the Bash
+    // group must not widen (its two hooks parse Bash-shaped payloads).
+    // Additive-only, same contract as every block above; without this branch
+    // no EXISTING install ever gets the hook (design-0017 §Rollout rule).
+    const FILE_LEDGER_HOOK = 'post-tool-file-ledger.mjs'
+    if (!Array.isArray(settings.hooks.PostToolUse)) settings.hooks.PostToolUse = []
+    const hasFileLedger = settings.hooks.PostToolUse.some((group) =>
+      Array.isArray(group.hooks) && group.hooks.some((h) => typeof h.command === 'string' && h.command.includes(FILE_LEDGER_HOOK)))
+    if (!hasFileLedger) {
+      settings.hooks.PostToolUse.push({
+        matcher: 'Write|Edit|MultiEdit|NotebookEdit',
+        hooks: [{
+          type: 'command',
+          command: `node ${path.join(toUnpackedPath(REPO_ROOT), 'hooks', FILE_LEDGER_HOOK)}`,
+        }],
+      })
+    }
+
     const afterText = JSON.stringify(settings, null, 2)
     if (afterText !== beforeText) {
       fs.writeFileSync(SETTINGS_LOCAL_PATH, afterText + '\n')

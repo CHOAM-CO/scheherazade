@@ -52,6 +52,15 @@
             "command": "node {AGENT_DIR}/hooks/post-bash-receipt-ledger.mjs"
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node {AGENT_DIR}/hooks/post-tool-file-ledger.mjs"
+          }
+        ]
       }
     ],
     "PreToolUse": [

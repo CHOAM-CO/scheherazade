@@ -32,6 +32,21 @@
         <div class="chat-msg" id="remember-body"></div>
       </div>
 
+      <!-- Recently touched files (같이보기 batch, 2026-08-19). Fed by the
+           file ledger hook (hooks/post-tool-file-ledger.mjs) via
+           /api/files/recent; read-only observability, placed right after the
+           prose pane because "what did it just do to my files" is the second
+           question a returning user asks. -->
+      <div class="category" id="cat-recent-files">
+        <div class="category-header">
+          <div class="category-label" id="recent-files-label"></div>
+          <button class="secondary" id="recent-files-refresh"></button>
+        </div>
+        <div class="field-hint" id="recent-files-hint"></div>
+        <div class="status-line" id="recent-files-status"></div>
+        <div class="entries" id="recent-files-entries"></div>
+      </div>
+
       <div id="m-session-group" class="session-group hidden">
         <div class="category-label" id="m-session-label"></div>
         <div id="m-session-list"></div>

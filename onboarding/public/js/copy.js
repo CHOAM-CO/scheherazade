@@ -717,6 +717,20 @@ window.COPY = {
       empty: (name) => `${name} hasn't written this yet. It's rewritten overnight, during a scheduled memory-consolidation pass — that requires autonomy to be turned on in Settings, and at least one night to have gone by since.`,
       loadError: (msg) => `Couldn't load this (${msg}).`,
     },
+    // AUTHORED -- recently-touched files (같이보기 batch, Mino 2026-08-19:
+    // "세라가 최근에 건드린 파일들 리스트도 볼 수 있게"). Register rules:
+    // failed touches render dimmed with a mark, never hidden -- hiding a
+    // failed write is the silent-false-success class this app keeps killing.
+    recentFiles: {
+      label: (name) => `Files ${name} touched recently`,
+      refreshLabel: 'Refresh',
+      empty: (name) => `Nothing recorded yet. This fills in as ${name} writes or edits files (recorded from this app version on).`,
+      loadError: (msg) => `Couldn't load this (${msg}).`,
+      touches: (n) => (n > 1 ? `${n} edits` : '1 edit'),
+      failedMark: 'last edit failed',
+      openFail: (msg) => `Couldn't open it (${msg}).`,
+      openHint: 'Click a file to open it',
+    },
     deleteDialog: (name) => `This can't be undone. ${name} will no longer remember this. Only a record that it was deleted will remain.`,
     deleteConfirm: 'Delete',
     deleteCancel: 'Cancel',

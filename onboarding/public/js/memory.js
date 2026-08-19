@@ -247,12 +247,95 @@
     }
 
     renderRemember()
+    renderRecentFiles()
     renderJournal()
     renderPointers()
     await loadSessionGroup()
     for (const table of ['user_facts', 'open_threads', 'corrections', 'preferences']) {
       loadCategory(table)
     }
+  }
+
+  // Recently touched files (같이보기 batch, 2026-08-19). Read-only over the
+  // file-ledger JSONL the PostToolUse hook appends; every row is
+  // textContent-built (paths are agent-influenced strings -- same
+  // no-innerHTML rule as everything else on this page). Failed touches dim
+  // with a mark instead of hiding: hiding a failed write is the
+  // silent-false-success class design-0017 exists to kill.
+  async function renderRecentFiles() {
+    const R = window.COPY.memoryPane.recentFiles
+    $('recent-files-label').textContent = R.label(displayName)
+    $('recent-files-hint').textContent = R.openHint
+    const refreshBtn = $('recent-files-refresh')
+    refreshBtn.textContent = R.refreshLabel
+    const entriesEl = $('recent-files-entries')
+    const statusEl = $('recent-files-status')
+
+    async function load() {
+      statusEl.textContent = ''
+      statusEl.className = 'status-line'
+      let data
+      try {
+        data = await api('/api/files/recent')
+      } catch (err) {
+        entriesEl.textContent = ''
+        statusEl.className = 'status-line failure'
+        statusEl.textContent = R.loadError(err.message)
+        return
+      }
+      entriesEl.textContent = ''
+      if (!data.rows || data.rows.length === 0) {
+        const empty = document.createElement('div')
+        empty.className = 'empty-state'
+        empty.textContent = R.empty(displayName)
+        entriesEl.appendChild(empty)
+        return
+      }
+      for (const row of data.rows) {
+        const el = document.createElement('div')
+        el.className = 'entry'
+        el.style.cursor = 'pointer'
+        if (row.failed) el.style.opacity = '0.6'
+
+        const line = document.createElement('div')
+        const nameSpan = document.createElement('strong')
+        const slash = row.path.lastIndexOf('/') >= 0 ? row.path.lastIndexOf('/') : row.path.lastIndexOf('\\')
+        nameSpan.textContent = slash >= 0 ? row.path.slice(slash + 1) : row.path
+        line.appendChild(nameSpan)
+        const dirSpan = document.createElement('span')
+        dirSpan.className = 'entry-meta'
+        dirSpan.textContent = slash >= 0 ? `  ${row.path.slice(0, slash + 1)}` : ''
+        line.appendChild(dirSpan)
+        el.appendChild(line)
+
+        const meta = document.createElement('div')
+        meta.className = 'entry-meta'
+        const when = new Date(row.ts)
+        const parts = [when.toLocaleString(), R.touches(row.touches)]
+        if (row.failed) parts.push(R.failedMark)
+        meta.textContent = parts.join(' · ')
+        el.appendChild(meta)
+
+        el.onclick = async () => {
+          try {
+            await api('/api/files/open', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ path: row.path }),
+            })
+          } catch (err) {
+            showToast(R.openFail(err.message))
+          }
+        }
+        entriesEl.appendChild(el)
+      }
+    }
+
+    refreshBtn.onclick = async () => {
+      refreshBtn.disabled = true
+      try { await load() } finally { refreshBtn.disabled = false }
+    }
+    load()
   }
 
   // "What I remember" (Dreaming feature, 2026-08-16). Read-only: this pane

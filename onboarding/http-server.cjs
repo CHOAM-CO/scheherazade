@@ -3454,6 +3454,7 @@ const API_ROUTES = [
   ...require('./routes/chat.cjs').createRoutes(staticCtx), // G11
   ...require('./routes/migrate.cjs').createRoutes(staticCtx), // G12 (design-0022)
   ...require('./routes/oauth-usage.cjs').createRoutes(staticCtx), // G13 (usage-gauge full-scope OAuth)
+  ...require('./routes/files.cjs').createRoutes(staticCtx), // G14 (recent-files ledger, 같이보기 batch 2026-08-19)
 ]
 
 module.exports = {
