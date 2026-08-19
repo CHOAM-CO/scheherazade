@@ -33,6 +33,20 @@
 'use strict'
 
 const { app, BrowserWindow, shell, dialog } = require('electron')
+
+// 0.2-track Electron-layer isolation (2026-08-19). package.json `name` is
+// still 'scheherazade', so Electron's default userData dir -- and with it
+// Chromium's "... Safe Storage" keychain item -- would be SHARED with a live
+// 0.1.x install. Two consequences, both measured on the magi-mac E2E:
+// (1) two different app binaries fighting over one profile dir, and (2) the
+// 0.2 binary (a different ad-hoc signature) touching 0.1.x's Safe Storage
+// keychain item throws a blocking OS password modal at first key store,
+// which freezes onboarding at "Checking the key...". Own dir = own keychain
+// item, created silently on first run. Must run before app.whenReady().
+// (inline require: the shared `path` const below this block isn't
+// initialized yet when this line runs)
+app.setPath('userData', require('node:path').join(app.getPath('appData'), 'scheherazade02'))
+
 const { spawn, execFileSync } = require('node:child_process')
 const attachTopology = require('./attach-topology.cjs')
 const path = require('node:path')

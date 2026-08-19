@@ -2055,7 +2055,22 @@ function computeAvailableProviders() {
   // "available" costs one loud spawn error, whereas reading the user's OAuth
   // token to avoid that error costs the promise.
   try {
-    if (fs.existsSync(CLAUDE_CLI_CREDENTIALS_PATH)) out.push('claude-cli')
+    if (fs.existsSync(CLAUDE_CLI_CREDENTIALS_PATH)) {
+      out.push('claude-cli')
+    } else if (process.platform === 'darwin') {
+      // macOS CLI logins live in the login keychain, not the JSON file --
+      // without this branch the found-login card NEVER shows on a typical
+      // Mac (0.2.3 E2E find, 2026-08-19). Existence-only stays true to the
+      // zero-auth promise: no `-w`, so the secret itself is never read here
+      // (metadata presence check only; the ACL guards the secret, not the
+      // item's existence). The lane's readClaudeCliToken() reads the same
+      // keychain service at spawn.
+      const { execFileSync: probeExec } = require('node:child_process')
+      try {
+        probeExec('security', ['find-generic-password', '-s', 'Claude Code-credentials'], { stdio: 'ignore', timeout: 3000 })
+        out.push('claude-cli')
+      } catch { /* not present (or security unavailable) -> not offered */ }
+    }
   } catch (err) {
     console.error('[scheherazade/onboarding] availableProviders: claude-cli artifact check failed (treating as unavailable):', err.message)
   }
