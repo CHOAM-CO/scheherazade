@@ -58,6 +58,28 @@ const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434/v
 const log = (m) => process.stdout.write(`[dsh-lane] ${m}\n`)
 const errLog = (m) => process.stderr.write(`[dsh-lane] ${m}\n`)
 
+// ── the <channel> tag (ported verbatim from headless-lane.mjs:304-332) ──────
+// The injected-message contract every channel backend and the agent's own
+// reply discipline are built around: sender/channelId ride as attributes,
+// and the body is entity-escaped so content can never forge a second
+// envelope. Raw content without this tag reads to the model as plain prose
+// with no reply-owed framing (live catch 2026-08-19: glm answered in text
+// and never called the reply tool until the tag was restored).
+const escapeAttr = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+const escapeText = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+function renderChannelTag ({ content, meta = {} }) {
+  const attrs = [
+    `source="${escapeAttr(meta.source || 'agent-channel')}"`,
+    `sender="${escapeAttr(meta.sender || 'user')}"`,
+    `channelId="${escapeAttr(meta.channelId || 'in-app')}"`,
+    `authorId="${escapeAttr(meta.authorId || '')}"`,
+    `timestamp="${escapeAttr(meta.timestamp || '')}"`,
+  ]
+  if (meta.messageTs) attrs.push(`messageTs="${escapeAttr(meta.messageTs)}"`)
+  if (meta.threadTs) attrs.push(`threadTs="${escapeAttr(meta.threadTs)}"`)
+  return `<channel ${attrs.join(' ')}>${escapeText(content)}</channel>`
+}
+
 if (!MEM) { errLog('MEM is required'); process.exit(2) }
 
 const endpointFile = () => path.join(MEM, '.ingest-endpoint.json')
@@ -438,7 +460,14 @@ async function main () {
       }
       lines.push(line)
     }
-    return [{ type: 'text', text: lines.join('\n') }]
+    return lines.join('\n')
+  }
+  // Marker rewrite FIRST (on raw content, where the marker lines live),
+  // channel tag SECOND (which entity-escapes the body) -- reversed order
+  // would hide the markers from the caption pass behind escaping.
+  async function renderInbound (content, meta) {
+    const text = await buildPromptContent(content)
+    return [{ type: 'text', text: renderChannelTag({ content: text, meta: meta || {} }) }]
   }
 
   // Redeliver anything the previous incarnation accepted but never finished.
@@ -446,7 +475,7 @@ async function main () {
   if (stale.length) {
     log(`redelivering ${stale.length} pending inbound message(s)`)
     for (const p of stale) {
-      try { await client.prompt(sessionId, await buildPromptContent(p.content)) } catch (e) { errLog(`redelivery failed: ${e.message}`) }
+      try { await client.prompt(sessionId, await renderInbound(p.content, p.meta)) } catch (e) { errLog(`redelivery failed: ${e.message}`) }
     }
   }
 
@@ -487,7 +516,7 @@ async function main () {
       if (!writePending([...readPending(), { content, meta: payload.meta || {}, ts: Date.now() }])) {
         return send(500, { error: 'pending persist failed' })
       }
-      buildPromptContent(content)
+      renderInbound(content, payload.meta)
         .then((parts) => client.prompt(sessionId, parts))
         .then(() => log(`inbound -> session (${content.length} chars, sender=${(payload.meta && payload.meta.sender) || '?'})`))
         .catch((e) => errLog(`prompt failed: ${e.message}`))
