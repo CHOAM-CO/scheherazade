@@ -835,6 +835,12 @@ window.COPY = {
     activityRunning: (n) => `Working… · ${n} step${n === 1 ? '' : 's'}`,
     activityFoldSummary: (n, secs) => `Worked for ${secs}s · ${n} step${n === 1 ? '' : 's'}`,
     activityFoldAria: 'What the agent did during this turn',
+    // 0.2.1 collapsible Think fold (dsh lane reasoning stream; Mino 08-19
+    // "우리도 띵크 접이식으로 가자"). Collapsed by default — the reasoning
+    // is there when wanted, never in the way.
+    thinkSummary: 'Thinking…',
+    thinkFoldSummary: 'Thought process',
+    thinkAria: "The model's reasoning for this turn (click to expand)",
     sendFailed: "Couldn't send. Your message is still in the box — try again.",
     // DM interaction states (v0.0.34). `read` is honest by construction:
     // a user message only enters the transcript after it was delivered

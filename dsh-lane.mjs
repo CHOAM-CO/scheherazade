@@ -247,17 +247,91 @@ async function main () {
     } catch { /* fail-open, same contract as the hook it replaces */ }
   }
 
+  // ── local-chat presence feed (activity + think, 0.2.1) ────────────────────
+  // Under Claude Code the activity feed came from the PreToolUse hook
+  // (hooks/pre-tool-activity.mjs); dsh has no shell hooks, so the lane posts
+  // the same POST /activity itself from mux events -- and adds kind:'think'
+  // (reasoning-delta chunks, flushed paragraph-sized) for the chat page's
+  // collapsible Think fold. Same posture as the hook it replaces: bearer
+  // token from MEM/local-channel.json read per post (port changes per
+  // channel restart), 800ms cap, fail-open -- presence must never wedge the
+  // lane. Local backend only, by the same design: the port file only exists
+  // while channel-local's surface runs.
+  function postPresence (label, kind) {
+    let ep
+    try {
+      ep = JSON.parse(fs.readFileSync(path.join(MEM, 'local-channel.json'), 'utf8'))
+    } catch { return }
+    const port = Number(ep && ep.port)
+    const token = String((ep && ep.token) || '')
+    if (!Number.isInteger(port) || port < 1 || port > 65535 || !token) return
+    fetch(`http://127.0.0.1:${port}/activity`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify(kind === 'think' ? { label, kind: 'think' } : { label }),
+      signal: AbortSignal.timeout(800)
+    }).catch(() => {})
+  }
+  // Activity labels mirror pre-tool-activity.mjs's per-tool convention:
+  // bash rides its bare command/description, the rest get a short prefix.
+  const truncLabel = (s, n = 140) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, n)
+  function activityLabelFor (name, args) {
+    const a = args || {}
+    if (name === 'bash' || name === 'shell') return truncLabel(a.description || a.command || a.cmd)
+    if (name === 'fetch' || name === 'web_fetch') return a.url ? `WebFetch: ${truncLabel(a.url)}` : ''
+    if (name === 'web_search') return a.query ? `WebSearch: ${truncLabel(a.query)}` : ''
+    if (FILE_TOOLS.has(name)) return `${name}: ${truncLabel(a.file_path || a.path || a.notebook_path)}`
+    if (name === 'run_code' || name === 'code') return `run_code: ${truncLabel(a.description || (typeof a.code === 'string' ? a.code : ''))}`
+    if (String(name || '').startsWith('mcp__')) return '' // channel plumbing (reply etc.) is not user-facing work
+    return name ? `${name}${a.description ? `: ${truncLabel(a.description)}` : ''}` : ''
+  }
+  // Reasoning accumulator: flush to the channel in paragraph-sized pieces
+  // (per-delta posts would be one HTTP round trip per token). Flush at
+  // ~700 chars or on turn end; cap a runaway turn's total so the fold
+  // cannot eat the page.
+  let thinkBuf = ''
+  let thinkSentThisTurn = 0
+  const THINK_FLUSH_AT = 700
+  const THINK_TURN_CAP = 20000
+  function flushThink (force) {
+    const text = thinkBuf.trim()
+    if (!text) return
+    if (!force && text.length < THINK_FLUSH_AT) return
+    thinkBuf = ''
+    if (thinkSentThisTurn >= THINK_TURN_CAP) return
+    thinkSentThisTurn += text.length
+    postPresence(text.slice(0, 3900), 'think')
+  }
+
   // Turn-close accounting: clear pending entries older than the turn end.
   const mux = client.openMux({
     onEvent (sid, event) {
       if (sid !== sessionId || !event) return
       if (event.type === 'turn/end') {
+        flushThink(true)
+        thinkSentThisTurn = 0
         const now = Date.now()
         writePending(readPending().filter((p) => p.ts > now))
         log(`turn end (${(event.data && event.data.reason && event.data.reason.kind) || '?'})`)
+      } else if (event.type === 'assistant/chunk') {
+        const c = event.data && event.data.chunk
+        if (c && c.type === 'reasoning-delta') {
+          thinkBuf += c.text || c.delta || ''
+          flushThink(false)
+        } else if (c && (c.type === 'text-delta' || c.type === 'finish')) {
+          // Visible prose starting means the think block for this step is
+          // complete -- flush the remainder so the fold never trails the reply.
+          flushThink(true)
+        }
       } else if (event.type === 'tool/call') {
         const d = event.data || {}
         log(`tool> ${d.name || '?'}`)
+        flushThink(true) // reasoning that led to this call belongs above it
+        try {
+          const argsForLabel = typeof d.arguments === 'string' ? JSON.parse(d.arguments) : (d.arguments || {})
+          const label = activityLabelFor(d.name, argsForLabel)
+          if (label) postPresence(label)
+        } catch {}
         if (FILE_TOOLS.has(d.name)) {
           try {
             const args = typeof d.arguments === 'string' ? JSON.parse(d.arguments) : (d.arguments || {})

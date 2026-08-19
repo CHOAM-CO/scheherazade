@@ -1013,6 +1013,35 @@ button.nav-ctl.is-busy::after {
 .chat-activity-fold .fold-line:last-child::after { display: none; }
 /* live state: the summary reads as quiet working status */
 .chat-run-live summary { color: var(--fg-dim); }
+/* 0.2.1 Think fold (dsh lane reasoning; Mino 08-19 "띵크 접이식"). Same
+   quiet class as the activity fold — collapsed by default, and the content
+   is prose, not a timeline: an indented frosted slab with a hairline rail,
+   the reasoning readable but visually one register below the reply. */
+.chat-think-fold {
+  align-self: stretch;
+  padding: 0.35rem var(--s4);
+  font-size: 0.8rem;
+  color: var(--fg-faint);
+}
+.chat-think-fold summary { cursor: pointer; user-select: none; }
+.chat-think-fold[open] summary { margin-bottom: 0.35rem; }
+.chat-think-fold .think-para {
+  margin: 0 0 0.45rem 0.3rem;
+  padding: 0.1rem 0 0.1rem 0.9rem;
+  border-left: 2px solid var(--border-strong);
+  color: var(--fg-faint);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+.chat-think-fold .think-para:last-child { margin-bottom: 0; }
+/* live: gentle pulse on the summary while reasoning streams — presence
+   without motion sickness (matches the typing-dot energy, not a spinner) */
+.chat-think-live summary { color: var(--fg-dim); animation: think-pulse 1.6s ease-in-out infinite; }
+@keyframes think-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
 .chat-gap {
   align-self: center;
   color: var(--fg-dim);

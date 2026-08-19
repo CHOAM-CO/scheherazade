@@ -69,6 +69,16 @@
   let activityLog = []
   let activityStart = 0
   let lastActivityAt = 0
+  // 0.2.1 collapsible Think fold (Mino 08-19 "우리도 띵크 접이식으로
+  // 가자"): the dsh lane streams the model's reasoning as kind:'think'
+  // transcript items (paragraph-sized flushes). One <details> per turn,
+  // COLLAPSED by default — the summary pulses while thinking, settles to
+  // "Thought process" when the reply lands. The claude lane never posts
+  // these, so the fold simply never appears there.
+  const MAX_THINK_PARAS = 40
+  let thinkEl = null
+  let thinkSummary = null
+  let thinkParas = 0
 
   function setStatics() {
     $('ct-title').textContent = C.title
@@ -220,7 +230,7 @@
     // P1 v2: the reply that ends the wait collapses the live run timeline
     // into its "Worked for Ns" resting state (aside behavior — we fold tool
     // labels, not streamed thinking text).
-    if (role === 'agent') finalizeActivityFold()
+    if (role === 'agent') { finalizeActivityFold(); finalizeThinkFold() }
     const el = document.createElement('div')
     el.className = `chat-msg chat-${role}`
     el.dataset.seq = m.seq
@@ -379,9 +389,54 @@
     activityLog = []
   }
 
+  // ── Think fold (0.2.1) ─────────────────────────────────────────────────
+  // Reasoning paragraphs accumulate into ONE closed <details> per turn.
+  // Closed is the design ("접이식") — .open is never set, and a user who
+  // opens it mid-turn is not fought (we only append children). Paragraphs
+  // past the cap drop from the TOP, matching the activity fold's ring.
+  function showThink(m) {
+    const text = String(m.text || '').trim()
+    if (!text) return
+    const stick = atBottom()
+    if (!thinkEl) {
+      thinkEl = document.createElement('details')
+      thinkEl.className = 'chat-think-fold chat-think-live'
+      thinkEl.setAttribute('aria-label', C.thinkAria)
+      thinkSummary = document.createElement('summary')
+      thinkSummary.textContent = C.thinkSummary
+      thinkEl.appendChild(thinkSummary)
+      thinkParas = 0
+    }
+    const para = document.createElement('div')
+    para.className = 'think-para'
+    para.textContent = text
+    thinkEl.appendChild(para)
+    thinkParas++
+    if (thinkParas > MAX_THINK_PARAS) {
+      const first = thinkEl.querySelector('.think-para')
+      if (first) { first.remove(); thinkParas-- }
+    }
+    pane.appendChild(thinkEl) // moves back to the end if bubbles landed above
+    lastActivityAt = Date.now() // thinking IS liveness for the run staleness guard
+    if (stick) pane.scrollTop = pane.scrollHeight
+  }
+
+  // The reply landing settles the fold: pulse off, resting summary. The
+  // fold KEEPS its content (unlike typing dots) — the reasoning is the
+  // record the reader may want after the fact.
+  function finalizeThinkFold() {
+    if (!thinkEl) return
+    thinkSummary.textContent = C.thinkFoldSummary
+    thinkEl.classList.remove('chat-think-live')
+    thinkEl = null
+    thinkSummary = null
+    thinkParas = 0
+  }
+
   function renderItem(m) {
     if (m.kind === 'reaction') applyReaction(m)
     else if (m.kind === 'activity') showActivity(m)
+    else if (m.kind === 'think') showThink(m)
     else appendMsg(m)
   }
 
@@ -559,6 +614,9 @@
     runEl = null
     runSummary = null
     activityLog = []
+    thinkEl = null
+    thinkSummary = null
+    thinkParas = 0
     awaitingSince = null
     nextSeq = null
     hideJump()

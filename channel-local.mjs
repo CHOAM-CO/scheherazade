@@ -133,7 +133,7 @@ async function writeTranscriptOnce() {
   // conversation -- replaying yesterday's command chatter into a fresh boot
   // would be noise wearing a transcript costume. seq stays as-is; the
   // cursor contract already tolerates gaps.
-  const durable = queue.filter((m) => m.kind !== 'activity')
+  const durable = queue.filter((m) => m.kind !== 'activity' && m.kind !== 'think')
   await fs.writeFile(tmp, JSON.stringify({ seq, queue: durable }, null, 1), { mode: 0o600 })
   await fs.rename(tmp, file)
 }
@@ -227,6 +227,16 @@ export function enqueueActivity(label, { now = () => Date.now() } = {}) {
   return push({ kind: 'activity', role: 'agent', text: String(label), ts: now() })
 }
 
+// A think item is the model's REASONING text (0.2.1 dsh lane: the engine
+// streams reasoning-delta chunks and the lane flushes them here in
+// paragraph-sized pieces). Same presence-not-conversation class as
+// activity: rides the queue for the page's collapsible Think fold, never
+// persisted, never clears the awaiting state, never notifies. The claude
+// lane simply never posts these -- the page degrades to no Think fold.
+export function enqueueThink(text, { now = () => Date.now() } = {}) {
+  return push({ kind: 'think', role: 'agent', text: String(text), ts: now() })
+}
+
 // The one presence value (see header). Asymmetric on purpose (live catch,
 // 07-30 dev-harness screenshot): a USER reaction is skipped -- a tap is not
 // a question awaiting an answer -- but an AGENT reaction counts as the agent
@@ -241,8 +251,9 @@ export function transcriptState() {
     // An activity item is evidence of WORK, not an answer: "running npm
     // test" must not clear the awaiting state the way a reply does, or the
     // read/typing affordances would claim the user's question was handled
-    // by a command starting.
-    if (m.kind === 'activity') continue
+    // by a command starting. Think text is the same class -- reasoning
+    // about the answer is not the answer.
+    if (m.kind === 'activity' || m.kind === 'think') continue
     if (m.role !== 'user') break
     since = m.ts
   }
@@ -605,6 +616,14 @@ export function createRequestHandler({ notify, token, onInbound = () => {} }) {
         try { parsed = JSON.parse(body || '{}') } catch { return send(400, { error: 'bad json' }) }
         const label = typeof (parsed && parsed.label) === 'string' ? parsed.label.trim() : ''
         if (!label) return send(400, { error: 'label required' })
+        // kind 'think' (0.2.1 dsh lane): reasoning text for the page's
+        // collapsible Think fold -- paragraph-sized, so its cap is the
+        // endpoint's own body cap, not the status-line cap below. Anything
+        // else is an activity label.
+        if (parsed.kind === 'think') {
+          enqueueThink(label.slice(0, 4000))
+          return send(202, { ok: true })
+        }
         // Length cap: this is a status line, not a second message lane. The
         // sender (pre-tool-activity.mjs) already truncates; enforcing here
         // keeps a crafted request honest too.
