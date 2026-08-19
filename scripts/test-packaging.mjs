@@ -207,7 +207,11 @@ function findDmg() {
   // EXACT version only. A different-version dmg (e.g. an old 0.0.24 left in
   // release/) is NOT proof of THIS build's asar; verifying it would be a version
   // illusion (Skia catch). Absent the exact dmg -> null -> postdist FAILs.
-  const exact = path.join(ROOT, 'release', `Scheherazade-${pkg.version}-arm64.dmg`)
+  // productName-derived (0.2 track: productName 'Scheherazade 0.2' makes the
+  // artifact 'Scheherazade 0.2-<version>-arm64.dmg' -- the hardcoded name
+  // missed a dmg that HAD built, 2026-08-19).
+  const artifactBase = (pkg.build && pkg.build.productName) || 'Scheherazade'
+  const exact = path.join(ROOT, 'release', `${artifactBase}-${pkg.version}-arm64.dmg`)
   return fs.existsSync(exact) ? exact : null
 }
 
@@ -219,15 +223,15 @@ function mountedAsarEntries() {
   try {
     execFileSync('hdiutil', ['attach', '-nobrowse', '-readonly', '-mountpoint', mnt, dmg], { stdio: 'pipe' })
     attached = true
-    const asarPath = path.join(mnt, 'Scheherazade.app', 'Contents', 'Resources', 'app.asar')
+    const asarPath = path.join(mnt, `${(pkg.build && pkg.build.productName) || 'Scheherazade'}.app`, 'Contents', 'Resources', 'app.asar')
     if (!fs.existsSync(asarPath)) return { status: 'error', reason: 'app.asar absent inside the mounted dmg' }
     // listPackage yields '/onboarding/login-status.cjs' (leading slash, dirs
     // included); normalize to the ROOT-relative shape the closure produces.
     const entries = require('@electron/asar').listPackage(asarPath)
     // extraResources ride NEXT TO app.asar, so asar listing never sees them --
     // check the vendored chromux (v0.1.10 web-search path) directly.
-    const chromuxShipped = fs.existsSync(path.join(mnt, 'Scheherazade.app', 'Contents', 'Resources', 'chromux', 'chromux.mjs'))
-    const agentToolsShipped = fs.existsSync(path.join(mnt, 'Scheherazade.app', 'Contents', 'Resources', 'agent-tools', 'windowshot.cjs'))
+    const chromuxShipped = fs.existsSync(path.join(mnt, `${(pkg.build && pkg.build.productName) || 'Scheherazade'}.app`, 'Contents', 'Resources', 'chromux', 'chromux.mjs'))
+    const agentToolsShipped = fs.existsSync(path.join(mnt, `${(pkg.build && pkg.build.productName) || 'Scheherazade'}.app`, 'Contents', 'Resources', 'agent-tools', 'windowshot.cjs'))
     return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^\/+/, ''))), chromuxShipped, agentToolsShipped }
   } catch (e) {
     // A DMG that EXISTS but will not mount / list is fail-CLOSED, never a skip.
@@ -300,7 +304,7 @@ if (lifecycle.startsWith('predist')) {
   if (asarResult.status === 'no-dmg' || asarResult.status === 'no-exe') {
     // NOT predist: a missing exact-version artifact cannot be verified. In
     // postdist it means the build never produced it (or built a different version).
-    const wanted = WIN_LANE ? `Scheherazade-Setup-${pkg.version}.exe` : `Scheherazade-${pkg.version}-arm64.dmg`
+    const wanted = WIN_LANE ? `Scheherazade-Setup-${pkg.version}.exe` : `${(pkg.build && pkg.build.productName) || 'Scheherazade'}-${pkg.version}-arm64.dmg`
     ok(`the ${pkg.version} ${WIN_LANE ? 'installer' : 'dmg'} exists to verify (${lifecycle || 'manual run'})`, false,
       `no release/${wanted} -- ${isPost ? 'the build did not produce it (or built a different version)' : `run npm run dist${WIN_LANE ? ':win' : ''} first`}`)
   } else if (asarResult.status === 'error') {
@@ -434,7 +438,7 @@ if (WIN_LANE) {
       'node-pty loads build/Release FIRST; a second lineage there silently wins over the tested prebuild')
   }
 } else {
-  const unpackedPty = path.join(ROOT, 'release', 'mac-arm64', 'Scheherazade.app', 'Contents', 'Resources', 'app.asar.unpacked', 'node_modules', 'node-pty')
+  const unpackedPty = path.join(ROOT, 'release', 'mac-arm64', `${(pkg.build && pkg.build.productName) || 'Scheherazade'}.app`, 'Contents', 'Resources', 'app.asar.unpacked', 'node_modules', 'node-pty')
   if (!fs.existsSync(unpackedPty)) {
     console.log('  SKIP  built-artifact node-pty checks -- no release/mac-arm64 build output present (run npm run dist first); NOT a pass')
   } else {
