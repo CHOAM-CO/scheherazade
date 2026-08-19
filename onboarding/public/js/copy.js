@@ -1181,6 +1181,8 @@ window.COPY = {
     permsDenied: 'Denied',
     permsIndeterminate: "Can't determine",
     permsHeuristicMark: 'Estimated',
+    permsStoredMark: 'stored key',
+    permsVerifiedMark: 'verified just now',
     permsOpenButton: 'Open Settings',
     permsProbeButton: 'Check',
     permsClassNames: {
@@ -1192,8 +1194,9 @@ window.COPY = {
       sip: 'System Integrity Protection (SIP)',
     },
     permsClassNotes: {
+      screen: 'Needed for 같이보기 — the agent taking a screenshot of one of your app windows when you ask it to look.',
       automation: 'Clicking Check may prompt a macOS permission dialog',
-      sudo: "Only checks whether it can run without a password. Not something you toggle here.",
+      sudo: 'Granted (stored key) means the admin password saved during setup arms sudo -A through the app. Check actually runs sudo with it — the one honest test of the stored password.',
       sip: 'A fixed system condition, unrelated to app permissions. Not something you change in Settings.',
     },
     permsRelaunchNote: 'If you changed a permission in Settings, some changes need an app restart to show up here',

@@ -22,7 +22,7 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 
 const require = createRequire(import.meta.url)
-const { probeAll, probeAutomation, DEEP_LINKS } = require(path.join(import.meta.dirname, '..', 'onboarding', 'permission-probes.cjs'))
+const { probeAll, probeAutomation, probeSudoVerified, DEEP_LINKS } = require(path.join(import.meta.dirname, '..', 'onboarding', 'permission-probes.cjs'))
 
 let passed = 0
 let failed = 0
@@ -142,6 +142,42 @@ const byClass = (rows, cls) => rows.find((r) => r.class === cls)
 
   const dflt = probeAutomation(undefined, { execFileSync: () => '1' })
   check('automation default target is System Events', dflt.target === 'System Events')
+}
+
+
+// ── sudo tiers (2026-08-19: stored-key lane, Mino 11:22 "키 긁어서 있으면 Granted") ──
+{
+  const throwStatus = () => { const e = new Error('sudo: a password is required'); e.status = 1; throw e }
+
+  const base = {
+    readFileSync: () => Buffer.from('plist'),
+    systemPreferences: { getMediaAccessStatus: () => 'granted', isTrustedAccessibilityClient: () => true },
+  }
+  const sudoFails = (cmd) => { if (cmd === 'sudo') throwStatus(); return 'enabled' }
+
+  const stored = probeAll({ ...base, execFileSync: sudoFails, sudoState: { enabled: true, hasStored: true } })
+  check('sudo -n fails but askpass lane armed -> granted kind=stored', byClass(stored, 'sudo').granted === true && byClass(stored, 'sudo').kind === 'stored')
+
+  const disabled = probeAll({ ...base, execFileSync: sudoFails, sudoState: { enabled: false, hasStored: true } })
+  check('stored key but SUDO_ENABLED=no -> denied (lane disarmed)', byClass(disabled, 'sudo').granted === false)
+
+  const noKey = probeAll({ ...base, execFileSync: sudoFails, sudoState: { enabled: true, hasStored: false } })
+  check('enabled but no stored key -> denied', byClass(noKey, 'sudo').granted === false)
+
+  const noState = probeAll({ ...base, execFileSync: sudoFails })
+  check('absent sudoState degrades to tier-1-only (pre-2026-08-19 behavior)', byClass(noState, 'sudo').granted === false)
+
+  let seenEnv = null, seenArgs = null
+  const ok = probeSudoVerified({ execFileSync: (_c, args, opts) => { seenArgs = args; seenEnv = opts.env; return '' }, askpassPath: '/tmp/ap.sh', env: { PATH: '/x' } })
+  check('probeSudoVerified success -> granted kind=verified', ok.granted === true && ok.kind === 'verified')
+  check('probeSudoVerified uses -k (drops cached timestamp, tests the STORED password)', seenArgs && seenArgs.includes('-k') && seenArgs.includes('-A'))
+  check('probeSudoVerified injects SUDO_ASKPASS', seenEnv && seenEnv.SUDO_ASKPASS === '/tmp/ap.sh')
+
+  const bad = probeSudoVerified({ execFileSync: () => { const e = new Error('auth fail'); e.status = 1; throw e }, askpassPath: '/tmp/ap.sh' })
+  check('probeSudoVerified auth failure -> denied kind=verified (honest negative)', bad.granted === false && bad.kind === 'verified')
+
+  const broke = probeSudoVerified({ execFileSync: () => throwWith('ENOENT'), askpassPath: '/tmp/ap.sh' })
+  check('probeSudoVerified machinery breakage -> indeterminate, never a denial', broke.granted === 'indeterminate')
 }
 
 console.log(`\n${passed} passed, ${failed} failed`)

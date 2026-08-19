@@ -84,18 +84,54 @@ function probeAccessibility({ systemPreferences }) {
   }
 }
 
-// sudo — `sudo -n true`: rc 0 means passwordless sudo is available right
-// now. "sudo ran and exited nonzero" (execFileSync sets err.status) means a
-// password would be required. Anything else — ENOENT, timeout kill, or an
-// error with NO exit status (the probe machinery itself broke) — is
-// "cannot measure", never a denial reading.
-function probeSudo({ execFileSync }) {
+// sudo — two truthful tiers (Mino 2026-08-19 11:22: the row read Denied on a
+// machine where onboarding had already collected and stored the admin
+// password — the probe only knew about tier 1):
+//   1. `sudo -n true` rc 0 -> passwordless sudo works right now.
+//   2. else, if the app's askpass lane is armed (SUDO_ENABLED=yes AND a
+//      sudo-pass blob in the vault) -> granted with kind 'stored': `sudo -A`
+//      works through the app. Store-time verification is a safeStorage
+//      round-trip, NOT a sudo run, so whether the password itself is RIGHT
+//      is only proven by probeSudoVerified below (explicit click) — the row
+//      says which tier it is via `kind` instead of flattening the difference.
+// "sudo ran and exited nonzero" (execFileSync sets err.status) with no
+// stored-key tier means a password would be required. Anything else —
+// ENOENT, timeout kill, or an error with NO exit status (the probe
+// machinery itself broke) — is "cannot measure", never a denial reading.
+// sudoState is injected by the caller ({enabled, hasStored}); absent state
+// degrades to tier-1-only, which is the pre-2026-08-19 behavior.
+function probeSudo({ execFileSync, sudoState }) {
   try {
     execFileSync('sudo', ['-n', 'true'], { stdio: 'pipe', timeout: 3000 })
-    return row('sudo', true, 'heuristic')
+    return row('sudo', true, 'heuristic', { detail: 'passwordless' })
   } catch (err) {
     if (err && (err.code === 'ENOENT' || err.killed)) return row('sudo', 'indeterminate', 'heuristic', { detail: String(err.code || 'timeout') })
+    if (sudoState && sudoState.enabled && sudoState.hasStored) {
+      return row('sudo', true, 'stored', { detail: 'admin password stored in app; sudo -A via askpass' })
+    }
     if (err && typeof err.status === 'number') return row('sudo', false, 'heuristic')
+    return row('sudo', 'indeterminate', 'heuristic', { detail: String(err && err.message).slice(0, 120) })
+  }
+}
+
+// sudo verify — EXPLICIT-TRIGGER ONLY (same contract as probeAutomation):
+// actually runs `sudo -k -A true` through the app's askpass helper. `-k`
+// drops the cached timestamp first so a stale grant cannot fake a pass —
+// this is a real test of the STORED password. Never called from a status
+// poll: a wrong stored password would write a PAM auth failure to the
+// system log on every poll tick.
+function probeSudoVerified({ execFileSync, askpassPath, env }) {
+  try {
+    execFileSync('sudo', ['-k', '-A', 'true'], {
+      stdio: 'pipe', timeout: 15000,
+      env: { ...(env || process.env), SUDO_ASKPASS: askpassPath },
+    })
+    return row('sudo', true, 'verified', { detail: 'sudo -A ran with the stored password just now' })
+  } catch (err) {
+    if (err && (err.code === 'ENOENT' || err.killed)) return row('sudo', 'indeterminate', 'heuristic', { detail: String(err.code || 'timeout') })
+    if (err && typeof err.status === 'number') {
+      return row('sudo', false, 'verified', { detail: 'sudo -A failed — stored password wrong, sudo disabled in settings, or askpass helper missing' })
+    }
     return row('sudo', 'indeterminate', 'heuristic', { detail: String(err && err.message).slice(0, 120) })
   }
 }
@@ -148,4 +184,4 @@ function probeAutomation(target, { execFileSync }) {
   }
 }
 
-module.exports = { probeAll, probeAutomation, DEEP_LINKS }
+module.exports = { probeAll, probeAutomation, probeSudoVerified, DEEP_LINKS }

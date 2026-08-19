@@ -434,6 +434,8 @@
     else if (row.granted === false) { el.classList.add('failure'); text = C.permsDenied }
     else { text = C.permsIndeterminate }
     if (row.kind === 'heuristic' && row.granted !== 'indeterminate') text += ` (${C.permsHeuristicMark})`
+    else if (row.kind === 'stored') text += ` (${C.permsStoredMark})`
+    else if (row.kind === 'verified') text += ` (${C.permsVerifiedMark})`
     el.textContent = text
   }
 
@@ -481,7 +483,16 @@
         right.appendChild(btn)
       }
 
-      if (r.class === 'automation') {
+      // Explicit-trigger probes: automation SENDS an Apple event, sudo RUNS
+      // `sudo -k -A true` with the stored password. Both are user-click-only
+      // by server contract; sudo's button renders only when there is a
+      // stored key to verify (kind 'stored'/'verified') — offering a Check
+      // that can only fail is the misroute rule again.
+      const explicitProbe =
+        r.class === 'automation' ? '/api/permissions/probe-automation'
+        : r.class === 'sudo' && (r.kind === 'stored' || r.kind === 'verified') ? '/api/permissions/probe-sudo'
+        : null
+      if (explicitProbe) {
         const btn = document.createElement('button')
         btn.textContent = C.permsProbeButton
         btn.style.marginLeft = '0.75rem'
@@ -490,7 +501,7 @@
           badge.className = 'status-line'
           badge.textContent = C.permsLoading
           try {
-            const { row: probed } = await api('/api/permissions/probe-automation', {
+            const { row: probed } = await api(explicitProbe, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({}),

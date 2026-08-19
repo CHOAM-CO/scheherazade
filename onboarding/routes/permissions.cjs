@@ -222,7 +222,14 @@ function createRoutes(staticCtx) {
       handler: async (req, res, callCtx) => {
         const { systemPreferences } = getElectron()
         const { execFileSync } = require('node:child_process')
-        const rows = permissionProbes.probeAll({ readFileSync: fs.readFileSync, execFileSync, systemPreferences })
+        // sudoState feeds probeSudo's tier 2 (2026-08-19): the askpass lane
+        // being armed IS a form of "admin commands work" — the row said
+        // Denied on machines where onboarding had already stored the key.
+        const sudoState = {
+          enabled: readAgentConfig().SUDO_ENABLED === 'yes',
+          hasStored: fs.existsSync(path.join(CREDENTIALS_DIR, 'sudo-pass.key.enc')),
+        }
+        const rows = permissionProbes.probeAll({ readFileSync: fs.readFileSync, execFileSync, systemPreferences, sudoState })
         try {
           fs.writeFileSync(
             path.join(DATA_HOME, 'permission-status.json'),
@@ -254,6 +261,24 @@ function createRoutes(staticCtx) {
           shell.openExternal(paneUrl).catch(() => {})
         }, 1000)
         sendJson(res, 200, { ok: true })
+        return
+      },
+    },
+    // Sudo verify is POST + explicit because it actually RUNS `sudo -k -A
+    // true` through the askpass helper — a wrong stored password writes a
+    // PAM auth failure to the system log, so this fires on a user click
+    // only, never on a status poll (same contract as probe-automation).
+    {
+      method: 'POST',
+      match: (pathname) => pathname === '/api/permissions/probe-sudo',
+      handler: async (req, res, callCtx) => {
+        const { execFileSync } = require('node:child_process')
+        sendJson(res, 200, {
+          row: permissionProbes.probeSudoVerified({
+            execFileSync,
+            askpassPath: path.join(DATA_HOME, 'sudo-askpass.sh'),
+          }),
+        })
         return
       },
     },
