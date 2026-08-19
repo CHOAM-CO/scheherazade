@@ -35,7 +35,7 @@ import os from 'node:os'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
-const { DshClient } = require('./dsh-client.cjs')
+const { DshClient, promptAndCollect } = require('./dsh-client.cjs')
 
 const MEM = process.env.MEM
 const MCP_CONFIG_FILE = process.env.MCP_CONFIG_FILE || ''
@@ -43,6 +43,16 @@ const SYSTEM_PROMPT_FILE = process.env.SYSTEM_PROMPT_FILE || ''
 const DSH_PROVIDER = process.env.DSH_PROVIDER || 'ollama'
 const DSH_MODEL = process.env.DSH_MODEL || 'glm-5.2:cloud'
 const DSH_EFFORT = process.env.DSH_EFFORT || 'max'
+// 같이보기/vision routing (0.2.1): image markers are captioned by a
+// one-shot SIDECAR session on the vision model, and the caption text rides
+// into the main session's prompt. NOT a per-turn selectModel switch: dsh
+// refuses to select a text-only model on a session whose history holds
+// images ("model-unavailable ... does not accept image input", measured
+// 2026-08-19), so one image would permanently evict glm from the session.
+// The sidecar sends the bytes INLINE as an image part ({type:'image',
+// mediaType, data} -- dsh-host-apiproxy sessions.schema.js:222); the main
+// session never sees an image and stays on the fast text model.
+const DSH_VISION_MODEL = process.env.DSH_VISION_MODEL || 'qwen3.5:cloud'
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434/v1'
 
 const log = (m) => process.stdout.write(`[dsh-lane] ${m}\n`)
@@ -148,12 +158,14 @@ function buildPatch () {
         models:
           - id: glm-5.2:cloud
             name: GLM 5.2 (fast text)
+            input: [text]
             contextWindow: 131072
             maxTokens: 16384
             reasoningEfforts:
 ${efforts}
           - id: qwen3.5:cloud
             name: Qwen 3.5 (vision)
+            input: [text, image]
             contextWindow: 131072
             maxTokens: 16384
             reasoningEfforts:
@@ -362,12 +374,79 @@ async function main () {
   })
   void mux
 
+  // ── image-marker captioning (같이보기 / chat uploads / windowshot) ────────
+  // Inbound content carries "[image attached: <path> — …]" marker lines
+  // (the Discord/chat-upload convention every surface shares). Under Claude
+  // Code the agent Read the path; here a one-shot sidecar session on the
+  // vision model describes the file and the marker is rewritten to the
+  // SAME caption format the 0.1.x upload route used (chat.js markerFor
+  // parses nothing, but the prose contract matters: the main model is told
+  // what a vision model saw, never invited to Read a raster it cannot
+  // parse). PDF markers become an honest cannot-view note -- known 0.2.1
+  // gap (docs/design-0021-dsh-junction.md).
+  const IMG_MARKER_RE = /^\[image attached: (.+?)(?: — [^\]]*)?\]$/
+  const PDF_MARKER_RE = /^\[PDF attached: (.+?)(?: — [^\]]*)?\]$/
+  const RASTER_EXT = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' }
+  // 5MB: the gateway's own imageLimits.maxImageBytes (measured rc-7,
+  // session.history metadata) -- larger files would be refused downstream.
+  const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+  const CAPTION_PROMPT = 'Describe this image thoroughly for someone who cannot see it: overall layout, ALL readable text verbatim, UI elements and their states, numbers, charts, people or objects, and anything unusual. Plain prose, no preamble. Do not use any tools.'
+  async function captionImage (mediaType, filePath) {
+    const data = fs.readFileSync(filePath).toString('base64')
+    const s = await client.createSession({ cwd: MEM })
+    const vsid = s.sessionId || s.id
+    // Effort low: a caption is transcription, not reasoning -- and the
+    // sidecar bills per image, so keep it cheap.
+    try { await client.selectModel(vsid, DSH_PROVIDER, DSH_VISION_MODEL, 'low') } catch (e) {
+      throw new Error(`vision model select failed: ${e.message}`)
+    }
+    const acc = await promptAndCollect(client, vsid, [
+      { type: 'text', text: CAPTION_PROMPT },
+      { type: 'image', mediaType, data, name: path.basename(filePath) }
+    ], { timeoutMs: 120000 })
+    const text = String(acc.text || '').trim()
+    if (!text) throw new Error('vision model returned no text')
+    return text
+  }
+  async function buildPromptContent (content) {
+    const lines = []
+    for (const line of String(content).split('\n')) {
+      const im = line.match(IMG_MARKER_RE)
+      if (im) {
+        const p = im[1].trim()
+        const mediaType = RASTER_EXT[path.extname(p).toLowerCase()]
+        let ok = false
+        try { ok = Boolean(mediaType) && fs.statSync(p).size <= MAX_IMAGE_BYTES } catch {}
+        if (ok) {
+          try {
+            const caption = await captionImage(mediaType, p)
+            // Brackets/newlines stripped, 2000 cap -- the marker must stay
+            // one parseable line (mirror of chat.js markerFor's clean).
+            const clean = caption.replace(/[\[\]]/g, '').replace(/\s*\n+\s*/g, ' ').slice(0, 2000)
+            lines.push(`[image attached: ${p} — this model cannot view images directly; a vision model (${DSH_VISION_MODEL}) described it: "${clean}"]`)
+            log(`captioned ${path.basename(p)} (${clean.length} chars)`)
+            continue
+          } catch (e) { errLog(`caption failed for ${p}: ${e.message.slice(0, 160)}`) }
+        }
+        lines.push(`[image attached: ${p} — NOTE: this model cannot view images and the vision fallback failed; do not guess the contents, tell the user honestly that you cannot see it]`)
+        continue
+      }
+      const pm = line.match(PDF_MARKER_RE)
+      if (pm) {
+        lines.push(`[PDF attached: ${pm[1].trim()} — NOTE: this lane cannot view PDFs; do not guess the contents, tell the user honestly]`)
+        continue
+      }
+      lines.push(line)
+    }
+    return [{ type: 'text', text: lines.join('\n') }]
+  }
+
   // Redeliver anything the previous incarnation accepted but never finished.
   const stale = readPending()
   if (stale.length) {
     log(`redelivering ${stale.length} pending inbound message(s)`)
     for (const p of stale) {
-      try { await client.prompt(sessionId, [{ type: 'text', text: p.content }]) } catch (e) { errLog(`redelivery failed: ${e.message}`) }
+      try { await client.prompt(sessionId, await buildPromptContent(p.content)) } catch (e) { errLog(`redelivery failed: ${e.message}`) }
     }
   }
 
@@ -408,7 +487,8 @@ async function main () {
       if (!writePending([...readPending(), { content, meta: payload.meta || {}, ts: Date.now() }])) {
         return send(500, { error: 'pending persist failed' })
       }
-      client.prompt(sessionId, [{ type: 'text', text: content }])
+      buildPromptContent(content)
+        .then((parts) => client.prompt(sessionId, parts))
         .then(() => log(`inbound -> session (${content.length} chars, sender=${(payload.meta && payload.meta.sender) || '?'})`))
         .catch((e) => errLog(`prompt failed: ${e.message}`))
       send(200, { ok: true })

@@ -3306,6 +3306,14 @@ function laneVision(spawn) {
   // ship vision. Everything else -- ollama, custom, null spawn-info -- is
   // 'no' unless the model is on the known-vision list. Never 'unknown'.
   if (/^claude/.test(provider) || /^claude/.test(model) || provider === 'chatgpt') return 'yes'
+  // dsh (0.2.1): 'yes' because the LANE routes image turns itself -- it
+  // lifts [image attached:] markers into inline image parts and switches
+  // the session to the vision model for that turn (dsh-lane.mjs
+  // buildPromptContent/promptWithVision). 'no' here would fire the
+  // ollama.com caption fallback, which needs a cloud key this
+  // credential-less lane does not have. PDFs stay a known gap -- the lane
+  // rewrites their marker to an honest cannot-view note.
+  if (provider === 'dsh') return 'yes'
   if (VISION_YES_MODELS.has(base)) return 'yes'
   return 'no'
 }

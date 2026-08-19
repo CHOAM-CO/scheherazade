@@ -700,7 +700,10 @@
       // else defaults to NO (server attaches a Gemma caption) unless the
       // model is on the known-vision list. No 'unknown' state -- its marker
       // invited a Read-tool image read that poisoned non-vision transcripts.
-      if (/^claude/.test(provider) || /^claude/.test(model) || provider === 'chatgpt') {
+      if (/^claude/.test(provider) || /^claude/.test(model) || provider === 'chatgpt' || provider === 'dsh') {
+        // dsh: the lane lifts image markers into inline image parts and
+        // routes the turn to its vision model itself -- mirror of
+        // http-server.cjs laneVision, change both together.
         visionState = 'yes'
       } else {
         const VISION_YES = new Set(['kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'gemma4', 'qwen3.5', 'minimax-m3', 'mistral-large-3'])
