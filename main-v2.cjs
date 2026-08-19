@@ -117,7 +117,51 @@ function dshBin () {
   return p.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`)
 }
 
+function seedDshHome () {
+  // A fresh dsh web has NO workspace registered — the composer stays
+  // read-only behind a native directory picker. Seed the storages unit so
+  // the agent's memory dir is the workspace from first launch (measured
+  // format: ~/.dsh/storages/workspace.json, unit version 2). Also seed
+  // settings.yaml: default model row (glm text / effort max) and the
+  // welcome-notice version so the first-run dialog doesn't gate the UI.
+  const home = dshHome()
+  const storages = path.join(home, 'storages')
+  fs.mkdirSync(storages, { recursive: true })
+  const wsFile = path.join(storages, 'workspace.json')
+  if (!fs.existsSync(wsFile)) {
+    const id = require('crypto').randomUUID()
+    fs.writeFileSync(wsFile, JSON.stringify({
+      unit: { name: 'workspace', version: 2 },
+      global: { initialized: true, workspaceIds: [id], archivedSessionIds: [] },
+      tables: {
+        workspaces: {
+          [id]: {
+            path: WORKSPACE,
+            title: AGENT_NAME,
+            sessionIds: [],
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          }
+        }
+      }
+    }, null, 2))
+  }
+  const settingsFile = path.join(home, 'settings.yaml')
+  if (!fs.existsSync(settingsFile)) {
+    fs.writeFileSync(settingsFile, [
+      'ui-onboarding:',
+      '  welcomeNoticeVersion: 2026-08-13.1',
+      'agent-default-model:',
+      '  provider: ollama',
+      '  model: glm-5.2:cloud',
+      '  reasoningEffort: max',
+      ''
+    ].join('\n'))
+  }
+}
+
 function spawnDsh (patchPath) {
+  seedDshHome()
   const env = {
     ...process.env,
     ELECTRON_RUN_AS_NODE: '1',
