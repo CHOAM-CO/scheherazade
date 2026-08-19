@@ -321,7 +321,7 @@ const TOOLS = [
   {
     name: 'send_file_to_discord',
     // Name deliberately unchanged -- see the header. Nothing here is Discord.
-    description: 'Attach a local file to the chat window. Use this for files -- the reply tool is text-only.',
+    description: 'Attach a local file to the chat window (25MB max). The user sees images inline and other files as a download chip. Use this for files -- the reply tool is text-only.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -436,12 +436,42 @@ export async function handleToolCall(name, args) {
     if (typeof filePath !== 'string' || !filePath.trim()) {
       return { content: [{ type: 'text', text: 'send failed: filePath is required' }], isError: true }
     }
-    // Deliberately reported as a path, not uploaded: the chat page is served
-    // from this machine, so a path IS the file. Copying bytes through the
-    // queue would be a second storage design with nothing asking for it yet.
-    const comment = args.comment ? `${args.comment}\n` : ''
-    const n = enqueueOutbound(`${comment}[file] ${filePath}`)
-    return { content: [{ type: 'text', text: `sent (#${n})\ndelivered_channel=${LOCAL_CHANNEL_ID}` }] }
+    // 0.1.18 (Mino 2026-08-19 11:21 "에이전트가 인앱메신저로 매체 보낼 수
+    // 있어야함"): the old handler enqueued a bare "[file] <path>" text line —
+    // a path the chat page rendered as prose, not a file the user could see.
+    // Now the file is COPIED into chat_uploads (the one directory the
+    // token-gated GET /api/chat/upload/<name> serves from, by basename) and
+    // the message carries the same marker form the user->agent direction
+    // already uses, so the chat page renders an image bubble / file chip
+    // through the exact display path that already exists. Copy, not link:
+    // the source may be a temp file the agent deletes next turn.
+    let resolved
+    try {
+      resolved = path.resolve(String(filePath).trim())
+      const st = await fs.stat(resolved)
+      if (!st.isFile()) {
+        return { content: [{ type: 'text', text: `send failed: not a file: ${resolved}` }], isError: true }
+      }
+      if (st.size > 25_000_000) {
+        return { content: [{ type: 'text', text: `send failed: file is ${Math.round(st.size / 1e6)}MB — 25MB max for in-app transfer. Tell the user the path instead: ${resolved}` }], isError: true }
+      }
+      const uploadsDir = path.join(DATA_HOME, 'chat_uploads')
+      await fs.mkdir(uploadsDir, { recursive: true })
+      const base = path.basename(resolved).replace(/[^\w.ㄱ-힝-]+/g, '_').slice(-80) || 'file'
+      const dest = path.join(uploadsDir, `${Date.now()}_agent_${base}`)
+      await fs.copyFile(resolved, dest)
+      const isImage = /\.(png|jpe?g|gif|webp)$/i.test(dest)
+      const marker = isImage
+        ? `[image attached: ${dest} — sent by the agent]`
+        : `[file attached: ${dest} — sent by the agent]`
+      const comment = args.comment ? `${args.comment}\n` : ''
+      const n = enqueueOutbound(`${comment}${marker}`)
+      return { content: [{ type: 'text', text: `sent (#${n})\ndelivered_channel=${LOCAL_CHANNEL_ID}\nserved_as=${path.basename(dest)}` }] }
+    } catch (err) {
+      // Honest failure with the reason — a silent fallback to the old
+      // path-as-text form would LOOK sent while showing the user nothing.
+      return { content: [{ type: 'text', text: `send failed: ${err && err.code === 'ENOENT' ? `file not found: ${resolved || filePath}` : String(err && err.message).slice(0, 200)}` }], isError: true }
+    }
   }
   if (name === 'read_channel_history') {
     const limit = Math.max(1, Math.min(200, Number(args && args.limit) || 30))

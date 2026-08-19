@@ -185,12 +185,18 @@ function createRoutes(staticCtx) {
         // PDFs join images. kind drives the client marker -- 'text' is safe
         // for ANY lane to Read; 'image'/'pdf' are vision-gated (Read renders
         // PDF pages as images, so a non-vision lane must not open them).
-        const ext = String(filename || '').toLowerCase().match(/\.(png|jpe?g|gif|webp|pdf|txt|md|csv|tsv|json|log|xml|yaml|yml)$/)
+        // 0.1.18 (Mino "파일 주고받기"): media + archives join. kind 'file'
+        // = agent can reference/process it with shell tools but must not
+        // Read it (binary; Read renders nothing useful).
+        const ext = String(filename || '').toLowerCase().match(/\.(png|jpe?g|gif|webp|pdf|txt|md|csv|tsv|json|log|xml|yaml|yml|mp3|m4a|wav|mp4|mov|webm|zip)$/)
         if (!ext) {
-          sendJson(res, 400, { error: 'unsupported type -- images (png/jpg/gif/webp), pdf, or text files (txt/md/csv/tsv/json/log/xml/yaml)', reason: 'bad_type' })
+          sendJson(res, 400, { error: 'unsupported type -- images (png/jpg/gif/webp), pdf, text files (txt/md/csv/tsv/json/log/xml/yaml), media (mp3/m4a/wav/mp4/mov/webm), or zip', reason: 'bad_type' })
           return
         }
-        const kind = /^\.(png|jpe?g|gif|webp)$/.test(ext[0]) ? 'image' : ext[0] === '.pdf' ? 'pdf' : 'text'
+        const kind = /^\.(png|jpe?g|gif|webp)$/.test(ext[0]) ? 'image'
+          : ext[0] === '.pdf' ? 'pdf'
+          : /^\.(mp3|m4a|wav|mp4|mov|webm|zip)$/.test(ext[0]) ? 'file'
+          : 'text'
         if (typeof dataBase64 !== 'string' || !dataBase64) {
           sendJson(res, 400, { error: 'dataBase64 is required', reason: 'no_data' })
           return
@@ -258,7 +264,14 @@ function createRoutes(staticCtx) {
         const type = /\.png$/i.test(name) ? 'image/png'
           : /\.jpe?g$/i.test(name) ? 'image/jpeg'
           : /\.gif$/i.test(name) ? 'image/gif'
-          : /\.webp$/i.test(name) ? 'image/webp' : 'application/octet-stream'
+          : /\.webp$/i.test(name) ? 'image/webp'
+          : /\.pdf$/i.test(name) ? 'application/pdf'
+          : /\.mp4$/i.test(name) ? 'video/mp4'
+          : /\.webm$/i.test(name) ? 'video/webm'
+          : /\.mov$/i.test(name) ? 'video/quicktime'
+          : /\.mp3$/i.test(name) ? 'audio/mpeg'
+          : /\.m4a$/i.test(name) ? 'audio/mp4'
+          : /\.wav$/i.test(name) ? 'audio/wav' : 'application/octet-stream'
         res.writeHead(200, { 'content-type': type, 'content-length': buf.length, 'cache-control': 'private, max-age=86400' })
         res.end(buf)
         return

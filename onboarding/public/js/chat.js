@@ -140,17 +140,54 @@
   // <img src> -- every /api GET is X-Onboard-Token-gated, so a bare src
   // would 403.
   // Tolerant of every markerFor() variant (and 0.0.54's original text):
-  // path up to the first " — ", then any guidance clause.
-  const IMG_MARKER_RE = /^\[image attached: (.+?) — [^\]]*\]$/
+  // path up to the first " — ", then any guidance clause. The clause is
+  // OPTIONAL since 0.1.18 — agent-emitted markers (send_file, windowshot
+  // skill) may carry a bare path.
+  const IMG_MARKER_RE = /^\[image attached: (.+?)(?: — [^\]]*)?\]$/
+  // 0.1.18 (attachments both ways): [file attached:] / [PDF attached:]
+  // lines used to render as raw path prose; now they lift into a
+  // download-chip through the same basename-in-chat_uploads serve route the
+  // image bubbles use. Only names actually inside chat_uploads resolve —
+  // anything else renders the honest missing-note.
+  const FILE_MARKER_RE = /^\[(?:file|PDF) attached: (.+?)(?: — [^\]]*)?\]$/
   function splitImageMarkers(text) {
     const images = []
+    const files = []
     const kept = []
     for (const line of String(text || '').split('\n')) {
-      const m = line.match(IMG_MARKER_RE)
-      if (m) images.push(m[1].split(/[\\/]/).pop())
-      else kept.push(line)
+      const im = line.match(IMG_MARKER_RE)
+      if (im) { images.push(im[1].split(/[\\/]/).pop()); continue }
+      const fm = line.match(FILE_MARKER_RE)
+      if (fm) { files.push(fm[1].split(/[\\/]/).pop()); continue }
+      kept.push(line)
     }
-    return { shown: kept.join('\n'), images }
+    return { shown: kept.join('\n'), images, files }
+  }
+
+  async function appendAttachmentFile(el, name) {
+    const chip = document.createElement('button')
+    chip.type = 'button'
+    chip.className = 'chat-attach-chip'
+    // Server-minted names are ts_stem.ext (user uploads) or ts_agent_base
+    // (agent sends) — show the human tail, keep the full name for the fetch.
+    chip.textContent = `📎 ${name.replace(/^\d+_(agent_)?/, '')}`
+    chip.onclick = async () => {
+      try {
+        const res = await fetch(`/api/chat/upload/${encodeURIComponent(name)}`, {
+          headers: { 'X-Onboard-Token': window.getOnboardToken() || '' },
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const blob = await res.blob()
+        const a = document.createElement('a')
+        a.href = URL.createObjectURL(blob)
+        a.download = name.replace(/^\d+_(agent_)?/, '')
+        a.click()
+        setTimeout(() => URL.revokeObjectURL(a.href), 60_000)
+      } catch {
+        showToast(C.attachMissing(name))
+      }
+    }
+    el.appendChild(chip)
   }
 
   async function appendAttachmentImage(el, name, wantScroll) {
@@ -187,13 +224,14 @@
     const el = document.createElement('div')
     el.className = `chat-msg chat-${role}`
     el.dataset.seq = m.seq
-    const { shown, images } = splitImageMarkers(m.text)
+    const { shown, images, files } = splitImageMarkers(m.text)
     renderMarkdown(el, shown)
     // P1 v2: no role labels — identity is carried by the asymmetry itself
     // (user = right-aligned accent glass bubble, agent = flat document
     // flow), per Mino's 2026-08-05 19:40 verdict on the labeled flat look
     // ("누가 누군지 잘 안보이잖아").
     for (const name of images) appendAttachmentImage(el, name, stick || role === 'user')
+    for (const name of files) appendAttachmentFile(el, name)
     if (role === 'agent') attachReactBar(el, m.seq, shown)
     else { lastUserBubble = el; attachCopyBar(el, shown) }
     pane.appendChild(el)
@@ -621,6 +659,11 @@
     if (att.kind === 'text') {
       return `[file attached: ${att.path} — open it with the Read tool]`
     }
+    if (att.kind === 'file') {
+      // 0.1.18: media/archive — binary, so Read is useless on every lane;
+      // shell tools can still process it (ffprobe, unzip -l, checksums).
+      return `[file attached: ${att.path} — a media/archive file. Do NOT open it with the Read tool; use shell tools if the user asks you to work with it.]`
+    }
     const noun = att.kind === 'pdf' ? 'PDF' : 'image'
     if (att.caption) {
       // Vision stand-in (0.0.56): the server already had a small vision
@@ -640,7 +683,7 @@
     if (!box) return
     const chip = document.createElement('span')
     chip.className = 'chat-attach-chip'
-    chip.textContent = `${att.kind === 'text' ? '📄' : att.kind === 'pdf' ? '📕' : '🖼'} ${att.name} `
+    chip.textContent = `${att.kind === 'text' ? '📄' : att.kind === 'pdf' ? '📕' : att.kind === 'file' ? '📎' : '🖼'} ${att.name} `
     const x = document.createElement('button')
     x.type = 'button'
     x.className = 'link'
@@ -654,7 +697,7 @@
     att.chip = chip
   }
 
-  const ATTACH_NAME_RE = /\.(png|jpe?g|gif|webp|pdf|txt|md|csv|tsv|json|log|xml|yaml|yml)$/i
+  const ATTACH_NAME_RE = /\.(png|jpe?g|gif|webp|pdf|txt|md|csv|tsv|json|log|xml|yaml|yml|mp3|m4a|wav|mp4|mov|webm|zip)$/i
   async function uploadImageFile(file) {
     // Accept by MIME for images (paste has no filename) OR by extension for
     // documents -- server re-validates the extension either way.

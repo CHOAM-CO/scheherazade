@@ -649,6 +649,48 @@ console.log('\n10c. HTTP /clear: token-gated, empties the transcript, keeps seq'
   fs.rmSync(base, { recursive: true, force: true })
 }
 
+console.log('\n12. send_file_to_discord: copies into chat_uploads, marker the page can render (0.1.18)')
+// In-process is fine here: handleToolCall's copy path resolves DATA_HOME at
+// import time, so we point the assertions at THAT resolved home and clean up
+// our own artifacts. A child-process variant would re-resolve env, but the
+// contract under test (marker form, served_as receipt, honest failures) is
+// identical either way.
+{
+  const fsx = await import('node:fs')
+  const osx = await import('node:os')
+  const pathx = await import('node:path')
+  const src = pathx.join(osx.tmpdir(), `sched-sendfile-${Date.now()}.png`)
+  fsx.writeFileSync(src, Buffer.from('89504e470d0a1a0a', 'hex'))
+
+  resetQueueForTest()
+  const ok = await handleToolCall('send_file_to_discord', { filePath: src, comment: 'here' })
+  const okText = ok.content[0].text
+  assert(!ok.isError && /sent \(#\d+\)/.test(okText), 'send succeeds with a numbered receipt')
+  const served = (okText.match(/served_as=(.+)/) || [])[1]
+  assert(!!served, 'receipt names the served basename (served_as=)')
+  const q = readOutbound(0).items.filter((i) => i.kind === 'message')
+  const msg = q[q.length - 1]
+  // The marker path is the copy's ground truth (DATA_HOME resolved at the
+  // module's import, not ours) -- assert against what the page will fetch.
+  const copied = (msg.text.match(/\[image attached: (.+?) \u2014 /) || [])[1]
+  assert(copied && fsx.existsSync(copied), 'file is COPIED to the marker path')
+  assert(copied && pathx.dirname(copied).endsWith('chat_uploads') && pathx.basename(copied) === served,
+    'copy lives in chat_uploads under the served_as basename (the serve route\u2019s only root)')
+  assert(/^here\n\[image attached: .+ \u2014 sent by the agent\]$/.test(msg.text), `comment + image marker form the page lifts (got: ${msg.text.slice(0, 80)})`)
+  assert(fsx.existsSync(src), 'source file is untouched (copy, not move)')
+
+  const missing = await handleToolCall('send_file_to_discord', { filePath: '/nonexistent/nope.bin' })
+  assert(missing.isError === true && /file not found/.test(missing.content[0].text), 'missing file fails honestly, never a silent path-as-text fallback')
+
+  const noArg = await handleToolCall('send_file_to_discord', {})
+  assert(noArg.isError === true, 'missing filePath is an error')
+
+  // cleanup our artifacts only
+  try { fsx.unlinkSync(src) } catch {}
+  try { copied && fsx.unlinkSync(copied) } catch {}
+  resetQueueForTest()
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 // exitCode, not process.exit() -- see the long note at the bottom of
 // scripts/test-codex-proxy-model.mjs for the measured reason. Short version:
