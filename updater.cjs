@@ -34,8 +34,15 @@
 // check is the least important thing it does.
 'use strict'
 
-const UPDATE_OWNER = 'Mino-is-me'
-const UPDATE_REPO = 'scheherazade-releases'
+// 0.2 track (2026-08-19): points at the PRIVATE 0.2 repo, NOT the live 0.1.x
+// releases feed (Mino-is-me/scheherazade-releases). The 0.2 win build ships
+// updater mode=auto with the feed baked in from build.publish -- leaving it
+// on the 0.1.x feed cross-couples the two release lines (a future 0.1.x-feed
+// tag above 0.2.x would auto-install over a 0.2 install). The private repo
+// 404s for the unauthenticated updater, which the log-only failure posture
+// treats as offline: effectively "no self-update on the 0.2 test track".
+const UPDATE_OWNER = 'CHOAM-CO'
+const UPDATE_REPO = 'scheherazade'
 const RELEASES_PAGE = `https://github.com/${UPDATE_OWNER}/${UPDATE_REPO}/releases/latest`
 const LATEST_API = `https://api.github.com/repos/${UPDATE_OWNER}/${UPDATE_REPO}/releases/latest`
 

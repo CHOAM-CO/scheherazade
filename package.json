@@ -174,8 +174,8 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "Mino-is-me",
-        "repo": "scheherazade-releases"
+        "owner": "CHOAM-CO",
+        "repo": "scheherazade"
       }
     ]
   },
