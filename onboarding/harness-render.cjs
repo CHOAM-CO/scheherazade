@@ -760,7 +760,9 @@ function createHarnessRender(ctx) {
     // they stop costing every boot. Same harness semantics as CLAUDE.md
     // (always re-rendered, never the agent's own history).
     fs.mkdirSync(path.join(DATA_HOME, 'procedures'), { recursive: true })
-    for (const proc of ['journal-compression.md', 'persona-reflux.md', 'madoromi.md', 'memory-consolidation.md']) {
+    // delegation.md + machine.md joined 2026-08-19 (diet round 2): §11 brief-
+    // craft rules and §14 runtime-fact bodies moved out of every-boot text.
+    for (const proc of ['journal-compression.md', 'persona-reflux.md', 'madoromi.md', 'memory-consolidation.md', 'delegation.md', 'machine.md']) {
       renderHarness(path.join('procedures', proc), path.join('procedures', proc))
     }
     // Attach-topology bootstrap (0.1.0 prep): harness-rendered so RUN_SH/MEM
