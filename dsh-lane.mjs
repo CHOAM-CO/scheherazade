@@ -197,6 +197,20 @@ function buildPatch () {
     `            reasoningEfforts:`,
     efforts
   ].join('\n')
+  // Retry policy: dsh's default retryableCodes INCLUDE EMPTY_RESPONSE, but a
+  // channel agent's final assistant message after its reply tool call is
+  // NORMALLY empty -- the reply already went out through the tool. With the
+  // default policy every silent turn end burned maxRetries (2) extra
+  // full-context completions re-asking the model to say nothing (measured on
+  // the 0.2.3 mac E2E: turns 2 and 3 each surfaced EMPTY_RESPONSE after the
+  // reply had already been delivered). Same list as the default minus
+  // EMPTY_RESPONSE; genuine transients (RATE_LIMIT/SERVER/TIMEOUT/TRANSPORT)
+  // keep their retries.
+  const retryPolicyBlock = [
+    '        retryPolicy:',
+    '          mode: normal',
+    '          retryableCodes: [RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT]'
+  ]
   let providerBlock
   if (DSH_ROUTE === 'anthropic-catalog') {
     // Catalog route: pi-ai ships the full anthropic model list (ids,
@@ -205,7 +219,8 @@ function buildPatch () {
     // pi-ai's native OAuth mode -- see the route contract comment above.
     providerBlock = [
       '      anthropic:',
-      `        apiKeyEnv: ${DSH_ROUTE_KEY_ENV}`
+      `        apiKeyEnv: ${DSH_ROUTE_KEY_ENV}`,
+      ...retryPolicyBlock
     ].join('\n')
   } else {
     // Hand-declared route: everything explicit. The main model row plus,
@@ -220,6 +235,7 @@ function buildPatch () {
       `        apiKeyEnv: ${DSH_ROUTE_KEY_ENV}`,
       `        api: ${DSH_ROUTE_API}`,
       `        baseURL: ${yamlQuote(DSH_ROUTE_BASE_URL)}`,
+      ...retryPolicyBlock,
       '        models:',
       ...rows
     ].join('\n')
@@ -451,7 +467,18 @@ async function main () {
         sawTextThisTurn = false
         const now = Date.now()
         writePending(readPending().filter((p) => p.ts > now))
-        log(`turn end (${(event.data && event.data.reason && event.data.reason.kind) || '?'})`)
+        {
+          const reason = (event.data && event.data.reason) || {}
+          const code = reason.error && reason.error.code
+          // EMPTY_RESPONSE on a turn that already delivered its reply is the
+          // NORMAL silent finish of a channel agent, not a failure -- logging
+          // it as 'error' made every healthy claude-route turn read as broken
+          // in the Logs pane (0.2.3 mac E2E). Genuine errors keep the label.
+          const label = reason.kind === 'error' && code === 'EMPTY_RESPONSE'
+            ? 'completed; silent final'
+            : (reason.kind || '?') + (reason.kind === 'error' && code ? `: ${code}` : '')
+          log(`turn end (${label})`)
+        }
       } else if (event.type === 'assistant/chunk') {
         const c = event.data && event.data.chunk
         if (c && c.type === 'reasoning-delta') {
