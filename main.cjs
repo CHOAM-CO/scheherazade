@@ -1038,8 +1038,14 @@ async function spawnRealAgentChildLocked() {
     return attachStartFromSession(config)
   }
 
+  // 0.2.2 full harness swap: the agent engine is the bundled dsh lane --
+  // Claude Code is NOT required to spawn. resolveClaudeBin is best-effort
+  // now: its result rides only into CLAUDE_BIN for the legacy
+  // LANE_KIND=headless escape hatch, and its absence must not block a
+  // launch that will never exec it. The cli_missing gate below fires only
+  // when that escape hatch is actually selected.
   const resolved = resolveClaudeBin()
-  if (!resolved) {
+  if (!resolved && String(config.LANE_KIND || '') === 'headless') {
     const need = ensureClaudeCli()
     // Two different sentences, because two different things are true. Telling
     // someone who just ran `npm i -g @anthropic-ai/claude-code` that it is not
@@ -1260,8 +1266,8 @@ async function spawnRealAgentChildLocked() {
   const model = config.MODEL || 'claude-opus-4-6' // same default as run.sh's own MODEL fallback
 
   log(
-    `spawning real agent via internal launcher: launcher=${RUN_SH_PATH} bin=${resolved.bin} ` +
-      `(${resolved.source}) model=${model} name=${agentName} dataHome=${DATA_HOME}`
+    `spawning real agent via internal launcher: launcher=${RUN_SH_PATH} bin=${resolved ? `${resolved.bin} (${resolved.source})` : 'none (dsh lane; Claude Code not required)'} ` +
+      `model=${model} name=${agentName} dataHome=${DATA_HOME}`
   )
 
   // BOT-TOKEN SEAM: decrypted here, at the moment of spawn, and injected
@@ -1291,7 +1297,9 @@ async function spawnRealAgentChildLocked() {
     // default applies. The stop-path spawns deliberately don't carry this
     // (run.sh stop never reads it).
     ...(config.EFFORT_LEVEL ? { EFFORT_LEVEL: config.EFFORT_LEVEL } : {}),
-    CLAUDE_BIN: resolved.bin,
+    // 0.2.2: best-effort -- absent Claude Code is fine, the dsh lane never
+    // execs it (see the softened cli_missing gate above).
+    CLAUDE_BIN: resolved ? resolved.bin : (config.CLAUDE_BIN || 'claude'),
     AGENT_DATA_HOME: DATA_HOME, // see run.sh's own comment: MEM = AGENT_DATA_HOME override
     // 4-provider-mode wiring (2026-07-04): spread LAST so buildProviderEnv()'s
     // fields (provider-env.cjs, computed above as providerEnvResult.env)

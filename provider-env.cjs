@@ -540,41 +540,106 @@ function snip(value, limit = 80) {
 // own login) would have shipped with every assertion still green. It lands
 // with the wiring that consumes it, and its test asserts on a built env. See
 // the claude-cli row for what that wiring will have to preserve.
+// ── dsh route helpers (0.2.2 full harness swap) ─────────────────────────
+// Every row now emits LANE_KIND=dsh plus a route description the lane's
+// buildPatch consumes (dsh-lane.mjs "route contract v2"). The CLI-era
+// auth fields are still explicitly cleared on every row -- process.env
+// spreading has not changed, only what the child does with it.
+function dshCommonEnv(config) {
+  return {
+    LANE_KIND: 'dsh',
+    // EFFORT_LEVEL (low/medium/high/max) passes through; the lane's
+    // selectModel is fail-soft on a level the route's model doesn't offer.
+    DSH_EFFORT: (config.EFFORT_LEVEL && String(config.EFFORT_LEVEL).trim()) || 'high',
+    ANTHROPIC_BASE_URL: undefined, // CLI-era fields: cleared on every dsh route
+    ANTHROPIC_API_KEY: undefined, // anthropicRouteEnv re-sets this AFTER the spread; every other route must not leak a stale key
+    ANTHROPIC_AUTH_TOKEN: undefined,
+    CLAUDE_CODE_OAUTH_TOKEN: undefined,
+    CLAUDE_CONFIG_DIR: undefined,
+    SKIP_MODEL_GUARD: '1', // no claude CLI argv to guard anymore
+  }
+}
+// Shared by claude / claude-subscription / claude-cli: the pi-ai anthropic
+// CATALOG route. `key` may be a real API key or an sk-ant-oat OAuth token
+// -- pi-ai branches on the prefix itself.
+function anthropicRouteEnv(key, config) {
+  const model = requiredModel(config) || 'claude-opus-4-6'
+  return {
+    ...dshCommonEnv(config),
+    DSH_ROUTE: 'anthropic-catalog',
+    DSH_PROVIDER: 'anthropic',
+    DSH_ROUTE_KEY_ENV: 'ANTHROPIC_API_KEY',
+    ANTHROPIC_API_KEY: key,
+    DSH_MODEL: model,
+    DSH_MODEL_VISION: '1', // claude models are vision-capable; markers attach inline
+    MODEL: model, // spawn-info/laneVision truth
+  }
+}
+// claude-cli (0.2.2): with the Claude Code binary gone, "reuse the login
+// you already have" can no longer mean "inject nothing and let the CLI
+// read its own store" -- SOMEONE has to read the token, and now it is us.
+// This is a deliberate promise change, named in the row comment below.
+// macOS: the CLI stores under Keychain item "Claude Code-credentials"
+// (un-namespaced slot -- CLAUDE_CONFIG_DIR namespacing note in the old row
+// comment, git history); elsewhere ~/.claude/.credentials.json. Returns
+// { token } or { error: reason }.
+function readClaudeCliToken() {
+  const fsMod = require('node:fs')
+  const pathMod = require('node:path')
+  const osMod = require('node:os')
+  let raw = null
+  const fileP = pathMod.join(osMod.homedir(), '.claude', '.credentials.json')
+  try { raw = fsMod.readFileSync(fileP, 'utf8') } catch {}
+  if (raw == null && process.platform === 'darwin') {
+    try {
+      const { execFileSync } = require('node:child_process')
+      raw = execFileSync('security', ['find-generic-password', '-s', 'Claude Code-credentials', '-w'], { encoding: 'utf8', timeout: 5000 })
+    } catch {}
+  }
+  if (raw == null) return { error: 'no Claude Code CLI login found (no ~/.claude/.credentials.json and no keychain item)' }
+  let parsed
+  try { parsed = JSON.parse(raw) } catch { return { error: 'the Claude Code CLI credential store could not be parsed' } }
+  const oauth = parsed && (parsed.claudeAiOauth || parsed)
+  const token = oauth && oauth.accessToken
+  if (!token || typeof token !== 'string') return { error: 'the Claude Code CLI credential store holds no access token' }
+  const expiresAt = Number(oauth.expiresAt)
+  // 5-minute headroom: a token that dies mid-first-turn is worse than an
+  // honest not_ready. No refresh here (writing into the CLI's store is not
+  // ours to do) -- running `claude` once refreshes it in place.
+  if (Number.isFinite(expiresAt) && expiresAt < Date.now() + 5 * 60 * 1000) {
+    return { error: 'the Claude Code CLI login token is expired (or about to expire)' }
+  }
+  return { token }
+}
+
 const PROVIDER_ROWS = [
   {
-    // BYOK -- PRESERVED EXACTLY as main.cjs's original (pre-4-provider)
-    // 'claude' branch behaved, plus the explicit-clear hardening described
-    // in this file's header comment.
+    // BYOK (0.2.2 harness swap, Mino 08-19 "클로드코드 아예 의존성째로
+    // 날려버려"): the key now feeds the dsh lane's anthropic CATALOG route
+    // (pi-ai ships the model list + anthropic-messages protocol) instead of
+    // the Claude Code CLI. Credential handling unchanged.
     id: 'claude',
     credential: 'required',
     keyName: 'claude',
     notReady: 'onboarding says PROVIDER=claude but no validated key is on file yet',
     notReadyFix: 'Open Settings > Model, choose the Anthropic API key mode, and paste your key. It is checked against the API before it is stored, so a bad key is rejected there rather than here.',
-    env: ({ key }) => ({
-      ANTHROPIC_API_KEY: key,
-      ANTHROPIC_BASE_URL: undefined, // clear any stale base_url from a prior chatgpt/ollama session
-      ANTHROPIC_AUTH_TOKEN: undefined, // 4th auth-shaped field since the ollama Bearer swap (2026-08-04): a stale Bearer would out-rank this row's key
-      CLAUDE_CODE_OAUTH_TOKEN: undefined, // clear any stale subscription token
-      CLAUDE_CONFIG_DIR: undefined, // see the claude-cli row: cleared on EVERY row so one inherited value cannot relocate ~/.claude.json under the harness seeding
-    }),
+    env: ({ key, config }) => anthropicRouteEnv(key, config),
   },
   {
-    // Claude Code CLI's own `claude setup-token` long-lived OAuth token,
-    // captured at onboarding (paste field, see http-server.cjs) and stored
-    // via the SAME safeStorage plumbing as a BYOK key (keyed under the
-    // pseudo-provider name 'claude-subscription' in CREDENTIALS_DIR).
+    // `claude setup-token` long-lived OAuth token (sk-ant-oat), captured at
+    // onboarding and stored via the same safeStorage plumbing as BYOK.
+    // 0.2.2: rides the SAME anthropic catalog route -- pi-ai detects the
+    // oat prefix and flips its native OAuth mode (Bearer + oauth beta
+    // headers + Claude Code identity system block + Claude Code tool-name
+    // normalization; raw-API 200 measured 2026-08-19, and the identity
+    // block requirement measured with it: without the block the API
+    // refuses).
     id: 'claude-subscription',
     credential: 'required',
     keyName: 'claude-subscription',
     notReady: 'onboarding says PROVIDER=claude-subscription but no OAuth token is on file yet',
     notReadyFix: 'Run `claude setup-token` in a terminal, copy the token it prints, and paste it into Settings > Model.',
-    env: ({ key }) => ({
-      CLAUDE_CODE_OAUTH_TOKEN: key,
-      ANTHROPIC_API_KEY: undefined, // do NOT inject an API key alongside the OAuth token (LOCKED design, mode 1)
-      ANTHROPIC_BASE_URL: undefined, // clear any stale base_url from a prior chatgpt/ollama session
-      ANTHROPIC_AUTH_TOKEN: undefined, // a stale Bearer (ollama key-mode) would out-rank the OAuth token -- same clear-on-every-row rule as the other auth fields
-      CLAUDE_CONFIG_DIR: undefined, // see the claude-cli row: cleared on EVERY row so one inherited value cannot relocate ~/.claude.json under the harness seeding
-    }),
+    env: ({ key, config }) => anthropicRouteEnv(key, config),
   },
   {
     // Reuse the Claude Code CLI login the user ALREADY has on this machine,
@@ -621,32 +686,33 @@ const PROVIDER_ROWS = [
     // file: detection is existence-only (http-server.cjs), because reading a
     // user's OAuth token to check it is exactly the thing this mode promises
     // not to do.
+    // PROMISE CHANGE (0.2.2, logged): the pre-swap mode injected NOTHING
+    // and let the Claude Code CLI read its own store -- "we store nothing,
+    // we copy nothing, we READ nothing". With the CLI gone from the spawn
+    // path, the only way to keep this mode alive (Mino 08-19 "빼지말고
+    // 되게 해봐") is to read the login's access token ourselves at spawn
+    // and hand it to the dsh anthropic route (pi-ai OAuth mode). Still
+    // never stored, never copied to disk, read fresh per spawn -- but it
+    // IS now read. Expired token -> honest not_ready (no refresh: writing
+    // into the CLI's credential store is not ours to do; running `claude`
+    // once refreshes it in place). Cost disclosure in the UI stays
+    // mandatory: this spends the user's own subscription quota.
     id: 'claude-cli',
     credential: 'none',
-    env: () => ({
-      ANTHROPIC_API_KEY: undefined,
-      ANTHROPIC_BASE_URL: undefined,
-      ANTHROPIC_AUTH_TOKEN: undefined, // 4th auth-shaped field (ollama Bearer swap 2026-08-04) -- a stale Bearer would hijack the CLI away from the OAuth session this mode exists to reuse
-      CLAUDE_CODE_OAUTH_TOKEN: undefined,
-      // Cleared for the same reason as the three above, against a different
-      // leak: main.cjs spreads ...process.env into the child, so a
-      // CLAUDE_CONFIG_DIR exported in the launching environment would send
-      // the spawned CLI to a DIFFERENT credential slot than the one this app
-      // checked to decide the mode was available at all. That check is
-      // hardcoded -- http-server.cjs's CLAUDE_CLI_CREDENTIALS_PATH is
-      // `~/.claude/.credentials.json` via os.homedir(), and it does not
-      // follow CLAUDE_CONFIG_DIR (see its computeAvailableProviders gate). So
-      // detection and spawn could read different dirs, and this mode's whole
-      // promise is "we reuse the login you already have" -- the one that was
-      // found. Clearing it makes the spawn look where the probe looked.
-      //
-      // This was left inherited through two earlier rounds on the theory that
-      // a user who exports CLAUDE_CONFIG_DIR and logs in under it would want
-      // it honoured. That user does not reach this code: with no
-      // ~/.claude/.credentials.json, claude-cli is never offered to them.
-      // The only reachable case was the inconsistent one.
-      CLAUDE_CONFIG_DIR: undefined,
-    }),
+    pre: (config, deps) => {
+      const r = (deps && deps.readClaudeCliToken ? deps.readClaudeCliToken : readClaudeCliToken)()
+      if (r.error) {
+        return {
+          error: {
+            kind: 'not_ready',
+            reason: `onboarding says PROVIDER=claude-cli but ${r.error}`,
+            fix: 'Open a terminal and run `claude` once (it refreshes the login), or switch Settings > Model to the setup-token mode.',
+          },
+        }
+      }
+      return { values: { token: r.token } }
+    },
+    env: ({ values, config }) => anthropicRouteEnv(values.token, config),
   },
   {
     // Local codex-as-api proxy. No user secret required -- see this file's
@@ -667,13 +733,25 @@ const PROVIDER_ROWS = [
       }
       return { values: { port: portResult.port } }
     },
-    env: ({ values }) => ({
-      ANTHROPIC_BASE_URL: `http://localhost:${values.port}`,
-      ANTHROPIC_API_KEY: CHATGPT_PLACEHOLDER_KEY,
-      ANTHROPIC_AUTH_TOKEN: undefined, // 4th auth-shaped field (ollama Bearer swap 2026-08-04) -- cleared on every row
-      CLAUDE_CODE_OAUTH_TOKEN: undefined, // force api-key auth precedence -- see sirin ground-truth comment
-      CLAUDE_CONFIG_DIR: undefined, // see the claude-cli row: cleared on EVERY row (harness-render seeds ~/.claude.json for all modes)
-    }),
+    env: ({ values, config }) => {
+      // 0.2.2: codex-as-api speaks the anthropic-messages protocol (it was
+      // consumed via ANTHROPIC_BASE_URL pre-swap), so it becomes a
+      // hand-declared anthropic-messages route in the dsh lane. The proxy
+      // ignores auth; the placeholder satisfies pi-ai's key requirement.
+      const model = requiredModel(config) || 'gpt-5.6-sol'
+      return {
+        ...dshCommonEnv(config),
+        DSH_ROUTE: 'declared',
+        DSH_PROVIDER: 'codex',
+        DSH_ROUTE_API: 'anthropic-messages',
+        DSH_ROUTE_BASE_URL: `http://localhost:${values.port}`,
+        DSH_ROUTE_KEY_ENV: 'CODEX_PROXY_KEY',
+        CODEX_PROXY_KEY: CHATGPT_PLACEHOLDER_KEY,
+        DSH_MODEL: model,
+        DSH_MODEL_VISION: '1', // parity with the pre-swap lane's vision 'yes'
+        MODEL: model,
+      }
+    },
   },
   {
     // Ollama CLOUD via API key (2026-08-04, Mino "ollama -> API키" -- see
@@ -704,21 +782,23 @@ const PROVIDER_ROWS = [
       // working -- see normalizeOllamaCloudModel's own comment.
       return { values: { model: normalizeOllamaCloudModel(model) } }
     },
-    env: ({ key, values }) => ({
-      ANTHROPIC_BASE_URL: OLLAMA_CLOUD_BASE_URL,
-      // Bearer, NOT x-api-key (field receipt 2026-08-04 18:14, Mino's
-      // machine): ANTHROPIC_API_KEY made the CLI send x-api-key, and
-      // ollama.com answered "Failed to authenticate. API Error: 401
-      // Unauthorized" on a key that validate had ACCEPTED minutes earlier
-      // -- validate sent both header forms, so it couldn't discriminate.
-      // ollama.com honors only `authorization: Bearer` (its docs' form);
-      // ANTHROPIC_AUTH_TOKEN is the CLI's documented Bearer-header env.
-      ANTHROPIC_AUTH_TOKEN: key,
-      ANTHROPIC_API_KEY: undefined, // never alongside AUTH_TOKEN -- a stale Anthropic key riding as x-api-key must not shadow the Bearer auth
-      MODEL: values.model,
-      SKIP_MODEL_GUARD: '1', // matches run-agent.sh:205's shape; NOTE run.sh has no such guard today -- see task report gaps
-      CLAUDE_CODE_OAUTH_TOKEN: undefined, // force api-key auth precedence -- see sirin ground-truth comment
-      CLAUDE_CONFIG_DIR: undefined, // see the claude-cli row: cleared on EVERY row (harness-render seeds ~/.claude.json for all modes)
+    env: ({ key, values, config }) => ({
+      // 0.2.2: ollama.com cloud via its OpenAI-compatible surface
+      // (https://ollama.com/v1) as a hand-declared openai-completions
+      // route. The Bearer-only auth requirement (field receipt 2026-08-04:
+      // x-api-key = 401, only `authorization: Bearer` works) is satisfied
+      // structurally -- the openai protocol sends its key as Bearer.
+      // ⚠ ollama.com/v1 openai surface: protocol-inferred, not yet
+      // field-verified with a live key (no ollama.com key on the dev box).
+      ...dshCommonEnv(config),
+      DSH_ROUTE: 'declared',
+      DSH_PROVIDER: 'ollama-cloud',
+      DSH_ROUTE_API: 'openai-completions',
+      DSH_ROUTE_BASE_URL: `${OLLAMA_CLOUD_BASE_URL}/v1`,
+      DSH_ROUTE_KEY_ENV: 'OLLAMA_CLOUD_KEY',
+      OLLAMA_CLOUD_KEY: key,
+      DSH_MODEL: values.model,
+      MODEL: values.model, // laneVision: model-based (glm -> 'no' -> app caption fallback)
     }),
   },
   {
@@ -784,14 +864,22 @@ const PROVIDER_ROWS = [
       }
       return { values: { url: urlResult.url, model } }
     },
-    env: ({ key, values }) => ({
-      ANTHROPIC_BASE_URL: values.url,
-      ANTHROPIC_API_KEY: key || CUSTOM_PLACEHOLDER_KEY,
-      ANTHROPIC_AUTH_TOKEN: undefined, // 4th auth-shaped field (ollama Bearer swap 2026-08-04) -- cleared on every row
+    env: ({ key, values, config }) => ({
+      // 0.2.2: hand-declared route. Pre-swap this base URL was consumed as
+      // ANTHROPIC_BASE_URL (anthropic-messages protocol); the settings-page
+      // presets are anthropic-compatible proxies, so the declared route
+      // keeps that protocol. A genuinely OpenAI-only proxy needs the api
+      // field made configurable -- CUSTOM_ROUTE_API config knob, honored
+      // here, defaulting to anthropic-messages for preset parity.
+      ...dshCommonEnv(config),
+      DSH_ROUTE: 'declared',
+      DSH_PROVIDER: 'custom',
+      DSH_ROUTE_API: (config.CUSTOM_ROUTE_API === 'openai-completions') ? 'openai-completions' : 'anthropic-messages',
+      DSH_ROUTE_BASE_URL: values.url,
+      DSH_ROUTE_KEY_ENV: 'CUSTOM_PROXY_KEY',
+      CUSTOM_PROXY_KEY: key || CUSTOM_PLACEHOLDER_KEY,
+      DSH_MODEL: values.model,
       MODEL: values.model,
-      SKIP_MODEL_GUARD: '1', // same reasoning as 'ollama' above -- not an Anthropic model id
-      CLAUDE_CODE_OAUTH_TOKEN: undefined, // force api-key auth precedence -- see sirin ground-truth comment
-      CLAUDE_CONFIG_DIR: undefined, // see the claude-cli row: cleared on EVERY row (harness-render seeds ~/.claude.json for all modes)
     }),
   },
   {
@@ -828,19 +916,18 @@ const PROVIDER_ROWS = [
       const model = (config.DSH_MODEL && String(config.DSH_MODEL).trim())
         || (DSH_LANE_MODELS.includes(configured) ? configured : 'glm-5.2:cloud')
       return {
-        LANE_KIND: 'dsh',
+        ...dshCommonEnv(config),
+        DSH_ROUTE: 'declared',
         DSH_PROVIDER: 'ollama',
-        DSH_MODEL: model,
-        DSH_EFFORT: (config.DSH_EFFORT && String(config.DSH_EFFORT).trim()) || 'max',
-        OLLAMA_BASE_URL: (config.OLLAMA_BASE_URL && String(config.OLLAMA_BASE_URL).trim()) || 'http://localhost:11434/v1',
+        DSH_ROUTE_API: 'openai-completions',
+        DSH_ROUTE_BASE_URL: (config.OLLAMA_BASE_URL && String(config.OLLAMA_BASE_URL).trim()) || 'http://localhost:11434/v1',
+        DSH_ROUTE_KEY_ENV: 'OLLAMA_API_KEY',
         OLLAMA_API_KEY: 'ollama-local', // dummy -- see row comment
+        DSH_MODEL: model,
+        DSH_EFFORT: (config.DSH_EFFORT && String(config.DSH_EFFORT).trim()) || 'max', // this route's own default beats the shared EFFORT_LEVEL mapping
+        DSH_VISION_SIDECAR: model === 'qwen3.5:cloud' ? '' : 'qwen3.5:cloud',
         MODEL: model, // laneVision/spawn-info truth, not a harness arg
-        SKIP_MODEL_GUARD: '1', // not an Anthropic model id
-        ANTHROPIC_BASE_URL: undefined, // dsh lane never talks Anthropic wire -- clear all 4 auth-shaped fields like every row
-        ANTHROPIC_API_KEY: undefined,
-        ANTHROPIC_AUTH_TOKEN: undefined,
-        CLAUDE_CODE_OAUTH_TOKEN: undefined,
-        CLAUDE_CONFIG_DIR: undefined,
+        ANTHROPIC_API_KEY: undefined, // this route never talks Anthropic wire
       }
     },
   },
@@ -907,7 +994,10 @@ function buildProviderEnv(provider, config, deps) {
   // other row has one or the other, so this order reproduces all six.
   let values = {}
   if (row.pre) {
-    const result = row.pre(config)
+    // deps rides into pre() too (0.2.2): claude-cli's login extraction is
+    // injectable (deps.readClaudeCliToken) so tests do not depend on the
+    // dev machine's real CLI login. Rows that don't need deps ignore it.
+    const result = row.pre(config, deps)
     if (result.error) return { error: result.error }
     values = result.values || {}
   }

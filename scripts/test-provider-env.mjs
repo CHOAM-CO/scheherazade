@@ -109,13 +109,23 @@ function fakeReadProviderKey(store) {
   const store = { claude: 'sk-ant-should-not-be-used', 'claude-subscription': 'token-should-not-be-used' }
   let readCalls = 0
   const spyRead = (p) => { readCalls++; return store[p] }
-  const result = buildProviderEnv('claude-cli', { MODEL: 'opus' }, { readProviderKey: spyRead })
-  assert(!result.error, 'claude-cli: never errors (no credential to be missing)')
-  assert(readCalls === 0, 'claude-cli: readProviderKey is NEVER called (the promise is that we do not read the user credential)')
-  assert(result.env.ANTHROPIC_API_KEY === undefined && 'ANTHROPIC_API_KEY' in result.env, 'claude-cli: ANTHROPIC_API_KEY actively cleared (a stale key would out-rank the OAuth session)')
-  assert(result.env.CLAUDE_CODE_OAUTH_TOKEN === undefined && 'CLAUDE_CODE_OAUTH_TOKEN' in result.env, 'claude-cli: CLAUDE_CODE_OAUTH_TOKEN actively cleared')
-  assert(result.env.ANTHROPIC_BASE_URL === undefined && 'ANTHROPIC_BASE_URL' in result.env, 'claude-cli: ANTHROPIC_BASE_URL actively cleared (else a stale ollama/codex base-url would hijack the session)')
-  assert(Object.values(result.env).every((v) => v === undefined), 'claude-cli: injects NOTHING -- the empty env IS the mechanism')
+  // 0.2.2 harness swap: the mode now reads the CLI login's access token
+  // itself (injectable extractor -- the test must not depend on the dev
+  // machine's real login) and hands it to the dsh anthropic route.
+  const result = buildProviderEnv('claude-cli', { MODEL: 'claude-opus-5' }, { readProviderKey: spyRead, readClaudeCliToken: () => ({ token: 'sk-ant-oat01-cli-fake' }) })
+  assert(!result.error, 'claude-cli: no error when the CLI login is readable')
+  assert(readCalls === 0, 'claude-cli: readProviderKey is NEVER called (no app-stored credential in this mode)')
+  assert(result.env.LANE_KIND === 'dsh', 'claude-cli: spawns the dsh lane')
+  assert(result.env.DSH_ROUTE === 'anthropic-catalog' && result.env.DSH_PROVIDER === 'anthropic', 'claude-cli: anthropic catalog route')
+  assert(result.env.ANTHROPIC_API_KEY === 'sk-ant-oat01-cli-fake', 'claude-cli: the extracted oat token rides the route key env (pi-ai detects the prefix and flips OAuth mode)')
+  assert(result.env.CLAUDE_CODE_OAUTH_TOKEN === undefined && 'CLAUDE_CODE_OAUTH_TOKEN' in result.env, 'claude-cli: CLI-era OAuth field actively cleared')
+  assert(result.env.ANTHROPIC_BASE_URL === undefined && 'ANTHROPIC_BASE_URL' in result.env, 'claude-cli: ANTHROPIC_BASE_URL actively cleared (else a stale base-url would hijack the route)')
+}
+{
+  // No login / expired login -> honest not_ready, never a spawn that dies
+  // mid-first-turn.
+  const result = buildProviderEnv('claude-cli', {}, { readProviderKey: () => null, readClaudeCliToken: () => ({ error: 'no Claude Code CLI login found' }) })
+  assert(result.error && result.error.kind === 'not_ready', 'claude-cli: unreadable/expired CLI login -> not_ready')
 }
 {
   // A stored credential is NOT required for this mode to be completable.
@@ -133,8 +143,11 @@ function fakeReadProviderKey(store) {
   const store = { 'claude-subscription': 'oauth-token-fake-0002' }
   const result = buildProviderEnv('claude-subscription', {}, { readProviderKey: fakeReadProviderKey(store) })
   assert(!result.error, 'claude-subscription: no error when a token is on file')
-  assert(result.env.CLAUDE_CODE_OAUTH_TOKEN === 'oauth-token-fake-0002', 'claude-subscription: CLAUDE_CODE_OAUTH_TOKEN == stored token')
-  assert(result.env.ANTHROPIC_API_KEY === undefined && 'ANTHROPIC_API_KEY' in result.env, 'claude-subscription: ANTHROPIC_API_KEY explicitly cleared (LOCKED design: do NOT inject alongside OAuth token)')
+  // 0.2.2: the stored token rides the dsh anthropic route's key env --
+  // pi-ai's oat-prefix detection does the OAuth work the CLI used to do.
+  assert(result.env.ANTHROPIC_API_KEY === 'oauth-token-fake-0002', 'claude-subscription: stored token rides the route key env')
+  assert(result.env.LANE_KIND === 'dsh' && result.env.DSH_ROUTE === 'anthropic-catalog', 'claude-subscription: dsh anthropic catalog route')
+  assert(result.env.CLAUDE_CODE_OAUTH_TOKEN === undefined && 'CLAUDE_CODE_OAUTH_TOKEN' in result.env, 'claude-subscription: CLI-era OAuth field actively cleared')
   assert(result.env.ANTHROPIC_BASE_URL === undefined && 'ANTHROPIC_BASE_URL' in result.env, 'claude-subscription: ANTHROPIC_BASE_URL explicitly cleared (no base_url override)')
 }
 {
@@ -159,20 +172,25 @@ function fakeReadProviderKey(store) {
   }
   const result = buildProviderEnv('chatgpt', {}, { readProviderKey: angryReadProviderKey })
   assert(!result.error, 'chatgpt: no error with no config at all (no secret required)')
-  assert(result.env.ANTHROPIC_BASE_URL === `http://localhost:${CHATGPT_PROXY_DEFAULT_PORT}`, `chatgpt: ANTHROPIC_BASE_URL defaults to :${CHATGPT_PROXY_DEFAULT_PORT}`)
-  assert(result.env.ANTHROPIC_API_KEY === CHATGPT_PLACEHOLDER_KEY, 'chatgpt: ANTHROPIC_API_KEY == clearly-labeled placeholder (see task report: deliberate divergence from skia\'s bare run-agent.sh shape)')
+  // 0.2.2: codex-as-api becomes a hand-declared anthropic-messages route
+  // in the dsh lane; the proxy URL moves from ANTHROPIC_BASE_URL to
+  // DSH_ROUTE_BASE_URL and the placeholder key to the route's own env.
+  assert(result.env.DSH_ROUTE_BASE_URL === `http://localhost:${CHATGPT_PROXY_DEFAULT_PORT}`, `chatgpt: route base URL defaults to :${CHATGPT_PROXY_DEFAULT_PORT}`)
+  assert(result.env.DSH_ROUTE === 'declared' && result.env.DSH_ROUTE_API === 'anthropic-messages', 'chatgpt: declared anthropic-messages route (the proxy speaks that protocol)')
+  assert(result.env.CODEX_PROXY_KEY === CHATGPT_PLACEHOLDER_KEY && result.env.DSH_ROUTE_KEY_ENV === 'CODEX_PROXY_KEY', 'chatgpt: clearly-labeled placeholder rides the route key env')
+  assert(result.env.ANTHROPIC_BASE_URL === undefined && 'ANTHROPIC_BASE_URL' in result.env, 'chatgpt: CLI-era ANTHROPIC_BASE_URL actively cleared')
   assert(result.env.CLAUDE_CODE_OAUTH_TOKEN === undefined && 'CLAUDE_CODE_OAUTH_TOKEN' in result.env, 'chatgpt: CLAUDE_CODE_OAUTH_TOKEN explicitly cleared (force api-key auth precedence)')
 }
 {
   const result = buildProviderEnv('chatgpt', { CHATGPT_PROXY_PORT: '19999' }, { readProviderKey: () => null })
-  assert(result.env.ANTHROPIC_BASE_URL === 'http://localhost:19999', 'chatgpt: custom CHATGPT_PROXY_PORT from config is honored')
+  assert(result.env.DSH_ROUTE_BASE_URL === 'http://localhost:19999', 'chatgpt: custom CHATGPT_PROXY_PORT from config is honored')
 }
 {
   // whitespace-only port config falls back to the default rather than
   // producing "http://localhost:" (a real, if unlikely, config-hygiene bug
   // class -- worth a direct assertion).
   const result = buildProviderEnv('chatgpt', { CHATGPT_PROXY_PORT: '   ' }, { readProviderKey: () => null })
-  assert(result.env.ANTHROPIC_BASE_URL === `http://localhost:${CHATGPT_PROXY_DEFAULT_PORT}`, 'chatgpt: whitespace-only CHATGPT_PROXY_PORT falls back to default, not "http://localhost:"')
+  assert(result.env.DSH_ROUTE_BASE_URL === `http://localhost:${CHATGPT_PROXY_DEFAULT_PORT}`, 'chatgpt: whitespace-only CHATGPT_PROXY_PORT falls back to default, not "http://localhost:"')
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -189,8 +207,13 @@ function fakeReadProviderKey(store) {
   // built for, and the ledger is model-agnostic anyway.
   const result = buildProviderEnv('ollama', { MODEL: 'glm-5.2:cloud' }, { readProviderKey: fakeReadProviderKey({ ollama: 'ol-key' }) })
   assert(!result.error, 'ollama: no error with a model + stored key configured')
-  assert(result.env.ANTHROPIC_BASE_URL === OLLAMA_CLOUD_BASE_URL, `ollama: ANTHROPIC_BASE_URL == ${OLLAMA_CLOUD_BASE_URL} (ollama.com speaks the Anthropic Messages API -- receipt in provider-env.cjs)`)
-  assert(result.env.ANTHROPIC_AUTH_TOKEN === 'ol-key', 'ollama: ANTHROPIC_AUTH_TOKEN == the stored key (Bearer header -- field receipt 2026-08-04 18:14: x-api-key form got 401 from ollama.com on a key validate had accepted)')
+  // 0.2.2: ollama.com rides the dsh lane's declared openai-completions
+  // route (Bearer is that protocol's native key header -- the 2026-08-04
+  // Bearer-only receipt is satisfied structurally now).
+  assert(result.env.DSH_ROUTE_BASE_URL === `${OLLAMA_CLOUD_BASE_URL}/v1`, `ollama: route base URL == ${OLLAMA_CLOUD_BASE_URL}/v1 (openai-compatible surface)`)
+  assert(result.env.DSH_ROUTE === 'declared' && result.env.DSH_ROUTE_API === 'openai-completions', 'ollama: declared openai-completions route (openai protocol sends the key as Bearer -- the 2026-08-04 field receipt, structurally)')
+  assert(result.env.OLLAMA_CLOUD_KEY === 'ol-key' && result.env.DSH_ROUTE_KEY_ENV === 'OLLAMA_CLOUD_KEY', 'ollama: stored key rides the route key env')
+  assert(result.env.ANTHROPIC_AUTH_TOKEN === undefined && 'ANTHROPIC_AUTH_TOKEN' in result.env, 'ollama: CLI-era Bearer field actively cleared')
   assert(result.env.ANTHROPIC_API_KEY === undefined && 'ANTHROPIC_API_KEY' in result.env, 'ollama: ANTHROPIC_API_KEY explicitly cleared (a stale Anthropic key as x-api-key must not shadow the Bearer auth)')
   assert(result.env.MODEL === 'glm-5.2', 'ollama: signin-era ":cloud" tag stripped at spawn -- ollama.com has no such names (Mino field receipt 2026-08-04 17:37)')
   assert(result.env.SKIP_MODEL_GUARD === '1', 'ollama: SKIP_MODEL_GUARD == "1" (matches run-agent.sh:205 shape; NOTE run.sh has no such guard today -- see task report gaps)')

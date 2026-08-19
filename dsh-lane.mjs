@@ -40,20 +40,45 @@ const { DshClient, promptAndCollect } = require('./dsh-client.cjs')
 const MEM = process.env.MEM
 const MCP_CONFIG_FILE = process.env.MCP_CONFIG_FILE || ''
 const SYSTEM_PROMPT_FILE = process.env.SYSTEM_PROMPT_FILE || ''
+
+// ── route contract v2 (0.2.2 full harness swap, Mino 08-19 "클로드코드
+// 아예 의존성째로 날려버려") ────────────────────────────────────────────
+// Every app provider is now a dsh LLM route; provider-env.cjs's rows emit
+// this env instead of Claude-CLI plumbing:
+//   DSH_ROUTE          'anthropic-catalog' | 'declared'
+//   DSH_PROVIDER       route id in the patch (anthropic | codex | ...)
+//   DSH_ROUTE_API      declared only: anthropic-messages | openai-completions
+//   DSH_ROUTE_BASE_URL declared only
+//   DSH_ROUTE_KEY_ENV  name of the env var carrying the secret (the row
+//                      sets that var too; catalog anthropic reads
+//                      ANTHROPIC_API_KEY -- an sk-ant-oat value there flips
+//                      pi-ai into native OAuth mode: Bearer + oauth beta
+//                      headers + Claude Code identity block, measured 200)
+//   DSH_MODEL / DSH_EFFORT
+//   DSH_MODEL_VISION   '1' -> the MAIN model sees images: declared rows get
+//                      input:[text,image] and markers attach inline
+//   DSH_VISION_SIDECAR sidecar caption model id (local-ollama route only)
+//   DSH_MODEL_CONTEXT / DSH_MODEL_MAXTOK  declared model row numbers
+// Defaults reproduce the 0.2.1 local-ollama lane so a bare `MEM=... node
+// dsh-lane.mjs` still boots the glm/qwen testbed.
+const DSH_ROUTE = process.env.DSH_ROUTE || 'declared'
 const DSH_PROVIDER = process.env.DSH_PROVIDER || 'ollama'
+const DSH_ROUTE_API = process.env.DSH_ROUTE_API || 'openai-completions'
+const DSH_ROUTE_BASE_URL = process.env.DSH_ROUTE_BASE_URL || process.env.OLLAMA_BASE_URL || 'http://localhost:11434/v1'
+const DSH_ROUTE_KEY_ENV = process.env.DSH_ROUTE_KEY_ENV || 'OLLAMA_API_KEY'
 const DSH_MODEL = process.env.DSH_MODEL || 'glm-5.2:cloud'
 const DSH_EFFORT = process.env.DSH_EFFORT || 'max'
-// 같이보기/vision routing (0.2.1): image markers are captioned by a
-// one-shot SIDECAR session on the vision model, and the caption text rides
-// into the main session's prompt. NOT a per-turn selectModel switch: dsh
-// refuses to select a text-only model on a session whose history holds
-// images ("model-unavailable ... does not accept image input", measured
-// 2026-08-19), so one image would permanently evict glm from the session.
-// The sidecar sends the bytes INLINE as an image part ({type:'image',
-// mediaType, data} -- dsh-host-apiproxy sessions.schema.js:222); the main
-// session never sees an image and stays on the fast text model.
-const DSH_VISION_MODEL = process.env.DSH_VISION_MODEL || 'qwen3.5:cloud'
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434/v1'
+const DSH_MODEL_VISION = process.env.DSH_MODEL_VISION === '1'
+const DSH_MODEL_CONTEXT = Number(process.env.DSH_MODEL_CONTEXT) > 0 ? Number(process.env.DSH_MODEL_CONTEXT) : 131072
+const DSH_MODEL_MAXTOK = Number(process.env.DSH_MODEL_MAXTOK) > 0 ? Number(process.env.DSH_MODEL_MAXTOK) : 16384
+// 같이보기/vision: three lanes, decided by the route --
+//   inline  (DSH_MODEL_VISION)   the main model sees the image part itself
+//   sidecar (DSH_VISION_SIDECAR) a one-shot session on the sidecar model
+//           captions it (NOT per-turn selectModel: dsh refuses a text-only
+//           model on an image-bearing session -- measured 2026-08-19)
+//   none                          honest cannot-see marker rewrite
+const DSH_VISION_SIDECAR = process.env.DSH_VISION_SIDECAR
+  || (DSH_PROVIDER === 'ollama' && !DSH_MODEL_VISION ? 'qwen3.5:cloud' : '')
 
 const log = (m) => process.stdout.write(`[dsh-lane] ${m}\n`)
 const errLog = (m) => process.stderr.write(`[dsh-lane] ${m}\n`)
@@ -163,35 +188,52 @@ function personaRow () {
 function buildPatch () {
   const efforts = ['off', 'low', 'high', 'max']
     .map((e) => e === 'off' ? '              off:' : `              ${e}: ${e}`).join('\n')
+  const modelRow = (id, name, vision) => [
+    `          - id: ${yamlQuote(id)}`,
+    `            name: ${yamlQuote(name)}`,
+    `            input: [${vision ? 'text, image' : 'text'}]`,
+    `            contextWindow: ${DSH_MODEL_CONTEXT}`,
+    `            maxTokens: ${DSH_MODEL_MAXTOK}`,
+    `            reasoningEfforts:`,
+    efforts
+  ].join('\n')
+  let providerBlock
+  if (DSH_ROUTE === 'anthropic-catalog') {
+    // Catalog route: pi-ai ships the full anthropic model list (ids,
+    // context windows, vision modality, anthropic-messages protocol). Only
+    // the credential env is ours. An sk-ant-oat value in that env flips
+    // pi-ai's native OAuth mode -- see the route contract comment above.
+    providerBlock = [
+      '      anthropic:',
+      `        apiKeyEnv: ${DSH_ROUTE_KEY_ENV}`
+    ].join('\n')
+  } else {
+    // Hand-declared route: everything explicit. The main model row plus,
+    // when a caption sidecar is configured, the sidecar's vision row.
+    const rows = [modelRow(DSH_MODEL, DSH_MODEL, DSH_MODEL_VISION)]
+    if (DSH_VISION_SIDECAR && DSH_VISION_SIDECAR !== DSH_MODEL) {
+      rows.push(modelRow(DSH_VISION_SIDECAR, `${DSH_VISION_SIDECAR} (vision sidecar)`, true))
+    }
+    providerBlock = [
+      `      ${DSH_PROVIDER}:`,
+      `        displayName: ${yamlQuote(DSH_PROVIDER)}`,
+      `        apiKeyEnv: ${DSH_ROUTE_KEY_ENV}`,
+      `        api: ${DSH_ROUTE_API}`,
+      `        baseURL: ${yamlQuote(DSH_ROUTE_BASE_URL)}`,
+      '        models:',
+      ...rows
+    ].join('\n')
+  }
   const base = `- id: agent-default-model
   config:
-    provider: ${DSH_PROVIDER}
+    provider: ${DSH_ROUTE === 'anthropic-catalog' ? 'anthropic' : DSH_PROVIDER}
     model: ${yamlQuote(DSH_MODEL)}
 - id: hmr
   disabled: true
 - id: llm-pi-ai
   config:
     providers:
-      ollama:
-        displayName: Ollama (local)
-        apiKeyEnv: OLLAMA_API_KEY
-        api: openai-completions
-        baseURL: ${yamlQuote(OLLAMA_BASE_URL)}
-        models:
-          - id: glm-5.2:cloud
-            name: GLM 5.2 (fast text)
-            input: [text]
-            contextWindow: 131072
-            maxTokens: 16384
-            reasoningEfforts:
-${efforts}
-          - id: qwen3.5:cloud
-            name: Qwen 3.5 (vision)
-            input: [text, image]
-            contextWindow: 131072
-            maxTokens: 16384
-            reasoningEfforts:
-${efforts}
+${providerBlock}
 `
   const parts = [base]
   const persona = personaRow()
@@ -219,7 +261,9 @@ function spawnEngine (patchPath) {
   const env = {
     ...process.env,
     DSH_HOME: dshHome(),
-    OLLAMA_API_KEY: process.env.OLLAMA_API_KEY || 'ollama-local',
+    // The route's key env must resolve to SOMETHING or pi-ai refuses the
+    // route (PI_AI_ERROR, measured); keyless local proxies get a dummy.
+    [DSH_ROUTE_KEY_ENV]: process.env[DSH_ROUTE_KEY_ENV] || 'local-dummy',
     DSH_TELEMETRY_MODE: process.env.DSH_TELEMETRY_MODE || 'DISABLED'
   }
   const isElectronNode = !!process.versions.electron
@@ -337,6 +381,43 @@ async function main () {
     postPresence(text.slice(0, 3900), 'think')
   }
 
+  // ── mute recovery (ported from headless-lane; live catch 0.2.2: claude
+  // route answered an image turn in TEXT with no reply call -- the exact
+  // failure class stop-reply-guard existed for, and dsh has no stop hook,
+  // so the LANE convicts and nudges). Same decision table: reply-class
+  // call -> clear; user turn composed text but sent nothing -> one nudge
+  // (session cap); ledger file shared with the UI's model-revert offer.
+  const isReplyClassTool = (name) => /__(?:reply|send_file_to_discord|react)$/.test(String(name || ''))
+  const opensMuteGate = ({ channelId, content } = {}) => {
+    if (String(channelId || '') === 'system') return false
+    if (/^\s*\[reaction\]/.test(String(content || ''))) return false
+    return true
+  }
+  const MUTE_NUDGE_SESSION_CAP = Math.max(1, Number(process.env.SCHEHERAZADE_MUTE_NUDGE_CAP) || 5)
+  const strikesFile = () => path.join(MEM, '.mute-strikes.json')
+  function recordMuteStrike () {
+    let cur = { strikes: 0 }
+    try { cur = JSON.parse(fs.readFileSync(strikesFile(), 'utf8')) } catch {}
+    const next = { strikes: (Number(cur.strikes) || 0) + 1, model: DSH_MODEL, lastAt: Date.now() }
+    try { writeJsonAtomic(strikesFile(), next) } catch {}
+    return next.strikes
+  }
+  function clearMuteStrike () {
+    try { fs.unlinkSync(strikesFile()) } catch {}
+  }
+  let turnHadUserInbound = false
+  let sawReplyThisTurn = false
+  let sawTextThisTurn = false
+  let muteNudgeCount = 0
+  function sendMuteNudge () {
+    const tag = renderChannelTag({
+      content: '[SYSTEM] 방금 사용자에게 보낼 답을 작성했지만 reply 도구를 호출하지 않아 실제로는 전달되지 않았다. 그 답을 새로 쓰지 말고 지금 mcp__agent-channel__reply(같은 channelId)로 그대로 전송하라. 정말로 보낼 내용이 없다고 판단했다면 그 판단을 한 줄로라도 답하라.',
+      meta: { source: 'system', sender: 'system', channelId: 'system' }
+    })
+    client.prompt(sessionId, [{ type: 'text', text: tag }])
+      .catch((e) => errLog(`mute nudge failed: ${e.message.slice(0, 120)}`))
+  }
+
   // Turn-close accounting: clear pending entries older than the turn end.
   const mux = client.openMux({
     onEvent (sid, event) {
@@ -344,6 +425,23 @@ async function main () {
       if (event.type === 'turn/end') {
         flushThink(true)
         thinkSentThisTurn = 0
+        // Mute verdict BEFORE the per-turn flags reset.
+        if (sawReplyThisTurn) {
+          clearMuteStrike()
+          muteNudgeCount = 0
+        } else if (turnHadUserInbound && sawTextThisTurn) {
+          const n = recordMuteStrike()
+          if (muteNudgeCount < MUTE_NUDGE_SESSION_CAP) {
+            muteNudgeCount += 1
+            log(`mute: turn composed text but called no reply tool -- nudging (strike ${n}; nudge ${muteNudgeCount}/${MUTE_NUDGE_SESSION_CAP})`)
+            sendMuteNudge()
+          } else {
+            log(`mute persists past the session nudge cap (${MUTE_NUDGE_SESSION_CAP}) -- leaving it to the UI model-revert offer (strike ${n})`)
+          }
+        }
+        turnHadUserInbound = false
+        sawReplyThisTurn = false
+        sawTextThisTurn = false
         const now = Date.now()
         writePending(readPending().filter((p) => p.ts > now))
         log(`turn end (${(event.data && event.data.reason && event.data.reason.kind) || '?'})`)
@@ -353,6 +451,7 @@ async function main () {
           thinkBuf += c.text || c.delta || ''
           flushThink(false)
         } else if (c && (c.type === 'text-delta' || c.type === 'finish')) {
+          if (c.type === 'text-delta') sawTextThisTurn = true // mute-verdict input
           // Visible prose starting means the think block for this step is
           // complete -- flush the remainder so the fold never trails the reply.
           flushThink(true)
@@ -360,6 +459,7 @@ async function main () {
       } else if (event.type === 'tool/call') {
         const d = event.data || {}
         log(`tool> ${d.name || '?'}`)
+        if (isReplyClassTool(d.name)) sawReplyThisTurn = true
         flushThink(true) // reasoning that led to this call belongs above it
         try {
           const argsForLabel = typeof d.arguments === 'string' ? JSON.parse(d.arguments) : (d.arguments || {})
@@ -396,18 +496,24 @@ async function main () {
   })
   void mux
 
-  // ── image-marker captioning (같이보기 / chat uploads / windowshot) ────────
+  // ── image markers (같이보기 / chat uploads / windowshot) ─────────────────
   // Inbound content carries "[image attached: <path> — …]" marker lines
-  // (the Discord/chat-upload convention every surface shares). Under Claude
-  // Code the agent Read the path; here a one-shot sidecar session on the
-  // vision model describes the file and the marker is rewritten to the
-  // SAME caption format the 0.1.x upload route used (chat.js markerFor
-  // parses nothing, but the prose contract matters: the main model is told
-  // what a vision model saw, never invited to Read a raster it cannot
-  // parse). PDF markers become an honest cannot-view note -- known 0.2.1
-  // gap (docs/design-0021-dsh-junction.md).
+  // (the Discord/chat-upload convention every surface shares). Three lanes
+  // by route (see the DSH_VISION_SIDECAR comment at top):
+  //   inline  -- the main model sees images: bytes ride as inline image
+  //              parts, marker guidance rewritten to say so
+  //   sidecar -- one-shot session on the sidecar model captions, marker
+  //              rewritten to the 0.1.x caption format
+  //   none    -- honest cannot-see rewrite (never invite a Read on a raster)
+  // A marker that ALREADY carries an upstream caption (the app's ollama.com
+  // fallback fires when laneVision says 'no') passes through untouched --
+  // double-captioning would burn a sidecar call to overwrite better text.
+  // PDF markers: pass through on inline routes (claude reads PDFs as
+  // images upstream of 0.2 -- the marker's own guidance stands); honest
+  // cannot-view note elsewhere.
   const IMG_MARKER_RE = /^\[image attached: (.+?)(?: — [^\]]*)?\]$/
   const PDF_MARKER_RE = /^\[PDF attached: (.+?)(?: — [^\]]*)?\]$/
+  const UPSTREAM_CAPTION_RE = /cannot view images directly; a vision model/
   const RASTER_EXT = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' }
   // 5MB: the gateway's own imageLimits.maxImageBytes (measured rc-7,
   // session.history metadata) -- larger files would be refused downstream.
@@ -419,7 +525,7 @@ async function main () {
     const vsid = s.sessionId || s.id
     // Effort low: a caption is transcription, not reasoning -- and the
     // sidecar bills per image, so keep it cheap.
-    try { await client.selectModel(vsid, DSH_PROVIDER, DSH_VISION_MODEL, 'low') } catch (e) {
+    try { await client.selectModel(vsid, DSH_PROVIDER, DSH_VISION_SIDECAR, 'low') } catch (e) {
       throw new Error(`vision model select failed: ${e.message}`)
     }
     const acc = await promptAndCollect(client, vsid, [
@@ -430,44 +536,69 @@ async function main () {
     if (!text) throw new Error('vision model returned no text')
     return text
   }
+  function readImagePart (filePath) {
+    const mediaType = RASTER_EXT[path.extname(filePath).toLowerCase()]
+    if (!mediaType) return null
+    try {
+      if (fs.statSync(filePath).size > MAX_IMAGE_BYTES) return null
+      return { type: 'image', mediaType, data: fs.readFileSync(filePath).toString('base64'), name: path.basename(filePath) }
+    } catch { return null }
+  }
+  // Returns { text, parts } -- parts non-empty only on inline routes.
   async function buildPromptContent (content) {
     const lines = []
+    const parts = []
     for (const line of String(content).split('\n')) {
       const im = line.match(IMG_MARKER_RE)
       if (im) {
+        if (UPSTREAM_CAPTION_RE.test(line)) { lines.push(line); continue }
         const p = im[1].trim()
-        const mediaType = RASTER_EXT[path.extname(p).toLowerCase()]
-        let ok = false
-        try { ok = Boolean(mediaType) && fs.statSync(p).size <= MAX_IMAGE_BYTES } catch {}
-        if (ok) {
-          try {
-            const caption = await captionImage(mediaType, p)
-            // Brackets/newlines stripped, 2000 cap -- the marker must stay
-            // one parseable line (mirror of chat.js markerFor's clean).
-            const clean = caption.replace(/[\[\]]/g, '').replace(/\s*\n+\s*/g, ' ').slice(0, 2000)
-            lines.push(`[image attached: ${p} — this model cannot view images directly; a vision model (${DSH_VISION_MODEL}) described it: "${clean}"]`)
-            log(`captioned ${path.basename(p)} (${clean.length} chars)`)
+        if (DSH_MODEL_VISION) {
+          const part = readImagePart(p)
+          if (part) {
+            parts.push(part)
+            lines.push(`[image attached: ${p} — the image itself is attached to this message]`)
             continue
-          } catch (e) { errLog(`caption failed for ${p}: ${e.message.slice(0, 160)}`) }
+          }
+          lines.push(`[image attached: ${p} — NOTE: the file could not be attached; tell the user honestly that you cannot see it]`)
+          continue
         }
-        lines.push(`[image attached: ${p} — NOTE: this model cannot view images and the vision fallback failed; do not guess the contents, tell the user honestly that you cannot see it]`)
+        if (DSH_VISION_SIDECAR) {
+          const mediaType = RASTER_EXT[path.extname(p).toLowerCase()]
+          let ok = false
+          try { ok = Boolean(mediaType) && fs.statSync(p).size <= MAX_IMAGE_BYTES } catch {}
+          if (ok) {
+            try {
+              const caption = await captionImage(mediaType, p)
+              // Brackets/newlines stripped, 2000 cap -- the marker must stay
+              // one parseable line (mirror of chat.js markerFor's clean).
+              const clean = caption.replace(/[\[\]]/g, '').replace(/\s*\n+\s*/g, ' ').slice(0, 2000)
+              lines.push(`[image attached: ${p} — this model cannot view images directly; a vision model (${DSH_VISION_SIDECAR}) described it: "${clean}"]`)
+              log(`captioned ${path.basename(p)} (${clean.length} chars)`)
+              continue
+            } catch (e) { errLog(`caption failed for ${p}: ${e.message.slice(0, 160)}`) }
+          }
+        }
+        lines.push(`[image attached: ${p} — NOTE: this model cannot view images here; do not guess the contents, tell the user honestly that you cannot see it]`)
         continue
       }
       const pm = line.match(PDF_MARKER_RE)
       if (pm) {
+        if (DSH_MODEL_VISION) { lines.push(line); continue }
         lines.push(`[PDF attached: ${pm[1].trim()} — NOTE: this lane cannot view PDFs; do not guess the contents, tell the user honestly]`)
         continue
       }
       lines.push(line)
     }
-    return lines.join('\n')
+    return { text: lines.join('\n'), parts }
   }
   // Marker rewrite FIRST (on raw content, where the marker lines live),
   // channel tag SECOND (which entity-escapes the body) -- reversed order
-  // would hide the markers from the caption pass behind escaping.
+  // would hide the markers from the caption pass behind escaping. Image
+  // parts (inline routes) ride AFTER the text part.
   async function renderInbound (content, meta) {
-    const text = await buildPromptContent(content)
-    return [{ type: 'text', text: renderChannelTag({ content: text, meta: meta || {} }) }]
+    const built = await buildPromptContent(content)
+    return [{ type: 'text', text: renderChannelTag({ content: built.text, meta: meta || {} }) }, ...built.parts]
   }
 
   // Redeliver anything the previous incarnation accepted but never finished.
@@ -475,7 +606,10 @@ async function main () {
   if (stale.length) {
     log(`redelivering ${stale.length} pending inbound message(s)`)
     for (const p of stale) {
-      try { await client.prompt(sessionId, await renderInbound(p.content, p.meta)) } catch (e) { errLog(`redelivery failed: ${e.message}`) }
+      try {
+        if (opensMuteGate({ channelId: (p.meta || {}).channelId, content: p.content })) turnHadUserInbound = true
+        await client.prompt(sessionId, await renderInbound(p.content, p.meta))
+      } catch (e) { errLog(`redelivery failed: ${e.message}`) }
     }
   }
 
@@ -516,6 +650,7 @@ async function main () {
       if (!writePending([...readPending(), { content, meta: payload.meta || {}, ts: Date.now() }])) {
         return send(500, { error: 'pending persist failed' })
       }
+      if (opensMuteGate({ channelId: (payload.meta || {}).channelId, content })) turnHadUserInbound = true
       renderInbound(content, payload.meta)
         .then((parts) => client.prompt(sessionId, parts))
         .then(() => log(`inbound -> session (${content.length} chars, sender=${(payload.meta && payload.meta.sender) || '?'})`))

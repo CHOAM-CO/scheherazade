@@ -111,17 +111,21 @@ FAILFILE="$MEM/.agent-failed.json"
 #     is no channel to orphan, so the gap before .mcp.json exists is moot.
 PKILL_PATTERN="${SCRIPT_DIR}/headless-lane.mjs"
 PKILL_LEAF_PATTERN="--mcp-config ${MEM}/.mcp.json"
-# dsh lane switch (0.2.1 harness swap): LANE_KIND=dsh rides in from
-# main.cjs's provider env (provider-env.cjs 'dsh' row; supervisor.mjs
-# resolveConfig mirrors this exact check). Same lane contract, different
-# engine inside -- and the orphan leaf is the dsh web engine, matched by
-# its --patch argv (stable per-agent path under MEM; never a post-spawn-
-# mutable field, same 2026-07-03 rule as the --mcp-config leaf).
-LANE_SCRIPT="headless-lane.mjs"
-if [ "${LANE_KIND:-}" = "dsh" ]; then
-  LANE_SCRIPT="dsh-lane.mjs"
-  PKILL_PATTERN="${SCRIPT_DIR}/dsh-lane.mjs"
-  PKILL_LEAF_PATTERN="--patch ${MEM}/.dsh-lane-home/lane.patch.yml"
+# dsh lane switch (0.2.2 full harness swap): dsh is the DEFAULT lane --
+# every provider row emits LANE_KIND=dsh, and an absent value means dsh
+# too. The claude lane survives only behind an explicit
+# LANE_KIND=headless escape hatch (emergency rollback; needs a Claude
+# Code CLI install). supervisor.mjs resolveConfig mirrors this exact
+# check. The dsh orphan leaf is the engine's --patch argv (stable
+# per-agent path under MEM; never a post-spawn-mutable field, same
+# 2026-07-03 rule as the --mcp-config leaf).
+LANE_SCRIPT="dsh-lane.mjs"
+PKILL_PATTERN="${SCRIPT_DIR}/dsh-lane.mjs"
+PKILL_LEAF_PATTERN="--patch ${MEM}/.dsh-lane-home/lane.patch.yml"
+if [ "${LANE_KIND:-}" = "headless" ]; then
+  LANE_SCRIPT="headless-lane.mjs"
+  PKILL_PATTERN="${SCRIPT_DIR}/headless-lane.mjs"
+  PKILL_LEAF_PATTERN="--mcp-config ${MEM}/.mcp.json"
 fi
 
 # Session timeout: forces the lane-wrapped claude process to exit after

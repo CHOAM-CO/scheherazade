@@ -409,7 +409,11 @@ if (process.platform === 'win32') {
   fs.writeFileSync(fakeBin, `#!/bin/sh\necho $$ > "${childPidFile}"\necho SUPTEST_CHILD_UP\nexec sleep 1000\n`)
   fs.chmodSync(fakeBin, 0o755)
   const configFile = path.join(itDir, '.agent-config')
-  fs.writeFileSync(configFile, `AGENT_NAME=suptest-${process.pid}\nCLAUDE_BIN=${fakeBin}\nAGENT_DATA_HOME=${mem}\nMODEL=fake-model\n`)
+  // LANE_KIND=headless: the fake agent stands in for the claude CLI, which
+  // only the legacy escape-hatch lane execs (0.2.2 default is dsh-lane,
+  // which ignores CLAUDE_BIN entirely). Signal/timeout semantics under test
+  // are lane-independent -- the spawn/kill contract is shared.
+  fs.writeFileSync(configFile, `AGENT_NAME=suptest-${process.pid}\nCLAUDE_BIN=${fakeBin}\nAGENT_DATA_HOME=${mem}\nMODEL=fake-model\nLANE_KIND=headless\n`)
 
   const waitFor = async (predicate, timeoutMs, label) => {
     const deadline = Date.now() + timeoutMs

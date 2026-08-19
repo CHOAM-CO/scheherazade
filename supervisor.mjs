@@ -124,10 +124,12 @@ export function resolveConfig(env = process.env, scriptDir = SCRIPT_DIR) {
     throw new Error(`no .agent-config found at ${configFile}, and AGENT_NAME is not already set in the environment -- run ./setup.sh first, or invoke with AGENT_NAME (and optionally CLAUDE_BIN/MODEL/AGENT_DATA_HOME) pre-exported`)
   }
   const merged = { ...env, ...fileVals }
-  // Lane switch (0.2.1 harness swap): provider-env.cjs's 'dsh' row rides
-  // LANE_KIND into the supervisor env; anything but the exact value 'dsh'
-  // (including absence -- every pre-swap config) stays on headless-lane.
-  const laneKind = merged.LANE_KIND === 'dsh' ? 'dsh' : 'headless'
+  // Lane switch (0.2.2 full harness swap): EVERY provider row now emits
+  // LANE_KIND=dsh, and dsh is also the default -- the claude lane survives
+  // only behind an explicit LANE_KIND=headless escape hatch (requires a
+  // Claude Code CLI install; kept for emergency rollback, not offered by
+  // any provider row).
+  const laneKind = merged.LANE_KIND === 'headless' ? 'headless' : 'dsh'
   const agentName = merged.AGENT_NAME
   if (!agentName) throw new Error('AGENT_NAME missing from config/env')
   const mem = merged.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', agentName)
