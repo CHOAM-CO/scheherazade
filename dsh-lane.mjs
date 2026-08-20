@@ -327,14 +327,68 @@ function ensureLanePreset () {
   const shippedDir = path.join(path.dirname(dshBin()), '..', 'config', 'agent-presets', 'standard')
   const src = fs.readFileSync(path.join(shippedDir, 'agent.cordis.yml'), 'utf8')
   const cut = src.indexOf('- id: tool-web')
-  const filtered = (cut === -1 ? src : src.slice(0, cut)) +
+  let filtered = (cut === -1 ? src : src.slice(0, cut)) +
     '# (tool-web row removed by dsh-lane 0.2.4: web search is the chromux\n' +
     '# websearch skill -- keyless, backend-independent. Mino 08-20.)\n'
+  filtered = guardSubagentRows(filtered)
   const destDir = path.join(dshHome(), '.agent-presets', LANE_PRESET_ID)
   fs.mkdirSync(destDir, { recursive: true })
   fs.writeFileSync(path.join(destDir, 'agent.cordis.yml'), filtered)
   fs.writeFileSync(path.join(destDir, 'preset.yml'),
     'name: Scheherazade standard\ndescription: shipped standard minus web_search (chromux skill carries search)\norder: 1\n')
+}
+
+// Subagent containment (2026-08-20, Mino cto field test: "서브에이전트 메세지가
+// 계속 인앱챗으로 역류함"). A delegated child joins the SAME preset as its
+// parent (session header agentPreset: schz-standard, measured), so it inherits
+// the full channel surface: the agent-channel MCP reply/react tools AND the
+// persona that instructs "answer through the reply tool". A dutiful child
+// therefore messages the USER directly -- its report belongs to the parent,
+// not the chat. Two-part fix, applied to the authored preset text:
+//   1. tool-subagent rows (subagent, subagent_fork): add `toolFilter.deny`
+//      for the channel tools + a worker `persona` override. Both flow into
+//      the delegation request (dsh-tool-subagent lib line ~229-230) and the
+//      spawn provider honors them (capabilities toolFilter: true).
+//   2. tool-ralph and tool-workflow: DISABLED. Their configs have no
+//      toolFilter, so their children cannot be contained -- a channel agent
+//      does not need loop/workflow orchestration badly enough to keep an
+//      uncontainable leak path open.
+const SUBAGENT_DENY = 'deny: [mcp__agent-channel__reply, mcp__agent-channel__react]'
+const SUBAGENT_PERSONA =
+  'You are a background subagent doing one delegated task for the main agent. ' +
+  'You are not the user-facing agent: never message the user, never use ' +
+  'channel/chat tools. Deliver everything you found as your final assistant ' +
+  'message -- that text IS your report to the parent agent.'
+function guardSubagentRows (yamlText) {
+  // Idempotent: ensureLanePreset always feeds the pristine shipped yaml, but
+  // a future caller re-running on authored output must not stack the rows.
+  if (yamlText.includes(SUBAGENT_DENY)) return yamlText
+  const lines = yamlText.split('\n')
+  const out = []
+  let disableRow = null
+  for (const line of lines) {
+    out.push(line)
+    // 1. containment config right after each continuable subagent row's tail
+    //    line (only the two ACTIVE rows carry `backgroundMode: continuable`;
+    //    codex/claude-code variants are one-shot + disabled).
+    const m = line.match(/^(\s+)backgroundMode: continuable$/)
+    if (m) {
+      const ind = m[1]
+      out.push(`${ind}toolFilter:`)
+      out.push(`${ind}  ${SUBAGENT_DENY}`)
+      out.push(`${ind}persona: >-`)
+      out.push(`${ind}  ${SUBAGENT_PERSONA}`)
+    }
+    // 2. disable the uncontainable spawn paths: mark at the row id, emit
+    //    `disabled: true` right after the row's `name:` line.
+    const row = line.match(/^(\s+)- id: (tool-ralph|tool-workflow)$/)
+    if (row) { disableRow = row[1]; continue }
+    if (disableRow !== null && /^\s+name: /.test(line)) {
+      out.push(`${disableRow}  disabled: true # dsh-lane: children inherit the channel surface unfiltered`)
+      disableRow = null
+    }
+  }
+  return out.join('\n')
 }
 
 // ── engine boot ─────────────────────────────────────────────────────────────
