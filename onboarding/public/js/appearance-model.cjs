@@ -22,13 +22,17 @@
 ;(function (root) {
   'use strict'
 
-  const DEFAULTS = { glass: 60, fontSize: 13.5, fontFamily: 'system', accent: '#5b8dee', bg: '#000000', fg: '#eaeaea', blur: 'soft' }
+  // Defaults = the app's own identity palette (0.2.6, Mino 08-20 "우리만의
+  // 색"): midnight navy + manuscript gold, sampled from build/icon_1024.png
+  // (field #121d31, crescent/book linework #d5a458). Prior defaults
+  // (black/#5b8dee blue) remain one click away in the preset rows.
+  const DEFAULTS = { glass: 60, fontSize: 13.5, fontFamily: 'system', accent: '#d5a458', bg: '#0b111e', fg: '#e8e6df', blur: 'soft' }
 
   // Quick-pick swatches beside the pickers. Presets are plain hex — a
   // swatch click and a picker pick flow through the SAME field.
-  const PRESET_ACCENTS = ['#5b8dee', '#8b7bee', '#5fae7c', '#d9a15f', '#d9695f']
-  const PRESET_BGS = ['#000000', '#0f1115', '#111214', '#14100f']
-  const PRESET_FGS = ['#eaeaea', '#ffffff', '#e6dfd2', '#cfd8e6']
+  const PRESET_ACCENTS = ['#d5a458', '#5b8dee', '#8b7bee', '#5fae7c', '#d9695f']
+  const PRESET_BGS = ['#0b111e', '#000000', '#0f1115', '#111214', '#14100f']
+  const PRESET_FGS = ['#e8e6df', '#eaeaea', '#ffffff', '#cfd8e6']
 
   // Pre-v2 configs stored accent as a named key. Map, don't reject — a
   // saved file from 0.0.63 must not silently reset the user's color.
@@ -85,6 +89,15 @@
 
   function triplet(hex) {
     return rgbOf(hex).join(' ')
+  }
+
+  // WCAG relative luminance -- used to pick readable text ON the accent.
+  function luminance(hex) {
+    const [r, g, b] = rgbOf(hex).map((v) => {
+      const c = v / 255
+      return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
+    })
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
   }
 
   function clampNum(v, lo, hi, fallback) {
@@ -161,6 +174,11 @@
       '--font-base': `${c.fontSize}px`,
       '--font': FONTS[c.fontFamily],
       '--accent': c.accent,
+      // Text ON accent fills (buttons): light accents (gold and friends)
+      // need dark text -- white on #d5a458 is ~2.3:1. Threshold 0.35 keeps
+      // the legacy blue (#5b8dee, L=.28) on white text so existing installs
+      // don't shift; anything brighter flips to near-black.
+      '--accent-fg': luminance(c.accent) > 0.35 ? '#1c170b' : '#ffffff',
       '--accent-hover': mix(c.accent, '#000000', 0.15),
       '--accent-ring': `rgb(${triplet(c.accent)} / 0.45)`,
       // Raw triplet so surfaces can compose their own alpha over the seed

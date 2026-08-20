@@ -18,12 +18,13 @@
      colors (bg, accent) in the Appearance tab; appearance-model.cjs derives
      the whole palette — panel ladder rgb triplets, frost wash, hover, focus
      ring — and the server injects the result over these fallbacks. The
-     fallbacks below EQUAL the model's defaults (bg black / accent blue) so
-     a page served without injection looks identical. */
-  --bg: #000000;
-  --frost-rgb: 0 0 0;
-  --panel-rgb: 20 20 20;
-  --raised-rgb: 29 29 29;
+     fallbacks below EQUAL the model's defaults (0.2.6: midnight navy /
+     manuscript gold — the app icon's own palette, Mino 08-20 "우리만의
+     색") so a page served without injection looks identical. */
+  --bg: #0b111e;
+  --frost-rgb: 11 17 30;
+  --panel-rgb: 31 36 48;
+  --raised-rgb: 39 44 56;
   /* Panels are TRANSLUCENT so the window's acrylic/vibrancy reads through
      them — with opaque panels the glass only ever showed in page margins.
      The three *-alpha vars below are the SINGLE knob surface, derived from
@@ -41,14 +42,15 @@
   --border-strong: rgb(255 255 255 / 0.16);
   --edge-highlight: inset 0 1px 0 rgb(255 255 255 / 0.06);
   /* v3: text is a SEED color (Appearance tab picker); dim/faint derive by
-     mixing toward the bg seed. Fallbacks = model defaults (fg #eaeaea over
-     bg #000000). */
-  --fg: #eaeaea;
-  --fg-dim: #919191;
-  --fg-faint: #5e5e5e;
-  --accent: #5b8dee;
-  --accent-hover: #4877d6;
-  --accent-ring: rgb(91 141 238 / 0.45);
+     mixing toward the bg seed. Fallbacks = model defaults (fg #e8e6df over
+     bg #0b111e). */
+  --fg: #e8e6df;
+  --fg-dim: #949596;
+  --fg-faint: #63666b;
+  --accent: #d5a458;
+  --accent-fg: #1c170b;
+  --accent-hover: #b58b4b;
+  --accent-ring: rgb(213 164 88 / 0.45);
   --danger: #d9695f;
   --danger-hover: #c25850;
   --success: #5fae7c;
@@ -140,7 +142,7 @@ button {
   border: none;
   cursor: pointer;
   background: var(--accent);
-  color: white;
+  color: var(--accent-fg, #ffffff);
   transition: background 0.12s ease;
 }
 button:hover:not(:disabled) { background: var(--accent-hover); }
@@ -1437,7 +1439,7 @@ button.nav-ctl.is-busy::after {
      every rgb(var(--accent-rgb)/…) below is an invalid color in a plain
      browser (measured: user bubbles rendered accent-less in the 08-20
      dev-serve-ui captures). */
-  --accent-rgb: 91 141 238;
+  --accent-rgb: 213 164 88;
   /* concentric radius tier: l = m (12) + s2 (8). Bubbles + composer.
      Children inside an l-radius box with s2 padding get radius-m. */
   --radius-l: 20px;
@@ -1511,8 +1513,8 @@ body {
 }
 .chat-user {
   max-width: min(72%, 62ch);
-  background: rgb(var(--accent-rgb) / 0.22);
-  border-color: rgb(var(--accent-rgb) / 0.42);
+  background: rgb(var(--accent-rgb) / 0.14);
+  border-color: rgb(var(--accent-rgb) / 0.36);
   border-radius: var(--radius-l) var(--radius-l) var(--radius-s) var(--radius-l);
   padding: 12px 16px;
   margin: 4px 16px;

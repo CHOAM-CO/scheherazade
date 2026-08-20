@@ -32,10 +32,10 @@ function assert(cond, msg) {
 console.log('1. appearance-model.cjs — the single mapping')
 const M = require(path.join(root, 'onboarding', 'public', 'js', 'appearance-model.cjs'))
 const d = M.normalize(null)
-assert(d.glass === 60 && d.fontSize === 13.5 && d.fontFamily === 'system' && d.accent === '#5b8dee' && d.bg === '#000000',
-  'defaults: glass 60 / 13.5px / system / accent blue / bg black (Mino 2026-08-05)')
-assert(d.fg === '#eaeaea' && d.blur === 'soft' && d.macMaterial === 'under-window',
-  'v3 defaults: fg #eaeaea, blur soft (macMaterial derives to under-window)')
+assert(d.glass === 60 && d.fontSize === 13.5 && d.fontFamily === 'system' && d.accent === '#d5a458' && d.bg === '#0b111e',
+  'defaults: glass 60 / 13.5px / system / accent gold / bg navy (identity palette, Mino 2026-08-20 "우리만의 색")')
+assert(d.fg === '#e8e6df' && d.blur === 'soft' && d.macMaterial === 'under-window',
+  'v3 defaults: fg #e8e6df parchment, blur soft (macMaterial derives to under-window)')
 const solid = M.cssVars({ glass: 0 })
 assert(solid['--frost-alpha'] === '0.820' && solid['--panel-alpha'] === '1.000' && solid['--raised-alpha'] === '1.000',
   'glass 0 reproduces the solid pre-0.61 look exactly (wash .82, opaque panels)')
@@ -43,7 +43,7 @@ const raw = M.cssVars({ glass: 100 })
 assert(raw['--frost-alpha'] === '0.000' && Number(raw['--panel-alpha']) < 0.3,
   'glass 100 is the raw platform effect')
 const junk = M.normalize({ glass: 'x', fontSize: 999, fontFamily: 'evil', accent: '<script>', bg: 'url(evil)' })
-assert(junk.glass === 60 && junk.fontSize === 16 && junk.fontFamily === 'system' && junk.accent === '#5b8dee' && junk.bg === '#000000',
+assert(junk.glass === 60 && junk.fontSize === 16 && junk.fontFamily === 'system' && junk.accent === '#d5a458' && junk.bg === '#0b111e',
   'junk input falls back per-field, never throws (PUT-body safety — colors reject non-hex)')
 assert(M.normalize({ fontSize: 12.7 }).fontSize === 12.5, 'fontSize snaps to half steps')
 // v3 blur: 3 levels, macMaterial DERIVED. Legacy v2 macMaterial configs
@@ -73,7 +73,9 @@ assert(M.normalize({ accent: 'blue' }).accent === '#5b8dee' && M.normalize({ acc
   'legacy 0.63 preset keys map to their hex (saved configs survive the v2 migration)')
 assert(M.normalize({ accent: '#ABC' }).accent === '#aabbcc', 'shorthand hex expands + lowercases')
 const defVars = M.cssVars(null)
-assert(defVars['--accent-hover'] === M.mix('#5b8dee', '#000000', 0.15), 'default hover comes from the same mix path')
+assert(defVars['--accent-hover'] === M.mix('#d5a458', '#000000', 0.15), 'default hover comes from the same mix path')
+assert(defVars['--accent-fg'] === '#1c170b', 'accent-fg: bright accents (gold) carry dark button text')
+assert(M.cssVars({ accent: '#5b8dee' })['--accent-fg'] === '#ffffff', 'accent-fg: legacy blue keeps white button text (threshold 0.35 non-breaking)')
 assert(defVars['--radius-s'] === '6px' && defVars['--radius-m'] === '12px' && defVars['--radius-pill'] === '999px',
   'radius vocabulary (exactly three values) emitted from the model')
 assert(defVars['--border'] === 'rgb(255 255 255 / 0.09)' && defVars['--edge-highlight'].includes('inset 0 1px 0'),
@@ -84,7 +86,7 @@ const fgSeeded = M.cssVars({ fg: '#ffffff', bg: '#000000' })
 assert(fgSeeded['--fg'] === '#ffffff' && fgSeeded['--fg-dim'] === M.mix('#ffffff', '#000000', 0.38)
   && fgSeeded['--fg-faint'] === M.mix('#ffffff', '#000000', 0.6),
   'text hierarchy derives from the fg seed toward the bg seed')
-assert(M.normalize({ fg: 'red' }).fg === '#eaeaea', 'junk fg falls back (colors are hex-only)')
+assert(M.normalize({ fg: 'red' }).fg === '#e8e6df', 'junk fg falls back (colors are hex-only)')
 const offVars = M.cssVars({ blur: 'off', glass: 100 })
 assert(offVars['--frost-alpha'] === '1.000' && offVars['--panel-alpha'] === '1.000' && offVars['--raised-alpha'] === '1.000',
   'blur off forces the whole tint stack opaque even at glass 100 — nothing behind the window to reveal')
