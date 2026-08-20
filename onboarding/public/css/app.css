@@ -1666,9 +1666,31 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
    ragged column is a stronger not-hand-crafted signal than any one value) */
 #set-perms-rows .agent-control-row > span:last-child {
   display: inline-grid;
-  grid-template-columns: minmax(11rem, auto) auto;
+  /* dot column (Mino 22:00: words → 초록불/빨간불): fixed 16px slot, so
+     the buttons align without needing the old wide text column */
+  grid-template-columns: 16px auto;
   align-items: center;
   gap: 12px;
+}
+/* permission dots: the nav bean grammar, re-scoped. Words live in the
+   hover title (applyPermBadge); grey rest dot = indeterminate, its own
+   visible state, never coerced to green/red. */
+#set-perms-rows .status-line { display: inline-flex; align-items: center; margin: 0; min-height: 0; }
+#set-perms-rows .status-line::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-faint);
+  flex: none;
+}
+#set-perms-rows .status-line.success::before {
+  background: var(--status-green);
+  box-shadow: 0 0 0 3px rgb(48 209 88 / 0.18);
+}
+#set-perms-rows .status-line.failure::before {
+  background: var(--status-red);
+  box-shadow: 0 0 0 3px rgb(255 69 58 / 0.18);
 }
 /* "remembered this session" was the one bare-skinned section on the memory
    page — same card grammar as its .category neighbors */

@@ -436,7 +436,13 @@
     if (row.kind === 'heuristic' && row.granted !== 'indeterminate') text += ` (${C.permsHeuristicMark})`
     else if (row.kind === 'stored') text += ` (${C.permsStoredMark})`
     else if (row.kind === 'verified') text += ` (${C.permsVerifiedMark})`
-    el.textContent = text
+    // Dot-only (Mino 08-20 22:00 "여기도 글 말고 초록불/빨간불로") — same
+    // bean grammar as the nav status. The full sentence (incl. the
+    // heuristic/stored/verified honesty marks) rides the hover title; the
+    // colored dot renders via #set-perms-rows .status-line::before.
+    // Indeterminate = the grey rest-state dot, its own visible third thing.
+    el.textContent = ''
+    el.title = text
   }
 
   function renderPermRows(rows, deepLinks) {
