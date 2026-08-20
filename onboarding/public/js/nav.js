@@ -254,6 +254,10 @@
 
   function renderRealityDetails(state) {
     const running = state === 'live' || state === 'connecting'
+    // 0.2.6 UI pass: the header names the agent, not its species — "세라",
+    // not "AGENT" — whenever the spawn carries a name (dev-serve-ui has no
+    // agentControls, so the copy label stays the fallback there).
+    if (spawnInfo && spawnInfo.name) $('nav-agent-label').textContent = spawnInfo.name
     $('nav-status-model').textContent = running && spawnInfo ? (spawnInfo.model || '') : ''
     $('nav-status-effort').textContent = running && spawnInfo ? (spawnInfo.effort || '') : ''
     renderContextGauge(state)

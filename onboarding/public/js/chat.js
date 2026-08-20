@@ -54,6 +54,8 @@
   let lastStatus = null
   let bubbles = new Map() // seq -> bubble element, for attaching reaction badges
   let lastUserBubble = null
+  let lastRenderedRole = null // 0.2.6 UI pass: agent-run grouping for the sender row
+  let agentName = '' // filled from the status probe (setStatus detail)
   let awaitingSince = null // state.awaitingReplySince from the last /out
   let channelUp = false // freshest signal: did the last /out poll succeed
   let typingEl = null
@@ -229,6 +231,23 @@
     }
   }
 
+  // 0.2.6 UI pass (Mino "UI/UX 검증해서 디벨롭"): system/boot announcements
+  // ("🔁 [system] 에이전트 세션 기동 — <ISO> (Thu)") used to render as
+  // full agent bubbles, and after a few restarts they OUTNUMBERED the real
+  // conversation (field capture 2026-08-20: 5 of 7 visible bubbles were
+  // session-boot pills). They are events, not speech — render as a slim
+  // centered timeline divider instead. Text shape is the boot announcer's;
+  // the ISO timestamp is condensed to HH:MM.
+  function parseSystemLine(text) {
+    const s = String(text || '')
+    const i = s.indexOf('[system]')
+    if (i === -1 || i > 8) return null // leading emoji at most, else not a system line
+    let label = s.slice(i + 8).trim()
+    const iso = label.match(/(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):\d{2}[^\s]*\s*(?:\([A-Za-z]{3}\))?/)
+    if (iso) label = label.replace(iso[0], '').replace(/[—–-]\s*$/, '').trim() + ` · ${iso[2]}:${iso[3]}`
+    return label
+  }
+
   function appendMsg(m) {
     clearEmpty()
     const stick = atBottom()
@@ -237,6 +256,43 @@
     // into its "Worked for Ns" resting state (aside behavior — we fold tool
     // labels, not streamed thinking text).
     if (role === 'agent') { finalizeActivityFold(); finalizeThinkFold(); discardDraft() }
+    const sysLabel = role === 'agent' ? parseSystemLine(m.text) : null
+    if (sysLabel !== null) {
+      const div = document.createElement('div')
+      div.className = 'chat-sysline'
+      div.dataset.seq = m.seq
+      const span = document.createElement('span')
+      span.textContent = sysLabel
+      div.appendChild(span)
+      pane.appendChild(div)
+      bubbles.set(m.seq, div)
+      msgCount++
+      lastRenderedRole = null // a session boundary breaks the bubble run
+      if (stick) pane.scrollTop = pane.scrollHeight
+      return
+    }
+    // 0.2.6 UI pass: an agent RUN opens with a sender row (name + time) —
+    // identity used to ride on bubble asymmetry alone, which held for two
+    // parties but left runs undated and the agent nameless on screen.
+    // Only the first bubble of a run gets the row; consecutive agent
+    // bubbles stay unlabeled (iMessage grouping).
+    if (role === 'agent' && lastRenderedRole !== 'agent') {
+      const meta = document.createElement('div')
+      meta.className = 'chat-meta'
+      const nm = document.createElement('span')
+      nm.className = 'chat-meta-name'
+      nm.textContent = agentName || 'Agent'
+      meta.appendChild(nm)
+      if (m.ts) {
+        const tm = document.createElement('span')
+        tm.className = 'chat-meta-time'
+        const d = new Date(m.ts)
+        tm.textContent = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+        meta.appendChild(tm)
+      }
+      pane.appendChild(meta)
+    }
+    lastRenderedRole = role
     const el = document.createElement('div')
     el.className = `chat-msg chat-${role}`
     el.dataset.seq = m.seq
@@ -537,6 +593,7 @@
     const el = $('ct-status')
     el.classList.remove('chat-status-up', 'chat-status-down')
     if (kind === 'up') {
+      if (detail) agentName = String(detail) // sender-row name rides the same probe
       el.textContent = C.statusUp(detail)
       el.classList.add('chat-status-up')
     } else if (kind === 'not_running') {

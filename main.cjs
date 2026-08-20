@@ -1400,6 +1400,9 @@ async function spawnRealAgentChildLocked() {
     model: config.MODEL || null,
     effort: config.EFFORT_LEVEL || null,
     provider: config.PROVIDER || null,
+    // 0.2.6 UI pass: the shell header shows the agent's NAME instead of the
+    // generic "AGENT" label when a spawn has one (nav.js reads this).
+    name: config.AGENT_NAME || null,
     at: new Date().toISOString(),
   }
   // Timeout backstop (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 2):
