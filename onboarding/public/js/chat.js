@@ -594,7 +594,10 @@
     el.classList.remove('chat-status-up', 'chat-status-down')
     if (kind === 'up') {
       if (detail) agentName = String(detail) // sender-row name rides the same probe
-      el.textContent = C.statusUp(detail)
+      // Healthy = SILENT (Mino 08-20 21:22): the standing "X is listening."
+      // line carried zero information the header dot doesn't — the row now
+      // renders only for abnormal states (CSS collapses it when empty).
+      el.textContent = ''
       el.classList.add('chat-status-up')
     } else if (kind === 'not_running') {
       el.textContent = C.statusNotRunning
@@ -945,7 +948,7 @@
   }
 
   function msPopulate() {
-    modelSel.innerHTML = ''
+    modelSel.replaceChildren() // NOT innerHTML — chat.js injection posture (test-chat-surface #1)
     // No stored MODEL (some lanes run on the provider default): a neutral
     // placeholder holds the selected slot so the chip never claims a model
     // the config doesn't. Any real pick still swaps normally.

@@ -1457,7 +1457,13 @@ body {
 }
 
 /* ── shell header: agent identity gets a face ── */
-.nav-status { align-items: center; gap: 8px; padding: 4px 0 8px; }
+/* baseline, not center (Mino 21:22 screenshot: name and status word sat on
+   different lines-that-almost-align — the classic uncanny offset). The
+   base .status-line also carries a margin-top meant for form contexts;
+   zeroed here so the row owns its own rhythm. Dot centers against the
+   status word via the status-line's own inline-flex. */
+.nav-status { align-items: baseline; gap: 8px; padding: 4px 0 8px; }
+.nav-status .status-line { margin-top: 0; }
 .nav-status .category-label {
   font-size: 1.05rem;
   font-weight: 650;
@@ -1640,6 +1646,10 @@ body {
   line-height: 30px;
 }
 .chat-status { font-size: 0.8rem; margin: 4px 4px 8px; }
+/* the status row exists ONLY when it says something abnormal (Mino 21:22:
+   '정보량은 없는데 자리를 차지하고 있는 텍스트' — the standing
+   "X is listening." line was chrome; the header dot already says it) */
+.chat-status:empty { display: none; }
 
 /* pane opens with breathing room — the first sender row was clipping against
    the frame (measured on the 08-20 after-capture) */
