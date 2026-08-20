@@ -225,7 +225,6 @@
 
     $('m-title').textContent = C.title
     $('m-subtitle').textContent = C.subtitle(displayName)
-    $('m-settings-link').textContent = window.COPY.settings.title
 
     for (const table of ['user_facts', 'open_threads', 'corrections', 'preferences']) {
       $(`cat-${table}-label`).textContent = C.categories[table].label

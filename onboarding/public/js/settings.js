@@ -463,7 +463,8 @@
       if (deepLinks && deepLinks[r.class]) {
         const btn = document.createElement('button')
         btn.textContent = C.permsOpenButton
-        btn.style.marginLeft = '0.75rem'
+        // spacing now owned by the row grid (app.css #set-perms-rows) --
+        // the old inline margin would double up with the grid gap
         btn.onclick = async () => {
           btn.disabled = true
           try {

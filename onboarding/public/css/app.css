@@ -1655,6 +1655,32 @@ body {
    the frame (measured on the 08-20 after-capture) */
 .chat-shell .chat-pane { padding: 12px 0 8px; }
 
+/* ── 0.2.6 sweep: memory / settings / logs pages (Mino 21:29) ── */
+/* form controls follow the seeded accent EVERYWHERE — the scoped
+   .agent-control-row rule left the logs Auto-scroll checkbox on the
+   browser's default blue, one loud off-palette pixel cluster */
+input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
+/* permission checklist: status text width varies per row, so the Open
+   Settings buttons landed at ragged x positions — badge takes a fixed-min
+   column and every button starts on the same line (research §10: the
+   ragged column is a stronger not-hand-crafted signal than any one value) */
+#set-perms-rows .agent-control-row > span:last-child {
+  display: inline-grid;
+  grid-template-columns: minmax(11rem, auto) auto;
+  align-items: center;
+  gap: 12px;
+}
+/* "remembered this session" was the one bare-skinned section on the memory
+   page — same card grammar as its .category neighbors */
+.session-group {
+  margin-bottom: var(--s5);
+  padding: var(--s4) var(--s5);
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--edge-highlight);
+}
+
 /* run/think folds: plain gray text rows → quiet chips, so live work reads
    as a state the surface owns rather than stray console text */
 .chat-activity-fold summary, .chat-think-fold summary {
