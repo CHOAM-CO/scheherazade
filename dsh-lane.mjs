@@ -544,6 +544,16 @@ async function main () {
   // field from the growing JSON. Escape-aware, resumable: an incomplete
   // \u or trailing backslash stops the scan until more delta arrives.
   const replyArgStreams = new Map() // callId -> { buf, sent }
+  // Once reply args start streaming, they ARE the answer -- body text around
+  // them is meta commentary, not the message. Live catch on the glm route
+  // (2026-08-20 ② provider matrix): glm narrates plans in body text before
+  // calling reply, so the draft painted "이번엔 두 문단, 주제는... 써야겠다" glued
+  // to the real answer. claude's body deltas stay empty on reply turns, which
+  // is why the mixed-draft never showed there. On the first extracted arg
+  // text the stale preamble draft is wiped (done-post) and body text-deltas
+  // stop feeding the draft for the rest of the turn (turnText still
+  // accumulates them -- mute promotion wants the composed text, warts and all).
+  let replyArgStarted = false
   function extractTextField (buf) {
     const k = buf.indexOf('"text"')
     if (k === -1) return null
@@ -583,6 +593,12 @@ async function main () {
     s.buf += delta
     const text = extractTextField(s.buf)
     if (text === null || text.length <= s.sent) return
+    if (!replyArgStarted) {
+      replyArgStarted = true
+      if (streamTimer) { clearTimeout(streamTimer); streamTimer = null }
+      streamBuf = ''
+      if (streamedThisTurn) { postPresence('', 'stream', { done: true }); streamedThisTurn = false }
+    }
     streamBuf += text.slice(s.sent)
     s.sent = text.length
     flushStream(false)
@@ -663,6 +679,7 @@ async function main () {
         if (streamTimer) { clearTimeout(streamTimer); streamTimer = null }
         streamBuf = ''
         replyArgStreams.clear()
+        replyArgStarted = false
         if (streamedThisTurn) postPresence('', 'stream', { done: true })
         streamedThisTurn = false
         streamSentThisTurn = 0
@@ -724,7 +741,7 @@ async function main () {
           if (c.type === 'text-delta') {
             sawTextThisTurn = true // mute-verdict input
             const piece = c.text || c.delta || ''
-            streamBuf += piece
+            if (!replyArgStarted) streamBuf += piece // post-reply body text is meta, not draft
             if (turnText.length < PROMOTE_CAP * 2) turnText += piece
             flushStream(false)
           } else {

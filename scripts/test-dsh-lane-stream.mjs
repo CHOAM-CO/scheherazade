@@ -85,6 +85,22 @@ assert(/isReplyClassTool\(d\.name\)\) \{[\s\S]{0,600}streamBuf = ''[\s\S]{0,600}
 assert(src.includes('replyArgStreams.clear()'),
   'per-call arg buffers reset at turn end')
 
+console.log('\n1c. draft purity — reply args own the draft once they start')
+assert(src.includes('let replyArgStarted = false'),
+  'turn-scoped replyArgStarted flag exists (glm live catch: body-text plan narration glued to the answer)')
+assert(/if \(!replyArgStarted\) \{\s*\n\s*replyArgStarted = true\s*\n\s*if \(streamTimer\)[\s\S]{0,200}done: true/.test(src),
+  'first extracted reply-arg text wipes the body-text preamble draft (done-post) before streaming the answer')
+assert(src.includes("if (!replyArgStarted) streamBuf += piece"),
+  'body text-deltas stop feeding the draft after reply args start')
+{
+  const i = src.indexOf("if (!replyArgStarted) streamBuf += piece")
+  const j = src.indexOf('turnText += piece', i)
+  assert(i > -1 && j > -1 && j - i < 200,
+    'turnText still accumulates suppressed body text (mute promotion wants the full composed text)')
+}
+assert(/replyArgStreams\.clear\(\)\s*\n\s*replyArgStarted = false/.test(src),
+  'replyArgStarted resets with the other per-turn stream state at turn/end')
+
 console.log('\n2. instruction-surface port — host skill provider + lane-owned preset')
 assert(src.includes('- id: skill-filesystem') && /skill-filesystem[\s\S]{0,1200}disabled: false/.test(src),
   'skill-filesystem re-enabled at host level: the seeded .claude/skills dir becomes a dsh skill root')
