@@ -79,6 +79,12 @@
   let thinkEl = null
   let thinkSummary = null
   let thinkParas = 0
+  // 0.2.4 answer-stream draft (Mino "두두두둑"): /out returns a `draft`
+  // string while the dsh lane streams the answer's text-deltas. One agent
+  // bubble grows in place (markdown re-render is destructive, so full-text
+  // re-render each tick is safe); the real transcript message retires it.
+  // The claude lane never streams, so the bubble simply never appears there.
+  let draftEl = null
 
   function setStatics() {
     $('ct-title').textContent = C.title
@@ -230,7 +236,7 @@
     // P1 v2: the reply that ends the wait collapses the live run timeline
     // into its "Worked for Ns" resting state (aside behavior — we fold tool
     // labels, not streamed thinking text).
-    if (role === 'agent') { finalizeActivityFold(); finalizeThinkFold() }
+    if (role === 'agent') { finalizeActivityFold(); finalizeThinkFold(); discardDraft() }
     const el = document.createElement('div')
     el.className = `chat-msg chat-${role}`
     el.dataset.seq = m.seq
@@ -440,6 +446,27 @@
     else appendMsg(m)
   }
 
+  // The growing draft bubble. Same classes as a real agent bubble plus
+  // chat-draft (styling hook); no seq, no react bar, no bubbles entry --
+  // those all belong to the authoritative message that replaces it.
+  function renderDraft(text) {
+    const stick = atBottom()
+    if (!draftEl) {
+      draftEl = document.createElement('div')
+      draftEl.className = 'chat-msg chat-agent chat-draft'
+    }
+    renderMarkdown(draftEl, text)
+    pane.appendChild(draftEl) // keep it below think/activity folds
+    lastActivityAt = Date.now() // streaming IS liveness
+    if (stick) pane.scrollTop = pane.scrollHeight
+  }
+
+  function discardDraft() {
+    if (!draftEl) return
+    draftEl.remove()
+    draftEl = null
+  }
+
   async function sendReaction(seq, emoji) {
     try {
       await window.api('/api/chat/react', {
@@ -468,7 +495,7 @@
     // Typing dots only before the first step lands — once the live
     // timeline is on screen, the run itself is the liveness signal
     // (aside shows the working steps, not dots beside them).
-    const typing = waiting && !runEl && (Date.now() - awaitingSince) < TYPING_SHOW_MAX_MS
+    const typing = waiting && !runEl && !draftEl && (Date.now() - awaitingSince) < TYPING_SHOW_MAX_MS
     if (typing) {
       if (!typingEl) {
         typingEl = document.createElement('div')
@@ -561,6 +588,8 @@
         for (const m of seed.items) renderItem(m)
         nextSeq = seed.latest
         awaitingSince = (seed.state && seed.state.awaitingReplySince) || null
+        if (typeof seed.draft === 'string' && seed.draft) renderDraft(seed.draft)
+        else discardDraft()
         channelUp = true
         showEmpty()
       } else {
@@ -569,6 +598,8 @@
         for (const m of result.items) renderItem(m)
         nextSeq = result.latest
         awaitingSince = (result.state && result.state.awaitingReplySince) || null
+        if (typeof result.draft === 'string' && result.draft) renderDraft(result.draft)
+        else discardDraft()
         channelUp = true
         showEmpty()
       }
@@ -584,7 +615,10 @@
     if (tick % STATUS_EVERY_TICKS === 0) await refreshStatus()
     tick++
     if (pollTimer) clearTimeout(pollTimer)
-    pollTimer = setTimeout(pollOnce, pollAgain ? 0 : POLL_MS)
+    // While a draft is painting, poll faster: 1s granularity reads as
+    // chunky paragraphs, 250ms reads as 두두두둑. Costs a few extra
+    // loopback GETs only during active generation.
+    pollTimer = setTimeout(pollOnce, pollAgain ? 0 : (draftEl ? 250 : POLL_MS))
     pollAgain = false
   }
 
@@ -617,6 +651,7 @@
     thinkEl = null
     thinkSummary = null
     thinkParas = 0
+    draftEl = null
     awaitingSince = null
     nextSeq = null
     hideJump()

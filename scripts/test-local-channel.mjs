@@ -462,6 +462,38 @@ console.log('\n10. boot announce: the greeting is the first thing the chat pane 
   }
 }
 
+// ── answer-stream draft (0.2.4 두두두둑): grows BESIDE the queue, never in it ──
+{
+  resetQueueForTest()
+  enqueueInbound('question')
+  const handler = createRequestHandler({ notify: async () => {}, token: TOKEN })
+  const post = async (body) => {
+    const res = makeRes()
+    await handler(makeReq({ method: 'POST', url: '/activity', body: JSON.stringify(body) }), res)
+    return res
+  }
+
+  assert((await post({ kind: 'stream', label: 'Hello ' })).code === 202, 'stream chunk lands as 202')
+  await post({ kind: 'stream', label: ' world' })
+  const out = readOutbound(0)
+  assert(out.draft === 'Hello  world', 'stream chunks append UNTRIMMED (mid-sentence whitespace is content)')
+  assert(!out.items.some((m) => m.kind === 'stream'), 'a draft is not a queue item and consumes no seq')
+  assert(out.state.awaitingReplySince !== null, 'a draft does NOT clear awaiting (half an answer is not an answer)')
+
+  assert((await post({ kind: 'stream', done: true })).code === 202, 'done post (no label) is accepted')
+  assert(readOutbound(0).draft === null, 'done retires the draft (reply-less turn path)')
+
+  assert((await post({ kind: 'stream' })).code === 400, 'stream with neither label nor done is refused')
+
+  await post({ kind: 'stream', label: 'draft again' })
+  enqueueOutbound('the real reply')
+  assert(readOutbound(0).draft === null, 'the authoritative reply supersedes and clears its own draft')
+
+  await post({ kind: 'stream', label: 'stale half-answer' })
+  await clearTranscript()
+  assert(readOutbound(0).draft === null, 'clearTranscript drops the draft with the thread')
+}
+
 console.log('\n10b. clearTranscript: the "New conversation" clean break (2026-08-18)')
 {
   const fs = await import('node:fs')

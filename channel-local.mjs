@@ -199,7 +199,17 @@ function enqueue(role, text, now) {
   return push({ kind: 'message', role, text: String(text), ts: now() })
 }
 
+// Answer-stream draft (0.2.4): the dsh lane mirrors visible text-deltas
+// here via POST /activity kind:'stream'. NOT a queue item on purpose -- it
+// consumes no seq, is never persisted, never touches transcriptState, and
+// /out returns it as a separate `draft` field the page renders as one
+// growing agent bubble. The real reply retires it (below); a done-post from
+// the lane retires it on reply-less turns; a clear retires it with the
+// thread.
+let draftText = null
+
 export function enqueueOutbound(text, { now = () => Date.now() } = {}) {
+  draftText = null // the authoritative message supersedes its own draft
   return enqueue('agent', text, now)
 }
 
@@ -285,10 +295,10 @@ export function readOutbound(since = 0) {
   // caller's cursor is older than everything we still hold. Without it a
   // client that slept through a trim would see a normal-looking response and
   // silently skip messages.
-  return { items, latest: seq, missed: from > 0 && from < oldestRetained - 1, state: transcriptState() }
+  return { items, latest: seq, missed: from > 0 && from < oldestRetained - 1, state: transcriptState(), draft: draftText }
 }
 
-export function resetQueueForTest() { seq = 0; queue = []; transcriptFile = null }
+export function resetQueueForTest() { seq = 0; queue = []; transcriptFile = null; draftText = null }
 
 // Deliberate transcript clear -- the "New conversation" clean break (2026-08-18).
 // Empties the queue but keeps `seq` MONOTONIC on purpose: a page holding a
@@ -301,6 +311,7 @@ export function resetQueueForTest() { seq = 0; queue = []; transcriptFile = null
 // durability boolean so a caller can gate on the empty state reaching disk.
 export function clearTranscript() {
   queue = []
+  draftText = null
   return flushTranscript()
 }
 
@@ -614,6 +625,17 @@ export function createRequestHandler({ notify, token, onInbound = () => {} }) {
         }
         let parsed
         try { parsed = JSON.parse(body || '{}') } catch { return send(400, { error: 'bad json' }) }
+        // kind 'stream' (0.2.4 answer stream): UNTRIMMED append -- chunk
+        // boundaries fall mid-sentence, so the whitespace is content. A
+        // done:true post (empty label allowed) retires the draft; the head
+        // cap bounds a runaway turn without corrupting what already painted.
+        if (parsed.kind === 'stream') {
+          if (parsed.done) { draftText = null; return send(202, { ok: true }) }
+          const chunk = typeof parsed.label === 'string' ? parsed.label : ''
+          if (!chunk) return send(400, { error: 'label required' })
+          if ((draftText || '').length < 16000) draftText = (draftText || '') + chunk.slice(0, 4000)
+          return send(202, { ok: true })
+        }
         const label = typeof (parsed && parsed.label) === 'string' ? parsed.label.trim() : ''
         if (!label) return send(400, { error: 'label required' })
         // kind 'think' (0.2.1 dsh lane): reasoning text for the page's

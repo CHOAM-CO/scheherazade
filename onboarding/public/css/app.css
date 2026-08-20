@@ -920,6 +920,23 @@ button.nav-ctl.is-busy::after {
   box-shadow: var(--edge-highlight);
   margin: 0.3rem var(--s4);
 }
+/* 0.2.4 answer-stream draft: same agent-bubble material, slightly
+   translucent + a breathing caret so a growing draft reads as "being
+   written", not as a finished reply. The authoritative message replaces
+   the node, so none of this survives the swap. */
+.chat-draft { opacity: 0.92; }
+.chat-draft::after {
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: currentColor;
+  animation: draft-caret 1s steps(2, start) infinite;
+}
+@keyframes draft-caret { to { visibility: hidden; } }
+
 /* user bubble: translucent accent glass, never a solid accent fill —
    the seed color shows through at reading-comfortable alpha on any
    background, and backdrop blur gives it the same frosted material as

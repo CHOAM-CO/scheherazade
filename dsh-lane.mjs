@@ -253,6 +253,45 @@ function buildPatch () {
   # never completed after ask_user_question). A channel-mediated agent asks
   # questions through the reply tool instead.
   disabled: true
+- id: skill-filesystem
+  # 0.2.4 instruction-surface port: skills seeded to MEM/.claude/skills
+  # were a Claude-Code-only surface (CC loads .claude/skills natively; dsh
+  # does not). dsh's own filesystem skill provider parses the SAME
+  # <name>/SKILL.md frontmatter (name/description), so this HOST-level
+  # provider points at the seeded dir unchanged and the hash-refresh
+  # seeding machinery keeps working. The agent preset's own tool-skill
+  # merges "whatever the deployment registered globally" into its catalog,
+  # so this is the only row the port needs -- the preset already mounts
+  # agent-instructions (CLAUDE.md loads from cwd) and tool-skill (catalog +
+  # loader). providerName is unique per README guidance for isolated
+  # custom-root providers; includeDefaultRoots off: only the app-owned dir,
+  # never the user's ~/.dsh or ~/.agents skills.
+  disabled: false
+  config:
+    providerName: app-seeded
+    includeDefaultRoots: false
+    customSkillDirs:
+      - ${yamlQuote(path.join(MEM, '.claude', 'skills'))}
+- id: agent-presets
+  # 0.2.4 websearch recovery: the model-facing web_search tool is mounted
+  # by the agent PRESET (standard/agent.cordis.yml), not the profile -- the
+  # profile-level tool-web row is disabled yet the E2E request header still
+  # carried web_search (measured 2026-08-20; Mino's 0.2.3 "DeepSeek API
+  # key" answer was REAL, not confabulated). Preset rows cannot be patched
+  # and the launcher force-overwrites config.roots with the shipped root,
+  # so the lane authors its OWN preset id into the always-scanned user root
+  # (<dshHome>/.agent-presets) -- shipped standard minus the tool-web row
+  # (ensureLanePreset below) -- and points the default here. Search is the
+  # chromux websearch skill's job: keyless, works on every backend.
+  config:
+    default: ${LANE_PRESET_ID}
+- id: web
+  # With no tool-web row anywhere, the web service + its DeepSeek search
+  # provider are dead weight; pinning them off keeps any future surface
+  # from resurrecting a keyed search path.
+  disabled: true
+- id: web-search-deepseek
+  disabled: true
 - id: llm-pi-ai
   config:
     providers:
@@ -265,6 +304,7 @@ ${providerBlock}
   if (mcp) parts.push(mcp)
   const patch = parts.join('\n')
   fs.mkdirSync(dshHome(), { recursive: true })
+  ensureLanePreset() // the patch's agent-presets default row names this preset
   const p = path.join(dshHome(), 'lane.patch.yml')
   fs.writeFileSync(p, patch)
   return p
@@ -274,6 +314,27 @@ function dshBin () {
   if (process.env.SCHZ_DSH_BIN) return process.env.SCHZ_DSH_BIN
   const p = require.resolve('@deepseek-ai/dsh/lib/bin.js')
   return p.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`)
+}
+
+// ── lane-owned agent preset (0.2.4) ─────────────────────────────────────────
+// Shipped `standard` minus its tool-web row, authored into the user preset
+// root the roster always scans. Re-derived from the shipped file at every
+// boot so a dsh upgrade's preset changes flow through; only OUR delta (no
+// web_search tool) is pinned. See the agent-presets patch row for why this
+// is the only override path that exists.
+const LANE_PRESET_ID = 'schz-standard'
+function ensureLanePreset () {
+  const shippedDir = path.join(path.dirname(dshBin()), '..', 'config', 'agent-presets', 'standard')
+  const src = fs.readFileSync(path.join(shippedDir, 'agent.cordis.yml'), 'utf8')
+  const cut = src.indexOf('- id: tool-web')
+  const filtered = (cut === -1 ? src : src.slice(0, cut)) +
+    '# (tool-web row removed by dsh-lane 0.2.4: web search is the chromux\n' +
+    '# websearch skill -- keyless, backend-independent. Mino 08-20.)\n'
+  const destDir = path.join(dshHome(), '.agent-presets', LANE_PRESET_ID)
+  fs.mkdirSync(destDir, { recursive: true })
+  fs.writeFileSync(path.join(destDir, 'agent.cordis.yml'), filtered)
+  fs.writeFileSync(path.join(destDir, 'preset.yml'),
+    'name: Scheherazade standard\ndescription: shipped standard minus web_search (chromux skill carries search)\norder: 1\n')
 }
 
 // ── engine boot ─────────────────────────────────────────────────────────────
@@ -328,6 +389,30 @@ async function main () {
     log(`selectModel skipped: ${e.message.slice(0, 120)}`)
   }
 
+  // Skill-catalog nudge (0.2.4, measured 2026-08-20): the session is created
+  // above BEFORE skill-filesystem finishes its first discovery, and
+  // tool-skill only injects the initial <available_skills> catalog when
+  // discovery beats the first request -- lose that boot race and the catalog
+  // NEVER appears (the model can load skills by exact name but cannot see
+  // what exists; E2E turn 1 confirmed). A later mtime change appends a
+  // replacement catalog through the watcher, so: touch one seeded SKILL.md
+  // shortly after session creation. Idempotent -- if the catalog already
+  // rendered, the replacement it triggers carries the same content.
+  setTimeout(() => {
+    try {
+      const skillsRoot = path.join(MEM, '.claude', 'skills')
+      for (const d of fs.readdirSync(skillsRoot)) {
+        const f = path.join(skillsRoot, d, 'SKILL.md')
+        if (fs.existsSync(f)) {
+          const now = new Date()
+          fs.utimesSync(f, now, now)
+          log(`skill catalog nudge (${d})`)
+          break
+        }
+      }
+    } catch { /* no skills seeded -- nothing to nudge */ }
+  }, 2500)
+
   // File ledger (같이보기 batch parity): under Claude Code this was a
   // PostToolUse hook; dsh has no shell hooks, so the lane sources the SAME
   // JSONL (DATA_HOME/.gates/file-ledger.jsonl, rows {ts,tool,path,failed?})
@@ -358,7 +443,7 @@ async function main () {
   // channel restart), 800ms cap, fail-open -- presence must never wedge the
   // lane. Local backend only, by the same design: the port file only exists
   // while channel-local's surface runs.
-  function postPresence (label, kind) {
+  function postPresence (label, kind, extra) {
     let ep
     try {
       ep = JSON.parse(fs.readFileSync(path.join(MEM, 'local-channel.json'), 'utf8'))
@@ -369,7 +454,7 @@ async function main () {
     fetch(`http://127.0.0.1:${port}/activity`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify(kind === 'think' ? { label, kind: 'think' } : { label }),
+      body: JSON.stringify(kind ? { label, kind, ...(extra || {}) } : { label }),
       signal: AbortSignal.timeout(800)
     }).catch(() => {})
   }
@@ -402,6 +487,42 @@ async function main () {
     if (thinkSentThisTurn >= THINK_TURN_CAP) return
     thinkSentThisTurn += text.length
     postPresence(text.slice(0, 3900), 'think')
+  }
+
+  // ── answer stream (0.2.4, Mino "두두두둑 생성되는거 보이잖아, 그런거 가능?") ──
+  // Visible text-deltas mirror to the local chat page as a GROWING DRAFT
+  // bubble: kind:'stream' posts append server-side draft text that /out
+  // returns beside the queue (never a transcript item, never persisted).
+  // The reply tool's real message retires the draft (channel-local clears
+  // it on enqueueOutbound); the turn-end done-post is the belt-and-braces
+  // clear for a turn that composed text but never called reply (mute case).
+  // Chunks are NOT trimmed -- mid-sentence whitespace is content here.
+  // Gated to in-app turns: a Discord-sourced turn's reply belongs to
+  // Discord, not half-mirrored into the local pane as a phantom draft.
+  let lastInboundChannelId = 'in-app'
+  let streamBuf = ''
+  let streamSentThisTurn = 0
+  let streamedThisTurn = false
+  let streamTimer = null
+  const STREAM_FLUSH_AT = 80
+  const STREAM_FLUSH_MS = 150
+  const STREAM_TURN_CAP = 16000
+  function flushStream (force) {
+    if (lastInboundChannelId !== 'in-app') { streamBuf = ''; return }
+    if (!streamBuf) return
+    if (!force && streamBuf.length < STREAM_FLUSH_AT) {
+      // Small tail: let it ride a short timer so slow token trickles still
+      // paint without one HTTP round trip per token.
+      if (!streamTimer) streamTimer = setTimeout(() => { streamTimer = null; flushStream(true) }, STREAM_FLUSH_MS)
+      return
+    }
+    if (streamTimer) { clearTimeout(streamTimer); streamTimer = null }
+    const text = streamBuf
+    streamBuf = ''
+    if (streamSentThisTurn >= STREAM_TURN_CAP) return
+    streamSentThisTurn += text.length
+    streamedThisTurn = true
+    postPresence(text.slice(0, 3900), 'stream')
   }
 
   // ── mute recovery (ported from headless-lane; live catch 0.2.2: claude
@@ -448,6 +569,15 @@ async function main () {
       if (event.type === 'turn/end') {
         flushThink(true)
         thinkSentThisTurn = 0
+        // Answer stream turn close: drop the unposted tail (the final reply
+        // message carries the authoritative text) and, if anything streamed,
+        // tell the surface to retire the draft -- covers the no-reply turn
+        // where no enqueueOutbound will ever clear it.
+        if (streamTimer) { clearTimeout(streamTimer); streamTimer = null }
+        streamBuf = ''
+        if (streamedThisTurn) postPresence('', 'stream', { done: true })
+        streamedThisTurn = false
+        streamSentThisTurn = 0
         // Mute verdict BEFORE the per-turn flags reset.
         if (sawReplyThisTurn) {
           clearMuteStrike()
@@ -485,7 +615,13 @@ async function main () {
           thinkBuf += c.text || c.delta || ''
           flushThink(false)
         } else if (c && (c.type === 'text-delta' || c.type === 'finish')) {
-          if (c.type === 'text-delta') sawTextThisTurn = true // mute-verdict input
+          if (c.type === 'text-delta') {
+            sawTextThisTurn = true // mute-verdict input
+            streamBuf += c.text || c.delta || ''
+            flushStream(false)
+          } else {
+            flushStream(true) // step's prose is complete -- paint the tail
+          }
           // Visible prose starting means the think block for this step is
           // complete -- flush the remainder so the fold never trails the reply.
           flushThink(true)
@@ -685,6 +821,10 @@ async function main () {
         return send(500, { error: 'pending persist failed' })
       }
       if (opensMuteGate({ channelId: (payload.meta || {}).channelId, content })) turnHadUserInbound = true
+      // Answer-stream gate: remember where this turn came from. The local
+      // surface's notifier sends no channelId (renderChannelTag defaults it
+      // to 'in-app'); platform backends send their real channel id.
+      lastInboundChannelId = String((payload.meta || {}).channelId || 'in-app')
       renderInbound(content, payload.meta)
         .then((parts) => client.prompt(sessionId, parts))
         .then(() => log(`inbound -> session (${content.length} chars, sender=${(payload.meta && payload.meta.sender) || '?'})`))
