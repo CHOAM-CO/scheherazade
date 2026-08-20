@@ -317,7 +317,13 @@
 
   function renderAgentStatus(state, status) {
     const line = $('nav-status-line')
-    line.textContent = NAV.states[state] || state
+    // Healthy = dot only (Mino 08-20 21:26 "Running 빼고 초록색 인디케이터만"):
+    // same silence-when-normal rule as the chat status row. Every OTHER state
+    // keeps its word — orange alone can't say connecting-vs-idle, grey alone
+    // can't say stopped-vs-blank, and color-only fails colorblind users.
+    // The word survives as a hover title for discoverability.
+    line.textContent = state === 'live' ? '' : (NAV.states[state] || state)
+    line.title = NAV.states[state] || state
     line.className = 'status-line'
     if (state === 'live') line.classList.add('success')
     else if (state === 'failed') line.classList.add('failure')
