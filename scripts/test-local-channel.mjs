@@ -492,6 +492,18 @@ console.log('\n10. boot announce: the greeting is the first thing the chat pane 
   await post({ kind: 'stream', label: 'stale half-answer' })
   await clearTranscript()
   assert(readOutbound(0).draft === null, 'clearTranscript drops the draft with the thread')
+
+  // promote: a convicted mute turn's composed text BECOMES the message
+  // (lane-side rationale: opus-4-6 refused a live nudge as prompt
+  // injection, E2E 2026-08-20 -- promotion is deterministic delivery).
+  await post({ kind: 'stream', label: '그리는 중...' })
+  assert((await post({ kind: 'stream', promote: true, label: '완성된 답변이야.' })).code === 202, 'promote post lands')
+  const after = readOutbound(0)
+  assert(after.draft === null, 'promotion retires the draft in the same breath')
+  const lastMsg = after.items.filter((m) => m.kind === 'message').at(-1)
+  assert(lastMsg && lastMsg.role === 'agent' && lastMsg.text === '완성된 답변이야.',
+    'the promoted text enqueues as a normal agent message (clears awaiting, persists, renders)')
+  assert(after.state.awaitingReplySince === null, 'a promoted message answers the user like a reply does')
 }
 
 console.log('\n10b. clearTranscript: the "New conversation" clean break (2026-08-18)')

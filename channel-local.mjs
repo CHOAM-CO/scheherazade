@@ -633,6 +633,17 @@ export function createRequestHandler({ notify, token, onInbound = () => {} }) {
           if (parsed.done) { draftText = null; return send(202, { ok: true }) }
           const chunk = typeof parsed.label === 'string' ? parsed.label : ''
           if (!chunk) return send(400, { error: 'label required' })
+          // promote (0.2.4 mute recovery, in-app draft contract): the lane
+          // convicted a mute turn (composed text, no reply call) and hands
+          // the composed text over to BE the message -- enqueue it like a
+          // reply and retire the draft in the same breath. The lane sends
+          // this instead of nudging the model (opus-4-6 refused a live
+          // nudge as prompt injection, E2E 2026-08-20).
+          if (parsed.promote) {
+            draftText = null
+            enqueueOutbound(chunk)
+            return send(202, { ok: true })
+          }
           if ((draftText || '').length < 16000) draftText = (draftText || '') + chunk.slice(0, 4000)
           return send(202, { ok: true })
         }

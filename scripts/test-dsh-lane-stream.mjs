@@ -29,8 +29,16 @@ assert(src.includes("if (lastInboundChannelId !== 'in-app') { streamBuf = ''; re
   'streaming is gated to in-app turns — a Discord turn never paints a local phantom draft')
 assert(src.includes("lastInboundChannelId = String((payload.meta || {}).channelId || 'in-app')"),
   'the gate is fed from ingest meta, defaulting to in-app like renderChannelTag does')
-assert(src.includes("streamBuf += c.text || c.delta || ''"),
+assert(src.includes("const piece = c.text || c.delta || ''") && src.includes('streamBuf += piece'),
   'text-deltas feed the stream buffer (they were discarded before 0.2.4)')
+assert(src.includes('turnText += piece'),
+  'the full turn text accumulates separately, for mute-promotion')
+assert(/lastInboundChannelId === 'in-app' && turnText\.trim\(\)/.test(src) && src.includes('promoteTurnText(turnText.trim())'),
+  'an in-app mute turn is PROMOTED (composed text delivered as the message), not nudged')
+assert(src.includes('function promoteTurnText') && /promote: true/.test(src) && src.includes('sendMuteNudge()'),
+  'promotion verifies the POST and falls back to the nudge on failure')
+assert(src.includes("DSH_PERMISSION_MODE: process.env.DSH_PERMISSION_MODE || 'danger-full-access'"),
+  "approval gate off by default (product bypass contract; live catch: websearch turn hung forever on approval/asked)")
 assert(src.includes("if (streamedThisTurn) postPresence('', 'stream', { done: true })"),
   'turn/end posts done:true so a reply-less (mute) turn still retires the draft')
 {
@@ -44,6 +52,38 @@ assert(/const STREAM_FLUSH_AT = \d+/.test(src) && /const STREAM_TURN_CAP = \d+/.
   'flush threshold and per-turn cap are named constants (runaway turns stay bounded)')
 assert(src.includes('body: JSON.stringify(kind ? { label, kind, ...(extra || {}) } : { label })'),
   'postPresence generalizes to kind+extra without changing the think/activity wire shape')
+
+console.log('\n1b. reply-arg streaming — the answer rides the reply TOOL, not body text')
+assert(src.includes("c.type === 'tool-call-delta' && /__reply\\$/.test(String(c.name || ''))") ||
+       /tool-call-delta.*__reply/.test(src),
+  'tool-call-delta chunks for reply-class tools feed the stream (live catch: body text-deltas stay empty on real turns)')
+assert(src.includes('function extractTextField'),
+  'the text field is extracted incrementally from the growing reply-args JSON')
+{
+  // Behavior-test the extractor by evaluating it in isolation.
+  const m = src.match(/function extractTextField[\s\S]*?\n  \}/)
+  assert(!!m, 'extractTextField source is liftable for behavior tests')
+  // eslint-disable-next-line no-new-func
+  const fn = new Function(`${m[0]}; return extractTextField`)()
+  assert(fn('{"channelId":"in-app","text":"안녕 ') === '안녕 ',
+    'partial value extracts as-is, untrimmed')
+  assert(fn('{"text":"a\\nb\\"c"') === 'a\nb"c',
+    'escapes decode (newline, quote)')
+  assert(fn('{"text":"x\\') === 'x',
+    'a trailing backslash (partial escape) stops the scan instead of corrupting output')
+  assert(fn('{"text":"x\\ud8') === 'x',
+    'a partial \\u escape (fewer than 4 hex digits) is held back until more delta arrives')
+  assert(fn('{"text":"x\\ud83d') === 'x\ud83d' && fn('{"text":"x\\ud83d\\ude00') === 'x😀',
+    'surrogate halves decode as they complete — append semantics reunite an emoji split across flushes')
+  assert(fn('{"text":"done"}') === 'done',
+    'a closed string extracts completely')
+  assert(fn('{"channelId":"in-app"') === null,
+    'no text key yet -> null (nothing streamed)')
+}
+assert(/isReplyClassTool\(d\.name\)\) \{[\s\S]{0,600}streamBuf = ''[\s\S]{0,600}done: true/.test(src),
+  'a reply-class tool/call retires the draft immediately (no stale-tail repaint beside the delivered reply)')
+assert(src.includes('replyArgStreams.clear()'),
+  'per-call arg buffers reset at turn end')
 
 console.log('\n2. instruction-surface port — host skill provider + lane-owned preset')
 assert(src.includes('- id: skill-filesystem') && /skill-filesystem[\s\S]{0,1200}disabled: false/.test(src),

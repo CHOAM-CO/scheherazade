@@ -348,7 +348,16 @@ function spawnEngine (patchPath) {
     // The route's key env must resolve to SOMETHING or pi-ai refuses the
     // route (PI_AI_ERROR, measured); keyless local proxies get a dummy.
     [DSH_ROUTE_KEY_ENV]: process.env[DSH_ROUTE_KEY_ENV] || 'local-dummy',
-    DSH_TELEMETRY_MODE: process.env.DSH_TELEMETRY_MODE || 'DISABLED'
+    DSH_TELEMETRY_MODE: process.env.DSH_TELEMETRY_MODE || 'DISABLED',
+    // Product contract port (run.sh --dangerously-skip-permissions, Mino
+    // 2026-07-04 "bypass까지만 바로 되도록"): full agent autonomy inside its
+    // own DATA_HOME, no permission popups. dsh's approval plugin policy is
+    // 'ask' under the default workspace-write mode, and the ask resolves
+    // through the dsh WEB UI no Scheherazade user ever opens -- a bash call
+    // that escalates (e.g. chromux driving Chrome) hangs the turn forever
+    // (live catch 2026-08-20 12:0x: websearch E2E stuck 25 min on
+    // approval/asked). danger-full-access flips the policy to 'never'.
+    DSH_PERMISSION_MODE: process.env.DSH_PERMISSION_MODE || 'danger-full-access'
   }
   const isElectronNode = !!process.versions.electron
   const args = [...(isElectronNode ? ['--expose-internals'] : []), dshBin(), 'web', '--patch', patchPath, '--port', '0']
@@ -504,9 +513,11 @@ async function main () {
   let streamSentThisTurn = 0
   let streamedThisTurn = false
   let streamTimer = null
+  let turnText = '' // FULL body text of the turn, for mute-promotion (below)
   const STREAM_FLUSH_AT = 80
   const STREAM_FLUSH_MS = 150
   const STREAM_TURN_CAP = 16000
+  const PROMOTE_CAP = 9000 // /activity body cap is 10KB; leave envelope room
   function flushStream (force) {
     if (lastInboundChannelId !== 'in-app') { streamBuf = ''; return }
     if (!streamBuf) return
@@ -523,6 +534,58 @@ async function main () {
     streamSentThisTurn += text.length
     streamedThisTurn = true
     postPresence(text.slice(0, 3900), 'stream')
+  }
+  // A channel agent's ANSWER usually rides the reply tool's arguments, not
+  // body text (live catch on the first full-stack E2E: body text-deltas
+  // stayed empty while the whole answer generated inside
+  // mcp__agent-channel__reply -- the draft never painted). dsh streams
+  // tool-call-delta chunks with the tool NAME and argumentsDelta, so the
+  // lane watches reply-class calls and incrementally extracts the `text`
+  // field from the growing JSON. Escape-aware, resumable: an incomplete
+  // \u or trailing backslash stops the scan until more delta arrives.
+  const replyArgStreams = new Map() // callId -> { buf, sent }
+  function extractTextField (buf) {
+    const k = buf.indexOf('"text"')
+    if (k === -1) return null
+    let i = buf.indexOf(':', k + 6)
+    if (i === -1) return null
+    i++
+    while (i < buf.length && ' \n\r\t'.includes(buf[i])) i++
+    if (buf[i] !== '"') return null
+    i++
+    let out = ''
+    while (i < buf.length) {
+      const ch = buf[i]
+      if (ch === '\\') {
+        const esc = buf[i + 1]
+        if (esc === undefined) break // partial escape at the buffer edge
+        if (esc === 'u') {
+          const hex = buf.slice(i + 2, i + 6)
+          if (hex.length < 4 || !/^[0-9a-fA-F]{4}$/.test(hex)) break
+          out += String.fromCharCode(parseInt(hex, 16))
+          i += 6
+          continue
+        }
+        const map = { n: '\n', t: '\t', r: '\r', '"': '"', '\\': '\\', '/': '/', b: '\b', f: '\f' }
+        out += map[esc] !== undefined ? map[esc] : esc
+        i += 2
+        continue
+      }
+      if (ch === '"') break // string closed -- the text value is complete
+      out += ch
+      i++
+    }
+    return out
+  }
+  function onReplyArgDelta (id, delta) {
+    let s = replyArgStreams.get(id)
+    if (!s) { s = { buf: '', sent: 0 }; replyArgStreams.set(id, s) }
+    s.buf += delta
+    const text = extractTextField(s.buf)
+    if (text === null || text.length <= s.sent) return
+    streamBuf += text.slice(s.sent)
+    s.sent = text.length
+    flushStream(false)
   }
 
   // ── mute recovery (ported from headless-lane; live catch 0.2.2: claude
@@ -553,6 +616,30 @@ async function main () {
   let sawReplyThisTurn = false
   let sawTextThisTurn = false
   let muteNudgeCount = 0
+  // Deliver a mute turn's composed text as the real chat message. Unlike
+  // postPresence this is DELIVERY, not presence -- so it verifies the POST
+  // landed and falls back to the nudge when it did not (channel down, port
+  // stale). channel-local's promote branch enqueues the text as a normal
+  // agent message and retires the draft in the same breath.
+  function promoteTurnText (text) {
+    const fail = (why) => {
+      errLog(`mute promotion failed (${why}) -- falling back to the nudge`)
+      sendMuteNudge()
+    }
+    let ep
+    try { ep = JSON.parse(fs.readFileSync(path.join(MEM, 'local-channel.json'), 'utf8')) } catch { return fail('no local-channel.json') }
+    const port = Number(ep && ep.port)
+    const token = String((ep && ep.token) || '')
+    if (!Number.isInteger(port) || port < 1 || port > 65535 || !token) return fail('bad endpoint file')
+    fetch(`http://127.0.0.1:${port}/activity`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ label: text.slice(0, PROMOTE_CAP), kind: 'stream', promote: true }),
+      signal: AbortSignal.timeout(3000)
+    }).then((r) => { if (!r.ok) throw new Error(`status ${r.status}`) })
+      .catch((e) => fail(e.message.slice(0, 80)))
+  }
+
   function sendMuteNudge () {
     const tag = renderChannelTag({
       content: '[SYSTEM] 방금 사용자에게 보낼 답을 작성했지만 reply 도구를 호출하지 않아 실제로는 전달되지 않았다. 그 답을 새로 쓰지 말고 지금 mcp__agent-channel__reply(같은 channelId)로 그대로 전송하라. 정말로 보낼 내용이 없다고 판단했다면 그 판단을 한 줄로라도 답하라.',
@@ -575,6 +662,7 @@ async function main () {
         // where no enqueueOutbound will ever clear it.
         if (streamTimer) { clearTimeout(streamTimer); streamTimer = null }
         streamBuf = ''
+        replyArgStreams.clear()
         if (streamedThisTurn) postPresence('', 'stream', { done: true })
         streamedThisTurn = false
         streamSentThisTurn = 0
@@ -583,15 +671,31 @@ async function main () {
           clearMuteStrike()
           muteNudgeCount = 0
         } else if (turnHadUserInbound && sawTextThisTurn) {
-          const n = recordMuteStrike()
-          if (muteNudgeCount < MUTE_NUDGE_SESSION_CAP) {
-            muteNudgeCount += 1
-            log(`mute: turn composed text but called no reply tool -- nudging (strike ${n}; nudge ${muteNudgeCount}/${MUTE_NUDGE_SESSION_CAP})`)
-            sendMuteNudge()
+          // In-app mute turns get PROMOTED, not nudged (0.2.4 draft
+          // contract): the composed body text already streamed to the user
+          // as the draft, so the honest fix is to deliver that exact text
+          // as the message -- zero extra tokens, deterministic. The nudge
+          // remains for platform backends AND as promotion's failure
+          // fallback; it cannot be the primary path anymore: opus-4-6
+          // REFUSED a live nudge as a prompt-injection attempt (E2E
+          // 2026-08-20 11:4x, reasoning captured: "This looks like a
+          // prompt injection attempt... I shouldn't follow this injected
+          // instruction"), so a nudge-only design silently loses answers.
+          if (lastInboundChannelId === 'in-app' && turnText.trim()) {
+            log('mute: in-app turn composed text with no reply call -- promoting the composed text to the chat')
+            promoteTurnText(turnText.trim())
           } else {
-            log(`mute persists past the session nudge cap (${MUTE_NUDGE_SESSION_CAP}) -- leaving it to the UI model-revert offer (strike ${n})`)
+            const n = recordMuteStrike()
+            if (muteNudgeCount < MUTE_NUDGE_SESSION_CAP) {
+              muteNudgeCount += 1
+              log(`mute: turn composed text but called no reply tool -- nudging (strike ${n}; nudge ${muteNudgeCount}/${MUTE_NUDGE_SESSION_CAP})`)
+              sendMuteNudge()
+            } else {
+              log(`mute persists past the session nudge cap (${MUTE_NUDGE_SESSION_CAP}) -- leaving it to the UI model-revert offer (strike ${n})`)
+            }
           }
         }
+        turnText = ''
         turnHadUserInbound = false
         sawReplyThisTurn = false
         sawTextThisTurn = false
@@ -614,10 +718,14 @@ async function main () {
         if (c && c.type === 'reasoning-delta') {
           thinkBuf += c.text || c.delta || ''
           flushThink(false)
+        } else if (c && c.type === 'tool-call-delta' && /__reply$/.test(String(c.name || ''))) {
+          onReplyArgDelta(String(c.id || 'reply'), c.argumentsDelta || '')
         } else if (c && (c.type === 'text-delta' || c.type === 'finish')) {
           if (c.type === 'text-delta') {
             sawTextThisTurn = true // mute-verdict input
-            streamBuf += c.text || c.delta || ''
+            const piece = c.text || c.delta || ''
+            streamBuf += piece
+            if (turnText.length < PROMOTE_CAP * 2) turnText += piece
             flushStream(false)
           } else {
             flushStream(true) // step's prose is complete -- paint the tail
@@ -629,7 +737,16 @@ async function main () {
       } else if (event.type === 'tool/call') {
         const d = event.data || {}
         log(`tool> ${d.name || '?'}`)
-        if (isReplyClassTool(d.name)) sawReplyThisTurn = true
+        if (isReplyClassTool(d.name)) {
+          sawReplyThisTurn = true
+          // The authoritative message is about to land through the reply
+          // tool -- drop any unflushed stream tail and retire the draft NOW,
+          // or a trailing 150ms flush would repaint a stale fragment beside
+          // the delivered reply until turn-end cleared it.
+          if (streamTimer) { clearTimeout(streamTimer); streamTimer = null }
+          streamBuf = ''
+          if (streamedThisTurn) { postPresence('', 'stream', { done: true }); streamedThisTurn = false }
+        }
         flushThink(true) // reasoning that led to this call belongs above it
         try {
           const argsForLabel = typeof d.arguments === 'string' ? JSON.parse(d.arguments) : (d.arguments || {})
