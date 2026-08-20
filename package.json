@@ -72,6 +72,7 @@
       "channel-local.mjs",
       "channel-runtime.mjs",
       "provider-env.cjs",
+      "codex-proxy-shim.cjs",
       "setup-token.cjs",
       "setup-token-session.cjs",
       "oauth-usage-session.cjs",

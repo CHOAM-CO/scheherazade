@@ -49,6 +49,7 @@ app.setPath('userData', require('node:path').join(app.getPath('appData'), 'scheh
 
 const { spawn, execFileSync } = require('node:child_process')
 const attachTopology = require('./attach-topology.cjs')
+const { startShimmedProxy } = require('./codex-proxy-shim.cjs')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 const fs = require('node:fs')
@@ -838,12 +839,12 @@ async function ensureCodexProxy(config) {
   }
 
   try {
-    codexProxyServer = await new Promise((resolve, reject) => {
-      // Loopback-only bind, deliberately narrower than the CLI's default.
-      const srv = createApp().listen(port, '127.0.0.1')
-      srv.once('listening', () => resolve(srv))
-      srv.once('error', reject)
-    })
+    // Loopback-only bind, deliberately narrower than the CLI's default.
+    // Shimmed (codex-proxy-shim.cjs): pi-ai stamps eager_input_streaming:true
+    // on every tool and codex-as-api 0.6.5 400s on it -- the shim strips the
+    // hint fields in front of the real app. killCodexProxy's close() closes
+    // both servers (the shim wraps close). 2026-08-20 cto field-test fix.
+    codexProxyServer = await startShimmedProxy({ app: createApp(), port, log: (m) => log(m) })
   } catch (err) {
     if (err && err.code === 'EADDRINUSE') {
       if (explicitPort) {
