@@ -917,6 +917,136 @@
     }
   }
 
+  // ── model quick-switch (0.2.6, Mino 08-20 19:09: "LLM 모델 바꾸는건 세팅
+  // 말고 챗쪽에 드랍다운으로 두는게 더 편할 것 같음") ─────────────────────
+  // A chip-styled native <select> in the composer bar, claude.ai pattern
+  // (composer-corner model chip, 08-20 reference capture). Reads the SHARED
+  // static catalog (js/model-catalog.js) and fires the same POST
+  // /api/agent/model the Engine page fires -- one server contract, two
+  // surfaces. Engine keeps the full picker (Custom proxy / Ollama-by-URL
+  // action rows, effort, apply-state line); this is the quick lane only.
+  // Dynamic catalog extras (CLI-scanned claude ids, ollama account models)
+  // are an Engine-page nicety and are NOT merged here -- a running
+  // non-catalog model still shows via the "(current)" passthrough.
+  const modelSel = $('ct-model-select')
+  const SET = window.COPY.settings // switchConfirm/switchOk/cancel live there
+  let msModel = ''
+  let msProvider = null
+  let msAvailable = []
+  let msBusy = false
+
+  // Mirror of connectors.js providerForModel: keep the current provider when
+  // it can serve the model, else the first authenticated provider that can.
+  function msProviderFor(modelId) {
+    const entry = window.SCHZ_MODEL_CATALOG.find((m) => m.id === modelId)
+    if (!entry) return msProvider // pinned non-catalog id: stay put
+    if (entry.providers.includes(msProvider)) return msProvider
+    return entry.providers.find((p) => msAvailable.includes(p)) || null
+  }
+
+  function msPopulate() {
+    modelSel.innerHTML = ''
+    // No stored MODEL (some lanes run on the provider default): a neutral
+    // placeholder holds the selected slot so the chip never claims a model
+    // the config doesn't. Any real pick still swaps normally.
+    if (!msModel) {
+      const opt = document.createElement('option')
+      opt.value = ''
+      opt.textContent = '—'
+      opt.selected = true
+      opt.hidden = true
+      modelSel.appendChild(opt)
+    }
+    // Non-catalog live model (old alias / URL-picked / custom): surface
+    // as-is so the chip reflects reality, not a guess.
+    if (msModel && !window.SCHZ_MODEL_CATALOG.some((m) => m.id === msModel)) {
+      const opt = document.createElement('option')
+      opt.value = msModel
+      opt.textContent = msModel
+      opt.selected = true
+      modelSel.appendChild(opt)
+    }
+    const groups = new Map()
+    for (const m of window.SCHZ_MODEL_CATALOG) {
+      const opt = document.createElement('option')
+      opt.value = m.id
+      opt.textContent = m.label
+      if (!m.providers.some((p) => msAvailable.includes(p))) opt.disabled = true
+      if (m.id === msModel) opt.selected = true
+      if (!groups.has(m.group)) {
+        const og = document.createElement('optgroup')
+        og.label = m.group
+        groups.set(m.group, og)
+        modelSel.appendChild(og)
+      }
+      groups.get(m.group).appendChild(opt)
+    }
+  }
+
+  // After a swap the agent restarts server-side; follow the settle so the
+  // lane chip + vision state re-resolve against the NEW spawn, not the old
+  // one. Bounded, exists only while a change is in flight (nav.js owns the
+  // standing poller).
+  async function msSettle() {
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 2000))
+      try {
+        const status = await window.api('/api/agent/status')
+        if (status.state !== 'connecting') break
+      } catch { break }
+    }
+    resolveVisionState()
+  }
+
+  async function initModelSwitch() {
+    if (!modelSel || !window.SCHZ_MODEL_CATALOG || !SET) return
+    let cfg
+    try { cfg = await window.api('/api/config') } catch (err) {
+      console.error('model chip config probe failed:', err)
+      return // chip stays hidden; Engine page still has the full picker
+    }
+    msModel = cfg.MODEL || ''
+    msProvider = cfg.PROVIDER || null
+    msAvailable = Array.isArray(cfg.availableProviders) ? cfg.availableProviders.slice() : []
+    // The onboarded provider is always available -- the running agent is
+    // its own proof (same clause as the Engine page).
+    if (msProvider && !msAvailable.includes(msProvider)) msAvailable.push(msProvider)
+    msPopulate()
+    modelSel.title = SET.modelLabel
+    modelSel.hidden = false
+    modelSel.onchange = async (e) => {
+      const model = e.target.value
+      if (model === msModel || msBusy) { e.target.value = msModel; return }
+      const provider = msProviderFor(model)
+      if (!provider) { e.target.value = msModel; return } // fail closed
+      const ok = await window.confirmDialog(SET.switchConfirm(model), SET.switchOk, SET.cancel)
+      if (!ok) { e.target.value = msModel; return }
+      const prevModel = msModel
+      const prevProvider = msProvider
+      msModel = model
+      msProvider = provider
+      msBusy = true
+      modelSel.disabled = true
+      try {
+        await window.api('/api/agent/model', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(provider !== prevProvider ? { model, provider } : { model }),
+        })
+        msSettle()
+      } catch (err) {
+        console.error('model swap failed:', err)
+        window.showToast(window.COPY.genericError(err.message))
+        msModel = prevModel
+        msProvider = prevProvider
+        e.target.value = prevModel
+      } finally {
+        msBusy = false
+        modelSel.disabled = false
+      }
+    }
+  }
+
   function init() {
     setStatics()
     sendBtn.onclick = send
@@ -940,6 +1070,7 @@
     const attachBtn = $('ct-attach')
     const fileInput = $('ct-file')
     resolveVisionState() // async, best-effort; 'unknown' until it lands
+    initModelSwitch() // async, best-effort; chip stays hidden on any failure
     if (attachBtn && fileInput) {
       attachBtn.title = C.attachTitle
       attachBtn.onclick = () => fileInput.click()

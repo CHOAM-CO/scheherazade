@@ -1521,17 +1521,50 @@ body {
 .chat-empty-title { font-size: 1.12rem; font-weight: 600; color: var(--fg); margin-bottom: 0.6rem; }
 .chat-empty-item { padding: 0.45rem 1.1rem; font-size: 0.9rem; }
 
-/* composer: thin strip → the room's one elevated fixture */
+/* composer: thin strip → the room's one elevated fixture. Two-deck layout
+   (0.2.6, claude.ai/chatgpt reference captures 08-20): textarea on top,
+   controls bar beneath — attach + model chip left, send right. */
 .chat-shell .chat-input-row {
+  flex-direction: column;
+  align-items: stretch;
   background: var(--panel);
   border: 1px solid var(--border-strong);
   border-radius: 18px;
-  padding: 0.5rem 0.55rem 0.5rem 0.7rem;
-  gap: 0.55rem;
+  padding: 0.55rem 0.6rem 0.5rem 0.7rem;
+  gap: 0.35rem;
   box-shadow: var(--edge-highlight), 0 8px 24px rgb(0 0 0 / 0.35);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
 }
+.chat-composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.chat-composer-spacer { flex: 1; }
+/* model quick-switch chip (Mino 08-20 19:09): native select dressed as a
+   quiet pill — present but not shouting, claude.ai composer-corner pattern */
+.chat-model-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--fg-dim);
+  font-size: 0.78rem;
+  line-height: 1;
+  padding: 0.42rem 1.5rem 0.42rem 0.85rem;
+  max-width: 14rem;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  /* chevron: inline data URI so the CSP stays external-free */
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'><path d='M1 1l3 3 3-3' fill='none' stroke='%23888' stroke-width='1.4' stroke-linecap='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 0.6rem center;
+}
+.chat-model-select:hover { color: var(--fg); border-color: var(--border-strong); }
+.chat-model-select:focus { outline: none; border-color: rgb(var(--accent-rgb) / 0.55); }
+.chat-model-select:disabled { opacity: 0.5; cursor: default; }
 .chat-shell .chat-input-row:focus-within {
   border-color: rgb(var(--accent-rgb) / 0.55);
   box-shadow: 0 0 0 2px var(--accent-ring), 0 8px 24px rgb(0 0 0 / 0.35);

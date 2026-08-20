@@ -773,117 +773,40 @@
   // 57e4744, ran 07-05). GPT: gpt-5.6-terra ran live (Skia lane, 07-10);
   // sol/luna are Mino-named siblings -- live-verify on first swap, the
   // mute-strike ledger is the backstop either way.
-  const CLAUDE_PROVIDERS = ['claude', 'claude-cli', 'claude-subscription']
-  // Sentinel model-select value for the Custom catalog entry below (custom-
+  // The real model rows live in the SHARED static catalog
+  // (js/model-catalog.js, loaded before this file) since the chat composer
+  // grew its own quick-switch dropdown (0.2.6, Mino 08-20 19:09) — one list,
+  // two surfaces. This page adds its two ACTION sentinels on top: they are
+  // settings-page interactions (reveal a form section), not models, so the
+  // chat dropdown never sees them. Row provenance/verification history moved
+  // to model-catalog.js.
+  // Sentinel model-select value for the Custom catalog entry (custom-
   // provider addition, 2026-07-25) -- never sent to the server as a real
   // model id (see the onchange handler's early-return branch for it).
   const CUSTOM_MODEL_SENTINEL = '__custom__'
   // Ollama by-URL picker sentinel (2026-08-04) -- same action-not-state
   // contract as CUSTOM_MODEL_SENTINEL; never sent to the server.
   const OLLAMA_URL_SENTINEL = '__ollama_url__'
-  const MODEL_CATALOG = [
-    { id: 'claude-fable-5', label: 'Claude Fable 5', group: 'Claude', providers: CLAUDE_PROVIDERS },
-    // opus-5 added 2026-08-13 (Mino: "FABLE 말고 OPUS 5 쓰고 싶은데 옵션에
-    // 안보여서") -- id + 1M window verified against the installed CLI
-    // binary's own model table the same day (see /api/model-catalog/claude);
-    // the id also runs live in the MAGI fleet daily.
-    { id: 'claude-opus-5', label: 'Claude Opus 5', group: 'Claude', providers: CLAUDE_PROVIDERS },
-    { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', group: 'Claude', providers: CLAUDE_PROVIDERS },
-    { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', group: 'Claude', providers: CLAUDE_PROVIDERS },
-    { id: 'claude-sonnet-5', label: 'Claude Sonnet 5', group: 'Claude', providers: CLAUDE_PROVIDERS },
-    { id: 'gpt-5.6-sol', label: 'GPT 5.6 Sol', group: 'GPT', providers: ['chatgpt'] },
-    { id: 'gpt-5.6-terra', label: 'GPT 5.6 Terra', group: 'GPT', providers: ['chatgpt'] },
-    { id: 'gpt-5.6-luna', label: 'GPT 5.6 Luna', group: 'GPT', providers: ['chatgpt'] },
-    // Kimi: DROPPED entirely (Mino, 2026-07-14 09:27 "키미는 프로바이더째로
-    // 드랍하자"). History compressed so nobody re-litigates it:
-    //   - Went mute in Mino's install (07-13). The first diagnosis ("ollama
-    //     lane can't produce tool_use", welded here at 638fbf7) was FALSIFIED
-    //     live the same night in 7 conditions incl. the real CLI + a real MCP
-    //     server with file receipts -- the lane DOES carry kimi tool calls.
-    //   - The failing transcript itself (chunsik session cd209c48, read 07-14
-    //     01:3x) showed kimi emitting raw <|tool_call...|> token sequences
-    //     that leaked as text in THAT session: the emission is intermittent,
-    //     and when it happens the lane cannot translate it. The fix would have
-    //     been a translating proxy (est. half-day+); Mino called the lane not
-    //     worth it.
-    //   - The mute-strike ledger (hooks/stop-reply-guard.mjs +
-    //     /api/agent/mute-status + revert banner) was born from this case and
-    //     STAYS: it convicts mute agents on real behavior, whatever the model.
-    //     (A swap-time smoke test can only acquit falsely -- every probe
-    //     passed the model that was mute in production.)
-    // Ollama defaults re-picked by Mino 2026-08-04 19:17 ("이거 세개는 기본
-    // 지원하고"): Kimi 2.7 Code / GLM 5.2 / DeepSeek V4 Flash (0731).
-    // DeepSeek V4 Pro row dropped in the same ask. Ids are the LIVE
-    // ollama.com catalog names (all three re-verified against /v1/models
-    // today) -- the signin-era ':cloud' suffixes are gone from new rows;
-    // old stored ids still work via normalizeOllamaCloudModel at spawn.
-    //
-    // Kimi note: kimi-k2 was dropped provider-wide 07-14 after the mute
-    // incident (raw <|tool_call|> leakage on the LOCAL ollama lane; history
-    // in git blame of this block). kimi-k2.7-code is a different model on a
-    // different lane (ollama.com cloud, Anthropic-compat) and comes back on
-    // Mino's explicit ask -- the mute-strike ledger stays as the backstop.
-    { id: 'kimi-k2.7-code', label: 'Kimi 2.7 Code', group: 'Ollama', providers: ['ollama'] },
-    // glm tool-use verified live by Mino (07-13 "glm5.2 << 문제 전혀없음";
-    // re-verified on the cloud key lane today, 0.49 Bearer fix round).
-    { id: 'glm-5.2', label: 'GLM 5.2', group: 'Ollama', providers: ['ollama'] },
-    // deepseek verified live by Mino on v0.0.40 ("딥시크 확인 완료, 잘
-    // 붙는다", 11:46) and the 0731 tag confirmed present in today's catalog.
-    { id: 'deepseek-v4-flash:0731', label: 'DeepSeek V4 Flash (0731)', group: 'Ollama', providers: ['ollama'] },
-    // Default-row expansion 2026-08-13 (Mino: "5개~7개까지 기본지원 모델로").
-    // Every id re-verified against the LIVE ollama.com /api/tags catalog the
-    // same day, AND live tool-call-probed through the Anthropic-compat lane
-    // (a send_reply tool definition; every row below returned a correct
-    // tool_use block -- the mute-agent failure mode this catalog guards
-    // against). Library capability pills read the same day. NOT picked,
-    // with grounds: kimi-k3 (paywalled -- "extra usage only" even on a
-    // signed-in account), nemotron-3-super (72s first token on the probe),
-    // nemotron-3-nano:30b (never called the tool), kimi-k2.6 /
-    // minimax-m2.7 / glm-5.1 (superseded in-family by k2.7 / m3 / 5.2),
-    // gemma4:31b (caption workhorse, too small for agent duty).
-    { id: 'qwen3.5:397b', label: 'Qwen 3.5 (397B)', group: 'Ollama', providers: ['ollama'] },
-    // minimax-m3: vision pill + 512K context; tool_use probe ok.
-    { id: 'minimax-m3', label: 'MiniMax M3', group: 'Ollama', providers: ['ollama'] },
-    // gpt-oss:120b: OpenAI open-weight lineage -- the one non-Chinese-lab
-    // frontier flavor in the catalog. NO vision (channel-slack laneHasVision
-    // was taught this the same day -- /^gpt/ no longer implies vision).
-    { id: 'gpt-oss:120b', label: 'GPT-OSS (120B)', group: 'Ollama', providers: ['ollama'] },
-    // mistral-large-3: vision pill, 1.1s probe, no thinking pill (fine --
-    // thinking is not a lane requirement).
-    { id: 'mistral-large-3:675b', label: 'Mistral Large 3 (675B)', group: 'Ollama', providers: ['ollama'] },
-    // By-URL picker (Mino 19:17): paste https://ollama.com/library/{name}
-    // to run any catalog model the three rows above don't list. ACTION row
-    // like the Custom sentinel below -- reveals the URL field, never POSTs
-    // its own value. Gated on the ollama provider being authed (unlike
-    // Custom, which opts out of gating entirely).
-    { id: OLLAMA_URL_SENTINEL, label: S.ollamaUrlCatalogLabel, group: 'Ollama', providers: ['ollama'] },
-    // dsh lane (0.2.1 harness swap): these ids are the models the lane's
-    // OWN patch layer serves against the LOCAL ollama daemon -- keep in
-    // sync with dsh-lane.mjs buildPatch AND provider-env.cjs's
-    // DSH_LANE_MODELS (which is the server-side gate on config.MODEL for
-    // this provider). Availability rides computeAvailableProviders()'s
-    // 'dsh' entry (engine bundled in this build), no credential involved.
-    { id: 'glm-5.2:cloud', label: 'GLM 5.2 (dsh)', group: 'DSH', providers: ['dsh'] },
-    { id: 'qwen3.5:cloud', label: 'Qwen 3.5 (dsh · vision)', group: 'DSH', providers: ['dsh'] },
-    // (old single 'gpt' Codex entry replaced by the versioned GPT group above)
-    // Custom (custom-provider addition, 2026-07-25): NOT a real model id --
-    // an ACTION entry, not a switchable state. Selecting it never fires the
-    // normal model-swap POST (see the onchange handler below); it just
-    // points the user at the always-visible "커스텀 프록시" section further
-    // down the page, where the actual base URL / API key / model id fields
-    // live (three fields, too many for this single-select row). `custom:
-    // true` (not a `providers` entry) so populateModelSelect() below never
-    // disables it -- unlike every other row, availability here doesn't
-    // depend on computeAvailableProviders() at all.
-    { id: CUSTOM_MODEL_SENTINEL, label: S.customCatalogLabel, group: 'Custom', custom: true, providers: [] },
-  ]
+  const CLAUDE_PROVIDERS = ['claude', 'claude-cli', 'claude-subscription'] // for dynamic-merge rows below; static rows carry their own copy
+  const MODEL_CATALOG = window.SCHZ_MODEL_CATALOG.map((row) => ({ ...row }))
+  // By-URL action row sits at the END of the Ollama group (after the last
+  // Ollama model, before the DSH rows), exactly where the inline literal
+  // kept it. Gated on the ollama provider being authed (unlike Custom,
+  // which opts out of gating entirely).
+  const lastOllamaIdx = MODEL_CATALOG.reduce((acc, row, i) => (row.group === 'Ollama' ? i : acc), -1)
+  MODEL_CATALOG.splice(lastOllamaIdx + 1, 0,
+    { id: OLLAMA_URL_SENTINEL, label: S.ollamaUrlCatalogLabel, group: 'Ollama', providers: ['ollama'] })
+  // Custom: ACTION entry, not a switchable state -- points at the custom
+  // proxy section below. `custom: true` opts it out of the provider gate.
+  MODEL_CATALOG.push(
+    { id: CUSTOM_MODEL_SENTINEL, label: S.customCatalogLabel, group: 'Custom', custom: true, providers: [] })
 
   // Effort selector (Mino 07-13 click-test item 2: sonnet-5 felt slow -- the
   // old hardwired max bought thinking budget casual chat doesn't need).
   // 'high' is run.sh's own `${EFFORT_LEVEL:-high}` default; labels say so
   // rather than pre-selecting silently.
-  const EFFORT_LEVELS = ['low', 'medium', 'high', 'max']
-  const EFFORT_DEFAULT = 'high'
+  const EFFORT_LEVELS = window.SCHZ_EFFORT_LEVELS
+  const EFFORT_DEFAULT = window.SCHZ_EFFORT_DEFAULT
 
   let currentProvider = null
   let currentModel = ''
