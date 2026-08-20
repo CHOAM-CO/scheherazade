@@ -1479,12 +1479,15 @@ body {
   width: max-content;
   box-shadow: var(--edge-highlight);
 }
-.tab {
+/* BOTH tab species: .tab (page-local tabs) AND .nav-tab (the shell's
+   primary tabs — missing from the first pass, which left the old accent
+   underline floating inside the pill track; Mino's 20:55 screenshot). */
+.tab, .nav-tab {
   border-bottom: none;
   border-radius: var(--radius-pill);
   padding: 8px 16px;
 }
-.tab.active {
+.tab.active, .nav-tab.active {
   border-bottom: none;
   background: rgb(var(--accent-rgb) / 0.18);
   box-shadow: var(--edge-highlight);
