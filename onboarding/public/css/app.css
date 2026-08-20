@@ -1415,6 +1415,21 @@ button.nav-ctl.is-busy::after {
    block — the cascade wins over the rules above, so the diff stays in one
    reviewable place. All colors derive from the seeded palette vars
    (Appearance tab contract, "제일 중요한 대원칙: 일관성" 2026-08-05).
+
+   v2 craft pass (Mino 20:13 "배경색보다 라운딩/마진에서 사람·AI 차이가
+   난다" → docs/research-ui-craft-20260820.md):
+   - radius vocabulary s/m/l+pill ONLY; l is the concentric tier
+     (l = m + s2, so a padded l-container's children land exactly on m —
+     Apple ConcentricRectangle rule, inner = outer − padding)
+   - every margin/padding on the 4/8pt scale (4 8 12 16 20 24 32); root is
+     13.5px so rem spacing values are banned here — px tokens only
+   - message grouping: same-sender gap 8px, sender-change gap 16px
+     (Gestalt proximity, inter-group ≥ 2× intra-group)
+   - exactly two small type sizes: 0.8rem caption / 0.72rem micro
+   - timestamps in the mono register (design-research-2026-08 §recipe 9)
+   - accent glow REMOVED from body — our own research doc calls ambient
+     accent glow an AI-slop fingerprint; depth now comes from one neutral
+     top light + the panel ladder
    ═══════════════════════════════════════════════════════════════════════ */
 
 :root {
@@ -1423,21 +1438,24 @@ button.nav-ctl.is-busy::after {
      browser (measured: user bubbles rendered accent-less in the 08-20
      dev-serve-ui captures). */
   --accent-rgb: 91 141 238;
+  /* concentric radius tier: l = m (12) + s2 (8). Bubbles + composer.
+     Children inside an l-radius box with s2 padding get radius-m. */
+  --radius-l: 20px;
 }
 
-/* depth: two accent-tinted glows over the seeded bg. The flat single-color
-   wall read as "washed out" next to dsh's lit dark shell. Fixed attachment
-   so scroll doesn't swim. */
+/* depth: ONE neutral top light over the seeded bg — a room lit from above,
+   not an "AI product" glow. Accent stays semantic (design-research-2026-08
+   §recipe 8: 악센트는 시맨틱 전용, 크롬에는 금지). Fixed attachment so
+   scroll doesn't swim. */
 body {
   background:
-    radial-gradient(1100px 650px at 72% -12%, rgb(var(--accent-rgb) / 0.10), transparent 62%),
-    radial-gradient(850px 550px at 8% 112%, rgb(var(--accent-rgb) / 0.05), transparent 60%),
+    radial-gradient(1200px 600px at 50% -10%, rgb(255 255 255 / 0.045), transparent 60%),
     var(--bg);
   background-attachment: fixed;
 }
 
 /* ── shell header: agent identity gets a face ── */
-.nav-status { align-items: center; gap: 0.7rem; padding: 0.3rem 0 0.55rem; }
+.nav-status { align-items: center; gap: 8px; padding: 4px 0 8px; }
 .nav-status .category-label {
   font-size: 1.05rem;
   font-weight: 650;
@@ -1445,24 +1463,26 @@ body {
   text-transform: none;
   color: var(--fg);
 }
-.nav-status .status-line::before { width: 9px; height: 9px; }
+.nav-status .status-line::before { width: 8px; height: 8px; }
 .nav-status .nav-ctl { border-radius: var(--radius-pill); }
 
-/* tabs: underline strip → segmented pill control (dsh/Aside grammar) */
+/* tabs: underline strip → segmented pill control (dsh/Aside grammar).
+   Pill track + pill segments (capsules are exempt from the rect radius
+   vocabulary). */
 .tabs, .nav-tabs {
   border-bottom: none;
-  gap: 0.25rem;
+  gap: 4px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
-  padding: 0.25rem;
+  padding: 4px;
   width: max-content;
   box-shadow: var(--edge-highlight);
 }
 .tab {
   border-bottom: none;
   border-radius: var(--radius-pill);
-  padding: 0.38rem 1rem;
+  padding: 8px 16px;
 }
 .tab.active {
   border-bottom: none;
@@ -1475,38 +1495,57 @@ body {
    copy nobody re-reads; the empty state carries onboarding now */
 .chat-shell .subtitle { display: none; }
 
-.chat-msg { font-size: 1rem; line-height: 1.6; }
+/* body text: one size, 1.55 leading (research: 1.45–1.55 for chat body).
+   Bubble line length capped at 62ch — a wall-of-text turn stops reading
+   as an unstyled full-width slab (research: 50–75ch, 66 sweet spot). */
+.chat-msg { font-size: 1rem; line-height: 1.55; }
 .chat-agent {
-  max-width: 78%;
+  max-width: min(78%, 62ch);
   background: rgba(255, 255, 255, 0.06);
-  padding: 0.75rem 1.05rem;
+  border-radius: var(--radius-l) var(--radius-l) var(--radius-l) var(--radius-s);
+  padding: 12px 16px;
+  margin: 4px 16px;
 }
 .chat-user {
+  max-width: min(72%, 62ch);
   background: rgb(var(--accent-rgb) / 0.22);
   border-color: rgb(var(--accent-rgb) / 0.42);
-  padding: 0.7rem 1.05rem;
+  border-radius: var(--radius-l) var(--radius-l) var(--radius-s) var(--radius-l);
+  padding: 12px 16px;
+  margin: 4px 16px;
 }
+/* message grouping (Gestalt proximity): consecutive same-sender bubbles
+   sit 8px apart (4+4 margins); a sender change opens to 16px. The meta
+   row already separates agent turns, so the rule only needs the two
+   direct-adjacency cases. */
+.chat-agent + .chat-user, .chat-user + .chat-agent { margin-top: 12px; }
 
-/* sender row: first bubble of an agent run carries name + clock (chat.js
-   appendMsg) — asymmetry alone left runs undated and the agent nameless */
+/* sender meta row: name (caption, weight-carried) + time (micro, mono —
+   the technical register from design-research-2026-08 §recipe 9). Opens
+   a turn group: 16px above, 4px to its own bubble. */
 .chat-meta {
   display: flex;
   align-items: baseline;
-  gap: 0.5rem;
-  margin: 0.85rem var(--s4) 0.05rem;
+  gap: 8px;
+  margin: 16px 16px 0;
 }
-.chat-meta-name { font-size: 0.82rem; font-weight: 600; color: rgb(var(--accent-rgb) / 0.95); }
-.chat-meta-time { font-size: 0.72rem; color: var(--fg-faint); }
+.chat-meta-name { font-size: 0.8rem; font-weight: 600; color: rgb(var(--accent-rgb) / 0.95); }
+.chat-meta-time {
+  font-size: 0.72rem;
+  color: var(--fg-faint);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
 
-/* session boundaries: full agent bubbles → slim centered timeline dividers
-   (chat.js parseSystemLine). Boot pills were outnumbering conversation. */
+/* system line: hairline divider with a centered micro label — session
+   boundaries read as timeline events, not as gray chat turns */
 .chat-sysline {
   display: flex;
   align-items: center;
-  gap: 0.8rem;
-  margin: 0.95rem var(--s4);
+  gap: 12px;
+  margin: 16px 16px;
+  font-size: 0.72rem;
   color: var(--fg-faint);
-  font-size: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .chat-sysline::before, .chat-sysline::after {
   content: '';
@@ -1517,21 +1556,23 @@ body {
 .chat-sysline span { white-space: nowrap; }
 
 /* empty state: gray footnote → hero moment (dsh's "Into the Unknown" beat) */
-.chat-empty { padding: 3rem 1rem; gap: 0.7rem; }
-.chat-empty-title { font-size: 1.12rem; font-weight: 600; color: var(--fg); margin-bottom: 0.6rem; }
-.chat-empty-item { padding: 0.45rem 1.1rem; font-size: 0.9rem; }
+.chat-empty { padding: 32px 16px; gap: 8px; }
+.chat-empty-title { font-size: 1.12rem; font-weight: 600; color: var(--fg); margin-bottom: 8px; }
+.chat-empty-item { padding: 8px 16px; font-size: 0.8rem; }
 
 /* composer: thin strip → the room's one elevated fixture. Two-deck layout
    (0.2.6, claude.ai/chatgpt reference captures 08-20): textarea on top,
-   controls bar beneath — attach + model chip left, send right. */
+   controls bar beneath — attach + model chip left, send right.
+   Concentric radii: outer l (20) − s2 padding (8) = m (12) on every
+   rectangular child. */
 .chat-shell .chat-input-row {
   flex-direction: column;
   align-items: stretch;
   background: var(--panel);
   border: 1px solid var(--border-strong);
-  border-radius: 18px;
-  padding: 0.55rem 0.6rem 0.5rem 0.7rem;
-  gap: 0.35rem;
+  border-radius: var(--radius-l);
+  padding: 8px;
+  gap: 4px;
   box-shadow: var(--edge-highlight), 0 8px 24px rgb(0 0 0 / 0.35);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
@@ -1539,7 +1580,7 @@ body {
 .chat-composer-bar {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 8px;
 }
 .chat-composer-spacer { flex: 1; }
 /* model quick-switch chip (Mino 08-20 19:09): native select dressed as a
@@ -1551,16 +1592,16 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   color: var(--fg-dim);
-  font-size: 0.78rem;
+  font-size: 0.8rem;
   line-height: 1;
-  padding: 0.42rem 1.5rem 0.42rem 0.85rem;
+  padding: 8px 24px 8px 12px;
   max-width: 14rem;
   text-overflow: ellipsis;
   cursor: pointer;
   /* chevron: inline data URI so the CSP stays external-free */
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'><path d='M1 1l3 3 3-3' fill='none' stroke='%23888' stroke-width='1.4' stroke-linecap='round'/></svg>");
   background-repeat: no-repeat;
-  background-position: right 0.6rem center;
+  background-position: right 8px center;
 }
 .chat-model-select:hover { color: var(--fg); border-color: var(--border-strong); }
 .chat-model-select:focus { outline: none; border-color: rgb(var(--accent-rgb) / 0.55); }
@@ -1573,25 +1614,31 @@ body {
   background: transparent;
   border: none;
   box-shadow: none;
-  font-size: 1.02rem;
+  font-size: 1rem;
   line-height: 1.5;
-  padding: 0.45rem 0.2rem;
+  padding: 8px 12px;
 }
 .chat-shell .chat-input-row textarea:focus { outline: none; border: none; box-shadow: none; }
-.chat-shell #ct-send { border-radius: 13px; padding: 0.55rem 1.15rem; font-weight: 600; }
+.chat-shell #ct-send {
+  border-radius: var(--radius-m);
+  padding: 8px 16px;
+  font-weight: 600;
+}
 .chat-shell #ct-attach {
-  border-radius: 12px;
-  width: 2.25rem;
-  height: 2.25rem;
+  border-radius: var(--radius-m);
+  width: 32px;
+  height: 32px;
   padding: 0;
   font-size: 1.15rem;
-  line-height: 1;
+  /* optical: the glyph's vertical center sits a hair low in the box —
+     line-height slightly under box height lifts it (research §4) */
+  line-height: 30px;
 }
-.chat-status { font-size: 0.78rem; margin: 0.35rem 0.15rem; }
+.chat-status { font-size: 0.8rem; margin: 4px 4px 8px; }
 
 /* pane opens with breathing room — the first sender row was clipping against
    the frame (measured on the 08-20 after-capture) */
-.chat-shell .chat-pane { padding: var(--s3) 0 var(--s2); }
+.chat-shell .chat-pane { padding: 12px 0 8px; }
 
 /* run/think folds: plain gray text rows → quiet chips, so live work reads
    as a state the surface owns rather than stray console text */
@@ -1600,8 +1647,8 @@ body {
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
-  padding: 0.22rem 0.8rem;
-  font-size: 0.78rem;
+  padding: 4px 12px;
+  font-size: 0.8rem;
 }
 .chat-activity-fold summary:hover, .chat-think-fold summary:hover {
   color: var(--fg-dim);
