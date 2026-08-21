@@ -190,10 +190,13 @@ console.log('cap table:')
   //
   // Source-text read, not import: connectors.js is browser code (it touches
   // `window` at load) and importing it here would fail rather than test.
-  const settingsSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'public', 'js', 'connectors.js'), 'utf8')
-  const catStart = settingsSrc.indexOf('const MODEL_CATALOG = [')
+  // 0.2.6 extracted the catalog out of connectors.js into the shared
+  // model-catalog.js (window.SCHZ_MODEL_CATALOG); this scan rotted unnoticed
+  // until the 0.2.9 full-suite run. Same anchor discipline, new file.
+  const settingsSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'public', 'js', 'model-catalog.js'), 'utf8')
+  const catStart = settingsSrc.indexOf('window.SCHZ_MODEL_CATALOG = [')
   const catEnd = settingsSrc.indexOf('\n  ]', catStart)
-  check('located MODEL_CATALOG in connectors.js', catStart !== -1 && catEnd > catStart)
+  check('located SCHZ_MODEL_CATALOG in model-catalog.js', catStart !== -1 && catEnd > catStart)
   const catalogIds = [...settingsSrc.slice(catStart, catEnd).matchAll(/\{\s*id:\s*'([^']+)'/g)].map((m) => m[1])
   check(`MODEL_CATALOG scan found rows (${catalogIds.length})`, catalogIds.length >= 5, catalogIds.join(','))
 

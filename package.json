@@ -1,6 +1,6 @@
 {
-  "name": "scheherazade02",
-  "version": "0.2.8",
+  "name": "scheherazade",
+  "version": "0.2.9",
   "private": true,
   "type": "module",
   "description": "Mac-native local AI agent. Forked from agent-portable (Claude Code single-agent harness); P0 spike layers an Electron packaging shell on top.",
@@ -54,8 +54,8 @@
     "@deepseek-ai/dsh-workflow": "0.1.0-rc.7"
   },
   "build": {
-    "appId": "com.choam.scheherazade2",
-    "productName": "Scheherazade 0.2",
+    "appId": "com.choam.scheherazade",
+    "productName": "Scheherazade",
     "directories": {
       "output": "release"
     },
@@ -175,8 +175,8 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "CHOAM-CO",
-        "repo": "scheherazade"
+        "owner": "Mino-is-me",
+        "repo": "scheherazade-releases"
       }
     ]
   },

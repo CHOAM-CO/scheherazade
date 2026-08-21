@@ -34,15 +34,15 @@
 // check is the least important thing it does.
 'use strict'
 
-// 0.2 track (2026-08-19): points at the PRIVATE 0.2 repo, NOT the live 0.1.x
-// releases feed (Mino-is-me/scheherazade-releases). The 0.2 win build ships
-// updater mode=auto with the feed baked in from build.publish -- leaving it
-// on the 0.1.x feed cross-couples the two release lines (a future 0.1.x-feed
-// tag above 0.2.x would auto-install over a 0.2 install). The private repo
-// 404s for the unauthenticated updater, which the log-only failure posture
-// treats as offline: effectively "no self-update on the 0.2 test track".
-const UPDATE_OWNER = 'CHOAM-CO'
-const UPDATE_REPO = 'scheherazade'
+// 0.2.9 unification (2026-08-21, Mino "진짜 통합"): back on the live public
+// feed. The dsh track is the main line -- appId/productName/data home now
+// equal the 0.1.x line's, so a 0.2.9+ release on this feed IS a plain
+// upgrade for every installed copy, and the 0.1.x-era cross-coupling worry
+// (two products sharing one feed) no longer exists. The 0.2.1-0.2.8 test
+// builds pointed at the private CHOAM-CO/scheherazade repo (404 = updates
+// off); those installs need one manual reinstall to land on this feed.
+const UPDATE_OWNER = 'Mino-is-me'
+const UPDATE_REPO = 'scheherazade-releases'
 const RELEASES_PAGE = `https://github.com/${UPDATE_OWNER}/${UPDATE_REPO}/releases/latest`
 const LATEST_API = `https://api.github.com/repos/${UPDATE_OWNER}/${UPDATE_REPO}/releases/latest`
 

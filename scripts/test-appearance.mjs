@@ -145,7 +145,11 @@ assert(css.includes('--panel: rgb(var(--panel-rgb) / var(--panel-alpha))'), 'pan
 assert(css.includes('--frost-alpha: 0.35'), 'frost default is the calibrated 0.35, not the 0.82 curtain')
 assert(css.includes('font-size: var(--font-base, 13.5px)'), 'base font size is appearance-controllable')
 assert(!/--panel:\s*#/.test(css), 'no opaque hex --panel anywhere (the regression shape)')
-assert(css.includes('background: rgb(var(--frost-rgb) / var(--frost-alpha))'), 'frost wash color comes from the bg seed, not a hardcoded rgba')
+// 0.2.9: the html,body frost wash is gone (page ground moved to the html
+// canvas -- the win gray-band fix); the frost token's surviving consumer is
+// the sticky chrome bar. Pin THAT usage so the seed-derivation contract
+// stays enforced.
+assert(css.includes('background: rgb(var(--frost-rgb) / var(--chrome-alpha))'), 'frost wash color comes from the bg seed, not a hardcoded rgba (chrome bar)')
 assert(!css.includes('rgba(17, 18, 20'), 'no hardcoded frost rgba left (nav bar included)')
 assert(css.includes('--radius: var(--radius-m)'), 'legacy --radius aliases into the vocabulary')
 assert(!/border-radius:\s*(7px|8px|10px|999px)/.test(css), 'no ad-hoc radius values outside the vocabulary (50% circles exempt)')

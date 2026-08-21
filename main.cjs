@@ -34,18 +34,18 @@
 
 const { app, BrowserWindow, shell, dialog } = require('electron')
 
-// 0.2-track Electron-layer isolation (2026-08-19). package.json `name` is
-// still 'scheherazade', so Electron's default userData dir -- and with it
-// Chromium's "... Safe Storage" keychain item -- would be SHARED with a live
-// 0.1.x install. Two consequences, both measured on the magi-mac E2E:
-// (1) two different app binaries fighting over one profile dir, and (2) the
-// 0.2 binary (a different ad-hoc signature) touching 0.1.x's Safe Storage
-// keychain item throws a blocking OS password modal at first key store,
-// which freezes onboarding at "Checking the key...". Own dir = own keychain
-// item, created silently on first run. Must run before app.whenReady().
-// (inline require: the shared `path` const below this block isn't
-// initialized yet when this line runs)
-app.setPath('userData', require('node:path').join(app.getPath('appData'), 'scheherazade02'))
+// 0.2.9 UNIFICATION (Mino 2026-08-21 "진짜 통합"): the dsh track is the main
+// line now. userData goes back to the 0.1.x dir ('scheherazade') so the
+// unified app IS the upgrade of a 0.1.x install -- one profile dir, one
+// Safe Storage keychain item ("Scheherazade Safe Storage"). The 0.2-test
+// isolation ('scheherazade02', 2026-08-19) existed so a testbed could run
+// BESIDE a live 0.1.x agent; that concern is over. Known cost, mac 0.2-track
+// testers only: credentials sealed under the test item ("Scheherazade 0.2
+// Safe Storage") don't decrypt under the unified item -- re-enter keys once.
+// Windows DPAPI is per-user, not per-app: win credentials survive as-is.
+// Must run before app.whenReady(). (inline require: the shared `path` const
+// below this block isn't initialized yet when this line runs)
+app.setPath('userData', require('node:path').join(app.getPath('appData'), 'scheherazade'))
 
 const { spawn, execFileSync } = require('node:child_process')
 const attachTopology = require('./attach-topology.cjs')
@@ -54,6 +54,41 @@ const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 const fs = require('node:fs')
 const os = require('node:os')
+
+// One-time data-home fold-in (0.2.9 unification). The 0.2 test track kept
+// its own Documents/Scheherazade02 so a testbed could run beside a live
+// 0.1.x agent (9f27d33: .agent-config/memory.db/channel-token contention).
+// Now that this IS the main line, fold the test home back into the
+// canonical Documents/Scheherazade:
+//   - canonical absent + 02 present  -> rename 02 -> canonical (atomic,
+//     same volume; carries config, credentials store, memory, journals,
+//     bin, and the dsh lane home in one move)
+//   - BOTH present -> the long-lived canonical home wins (that machine had
+//     a real 0.1.x agent); the 02 home stays untouched on disk for manual
+//     salvage. Log only -- never merge two agent histories silently.
+//   - neither -> fresh onboarding, nothing to do.
+// Runs synchronously at module load: MUST precede createOnboardingServer()
+// (whose first-boot side effects mkdir/seed the canonical home -- a later
+// fold-in would then see "both" and silently strand the 02 data).
+;(() => {
+  const canonical = path.join(os.homedir(), 'Documents', 'Scheherazade')
+  const testHome = path.join(os.homedir(), 'Documents', 'Scheherazade02')
+  try {
+    const hasTest = fs.existsSync(testHome)
+    if (!hasTest) return
+    if (!fs.existsSync(canonical)) {
+      fs.renameSync(testHome, canonical)
+      console.error(`[main] data-home fold-in: ${testHome} -> ${canonical}`)
+    } else {
+      console.error(`[main] data-home fold-in: both homes exist; keeping ${canonical}, leaving ${testHome} untouched`)
+    }
+  } catch (e) {
+    // FAIL LOUD posture, but a fold-in failure must not brick boot: the app
+    // still runs -- against the canonical home -- and the 02 data stays
+    // where it was. Surface it in the log the support flow always asks for.
+    console.error('[main] data-home fold-in FAILED (continuing on canonical home):', e.message)
+  }
+})()
 const {
   createOnboardingServer,
   readAgentConfig,
