@@ -164,9 +164,33 @@ function mcpRowsFromClaudeConfig (file) {
       if (Array.isArray(s.args) && s.args.length) {
         lines.push(`        args: [${s.args.map(yamlQuote).join(', ')}]`)
       }
-      if (s.env && typeof s.env === 'object' && Object.keys(s.env).length) {
+      // CHANNEL-SECRET SEAM (2026-08-21, Mino field case: discord setup on
+      // the dsh lane died in a "DISCORD_BOT_TOKEN not set" FATAL loop). The
+      // claude lanes forward the full parent env to MCP children, so
+      // main.cjs's spawn-time token injection just arrived. The dsh harness
+      // does NOT: dsh-mcp-client spawns stdio servers with
+      // scrubbedParentEnv() -- /KEY|PASSWORD|SECRET|TOKEN/i names dropped
+      // (dsh-subprocess) -- so every channel token vanished at this seam.
+      // The harness DOES merge the row's declared env on top of the scrub,
+      // and the loader yaml dialect supports `!!js` expression nodes
+      // evaluated in the ENGINE process (cordis-plugin-include JsExpr +
+      // cordis-plugin-loader interpolate). So: emit an expression REFERENCE,
+      // never the value -- the patch file on disk carries the string
+      // "process.env.DISCORD_BOT_TOKEN", not the token, honoring main.cjs's
+      // BOT-TOKEN SEAM (no secret in any on-disk file). Only rows land for
+      // names present in this process's env, and only THIS server's child
+      // sees them -- bash/pwsh tool children stay fully scrubbed. Do NOT
+      // "fix" this by renaming tokens to scrub-surviving names: that leaks
+      // them into every agent subprocess.
+      const passthrough = ['DISCORD_BOT_TOKEN', 'TELEGRAM_BOT_TOKEN', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN']
+        .filter((k) => process.env[k])
+      const declared = s.env && typeof s.env === 'object' ? Object.entries(s.env) : []
+      if (declared.length || passthrough.length) {
         lines.push('        env:')
-        for (const [k, v] of Object.entries(s.env)) lines.push(`          ${k}: ${yamlQuote(v)}`)
+        for (const [k, v] of declared) lines.push(`          ${k}: ${yamlQuote(v)}`)
+        for (const k of passthrough) {
+          if (!declared.some(([dk]) => dk === k)) lines.push(`          ${k}: !!js process.env.${k}`)
+        }
       }
       lines.push(`        reconnect:`, `          enabled: true`)
       rows.push(lines.join('\n'))
