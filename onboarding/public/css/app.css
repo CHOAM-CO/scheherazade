@@ -1472,9 +1472,16 @@ button.nav-ctl.is-busy::after {
    scroll doesn't swim. On html, not body — the canvas paints the whole
    scroll range; body's box is only ever one viewport tall (see html,body). */
 html {
+  /* Bottom layer is the FROST wash, not opaque var(--bg) (Mino 08-21
+     "반투명 프로스티드 블러 안되는데...다시 되게" — the gray-band fix had
+     painted the ground opaque and killed the glass). Frost on the canvas
+     keeps BOTH properties: the OS blur reads through the page again, and
+     the canvas paints the full scroll range uniformly so the band cannot
+     come back. --frost-alpha rides the glass gauge and goes 1.0 when blur
+     is off — the solid look is the gauge's own job, not this rule's. */
   background:
     radial-gradient(1200px 600px at 50% -10%, rgb(255 255 255 / 0.045), transparent 60%),
-    var(--bg);
+    rgb(var(--frost-rgb) / var(--frost-alpha));
   background-attachment: fixed;
 }
 

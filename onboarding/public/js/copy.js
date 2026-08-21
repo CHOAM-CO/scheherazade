@@ -841,18 +841,22 @@ window.COPY = {
     // the concrete label rides along so it stays informative, not just cute.
     // Labels arrive as `WebFetch: url` / `name: path` / bare bash prose
     // (dsh-lane activityLabelFor + hooks/pre-tool-activity.mjs conventions).
+    // Vocabulary drawn from the Nights themselves (Mino: "천일야화에서
+    // 따와서"): scrolls and ink for the scribe's work, caravans for word
+    // from the wider world, the lamp's djinn for commands carried out, the
+    // astrolabe for computation, and the magic word for a practiced art.
     statusLive: (label, n) => {
       const L = String(label || '')
-      let verb = '손을 쓰는 중'
-      if (/^web_?(fetch|search)/i.test(L)) verb = '바깥 소식을 살피는 중'
-      else if (/^(read|grep|glob|ls|find|view|cat|search)[ :(]/i.test(L)) verb = '두루마리를 펼치는 중'
-      else if (/^(write|edit|str_replace|create|notebook)[ :(]/i.test(L)) verb = '붓을 놀리는 중'
-      else if (/^run_code/i.test(L)) verb = '셈을 굴리는 중'
-      else if (/^skill/i.test(L)) verb = '두루마리 묶음을 꺼내는 중'
+      let verb = "Summoning the lamp's djinn"
+      if (/^web_?(fetch|search)/i.test(L)) verb = 'Hearing word from the caravans'
+      else if (/^(read|grep|glob|ls|find|view|cat|search)[ :(]/i.test(L)) verb = 'Leafing through the scrolls'
+      else if (/^(write|edit|str_replace|create|notebook)[ :(]/i.test(L)) verb = 'Setting ink to paper'
+      else if (/^run_code/i.test(L)) verb = 'Consulting the astrolabe'
+      else if (/^skill/i.test(L)) verb = 'Open sesame'
       const short = L.replace(/^[A-Za-z_]+:\s*/, '').slice(0, 48)
       return `${verb}${short ? ` — ${short}` : ''} · ${n}`
     },
-    thinkLive: '실마리를 푸는 중…',
+    thinkLive: 'Weaving the tale…',
     activityFoldSummary: (n, secs) => `Worked for ${secs}s · ${n} step${n === 1 ? '' : 's'}`,
     activityFoldAria: 'What the agent did during this turn',
     // 0.2.1 collapsible Think fold (dsh lane reasoning stream; Mino 08-19
