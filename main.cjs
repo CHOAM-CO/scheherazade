@@ -71,23 +71,42 @@ const os = require('node:os')
 // (whose first-boot side effects mkdir/seed the canonical home -- a later
 // fold-in would then see "both" and silently strand the 02 data).
 ;(() => {
-  const canonical = path.join(os.homedir(), 'Documents', 'Scheherazade')
-  const testHome = path.join(os.homedir(), 'Documents', 'Scheherazade02')
-  try {
-    const hasTest = fs.existsSync(testHome)
-    if (!hasTest) return
-    if (!fs.existsSync(canonical)) {
-      fs.renameSync(testHome, canonical)
-      console.error(`[main] data-home fold-in: ${testHome} -> ${canonical}`)
-    } else {
-      console.error(`[main] data-home fold-in: both homes exist; keeping ${canonical}, leaving ${testHome} untouched`)
+  const fold = (from, to, label) => {
+    try {
+      if (!fs.existsSync(from)) return
+      if (!fs.existsSync(to)) {
+        fs.renameSync(from, to)
+        console.error(`[main] ${label} fold-in: ${from} -> ${to}`)
+      } else {
+        console.error(`[main] ${label} fold-in: both exist; keeping ${to}, leaving ${from} untouched`)
+      }
+    } catch (e) {
+      // FAIL LOUD posture, but a fold-in failure must not brick boot: the
+      // app still runs -- against the canonical location -- and the 02 data
+      // stays where it was. Surface it in the log the support flow asks for.
+      console.error(`[main] ${label} fold-in FAILED (continuing on canonical):`, e.message)
     }
-  } catch (e) {
-    // FAIL LOUD posture, but a fold-in failure must not brick boot: the app
-    // still runs -- against the canonical home -- and the 02 data stays
-    // where it was. Surface it in the log the support flow always asks for.
-    console.error('[main] data-home fold-in FAILED (continuing on canonical home):', e.message)
   }
+  fold(
+    path.join(os.homedir(), 'Documents', 'Scheherazade02'),
+    path.join(os.homedir(), 'Documents', 'Scheherazade'),
+    'data-home'
+  )
+  // userData must fold WITH the data home: on Windows, Electron safeStorage
+  // is Chromium OSCrypt -- the blobs in DATA_HOME/.credentials decrypt only
+  // with the os_crypt key in userData's 'Local State'. Moving the home
+  // without its userData leaves every stored credential undecryptable
+  // (measured on magi-win 2026-08-21: readDiscordToken threw, agent never
+  // spawned). Electron has not touched the new userData dir yet at module
+  // load, so the rename is safe here and Chromium opens the folded dir as
+  // its own. macOS keys live in the Keychain under the productName, so this
+  // fold is a no-op for mac crypto (0.2-track mac testers still re-enter
+  // keys once) -- moving the dir is still harmless there.
+  fold(
+    path.join(app.getPath('appData'), 'scheherazade02'),
+    path.join(app.getPath('appData'), 'scheherazade'),
+    'user-data'
+  )
 })()
 const {
   createOnboardingServer,
@@ -1291,7 +1310,10 @@ async function spawnRealAgentChildLocked() {
     try {
       token = readDiscordToken()
     } catch (err) {
-      console.error('[scheherazade/main] readDiscordToken failed, cannot spawn agent:', err)
+      // log(), not console.error: this abort was INVISIBLE in the field
+      // (magi-win 2026-08-21, the OSCrypt fold-in case) -- stderr never
+      // reaches app.log, so the boot just looked like "no spawn line".
+      log(`readDiscordToken failed, cannot spawn agent: ${(err && err.message) || err}`)
       // 'channel_token_error', deliberately distinct from its two neighbours:
       // key_error is the PROVIDER key, and discord_token_bad is the marker-
       // driven missing/rejected-token path in channel.mjs. This one is "the
