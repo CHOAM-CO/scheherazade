@@ -120,8 +120,14 @@ html, body {
   margin: 0;
   padding: 0;
   height: 100%;
-  /* translucent over the window's vibrancy/acrylic layer (see :root note) */
-  background: rgb(var(--frost-rgb) / var(--frost-alpha));
+  /* NO background here — the page ground lives on html alone (the depth
+     block further down). It used to be a translucent frost on BOTH, with
+     the opaque ground on body: since html,body are height:100% the body
+     box stays one viewport tall while content overflows it, so scrolling
+     past 100vh fell off body's paint area onto the frost-over-acrylic
+     canvas — a light gray band on Windows (Mino 08-21 field screenshot).
+     Painting the ground on html = the canvas = it covers the full scroll
+     range and overscroll on every page. */
   color: var(--fg);
   font-family: var(--font);
   /* --font-base comes from the Appearance tab (server-injected override
@@ -1463,8 +1469,9 @@ button.nav-ctl.is-busy::after {
 /* depth: ONE neutral top light over the seeded bg — a room lit from above,
    not an "AI product" glow. Accent stays semantic (design-research-2026-08
    §recipe 8: 악센트는 시맨틱 전용, 크롬에는 금지). Fixed attachment so
-   scroll doesn't swim. */
-body {
+   scroll doesn't swim. On html, not body — the canvas paints the whole
+   scroll range; body's box is only ever one viewport tall (see html,body). */
+html {
   background:
     radial-gradient(1200px 600px at 50% -10%, rgb(255 255 255 / 0.045), transparent 60%),
     var(--bg);
