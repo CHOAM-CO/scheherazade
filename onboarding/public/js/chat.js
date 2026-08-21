@@ -418,7 +418,9 @@
     row.className = 'fold-line'
     row.textContent = String(m.text || '')
     runEl.appendChild(row)
-    runSummary.textContent = C.activityRunning(activityLog.length)
+    // storyteller status (0.2.11): per-event verb, falls back to the old
+    // counter copy if the key is missing (stale cached copy.js)
+    runSummary.textContent = C.statusLive ? C.statusLive(m.text, activityLog.length) : C.activityRunning(activityLog.length)
     pane.appendChild(runEl) // appendChild moves it back to the end
     if (stick) pane.scrollTop = pane.scrollHeight
   }
@@ -465,7 +467,7 @@
       thinkEl.className = 'chat-think-fold chat-think-live'
       thinkEl.setAttribute('aria-label', C.thinkAria)
       thinkSummary = document.createElement('summary')
-      thinkSummary.textContent = C.thinkSummary
+      thinkSummary.textContent = C.thinkLive || C.thinkSummary
       thinkEl.appendChild(thinkSummary)
       thinkParas = 0
     }
@@ -497,6 +499,7 @@
 
   function renderItem(m) {
     if (m.kind === 'reaction') applyReaction(m)
+    else if (m.kind === 'turn-end') { finalizeActivityFold(); finalizeThinkFold() } // background turns end with no bubble (0.2.11 stuck-Thinking fix)
     else if (m.kind === 'activity') showActivity(m)
     else if (m.kind === 'think') showThink(m)
     else appendMsg(m)

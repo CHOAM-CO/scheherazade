@@ -833,6 +833,26 @@ window.COPY = {
     // agent works, then collapse into the "Worked for" summary when the
     // reply lands.
     activityRunning: (n) => `Working… · ${n} step${n === 1 ? '' : 's'}`,
+    // 0.2.11 storyteller status (Mino 08-21 "'세헤라자드'라는 캐릭터리스틱에
+    // 맞춰서... 에이전트가 지금 무슨 일을 하고 있는지 알아보기 쉽게"): the
+    // LIVE summary names the current move in the storyteller's own register
+    // and updates on every event — the pace of change is what reads as
+    // speed ("와바바박 바뀌어야 빨라보인다구"). Verb from the label's shape;
+    // the concrete label rides along so it stays informative, not just cute.
+    // Labels arrive as `WebFetch: url` / `name: path` / bare bash prose
+    // (dsh-lane activityLabelFor + hooks/pre-tool-activity.mjs conventions).
+    statusLive: (label, n) => {
+      const L = String(label || '')
+      let verb = '손을 쓰는 중'
+      if (/^web_?(fetch|search)/i.test(L)) verb = '바깥 소식을 살피는 중'
+      else if (/^(read|grep|glob|ls|find|view|cat|search)[ :(]/i.test(L)) verb = '두루마리를 펼치는 중'
+      else if (/^(write|edit|str_replace|create|notebook)[ :(]/i.test(L)) verb = '붓을 놀리는 중'
+      else if (/^run_code/i.test(L)) verb = '셈을 굴리는 중'
+      else if (/^skill/i.test(L)) verb = '두루마리 묶음을 꺼내는 중'
+      const short = L.replace(/^[A-Za-z_]+:\s*/, '').slice(0, 48)
+      return `${verb}${short ? ` — ${short}` : ''} · ${n}`
+    },
+    thinkLive: '실마리를 푸는 중…',
     activityFoldSummary: (n, secs) => `Worked for ${secs}s · ${n} step${n === 1 ? '' : 's'}`,
     activityFoldAria: 'What the agent did during this turn',
     // 0.2.1 collapsible Think fold (dsh lane reasoning stream; Mino 08-19

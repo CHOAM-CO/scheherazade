@@ -750,6 +750,12 @@ async function main () {
       if (event.type === 'turn/end') {
         flushThink(true)
         thinkSentThisTurn = 0
+        // Presence turn-close (0.2.11, Mino field report: idle app stuck on
+        // "Thinking…"): the chat page's live folds settle on an AGENT BUBBLE
+        // -- but background turns (calendar nudge, watchdog pokes) stream
+        // think/activity and end with no bubble at all, leaving the fold
+        // live forever. Tell the surface the turn is over explicitly.
+        postPresence('done', 'turn-end')
         // Answer stream turn close: drop the unposted tail (the final reply
         // message carries the authoritative text) and, if anything streamed,
         // tell the surface to retire the draft -- covers the no-reply turn

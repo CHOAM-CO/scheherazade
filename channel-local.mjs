@@ -133,7 +133,7 @@ async function writeTranscriptOnce() {
   // conversation -- replaying yesterday's command chatter into a fresh boot
   // would be noise wearing a transcript costume. seq stays as-is; the
   // cursor contract already tolerates gaps.
-  const durable = queue.filter((m) => m.kind !== 'activity' && m.kind !== 'think')
+  const durable = queue.filter((m) => m.kind !== 'activity' && m.kind !== 'think' && m.kind !== 'turn-end')
   await fs.writeFile(tmp, JSON.stringify({ seq, queue: durable }, null, 1), { mode: 0o600 })
   await fs.rename(tmp, file)
 }
@@ -247,6 +247,14 @@ export function enqueueThink(text, { now = () => Date.now() } = {}) {
   return push({ kind: 'think', role: 'agent', text: String(text), ts: now() })
 }
 
+// Turn-close marker (0.2.11): lets the page settle its live folds when a
+// turn ends WITHOUT a reply bubble (background nudges). Same ephemeral
+// class as activity/think: never persisted, never clears awaiting, never
+// notifies.
+export function enqueueTurnEnd({ now = () => Date.now() } = {}) {
+  return push({ kind: 'turn-end', role: 'agent', text: '', ts: now() })
+}
+
 // The one presence value (see header). Asymmetric on purpose (live catch,
 // 07-30 dev-harness screenshot): a USER reaction is skipped -- a tap is not
 // a question awaiting an answer -- but an AGENT reaction counts as the agent
@@ -263,7 +271,7 @@ export function transcriptState() {
     // read/typing affordances would claim the user's question was handled
     // by a command starting. Think text is the same class -- reasoning
     // about the answer is not the answer.
-    if (m.kind === 'activity' || m.kind === 'think') continue
+    if (m.kind === 'activity' || m.kind === 'think' || m.kind === 'turn-end') continue
     if (m.role !== 'user') break
     since = m.ts
   }
@@ -655,6 +663,14 @@ export function createRequestHandler({ notify, token, onInbound = () => {} }) {
         // else is an activity label.
         if (parsed.kind === 'think') {
           enqueueThink(label.slice(0, 4000))
+          return send(202, { ok: true })
+        }
+        // kind 'turn-end' (0.2.11): the lane's explicit turn-close signal so
+        // the page can settle its live folds even when the turn produced no
+        // reply bubble (background nudges left "Thinking…" stuck live).
+        // Ephemeral like activity/think: presence, not conversation.
+        if (parsed.kind === 'turn-end') {
+          enqueueTurnEnd()
           return send(202, { ok: true })
         }
         // Length cap: this is a status line, not a second message lane. The
