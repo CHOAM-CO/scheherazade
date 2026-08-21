@@ -21,10 +21,14 @@
 // - Ollama defaults picked by Mino 08-04 19:17 (kimi/glm/deepseek) and
 //   expanded 08-13 ("5개~7개까지 기본지원 모델로") — every id verified
 //   against the live ollama.com catalog + tool-call-probed through the
-//   Anthropic-compat lane the same day. NOT picked, with grounds: kimi-k3
-//   (paywalled), nemotron-3-super (72s first token), nemotron-3-nano:30b
-//   (never called the tool), k2.6/m2.7/glm-5.1 (superseded in-family),
-//   gemma4:31b (too small for agent duty).
+//   Anthropic-compat lane the same day. NOT picked, with grounds:
+//   nemotron-3-super (72s first token), nemotron-3-nano:30b (never called
+//   the tool), k2.6/m2.7/glm-5.1 (superseded in-family), gemma4:31b (too
+//   small for agent duty). kimi-k3 sat here too (paywalled, 08-13) until
+//   ollama.com opened it — added 08-21 on Mino's ask ("올라마 키미K3
+//   지원기념 K3 ㄱ"), tool-call-probed same day through the local ollama
+//   openai-compat surface (same protocol the lane speaks; lane auth path
+//   is OLLAMA_CLOUD_KEY, probe rode the signin proxy).
 // - DSH rows (0.2.1 harness swap): ids the lane's own patch layer serves —
 //   keep in sync with dsh-lane.mjs buildPatch AND provider-env.cjs
 //   DSH_LANE_MODELS. Availability rides computeAvailableProviders() 'dsh'.
@@ -40,6 +44,7 @@
     { id: 'gpt-5.6-sol', label: 'GPT 5.6 Sol', group: 'GPT', providers: ['chatgpt'] },
     { id: 'gpt-5.6-terra', label: 'GPT 5.6 Terra', group: 'GPT', providers: ['chatgpt'] },
     { id: 'gpt-5.6-luna', label: 'GPT 5.6 Luna', group: 'GPT', providers: ['chatgpt'] },
+    { id: 'kimi-k3', label: 'Kimi K3', group: 'Ollama', providers: ['ollama'] },
     { id: 'kimi-k2.7-code', label: 'Kimi 2.7 Code', group: 'Ollama', providers: ['ollama'] },
     { id: 'glm-5.2', label: 'GLM 5.2', group: 'Ollama', providers: ['ollama'] },
     { id: 'deepseek-v4-flash:0731', label: 'DeepSeek V4 Flash (0731)', group: 'Ollama', providers: ['ollama'] },

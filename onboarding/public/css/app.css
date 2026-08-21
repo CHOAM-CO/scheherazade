@@ -14,6 +14,13 @@
      columns when the window is wide (요구 ⑧ "리액티브하게") */
 
 :root {
+  /* Native popup surfaces (select dropdown list, scrollbars): Chromium
+     paints these from color-scheme, not from our CSS — without it the
+     model picker's popup opened as a white OS panel over the dark app
+     (Mino 08-21 "모델 프로바이더 창 톤앤매너 안맞는데"). The app's palette
+     grammar is dark-first (panel ladder mixes bg toward white), so dark is
+     correct even under user-seeded palettes. */
+  color-scheme: dark;
   /* v2 (2026-08-05, Mino "제일 중요한 대원칙 : 일관성"): the user seeds TWO
      colors (bg, accent) in the Appearance tab; appearance-model.cjs derives
      the whole palette — panel ladder rgb triplets, frost wash, hover, focus
@@ -131,6 +138,14 @@ body {
 
 h1, h2, h3 { margin: 0 0 0.5em; font-weight: 600; }
 p { margin: 0 0 0.75em; color: var(--fg-dim); }
+
+/* Select popup rows: Windows/Linux Chromium paints <option> from these;
+   macOS ignores them and follows :root color-scheme instead. Solid raised
+   color on purpose — the popup is an OS surface, it can't be translucent.
+   Global on purpose too: the chat model chip, engine picker, and effort
+   select all share the same popup. */
+option { background: rgb(var(--raised-rgb)); color: var(--fg); }
+optgroup { background: rgb(var(--raised-rgb)); color: var(--fg-dim); font-style: normal; }
 
 button {
   font-family: inherit;
