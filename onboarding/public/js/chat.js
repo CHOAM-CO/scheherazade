@@ -935,10 +935,12 @@
   // are an Engine-page nicety and are NOT merged here -- a running
   // non-catalog model still shows via the "(current)" passthrough.
   const modelSel = $('ct-model-select')
+  const effortSel = $('ct-effort-select') // 0.2.12: effort beside the model chip
   const SET = window.COPY.settings // switchConfirm/switchOk/cancel live there
   let msModel = ''
   let msProvider = null
   let msAvailable = []
+  let msEffort = ''
   let msBusy = false
 
   // Mirror of connectors.js providerForModel: keep the current provider when
@@ -986,6 +988,20 @@
         modelSel.appendChild(og)
       }
       groups.get(m.group).appendChild(opt)
+    }
+  }
+
+  // Effort chip (0.2.12, Mino 08-23): same population rule as the Engine
+  // page's set-effort-select — static levels from the shared catalog file,
+  // "(default)" marks the shipped default.
+  function msPopulateEffort() {
+    effortSel.replaceChildren() // NOT innerHTML — chat.js injection posture (test-chat-surface #1)
+    for (const level of window.SCHZ_EFFORT_LEVELS) {
+      const opt = document.createElement('option')
+      opt.value = level
+      opt.textContent = level === window.SCHZ_EFFORT_DEFAULT ? `${level} (default)` : level
+      if (level === msEffort) opt.selected = true
+      effortSel.appendChild(opt)
     }
   }
 
@@ -1049,6 +1065,46 @@
       } finally {
         msBusy = false
         modelSel.disabled = false
+      }
+    }
+
+    // Effort quick-switch: same /api/agent/effort contract as the Engine
+    // page (restarts the agent), same confirm-first + revert-on-failure
+    // shape as the model chip above. Shares msBusy so a model swap and an
+    // effort swap cannot race each other.
+    if (effortSel && Array.isArray(window.SCHZ_EFFORT_LEVELS)) {
+      msEffort = window.SCHZ_EFFORT_LEVELS.includes(cfg.EFFORT_LEVEL)
+        ? cfg.EFFORT_LEVEL : window.SCHZ_EFFORT_DEFAULT
+      msPopulateEffort()
+      effortSel.title = SET.effortLabel
+      effortSel.hidden = false
+      effortSel.onchange = async (e) => {
+        const effort = e.target.value
+        if (effort === msEffort || msBusy) { e.target.value = msEffort; return }
+        const ok = await window.confirmDialog(SET.effortConfirm(effort), SET.switchOk, SET.cancel)
+        if (!ok) { e.target.value = msEffort; return }
+        const prevEffort = msEffort
+        msEffort = effort
+        msBusy = true
+        modelSel.disabled = true
+        effortSel.disabled = true
+        try {
+          await window.api('/api/agent/effort', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ effort }),
+          })
+          msSettle()
+        } catch (err) {
+          console.error('effort swap failed:', err)
+          window.showToast(window.COPY.genericError(err.message))
+          msEffort = prevEffort
+          e.target.value = prevEffort
+        } finally {
+          msBusy = false
+          modelSel.disabled = false
+          effortSel.disabled = false
+        }
       }
     }
   }

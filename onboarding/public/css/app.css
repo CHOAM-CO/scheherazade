@@ -1622,6 +1622,15 @@ html {
   align-items: center;
   gap: 8px;
 }
+/* agent controls row (0.2.12, Mino 08-23): model + effort chips out of the
+   composer bubble, own row aligned above it — left-set, quiet */
+.chat-agent-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.chat-effort-select { max-width: 9rem; }
 .chat-composer-spacer { flex: 1; }
 /* model quick-switch chip (Mino 08-20 19:09): native select dressed as a
    quiet pill — present but not shouting, claude.ai composer-corner pattern */

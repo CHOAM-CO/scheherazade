@@ -36,18 +36,23 @@
       <!-- attachment chips (image upload, 2026-08-04): pending images shown
            above the composer, removable until send. -->
       <div class="chat-attach-chips" id="ct-attach-chips"></div>
+      <!-- agent controls (0.2.12, Mino 08-23 22:28: "모델 드랍다운이랑
+           에포트는 말풍선쪽에 넣지 말고 다른칸에(위에 정렬)") -- model
+           quick-switch + effort pulled OUT of the composer card into their
+           own quiet row above it. Same chip styling, same server contracts
+           as the Engine page (/api/agent/model, /api/agent/effort). -->
+      <div class="chat-agent-controls">
+        <select id="ct-model-select" class="chat-model-select" hidden></select>
+        <select id="ct-effort-select" class="chat-model-select chat-effort-select" hidden></select>
+      </div>
       <!-- composer (0.2.6): two-deck card, claude.ai/chatgpt pattern from the
-           08-20 reference captures -- text on top, controls bar beneath. The
-           model quick-switch chip lives HERE (Mino 19:09: "LLM 모델 바꾸는건
-           세팅 말고 챗쪽에 드랍다운으로") -- a native <select> styled as a
-           chip, populated from the shared catalog (js/model-catalog.js) and
-           firing the same /api/agent/model swap as the Engine page. -->
+           08-20 reference captures -- text on top, controls bar beneath.
+           (The model chip lived here 0.2.6-0.2.11; moved to the row above.) -->
       <div class="chat-input-row">
         <input type="file" id="ct-file" accept="image/png,image/jpeg,image/gif,image/webp,.pdf,.txt,.md,.csv,.tsv,.json,.log,.xml,.yaml,.yml" multiple hidden />
         <textarea id="ct-input" rows="1" autocomplete="off"></textarea>
         <div class="chat-composer-bar">
           <button class="secondary" id="ct-attach" title="Attach image">+</button>
-          <select id="ct-model-select" class="chat-model-select" hidden></select>
           <span class="chat-composer-spacer"></span>
           <button id="ct-send"></button>
         </div>
