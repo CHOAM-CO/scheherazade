@@ -52,9 +52,12 @@ console.log('-- schedules.json seeding: fresh DATA_HOME')
   try { store = JSON.parse(fs.readFileSync(schedulesPath, 'utf8')) } catch (err) { store = null; ok('schedules.json parses as JSON', false, err.message) }
   if (store) {
     ok('store version is 1', store.version === 1)
-    ok('exactly one seeded entry', Array.isArray(store.schedules) && store.schedules.length === 1, JSON.stringify(store.schedules))
-    const entry = store.schedules[0]
-    ok('id is memory-consolidation', entry && entry.id === 'memory-consolidation')
+    // 0.2.12: madoromi joins memory-consolidation as a shipped default
+    // (Mino 08-23 — dreams never fired on their own before; nothing
+    // triggered the cycle CLAUDE.md promised for "idle stretches").
+    ok('exactly two seeded entries', Array.isArray(store.schedules) && store.schedules.length === 2, JSON.stringify(store.schedules))
+    const entry = Array.isArray(store.schedules) ? store.schedules.find((s) => s && s.id === 'memory-consolidation') : null
+    ok('memory-consolidation entry present', !!entry)
     ok('enabled', entry && entry.enabled === true)
     ok('kind is recurring', entry && entry.kind === 'recurring')
     ok('everyMinutes is 1440 (daily)', entry && entry.everyMinutes === 1440)
@@ -65,6 +68,15 @@ console.log('-- schedules.json seeding: fresh DATA_HOME')
     // bypassing it -- "system" would fire unsupervised with no consent at all.
     ok('createdBy is "agent" (rides the AUTONOMY=yes consent gate, never bypasses it)', entry && entry.createdBy === 'agent')
     ok('lastRunISO starts null', entry && entry.lastRunISO === null)
+    const dream = Array.isArray(store.schedules) ? store.schedules.find((s) => s && s.id === 'madoromi') : null
+    ok('madoromi entry present', !!dream)
+    ok('madoromi enabled', dream && dream.enabled === true)
+    ok('madoromi kind is recurring', dream && dream.kind === 'recurring')
+    ok('madoromi everyMinutes is 1440 (daily)', dream && dream.everyMinutes === 1440)
+    ok('madoromi window is 13:00-21:00 (first contact lands while the human is awake)', dream && dream.window === '13:00-21:00')
+    ok('madoromi prompt names the solo script and the procedure file', dream && /madoromi-solo\.mjs/.test(dream.prompt) && /procedures\/madoromi\.md/.test(dream.prompt), dream && dream.prompt)
+    ok('madoromi createdBy is "agent" (same consent gate as memory-consolidation)', dream && dream.createdBy === 'agent')
+    ok('madoromi lastRunISO starts null', dream && dream.lastRunISO === null)
   }
   const stray = fs.readdirSync(mem).filter((f) => f.endsWith('.tmp') || f.includes('.tmp-'))
   ok('no stray .tmp files left behind by the atomic write', stray.length === 0, JSON.stringify(stray))

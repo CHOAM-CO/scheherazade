@@ -273,6 +273,24 @@ function defaultScheduleStore() {
         createdBy: 'agent',
         lastRunISO: null,
       },
+      // Madoromi (0.2.12, Mino 08-23: "꿈 꾸면 그냥 먼저 톡했으면 좋겠음").
+      // CLAUDE.md always SAID dreams happen in idle stretches, but nothing
+      // ever fired one — the first live agent went 24h dreamless until the
+      // human ran the script by hand. Daily, afternoon/evening window so
+      // the post-dream first contact (procedures/madoromi.md ending) lands
+      // while the human is awake to receive it; ACTIVITY_SUPPRESS defers it
+      // out of live conversation, and createdBy 'agent' rides the same
+      // AUTONOMY=yes consent gate as memory-consolidation — never bypasses.
+      {
+        id: 'madoromi',
+        enabled: true,
+        kind: 'recurring',
+        everyMinutes: 1440,
+        window: '13:00-21:00',
+        prompt: 'An idle stretch. Run your madoromi cycle: madoromi-solo.mjs for the source entries, then read procedures/madoromi.md and follow it.',
+        createdBy: 'agent',
+        lastRunISO: null,
+      },
     ],
   }
 }

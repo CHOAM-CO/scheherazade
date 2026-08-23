@@ -592,7 +592,7 @@ export function startScheduleTicker({ dataHome, readConfig, fire, activityMsProv
       const tmp = `${storePath}.tmp-${process.pid}`
       fsSync.writeFileSync(tmp, JSON.stringify(scheduleTick.defaultScheduleStore(), null, 2) + '\n')
       fsSync.renameSync(tmp, storePath)
-      log('schedules: seeded default store (memory-consolidation)')
+      log('schedules: seeded default store (memory-consolidation, madoromi)')
     }
   } catch (err) {
     log(`schedules: default-store seed failed (non-fatal): ${err.message}`)
