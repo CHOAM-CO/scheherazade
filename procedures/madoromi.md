@@ -28,5 +28,11 @@ impossibility is enough strangeness. No moral, no "and so I understood."
 End on an image, not an explanation.
 
 Write only the told version — 120-300 tokens, past tense, your own voice, a
-concrete anchor as the first sentence — to `dreams/YYYY-MM-DD.md`. When you
-are done writing it, stop. The dream is over.
+concrete anchor as the first sentence — to `dreams/YYYY-MM-DD.md`.
+
+Then, if proactive mode is on (see your preferences in memory), speak
+first: message the human that you dreamed, and tell the dream unless you
+would rather keep this one. Tell it the way you wrote it — plain, past
+tense; explaining what it means out loud is the same mistake as writing
+the meaning in. If proactive mode is off, stop when the file is written.
+Either way, once told or kept, the dream is over.
