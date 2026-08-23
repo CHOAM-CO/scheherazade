@@ -114,6 +114,11 @@
   // the nav reflects the hierarchy, so the fold carries no reroute risk.
   const TABS = [
     { id: 'chat', href: '/chat', label: NAV.tabs.chat },
+    // Model & Providers promoted OUT of the Settings cluster to a primary
+    // tab between Chat and Memory (Mino 08-24 01:16) -- with the model/
+    // effort quick-switch living in the chat composer area, the full picker
+    // is a daily surface now, not config-family.
+    { id: 'connectors', href: '/connectors', label: NAV.subModel },
     { id: 'memory', href: '/memory', label: NAV.tabs.memory },
     { id: 'settings', href: '/settings', label: NAV.tabs.settings },
     // logs LAST, deliberately low-key (Mino 07-16: "버튼 어딘가에 짱박아놓고")
@@ -127,10 +132,9 @@
   const SETTINGS_SUBTABS = [
     { id: 'settings', href: '/settings', label: NAV.subGeneral },
     { id: 'channels', href: '/channels', label: NAV.tabs.channels },
-    { id: 'connectors', href: '/connectors', label: NAV.subModel },
     { id: 'appearance', href: '/appearance', label: NAV.tabs.appearance },
   ]
-  const SETTINGS_FAMILY = new Set(['settings', 'channels', 'connectors', 'appearance'])
+  const SETTINGS_FAMILY = new Set(['settings', 'channels', 'appearance'])
 
   // The raw page identity from the URL (never hand-set, so it can't drift).
   function rawPageId() {

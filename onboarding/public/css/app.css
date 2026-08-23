@@ -1623,12 +1623,15 @@ html {
   gap: 8px;
 }
 /* agent controls row (0.2.12, Mino 08-23): model + effort chips out of the
-   composer bubble, own row aligned above it — left-set, quiet */
+   composer bubble, own row aligned above it — left-set, quiet.
+   0.2.13 (Mino 08-24 01:05 "마진좀 넉넉하게"): breathing room on every
+   side — the chips sat flush against the pane above and the composer
+   card below in the first field capture. */
 .chat-agent-controls {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
+  gap: 10px;
+  margin: 14px 4px 12px;
 }
 .chat-effort-select { max-width: 9rem; }
 .chat-composer-spacer { flex: 1; }
