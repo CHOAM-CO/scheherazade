@@ -1708,8 +1708,14 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 #set-perms-rows .agent-control-row > span:last-child {
   display: inline-grid;
   /* dot column (Mino 22:00: words → 초록불/빨간불): fixed 16px slot, so
-     the buttons align without needing the old wide text column */
-  grid-template-columns: 16px auto;
+     the buttons align without needing the old wide text column.
+     Columns beyond the dot are implicit (auto-flow): the automation row
+     carries TWO buttons (Open Settings + Check) and a fixed `16px auto`
+     template dropped the second one onto an implicit grid ROW — the
+     broken stacked-button capture from Mino, 08-24 10:55. */
+  grid-template-columns: 16px;
+  grid-auto-flow: column;
+  grid-auto-columns: max-content;
   align-items: center;
   gap: 12px;
 }

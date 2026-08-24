@@ -502,11 +502,15 @@
       if (explicitProbe) {
         const btn = document.createElement('button')
         btn.textContent = C.permsProbeButton
-        btn.style.marginLeft = '0.75rem'
+        // spacing owned by the row grid (app.css #set-perms-rows) — an
+        // inline margin here doubles up with the grid gap
         btn.onclick = async () => {
           btn.disabled = true
           badge.className = 'status-line'
-          badge.textContent = C.permsLoading
+          // dot grammar: words ride the hover title, never the 16px dot
+          // column (text there overflows the grid slot)
+          badge.textContent = ''
+          badge.title = C.permsLoading
           try {
             const { row: probed } = await api(explicitProbe, {
               method: 'POST',
@@ -515,7 +519,8 @@
             })
             applyPermBadge(badge, probed)
           } catch (err) {
-            badge.textContent = C.permsIndeterminate
+            badge.textContent = ''
+            badge.title = C.permsIndeterminate
             showToast(GEN(err.message))
           } finally {
             btn.disabled = false
