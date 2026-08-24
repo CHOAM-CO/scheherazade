@@ -589,6 +589,10 @@ async function downloadSlackImageToTmp(url, mime, opts = {}, extHint) {
 // above. meta field names are IDENTICAL to channel.mjs's (sender/channelId/
 // authorId/timestamp) since that tag format is a property of the MCP client,
 // not of Discord or Slack.
+// mention/message double-delivery guard (see the dedup block below):
+// `${channel}:${ts}` -> event.type of the first accepted arrival.
+const inboundSeenTypes = new Map()
+
 async function handleInboundMessage(event, opts = {}) {
   const notify = opts.notify || (notifyInbound)
   const resolveSender = opts.resolveSender || resolveSenderName
@@ -599,9 +603,24 @@ async function handleInboundMessage(event, opts = {}) {
   // app manifest) are ALWAYS accepted; a configured home channel is an
   // additional surface on top. The original home-channel-only scoping
   // ("hard constraint #2") applies only to non-DM channels: any other
-  // channel/group the bot happens to be in stays ignored.
+  // channel/group the bot happens to be in stays ignored -- EXCEPT a
+  // mention (Mino 08-24 "멘션은 무조건 받게"): @-ing the bot is an explicit
+  // summon, so app_mention events are accepted from ANY channel.
   const isDm = event.channel_type === 'im'
-  if (!isDm && event.channel !== HOME_CHANNEL_ID) return { skipped: true, reason: 'not_home_channel_or_dm' }
+  const isMention = event.type === 'app_mention'
+  if (!isDm && !isMention && event.channel !== HOME_CHANNEL_ID) return { skipped: true, reason: 'not_home_channel_or_dm' }
+  // A mention in the HOME channel arrives twice -- once as message.channels,
+  // once as app_mention (same channel, same ts). Drop the second arrival,
+  // keyed on the type differing so a legitimate re-handle of the same event
+  // shape (test seams, Slack redelivery of the SAME type after a missed ack)
+  // is not swallowed.
+  if (event.ts) {
+    const dupKey = `${event.channel}:${event.ts}`
+    const prevType = inboundSeenTypes.get(dupKey)
+    if (prevType && prevType !== event.type) return { skipped: true, reason: 'duplicate_event' }
+    inboundSeenTypes.set(dupKey, event.type)
+    if (inboundSeenTypes.size > 200) inboundSeenTypes.delete(inboundSeenTypes.keys().next().value)
+  }
 
   lastInboundChannelId = event.channel
   lastInboundSurface = 'slack' // real user inbound arrived on Slack (H1 surface tracking)
@@ -657,7 +676,7 @@ async function handleInboundMessage(event, opts = {}) {
   return { content, meta }
 }
 
-socketModeClient.on('message', async ({ event, ack }) => {
+const onSocketInbound = async ({ event, ack }) => {
   try {
     await ack()
   } catch (err) {
@@ -677,7 +696,12 @@ socketModeClient.on('message', async ({ event, ack }) => {
         .catch((e) => log('failure receipt post failed:', e.message))
     }
   }
-})
+}
+socketModeClient.on('message', onSocketInbound)
+// app_mention rides its OWN socket-mode event type -- without this listener
+// a mention outside the home channel never reached the agent at all (Sera's
+// field diagnosis, 08-24: scopes/subscriptions fine, handler DM-only).
+socketModeClient.on('app_mention', onSocketInbound)
 
 // ── Liveness heartbeat gated on ACTUAL connection state (hard constraint #6)
 // ────────────────────────────────────────────────────────────────────────

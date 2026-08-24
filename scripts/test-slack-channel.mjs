@@ -182,6 +182,51 @@ console.log('\n(b2) DM acceptance (message.im)')
   check('bot echo in a DM is still skipped', rEcho.skipped === true && notifyCalls === 0)
 }
 
+// ── (b3) mention acceptance + double-delivery guard (2026-08-24, Mino
+// "멘션은 무조건 받게" -- Sera's field diagnosis: handler was DM/home-only) ──
+console.log('\n(b3) app_mention acceptance (any channel) + home-channel dedup')
+{
+  // an @mention in a NON-home channel is accepted (the explicit-summon rule)
+  let captured = null
+  const mention = { type: 'app_mention', channel: 'C_RANDOM_CHANNEL', user: 'U888', text: '<@UBOT> 세라야 이것 좀', ts: '1700000009.000100' }
+  const r = await handleInboundMessage(mention, {
+    resolveSender: async () => 'MentionUser',
+    notify: async (params) => { captured = params },
+  })
+  check('app_mention outside the home channel is NOT skipped', !r.skipped, JSON.stringify(r))
+  check('mention meta.channelId is the mention channel (reply target)', captured?.meta?.channelId === 'C_RANDOM_CHANNEL', captured?.meta?.channelId)
+
+  // a mention in the HOME channel arrives twice (message.channels +
+  // app_mention, same ts) -- the second arrival of the OTHER type is dropped
+  let notifyCalls = 0
+  const ts = '1700000009.000200'
+  const asMessage = { type: 'message', channel: HOME_ID, user: 'U888', text: '<@UBOT> hello', ts }
+  const asMention = { type: 'app_mention', channel: HOME_ID, user: 'U888', text: '<@UBOT> hello', ts }
+  const r1 = await handleInboundMessage(asMessage, { resolveSender: async () => 'U', notify: async () => { notifyCalls++ } })
+  const r2 = await handleInboundMessage(asMention, { resolveSender: async () => 'U', notify: async () => { notifyCalls++ } })
+  check('first arrival (message.channels) is delivered', !r1.skipped && notifyCalls === 1, JSON.stringify(r1))
+  check('second arrival (app_mention, same ts) is dropped as duplicate', r2.skipped === true && r2.reason === 'duplicate_event' && notifyCalls === 1, JSON.stringify(r2))
+
+  // order-independent: app_mention first, paired message second
+  notifyCalls = 0
+  const ts2 = '1700000009.000300'
+  const m1 = await handleInboundMessage({ type: 'app_mention', channel: HOME_ID, user: 'U888', text: '<@UBOT> again', ts: ts2 }, { resolveSender: async () => 'U', notify: async () => { notifyCalls++ } })
+  const m2 = await handleInboundMessage({ type: 'message', channel: HOME_ID, user: 'U888', text: '<@UBOT> again', ts: ts2 }, { resolveSender: async () => 'U', notify: async () => { notifyCalls++ } })
+  check('mention-first order also delivers exactly once', !m1.skipped && m2.skipped === true && notifyCalls === 1, JSON.stringify(m2))
+
+  // a bot-authored mention (another bot @-ing us) still filters
+  let botCalls = 0
+  const botMention = { type: 'app_mention', channel: 'C_RANDOM_CHANNEL', bot_id: 'B777', text: '<@UBOT> from a bot', ts: '1700000009.000400' }
+  const rb = await handleInboundMessage(botMention, { notify: async () => { botCalls++ } })
+  check('bot-authored mention is still skipped', rb.skipped === true && botCalls === 0)
+
+  // plain (unmentioned) message in a non-home channel stays ignored --
+  // the mention rule must not widen the home-channel scoping itself
+  const plain = { type: 'message', channel: 'C_RANDOM_CHANNEL', user: 'U888', text: 'no mention here', ts: '1700000009.000500' }
+  const rp = await handleInboundMessage(plain, { notify: async () => {} })
+  check('plain non-home channel message is still skipped', rp.skipped === true && rp.reason === 'not_home_channel_or_dm', JSON.stringify(rp))
+}
+
 // ── (c) reply chunking boundary ─────────────────────────────────────────────
 console.log('\n(c) reply chunking boundary (4000-char budget)')
 {
