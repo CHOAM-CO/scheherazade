@@ -1432,6 +1432,7 @@ window.COPY = {
     // shape we have not bound yet; the field list IS the receipt to send us.
     usageOllamaUnknownShape: (fields) => `endpoint answered but the shape is new to us — ${fields}`,
     usageWinWeekly: 'weekly',
+    usageWinFable: 'fable',
     usageError: 'Could not read usage.',
     usageUnreadable: 'unreadable',
     usageStaleNote: (time) => `refresh failed, showing ${time} reading`,

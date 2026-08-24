@@ -269,6 +269,7 @@
     }
     body.appendChild(gaugeSeg({ label: '5h', pctVal: u.fiveHourPct, meta: at(u.fiveHourResetsAt, false) }))
     body.appendChild(gaugeSeg({ label: C.usageWinWeekly, pctVal: u.weeklyPct, meta: at(u.weeklyResetsAt, true) }))
+    if (u.fablePct != null) body.appendChild(gaugeSeg({ label: C.usageWinFable, pctVal: u.fablePct }))
     // Name whose login the meter reads: cli-session = this machine's Claude
     // CLI; app-login = the setup-token (scope-limited, may degrade); the
     // full-scope usage-oauth credential needs no note (it is the intended one).

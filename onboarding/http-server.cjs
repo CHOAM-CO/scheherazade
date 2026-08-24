@@ -2163,10 +2163,16 @@ function resolveBin(name) {
   // app-managed bootstrap dir on both platforms; the Ollama entry is its
   // installer's default user-scope location (harmlessly absent for other
   // names, same shape as probing /opt/homebrew/bin/<name> on mac).
+  const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
+  const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')
   const fixed = process.platform === 'win32'
     ? [
         path.join(DATA_HOME, 'bin', `${name}.exe`),
-        path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Programs', 'Ollama', `${name}.exe`),
+        // Codex standalone installer (OpenAI's own MSI/setup, verified on magi-win)
+        path.join(localAppData, 'Programs', 'OpenAI', 'Codex', 'bin', `${name}.exe`),
+        // npm global install (.cmd shim — needs shell:true in spawn, see below)
+        path.join(appData, 'npm', `${name}.cmd`),
+        path.join(localAppData, 'Programs', 'Ollama', `${name}.exe`),
       ]
     : [
         path.join(DATA_HOME, 'bin', name),
@@ -2202,7 +2208,10 @@ function probeAlreadyLoggedIn(provider, binPath) {
     return Promise.resolve(fs.existsSync(spec.artifact()))
   }
   return new Promise((resolve) => {
-    execFile(binPath, spec.probe.argv, { timeout: LOGIN_PROBE_TIMEOUT_MS }, (err) => resolve(!err))
+    // .cmd shims (npm global bin on Windows) need shell:true for execFile too
+    const opts = { timeout: LOGIN_PROBE_TIMEOUT_MS }
+    if (binPath.endsWith('.cmd')) opts.shell = true
+    execFile(binPath, spec.probe.argv, opts, (err) => resolve(!err))
   })
 }
 
@@ -2248,8 +2257,12 @@ async function startProviderLoginLocked(provider, { force }) {
 
   setLoginStatus(provider, 'running', null, `${spec.bin} ${spec.argv.join(' ')} started -- complete the flow in your browser`)
   log(`login shell-out: spawning ${binPath} ${spec.argv.join(' ')} (provider=${provider}, timeout=${LOGIN_TIMEOUT_MS}ms)`)
+  // .cmd shims (npm global bin on Windows) need shell:true -- Node's spawn
+  // cannot exec a .cmd directly without it. Exe and unix binaries don't.
+  const needsShell = binPath.endsWith('.cmd')
   const child = spawn(binPath, spec.argv, {
-    detached: true, // own pgroup -> group-SIGTERM reaps browser-opener grandchildren too
+    detached: !needsShell, // own pgroup -> group-SIGTERM reaps browser-opener grandchildren too (detached is incompatible with shell:true on Windows)
+    shell: needsShell,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   loginChildren[provider] = child
@@ -3119,6 +3132,23 @@ async function fetchClaudeSubscriptionUsage(opts = {}) {
     return failWith('http_error', `HTTP ${out.res.status}`, Number.isFinite(ra) ? ra * 1000 : 0)
   }
   const body = out.body || {}
+  // Fable weekly pool (same shape the fleet's usage-poll.sh parses since
+  // 2026-07-02): the dedicated Fable quota lives inside the generic
+  // 'limits' array as a 'weekly_scoped' entry keyed by
+  // scope.model.display_name. NOT in a top-level bucket like five_hour.
+  let fablePct = null
+  const limits = Array.isArray(body.limits) ? body.limits : []
+  for (const item of limits) {
+    if (!item || typeof item !== 'object') continue
+    if (item.kind !== 'weekly_scoped') continue
+    const scope = (item.scope && typeof item.scope === 'object') ? item.scope : {}
+    const model = (scope.model && typeof scope.model === 'object') ? scope.model : {}
+    const name = typeof model.display_name === 'string' ? model.display_name.trim().toLowerCase() : ''
+    if (name === 'fable') {
+      fablePct = num(typeof item.percent === 'number' ? item.percent : null)
+      break
+    }
+  }
   const payload = {
     ok: true,
     source, // 'app-login' | 'cli-session' -- UI labels whose login the meter reads
@@ -3126,6 +3156,7 @@ async function fetchClaudeSubscriptionUsage(opts = {}) {
     weeklyPct: num(body.seven_day && body.seven_day.utilization),
     fiveHourResetsAt: (body.five_hour && body.five_hour.resets_at) || null,
     weeklyResetsAt: (body.seven_day && body.seven_day.resets_at) || null,
+    fablePct, // null when absent (non-fable subscription) -- UI skips the gauge
     asOf: new Date(now).toISOString(),
   }
   usageCache = { at: now, payload }
