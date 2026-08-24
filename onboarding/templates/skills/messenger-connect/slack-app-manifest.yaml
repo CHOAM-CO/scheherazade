@@ -5,6 +5,10 @@
 # message.groups — his original carries only app_mention + message.im, which
 # leaves this app's home-channel mode silent (channel-slack.mjs consumes
 # plain `message` events in the home channel; DM mode alone would survive).
+# DEVIATION 2 (2026-08-24, Mino field test): messages_tab_enabled false -> true.
+# His original ships the Messages tab OFF, which locks the DM composer even
+# with all im:* scopes and message.im subscriptions in place — installs from
+# this manifest could never be DM'd. read_only stays false (input allowed).
 # Nothing was removed or reordered. Everything else is verbatim.
 # Canonical copy: the fenced yaml block in SKILL.md must stay byte-identical
 # to this file below the marker — scripts/test-slack-manifest.mjs enforces it.
@@ -16,7 +20,7 @@ display_information:
 features:
   app_home:
     home_tab_enabled: true
-    messages_tab_enabled: false
+    messages_tab_enabled: true
     messages_tab_read_only_enabled: false
   bot_user:
     display_name: Scheherazade
