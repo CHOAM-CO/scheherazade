@@ -87,6 +87,11 @@
   // re-render each tick is safe); the real transcript message retires it.
   // The claude lane never streams, so the bubble simply never appears there.
   let draftEl = null
+  // 0.2.15 background-subagent pill (Mino 08-24 "서브 스폰하면 서브도
+  // working 정보에 띄우게"): /out returns a live `bg` roster; while any
+  // entry exists the pill stays visible EVEN AFTER the turn's run fold
+  // collapsed -- turn end is not work end when children are running.
+  let bgEl = null
 
   function setStatics() {
     $('ct-title').textContent = C.title
@@ -505,6 +510,26 @@
     else appendMsg(m)
   }
 
+  // Background pill: one line above the controls row, present only while
+  // the roster is non-empty. Rebuilt from scratch each poll (it is one
+  // short text line -- no incremental DOM to get wrong).
+  function renderBg(list) {
+    const labels = Array.isArray(list) ? list.map((t) => (t && t.label) || '').filter(Boolean) : []
+    if (!labels.length) {
+      if (bgEl) { bgEl.remove(); bgEl = null }
+      return
+    }
+    if (!bgEl) {
+      bgEl = document.createElement('p')
+      bgEl.className = 'chat-bg-pill'
+      bgEl.setAttribute('aria-label', C.bgPillAria)
+      const status = $('ct-status')
+      if (status && status.parentNode) status.insertAdjacentElement('afterend', bgEl)
+      else pane.appendChild(bgEl)
+    }
+    bgEl.textContent = C.bgPill(labels)
+  }
+
   // The growing draft bubble. Same classes as a real agent bubble plus
   // chat-draft (styling hook); no seq, no react bar, no bubbles entry --
   // those all belong to the authoritative message that replaces it.
@@ -653,6 +678,7 @@
         awaitingSince = (seed.state && seed.state.awaitingReplySince) || null
         if (typeof seed.draft === 'string' && seed.draft) renderDraft(seed.draft)
         else discardDraft()
+        renderBg(seed.bg)
         channelUp = true
         showEmpty()
       } else {
@@ -663,6 +689,7 @@
         awaitingSince = (result.state && result.state.awaitingReplySince) || null
         if (typeof result.draft === 'string' && result.draft) renderDraft(result.draft)
         else discardDraft()
+        renderBg(result.bg)
         channelUp = true
         showEmpty()
       }

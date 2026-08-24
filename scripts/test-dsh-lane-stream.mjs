@@ -128,5 +128,18 @@ console.log('\n4. skill catalog race — nudge after session creation')
 assert(src.includes('skill catalog nudge') && src.includes('fs.utimesSync(f, now, now)'),
   'lane nudges one SKILL.md mtime after session creation (catalog only renders if discovery beats the first request)')
 
+console.log('\n5. background-subagent roster (0.2.15) — lane half of the bg contract')
+assert(src.includes("BG_STARTED_RE = /^started (?:background subagent job|subagent) (\\S+)/"),
+  'launch detection parses dsh-tool-subagent\'s own render text (background job AND continuable forms)')
+assert(src.includes("d.name === 'subagent' && d.callId") && src.includes('pendingSubagentCalls.set(d.callId'),
+  'a subagent tool/call parks its display label under its callId until the result names the id')
+assert(src.includes("postPresence(bgLabel || 'background subagent', 'bg', { id: m[1] })"),
+  'a background launch posts kind:bg with the engine-issued id')
+assert(src.includes("src.kind === 'subagent-settled' && src.senderSessionId") &&
+  src.includes("postPresence('', 'bg', { id: String(src.senderSessionId), done: true })"),
+  'the settlement notice (source.kind subagent-settled) retires the child by senderSessionId')
+assert(src.includes("d.name === 'job_kill' && argsForLabel.jobId"),
+  'job_kill retires its target id immediately (one-shot background jobs get no settlement notice)')
+
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)

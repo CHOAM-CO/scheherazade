@@ -208,6 +208,26 @@ function enqueue(role, text, now) {
 // thread.
 let draftText = null
 
+// Background subagent roster (0.2.15, Mino 08-24 "서브 스폰하면 서브도
+// working 정보에 띄우게"): the dsh lane posts kind:'bg' when the model
+// launches a background/continuable subagent and when its settlement notice
+// comes back. NOT a queue item -- same ephemeral presence class as the
+// draft: /out returns the live roster as a separate `bg` field, so the page
+// can show "still working in the background" ACROSS turn ends (the fold's
+// "Worked for Ns" collapse is about the turn, not the children). Ids are the
+// engine's own (jobId / subagentId), so a stale entry can be retired by id.
+const bgTasks = new Map() // id -> { id, label, since }
+
+export function upsertBgTask(id, label, { now = () => Date.now() } = {}) {
+  const key = String(id)
+  const prev = bgTasks.get(key)
+  bgTasks.set(key, { id: key, label: String(label || (prev && prev.label) || 'background task'), since: prev ? prev.since : now() })
+}
+
+export function retireBgTask(id) { return bgTasks.delete(String(id)) }
+
+export function listBgTasks() { return [...bgTasks.values()] }
+
 export function enqueueOutbound(text, { now = () => Date.now() } = {}) {
   draftText = null // the authoritative message supersedes its own draft
   return enqueue('agent', text, now)
@@ -303,10 +323,10 @@ export function readOutbound(since = 0) {
   // caller's cursor is older than everything we still hold. Without it a
   // client that slept through a trim would see a normal-looking response and
   // silently skip messages.
-  return { items, latest: seq, missed: from > 0 && from < oldestRetained - 1, state: transcriptState(), draft: draftText }
+  return { items, latest: seq, missed: from > 0 && from < oldestRetained - 1, state: transcriptState(), draft: draftText, bg: listBgTasks() }
 }
 
-export function resetQueueForTest() { seq = 0; queue = []; transcriptFile = null; draftText = null }
+export function resetQueueForTest() { seq = 0; queue = []; transcriptFile = null; draftText = null; bgTasks.clear() }
 
 // Deliberate transcript clear -- the "New conversation" clean break (2026-08-18).
 // Empties the queue but keeps `seq` MONOTONIC on purpose: a page holding a
@@ -653,6 +673,17 @@ export function createRequestHandler({ notify, token, onInbound = () => {} }) {
             return send(202, { ok: true })
           }
           if ((draftText || '').length < 16000) draftText = (draftText || '') + chunk.slice(0, 4000)
+          return send(202, { ok: true })
+        }
+        // kind 'bg' (0.2.15): background-subagent roster updates from the
+        // dsh lane. {id, label} adds/refreshes; {id, done:true} retires.
+        // Sits BEFORE the label-required gate: a retire post has no label.
+        if (parsed.kind === 'bg') {
+          const id = typeof parsed.id === 'string' ? parsed.id.trim() : ''
+          if (!id) return send(400, { error: 'id required' })
+          if (parsed.done) { retireBgTask(id); return send(202, { ok: true }) }
+          if (bgTasks.size >= 20 && !bgTasks.has(id)) return send(202, { ok: true }) // roster cap, fail-open
+          upsertBgTask(id, typeof parsed.label === 'string' ? parsed.label.trim().slice(0, 140) : '')
           return send(202, { ok: true })
         }
         const label = typeof (parsed && parsed.label) === 'string' ? parsed.label.trim() : ''

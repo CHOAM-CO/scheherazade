@@ -1123,6 +1123,28 @@ button.nav-ctl.is-busy::after {
 }
 .chat-status-up { color: var(--success); }
 .chat-status-down { color: var(--danger); }
+/* 0.2.15 background-subagent pill: visible while /out's bg roster is
+   non-empty -- turn end is not work end when children are running. The
+   pulsing dot borrows the think-summary liveness grammar. */
+.chat-bg-pill {
+  font-size: 0.8rem;
+  margin: 0 0 0.5rem;
+  color: var(--fg-dim);
+}
+.chat-bg-pill::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 0.5rem;
+  background: var(--accent);
+  animation: chat-bg-pulse 1.6s ease-in-out infinite;
+}
+@keyframes chat-bg-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
 .chat-input-row {
   display: flex;
   gap: 0.6rem;

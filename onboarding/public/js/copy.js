@@ -864,6 +864,14 @@ window.COPY = {
     // is there when wanted, never in the way.
     thinkSummary: 'Thinking…',
     thinkFoldSummary: 'Thought process',
+    // 0.2.15 background-subagent pill (Mino 08-24 "서브 스폰하면 서브도
+    // working 정보에 띄우게"): stays visible across turn ends while any
+    // background child is still working, so "Worked for Ns" cannot read as
+    // "everything is finished".
+    bgPill: (labels) => labels.length === 1
+      ? `Still working in the background: ${labels[0]}`
+      : `Still working in the background (${labels.length}): ${labels.join(' · ')}`,
+    bgPillAria: 'Background tasks the agent has running',
     thinkAria: "The model's reasoning for this turn (click to expand)",
     sendFailed: "Couldn't send. Your message is still in the box — try again.",
     // DM interaction states (v0.0.34). `read` is honest by construction:

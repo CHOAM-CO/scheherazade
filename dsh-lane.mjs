@@ -743,10 +743,33 @@ async function main () {
       .catch((e) => errLog(`mute nudge failed: ${e.message.slice(0, 120)}`))
   }
 
+  // ── background-subagent roster (0.2.15, Mino "서브 스폰하면 서브도
+  // working 정보에 띄우게") ─────────────────────────────────────────────
+  // The subagent tool's result names what it launched ("started background
+  // subagent job X" / "started subagent Y" -- dsh-tool-subagent's render);
+  // the settlement notice comes back as a user message with
+  // source.kind:'subagent-settled' and senderSessionId = the child id.
+  // Roster updates ride postPresence kind:'bg' (fail-open, local page only).
+  const pendingSubagentCalls = new Map() // callId -> display label
+  const BG_STARTED_RE = /^started (?:background subagent job|subagent) (\S+)/
+  function eventMessageText (d) {
+    const content = d && d.message && d.message.content
+    if (!Array.isArray(content)) return ''
+    return content.map((p) => (p && typeof p.text === 'string') ? p.text : '').join('\n')
+  }
+
   // Turn-close accounting: clear pending entries older than the turn end.
   const mux = client.openMux({
     onEvent (sid, event) {
       if (sid !== sessionId || !event) return
+      // Settlement notice (any event type that carries the injected user
+      // message): retire the child from the roster by its own id.
+      try {
+        const src = event.data && event.data.message && event.data.message.source
+        if (src && src.kind === 'subagent-settled' && src.senderSessionId) {
+          postPresence('', 'bg', { id: String(src.senderSessionId), done: true })
+        }
+      } catch {}
       if (event.type === 'turn/end') {
         flushThink(true)
         thinkSentThisTurn = 0
@@ -853,6 +876,14 @@ async function main () {
           const argsForLabel = typeof d.arguments === 'string' ? JSON.parse(d.arguments) : (d.arguments || {})
           const label = activityLabelFor(d.name, argsForLabel)
           if (label) postPresence(label)
+          // Background roster bookkeeping: remember the subagent call's
+          // display label until its result names the launched id; a
+          // job_kill retires its target immediately.
+          if (d.name === 'subagent' && d.callId) {
+            pendingSubagentCalls.set(d.callId, truncLabel(argsForLabel.description || argsForLabel.prompt, 140))
+            if (pendingSubagentCalls.size > 50) pendingSubagentCalls.delete(pendingSubagentCalls.keys().next().value)
+          }
+          if (d.name === 'job_kill' && argsForLabel.jobId) postPresence('', 'bg', { id: String(argsForLabel.jobId), done: true })
         } catch {}
         if (FILE_TOOLS.has(d.name)) {
           try {
@@ -866,6 +897,16 @@ async function main () {
         // callId sits at data.callId on tool/call but inside
         // data.message.source.callId on tool/result (measured session log).
         const callId = d.callId || (d.message && d.message.source && d.message.source.callId)
+        // Background subagent launched: the result text names the id.
+        const bgLabel = callId && pendingSubagentCalls.get(callId)
+        if (bgLabel !== undefined) {
+          pendingSubagentCalls.delete(callId)
+          const m = eventMessageText(d).match(BG_STARTED_RE)
+          if (m) {
+            log(`subagent> background child ${m[1]} (${bgLabel || 'no label'})`)
+            postPresence(bgLabel || 'background subagent', 'bg', { id: m[1] })
+          }
+        }
         const rec = callId && pendingToolPaths.get(callId)
         if (rec) {
           pendingToolPaths.delete(callId)

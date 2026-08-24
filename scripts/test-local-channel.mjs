@@ -18,6 +18,7 @@ import {
   deliverInbound, deliverReaction, transcriptState, handleToolCall,
   createRequestHandler, LOCAL_CHANNEL_ID, MAX_QUEUE, USER_REACTIONS,
   enableTranscriptPersistence, flushTranscript, clearTranscript,
+  upsertBgTask, retireBgTask, listBgTasks,
 } from '../channel-local.mjs'
 
 let pass = 0
@@ -732,6 +733,57 @@ console.log('\n12. send_file_to_discord: copies into chat_uploads, marker the pa
   // cleanup our artifacts only
   try { fsx.unlinkSync(src) } catch {}
   try { copied && fsx.unlinkSync(copied) } catch {}
+  resetQueueForTest()
+}
+
+// ── background-subagent roster (0.2.15, Mino 08-24 "서브 스폰하면 서브도
+// working 정보에 띄우게") ────────────────────────────────────────────────
+{
+  resetQueueForTest()
+  assert(Array.isArray(readOutbound(0).bg) && readOutbound(0).bg.length === 0,
+    '/out carries an empty bg roster by default')
+  upsertBgTask('job-1', 'research MZ slang', { now: () => 1000 })
+  const one = readOutbound(0).bg
+  assert(one.length === 1 && one[0].id === 'job-1' && one[0].label === 'research MZ slang' && one[0].since === 1000,
+    'an upserted bg task appears in /out with id/label/since')
+  upsertBgTask('job-1', 'research MZ slang (round 2)', { now: () => 2000 })
+  const re = readOutbound(0).bg
+  assert(re.length === 1 && re[0].label === 'research MZ slang (round 2)' && re[0].since === 1000,
+    're-upsert refreshes the label but keeps the original since (still ONE task)')
+  upsertBgTask('sub-2', '', { now: () => 3000 })
+  assert(readOutbound(0).bg.length === 2 && readOutbound(0).bg.find((t) => t.id === 'sub-2').label === 'background task',
+    'an empty label falls back to a generic one instead of an empty pill')
+  assert(retireBgTask('job-1') === true && readOutbound(0).bg.length === 1,
+    'retire removes exactly the named task')
+  assert(retireBgTask('job-1') === false, 'retiring an unknown id reports false, no throw')
+  assert(listBgTasks().length === 1 && listBgTasks()[0].id === 'sub-2', 'listBgTasks mirrors the roster')
+  resetQueueForTest()
+  assert(listBgTasks().length === 0, 'resetQueueForTest clears the roster')
+}
+
+// bg roster over the HTTP surface: POST /activity kind:'bg' add + done
+{
+  resetQueueForTest()
+  const token = 'bg-test-token'
+  const handler = createRequestHandler({ token, notify: async () => {}, onInbound: () => {} })
+  const { createServer } = await import('node:http')
+  const srv = createServer(handler)
+  await new Promise((res) => srv.listen(0, '127.0.0.1', res))
+  const port = srv.address().port
+  const post = (body) => fetch(`http://127.0.0.1:${port}/activity`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  })
+  let r = await post({ kind: 'bg', id: 'child-9', label: 'summarize the docs' })
+  assert(r.status === 202, 'bg add returns 202')
+  assert(readOutbound(0).bg.length === 1 && readOutbound(0).bg[0].id === 'child-9',
+    'bg add lands in the roster')
+  r = await post({ kind: 'bg', id: 'child-9', done: true })
+  assert(r.status === 202 && readOutbound(0).bg.length === 0, 'bg done retires the task (202, roster empty)')
+  r = await post({ kind: 'bg', done: true })
+  assert(r.status === 400, 'bg post without id is refused (400)')
+  await new Promise((res) => srv.close(res))
   resetQueueForTest()
 }
 
