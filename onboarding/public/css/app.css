@@ -1237,11 +1237,18 @@ button.nav-ctl.is-busy::after {
 /* ── DM interaction states (v0.0.34) ─────────────────────────────────────
    Reaction chips overlap the bubble's bottom edge (iMessage tapback shape);
    the bubble gets extra bottom margin only when it actually carries one. */
-.chat-has-react { margin-bottom: 0.55rem; }
+.chat-has-react { margin-bottom: 0.8rem; }
 .chat-react-badge {
   position: absolute;
-  bottom: -0.75rem;
-  font-size: 0.78rem;
+  bottom: -1rem;
+  /* 1.5x of the original 0.78rem (Mino 2026-08-24 "이모티콘 좀 더 크게, 1.5배")
+     — the tapback overlay was too small to read at a glance. Overhang and
+     .chat-has-react margin grew with it so the bigger chip still clears the
+     next bubble. Known platform limit, NOT ours to fix here: Chromium on
+     macOS clips the right edge of a few Unicode-14 hand-over-face glyphs
+     (🫡 🫢 …) whose ink is wider than their advance — reproduced in plain
+     Chrome 151 at any font size; scaling changes nothing. */
+  font-size: 1.17rem;
   background: var(--panel-raised);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
