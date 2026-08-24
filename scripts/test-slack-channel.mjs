@@ -227,6 +227,35 @@ console.log('\n(b3) app_mention acceptance (any channel) + home-channel dedup')
   check('plain non-home channel message is still skipped', rp.skipped === true && rp.reason === 'not_home_channel_or_dm', JSON.stringify(rp))
 }
 
+// ── (b4) bot-authored mentions (2026-08-24, Mino "에이전트/앱이 태그하면
+// 못봄") — SELF filters, other bots pass on an explicit mention ───────────
+console.log('\n(b4) other-bot mention acceptance vs self-echo')
+{
+  const self = { userId: 'U_ME', botId: 'B_ME' }
+  // another bot mentions us in a non-home channel -> accepted as a mention
+  let captured = null
+  const otherBot = { type: 'message', channel: 'C_AGENT_CHANNEL', bot_id: 'B_OTHER', username: 'CasparBot', text: '<@U_ME> 세라야 회의록 좀', ts: '1700000011.000100' }
+  const r = await handleInboundMessage(otherBot, { self, notify: async (p) => { captured = p } })
+  check('other-bot mention is NOT skipped', !r.skipped, JSON.stringify(r))
+  check('bot sender falls back to its username (no users.info for bots)', captured?.meta?.sender === 'CasparBot', captured?.meta?.sender)
+
+  // the same event from OUR OWN bot id is still an echo -- even with the mention text
+  let echoCalls = 0
+  const selfEcho = { type: 'message', channel: 'C_AGENT_CHANNEL', bot_id: 'B_ME', text: '<@U_ME> echo', ts: '1700000011.000200' }
+  const rEcho = await handleInboundMessage(selfEcho, { self, notify: async () => { echoCalls++ } })
+  check('self bot_id is still filtered even when the text mentions us', rEcho.skipped === true && echoCalls === 0, JSON.stringify(rEcho))
+
+  // another bot WITHOUT a mention stays filtered even in the home channel
+  const noMention = { type: 'message', channel: HOME_ID, bot_id: 'B_OTHER', text: 'just bot chatter', ts: '1700000011.000300' }
+  const rNo = await handleInboundMessage(noMention, { self, notify: async () => { echoCalls++ } })
+  check('other-bot message without a mention is still filtered', rNo.skipped === true && rNo.reason === 'bot_or_subtype' && echoCalls === 0)
+
+  // with NO self identity known (auth.test not landed), bot events filter as before
+  const unknownSelf = { type: 'message', channel: HOME_ID, bot_id: 'B_OTHER', text: '<@U_ME> hello', ts: '1700000011.000400' }
+  const rUnknown = await handleInboundMessage(unknownSelf, { notify: async () => { echoCalls++ } })
+  check('unknown SELF fails safe: bot mention filtered until auth.test resolves', rUnknown.skipped === true && echoCalls === 0)
+}
+
 // ── (c) reply chunking boundary ─────────────────────────────────────────────
 console.log('\n(c) reply chunking boundary (4000-char budget)')
 {

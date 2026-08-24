@@ -435,6 +435,10 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 function isBotEvent(event) {
   return Boolean(event?.bot_id) || event?.subtype === 'bot_message'
 }
+// This bot's own identity, from auth.test at startup (validateBotToken).
+// Separates SELF (echo, always filtered) from OTHER bots (pass when they
+// mention us). Until it resolves, every bot event filters — fail-safe.
+const SELF = { userId: '', botId: '' }
 // Slack's events_api 'message' type also fires for edits/deletes/joins/etc.
 // via `subtype` (message_changed, message_deleted, channel_join, ...).
 // Discord has no analog -- message.author.bot is discord.js's only such
@@ -597,7 +601,19 @@ async function handleInboundMessage(event, opts = {}) {
   const notify = opts.notify || (notifyInbound)
   const resolveSender = opts.resolveSender || resolveSenderName
 
-  if (isBotEvent(event) || isIgnorableSubtype(event)) return { skipped: true, reason: 'bot_or_subtype' }
+  // Bot handling, two layers (Mino 08-24 "에이전트/앱이 태그하면 못봄"):
+  // SELF always filters (echo guard), but OTHER bots pass when they
+  // explicitly mention this bot. Slack never fires app_mention for
+  // bot-authored messages (its own loop guard), so a bot's tag arrives
+  // only as the plain message event — the acceptance rides that path.
+  // Identity comes from auth.test at startup; while unknown (SELF empty,
+  // e.g. unit tests without a seam) every bot event filters as before.
+  const self = opts.self || SELF
+  const isSelf = Boolean((event.bot_id && self.botId && event.bot_id === self.botId) ||
+    (event.user && self.userId && event.user === self.userId))
+  const botMentionsUs = !isSelf && isBotEvent(event) &&
+    Boolean(self.userId && String(event.text || '').includes(`<@${self.userId}>`))
+  if ((isBotEvent(event) && !botMentionsUs) || isIgnorableSubtype(event)) return { skipped: true, reason: 'bot_or_subtype' }
   // DM-default (2026-08-04, Mino): DMs to the bot (channel_type 'im',
   // message.im event -- needs im:history + the event subscription in the
   // app manifest) are ALWAYS accepted; a configured home channel is an
@@ -607,7 +623,7 @@ async function handleInboundMessage(event, opts = {}) {
   // mention (Mino 08-24 "멘션은 무조건 받게"): @-ing the bot is an explicit
   // summon, so app_mention events are accepted from ANY channel.
   const isDm = event.channel_type === 'im'
-  const isMention = event.type === 'app_mention'
+  const isMention = event.type === 'app_mention' || botMentionsUs
   if (!isDm && !isMention && event.channel !== HOME_CHANNEL_ID) return { skipped: true, reason: 'not_home_channel_or_dm' }
   // A mention in the HOME channel arrives twice -- once as message.channels,
   // once as app_mention (same channel, same ts). Drop the second arrival,
@@ -627,7 +643,11 @@ async function handleInboundMessage(event, opts = {}) {
   lastChannelStore.persist(event.channel)
   lastActivityMs = Date.now()
 
-  const sender = await resolveSender(event.user, opts)
+  // Bot senders usually carry no `user` id — fall back to the bot's own
+  // display identity so the tag names who spoke instead of 'unknown'.
+  const sender = event.user
+    ? await resolveSender(event.user, opts)
+    : (event.username || (event.bot_profile && event.bot_profile.name) || 'unknown')
   const text = (event.text || '').trim()
   // Attachments -> local tmp paths, same convention as channel.mjs
   // (Discord) :757 -- markers per kind (image/PDF vision-gated, text files
@@ -816,7 +836,11 @@ const muteAnnouncer = createMuteStrikeAnnouncer({
 async function validateBotToken(opts = {}) {
   const wc = opts.webClient || slackWeb
   try {
-    await wc.auth.test()
+    const res = await wc.auth.test()
+    // Capture our own identity for the self-vs-other-bot split
+    // (handleInboundMessage). bot_id is present on bot-token auth.test.
+    if (res && res.user_id) SELF.userId = String(res.user_id)
+    if (res && res.bot_id) SELF.botId = String(res.bot_id)
     return { ok: true }
   } catch (err) {
     const reason = `auth.test failed: ${err.message}`
