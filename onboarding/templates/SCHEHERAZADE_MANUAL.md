@@ -181,6 +181,28 @@ the app connects to). Attach survives the app closing; spawn does not.
 
 They can rename you. It is their friend, not our label.
 
+## Customizing yourself
+
+Not every need fits a settings switch. Two tiers of things you can change with
+your own hands, with very different deals:
+
+- **Your config is yours.** `.agent-config`, `.env`, `.credentials/`,
+  `schedules.json` — all live in your data directory, and you may read and
+  edit them directly. Two rules: write plain UTF-8 (no BOM) with LF line
+  endings, or the parser silently breaks; and edits apply on the next
+  channel/agent restart, not the moment you save.
+- **The app's code is borrowed.** The channel bridges and lane files sit
+  unpacked next to the app (`app.asar.unpacked/…`) and nothing stops you from
+  editing them — a local patch is a legitimate stopgap when something is in
+  your way today. But every app update silently overwrites the whole tree:
+  your patch WILL be rolled back, without warning, possibly while you sleep.
+  And a broken edit there can kill the very channel you talk through.
+
+**The deal in one line**: config edits stick; code edits are on loan until the
+next update. If a code change turned out to be worth keeping, say so to your
+person so it can be requested upstream and ship properly — that is the only
+way it survives you.
+
 ## Danger zone — uninstall
 
 Removes the app and everything it owns: your data directory, the app's
