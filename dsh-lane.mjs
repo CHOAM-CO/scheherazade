@@ -874,16 +874,21 @@ async function main () {
       } else if (event.type === 'tool/call') {
         const d = event.data || {}
         log(`tool> ${d.name || '?'}`)
-        if (isReplyClassTool(d.name)) {
-          sawReplyThisTurn = true
-          // The authoritative message is about to land through the reply
-          // tool -- drop any unflushed stream tail and retire the draft NOW,
-          // or a trailing 150ms flush would repaint a stale fragment beside
-          // the delivered reply until turn-end cleared it.
-          if (streamTimer) { clearTimeout(streamTimer); streamTimer = null }
-          streamBuf = ''
-          if (streamedThisTurn) { postPresence('', 'stream', { done: true }); streamedThisTurn = false }
-        }
+        if (isReplyClassTool(d.name)) sawReplyThisTurn = true
+        // Retire the draft on EVERY tool call, not just reply-class (0.2.17,
+        // Mino 08-27 17:08: a multi-step turn's step narration -- "확인해볼게"
+        // / "비교해볼게" between tool calls -- accumulated into one glued
+        // wall in the chat pane). Body text before a tool call is step
+        // commentary: show it while the step is being written, wipe it when
+        // the step fires, exactly like a status line. The delivered answer
+        // never lives in the draft anyway (it rides the reply tool; body-only
+        // answers are the mute-recovery fault class), and mute promotion
+        // reads turnText, which keeps accumulating the full composed text.
+        // For reply-class calls this is the same drop-stale-fragment fix as
+        // before (a trailing 150ms flush would repaint beside the reply).
+        if (streamTimer) { clearTimeout(streamTimer); streamTimer = null }
+        streamBuf = ''
+        if (streamedThisTurn) { postPresence('', 'stream', { done: true }); streamedThisTurn = false }
         flushThink(true) // reasoning that led to this call belongs above it
         try {
           const argsForLabel = typeof d.arguments === 'string' ? JSON.parse(d.arguments) : (d.arguments || {})

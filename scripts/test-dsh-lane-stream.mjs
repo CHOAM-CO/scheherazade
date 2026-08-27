@@ -80,8 +80,14 @@ assert(src.includes('function extractTextField'),
   assert(fn('{"channelId":"in-app"') === null,
     'no text key yet -> null (nothing streamed)')
 }
-assert(/isReplyClassTool\(d\.name\)\) \{[\s\S]{0,600}streamBuf = ''[\s\S]{0,600}done: true/.test(src),
-  'a reply-class tool/call retires the draft immediately (no stale-tail repaint beside the delivered reply)')
+// 0.2.17 (Mino 08-27): the wipe is UNCONDITIONAL at tool/call — step
+// narration between tool calls is ephemeral status, not draft content. The
+// reply-class case (no stale-tail repaint beside the delivered reply) is a
+// subset of the same wipe, so both behaviors ride one assertion: the wipe
+// must sit in the tool/call handler AFTER the sawReplyThisTurn mark and
+// OUTSIDE any isReplyClassTool guard.
+assert(/if \(isReplyClassTool\(d\.name\)\) sawReplyThisTurn = true[\s\S]{0,1600}streamBuf = ''[\s\S]{0,200}done: true/.test(src),
+  'every tool/call retires the draft immediately (step narration is ephemeral; covers the reply-class stale-tail case too)')
 assert(src.includes('replyArgStreams.clear()'),
   'per-call arg buffers reset at turn end')
 
