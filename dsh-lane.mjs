@@ -354,6 +354,19 @@ function ensureLanePreset () {
   let filtered = (cut === -1 ? src : src.slice(0, cut)) +
     '# (tool-web row removed by dsh-lane 0.2.4: web search is the chromux\n' +
     '# websearch skill -- keyless, backend-independent. Mino 08-20.)\n'
+  // tool-ask-user: PRESET-mounted, so the profile-level `tool-ask-user
+  // disabled: true` patch row (added after the 08-19 hang) never reached the
+  // session -- the exact "preset rows cannot be patched" class the tool-web
+  // comment above documents. Confirmed live 2026-08-27 16:58: dsh-lane logged
+  // `tool> ask_user_question` and the turn hung sera (no web UI ever answers).
+  // Remove the row from the authored preset like tool-web; shipped standard
+  // has it BEFORE tool-web (L237 vs L247) so the cut above never caught it.
+  filtered = filtered.replace(
+    /^- id: tool-ask-user\n(?:^ {2}.*\n|^\n)*?(?=^- id: |\Z)/m,
+    '# (tool-ask-user row removed by dsh-lane 0.2.17: ask_user_question awaits\n' +
+    '# a web-UI answer no Scheherazade user can give -- turn hangs forever.\n' +
+    '# Channel agents ask through the reply tool. Mino 08-27 16:58 hang.)\n'
+  )
   filtered = guardSubagentRows(filtered)
   const destDir = path.join(dshHome(), '.agent-presets', LANE_PRESET_ID)
   fs.mkdirSync(destDir, { recursive: true })
