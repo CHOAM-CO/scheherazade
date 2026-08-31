@@ -134,11 +134,18 @@ if (inAppMatch) {
 // they are here because the alternative is no coverage at all for a file that
 // spawns a CLI child and moves a credential.
 
-// Endpoints the UI must call, exactly as the routes define them.
-for (const route of ['/api/setup-token/start', '/api/setup-token/status', '/api/setup-token/code', '/api/setup-token/cancel']) {
-  assert(routeSrc.includes(`pathname === '${route}'`), `route ${route} is defined server-side`)
+// Endpoints the UI must call, exactly as the routes define them. The primary
+// claude login moved from the CLI-spawning setup-token flow to the in-app
+// loopback OAuth (G15, 2026-08-31 "clean-machine, no Claude Code installed"
+// fix): no /code route, because a loopback redirect never pastes a code.
+const loginRouteSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'routes', 'oauth-login.cjs'), 'utf8')
+for (const route of ['/api/claude-login/start', '/api/claude-login/status', '/api/claude-login/cancel']) {
+  assert(loginRouteSrc.includes(`pathname === '${route}'`), `route ${route} is defined server-side`)
   assert(wizardSrc.includes(`'${route}'`), `wizard calls ${route}`)
 }
+// The wizard opens the authorize page it gets back -- the browser leg of the
+// OAuth flow. Without this the login never starts.
+assert(/window\.open\(r\.authorizeUrl/.test(wizardSrc), 'wizard opens the authorize URL in the browser')
 
 // On success the server has ALREADY validated and stored the credential, and
 // there is no key in the form. Routing Next back through validateNextHandler
@@ -153,12 +160,16 @@ if (connectedBlock) {
   assert(/nextBtn\.disabled = false/.test(connectedBlock[0]), 'connected un-gates Next')
 }
 
-// The code box must not be visible until the CLI asks for it.
+// The loopback OAuth flow never pastes a code, so the code box stays hidden
+// throughout -- the wizard re-hides it for this sub-mode and no branch ever
+// reveals it (the old awaiting_code reveal is gone with the CLI dependency).
 assert(/codeField\.className = 'field hidden'/.test(wizardSrc), 'code box starts hidden')
-const awaitingIdx = wizardSrc.indexOf("st === 'awaiting_code'")
-const revealIdx = wizardSrc.indexOf("codeField.classList.remove('hidden')")
-assert(awaitingIdx !== -1 && revealIdx !== -1 && revealIdx > awaitingIdx,
-  'the code box is revealed only under the awaiting_code branch')
+assert(/codeField\.classList\.add\('hidden'\) \/\/ loopback/.test(wizardSrc),
+  'the loopback sub-mode explicitly keeps the code box hidden')
+assert(wizardSrc.indexOf("st === 'awaiting_code'") === -1,
+  'no awaiting_code branch remains (the CLI paste fallback is gone from the primary flow)')
+assert(wizardSrc.indexOf("codeField.classList.remove('hidden')") === -1,
+  'nothing reveals the code box in the loopback flow')
 
 // ORDER pin: renderClaudeArea's reset un-hides the key field for every tab,
 // so the in-app default must re-hide it AFTER that reset. Written the other
@@ -206,11 +217,11 @@ assert((inAppRegion.match(/setInterval/g) || []).length === 1,
 // repaint the status line. The server session outlives the page; the interval
 // does not. Without this the user waits forever on a login that already
 // finished.
-const resumeBlock = wizardSrc.match(/api\('\/api\/setup-token\/status'\)\.then\(\(s\) => \{[\s\S]*?\}\)\.catch/)
+const resumeBlock = wizardSrc.match(/api\('\/api\/claude-login\/status'\)\.then\(\(s\) => \{[\s\S]*?\}\)\.catch/)
 assert(Boolean(resumeBlock), 'located the resume-on-render probe')
 if (resumeBlock) {
   assert(/startSetupPoll\(\)/.test(resumeBlock[0]), 'the resume path restarts the poll for an in-flight flow')
-  for (const st of ['running', 'awaiting_code', 'validating']) {
+  for (const st of ['awaiting_authorize', 'running', 'exchanging']) {
     assert(resumeBlock[0].includes(`'${st}'`), `the resume path treats "${st}" as in-flight`)
   }
   assert(/state === 'idle'/.test(resumeBlock[0]), 'the resume path still short-circuits on idle')
@@ -226,11 +237,12 @@ assert(!wizardSrc.includes("state.provider = 'claude'\n") && !wizardSrc.includes
   'no wizard sub-mode submits provider:\'claude\' (BYOK removed 2026-08-04)')
 const connectorsSrc = fs.readFileSync(new URL('../onboarding/public/js/connectors.js', import.meta.url), 'utf8')
 assert(!/provider: 'claude'[,}]/.test(connectorsSrc), 'connectors page never validates provider:\'claude\' (BYOK row removed)')
-assert(/api\('\/api\/setup-token\/start'/.test(connectorsSrc), 'connectors claude row drives the setup-token capture (re-login)')
-const connResume = connectorsSrc.match(/api\('\/api\/setup-token\/status'\)\.then\(\(s\) => \{[\s\S]*?\}\)\.catch/)
+assert(/api\('\/api\/claude-login\/start'/.test(connectorsSrc), 'connectors claude row drives the in-app loopback OAuth login (re-login)')
+assert(/window\.open\(r\.authorizeUrl/.test(connectorsSrc), 'connectors claude row opens the authorize URL in the browser')
+const connResume = connectorsSrc.match(/api\('\/api\/claude-login\/status'\)\.then\(\(s\) => \{[\s\S]*?\}\)\.catch/)
 assert(Boolean(connResume) && /startSetupPoll\(\)/.test(connResume[0]),
   'connectors claude row resumes an in-flight login poll on load (same rule as the wizard)')
-for (const st of ['running', 'awaiting_code', 'validating']) {
+for (const st of ['awaiting_authorize', 'running', 'exchanging']) {
   assert(connResume && connResume[0].includes(`'${st}'`), `connectors resume path treats "${st}" as in-flight`)
 }
 

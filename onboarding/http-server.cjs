@@ -88,7 +88,7 @@ const { createSetupTokenSession, killSetupTokenChildOnShutdown } = require('../s
 // scope cannot read the usage endpoint). Loopback flow, no native module.
 const {
   createUsageOAuthSession, killUsageOAuthChildOnShutdown, refreshUsageCredential,
-  PROVIDER_ID: USAGE_PROVIDER_ID,
+  PROVIDER_ID: USAGE_PROVIDER_ID, LOGIN_SCOPES,
 } = require('../oauth-usage-session.cjs')
 
 // sudo askpass per-boot token (0.1.0 prep): generated in createOnboardingServer's
@@ -2006,6 +2006,31 @@ function getUsageOAuthSession() {
   return usageOAuthSession
 }
 
+// ── in-app Claude login for the AGENT LANE (claude-subscription) ───────────
+// The browser replacement for `claude setup-token`: same OAuth machinery as
+// the usage session above (loopback redirect, PKCE, single-flight, no CLI),
+// but requesting ONLY user:inference so the endpoint mints the long-lived oat
+// token, and storing the RAW token string as 'claude-subscription' -- byte-for
+// -byte the credential the CLI's setup-token produced. The dsh lane reads that
+// slot unchanged, so this drops the Claude Code CLI dependency for login with
+// zero change to how the agent runs. Separate single-flight instance from the
+// usage session: the two flows must never share one loopback callback port.
+let loginOAuthSession = null
+function getLoginOAuthSession() {
+  if (!loginOAuthSession) {
+    loginOAuthSession = createUsageOAuthSession({
+      storeUsageCredential: (token) => storeProviderKeyVerified('claude-subscription', token),
+      scopes: LOGIN_SCOPES,
+      // Store the raw oat string, not the access+refresh blob -- an
+      // inference-only token is long-lived and never refreshed, and the lane
+      // expects the bare token exactly as setup-token wrote it.
+      serialize: (body) => body.access_token,
+      log,
+    })
+  }
+  return loginOAuthSession
+}
+
 // Parser for `claude mcp list`: real output has a health-check preamble
 // line and local servers marked "⏸ Pending approval", not just the doc's two
 // states. Line-based match naturally skips the preamble; we keep ONLY
@@ -3491,6 +3516,8 @@ const staticCtx = {
   getSetupTokenSession,
   // full-scope OAuth capture for the usage gauge (claude-usage)
   getUsageOAuthSession,
+  // in-app Claude login for the agent lane (claude-subscription, no CLI)
+  getLoginOAuthSession,
   // usage gauge + update check (2026-08-04 tester requests)
   fetchClaudeSubscriptionUsage, fetchCodexUsage, fetchOllamaUsage, checkForUpdate,
   extractClaudeModelsFromBin, fetchOllamaCloudCatalog,
@@ -3530,6 +3557,7 @@ const API_ROUTES = [
   ...require('./routes/migrate.cjs').createRoutes(staticCtx), // G12 (design-0022)
   ...require('./routes/oauth-usage.cjs').createRoutes(staticCtx), // G13 (usage-gauge full-scope OAuth)
   ...require('./routes/files.cjs').createRoutes(staticCtx), // G14 (recent-files ledger, 같이보기 batch 2026-08-19)
+  ...require('./routes/oauth-login.cjs').createRoutes(staticCtx), // G15 (in-app Claude login → claude-subscription, drops CLI dep)
 ]
 
 module.exports = {

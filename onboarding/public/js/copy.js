@@ -1114,6 +1114,13 @@ window.COPY = {
     customPresetGrok: 'Grok (:8766)',
     customPresetOllamaCloud: 'Ollama Cloud (:11434)',
     customPresetCodexApi: 'Codex-as-API (:18080)',
+    // Subscription / pay-as-you-go cloud providers (2026-08-31): pick one and
+    // the Base URL + a starter Model ID fill in; you add your own key. All
+    // three speak the OpenAI-compatible protocol this custom lane already uses.
+    // Model IDs are editable — vendors rotate their default model names often.
+    customPresetKimi: 'Kimi / Moonshot',
+    customPresetDeepSeek: 'DeepSeek',
+    customPresetZai: 'z.ai (GLM)',
     customUrlLabel: 'Base URL',
     customKeyLabel: 'API key (optional)',
     customKeyStoredPlaceholder: 'Key stored — leave blank to keep using it',

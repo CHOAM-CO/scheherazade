@@ -540,18 +540,22 @@
     $('conn-claude-code-hint').textContent = C.claudeSubCodePrompt
     codeBtn.textContent = C.claudeSubCodeButton
 
+    // In-app Claude login via loopback OAuth (G15, drops the Claude Code CLI
+    // dependency the old setup-token flow required). No paste code: the browser
+    // redirect lands on the app's own 127.0.0.1 listener and the exchange runs
+    // in-process, so the code-paste field stays hidden for this flow. States
+    // come from oauth-usage-session.cjs: awaiting_authorize / exchanging are
+    // pending, connected / failed / cancelled are terminal.
+    codeField.classList.add('hidden') // loopback flow never pastes a code
     function applyStatus(s) {
       const st = s && s.state
-      if (st === 'running' || st === 'awaiting_code') {
+      if (st === 'awaiting_authorize' || st === 'running') {
         flow.classList.remove('hidden')
         lineEl.className = 'status-line pending'
         lineEl.textContent = C.claudeSubWaiting
         btn.disabled = true
         cancelBtn.classList.remove('hidden')
-        // awaiting_code = the paste fallback is AVAILABLE, not required --
-        // on most machines the localhost redirect wins and this stays hidden.
-        if (st === 'awaiting_code') codeField.classList.remove('hidden')
-      } else if (st === 'validating') {
+      } else if (st === 'exchanging' || st === 'validating') {
         lineEl.className = 'status-line pending'
         lineEl.textContent = C.claudeSubValidating
         btn.disabled = true
@@ -559,7 +563,6 @@
         stopSetupPoll()
         lineEl.textContent = ''
         flow.classList.add('hidden')
-        codeField.classList.add('hidden')
         cancelBtn.classList.add('hidden')
         btn.disabled = false
         btn.textContent = C.claudeSubRelogin
@@ -569,7 +572,6 @@
         stopSetupPoll()
         lineEl.className = 'status-line failure'
         lineEl.textContent = C.claudeSubFailure(s.reason)
-        codeField.classList.add('hidden')
         cancelBtn.classList.add('hidden')
         btn.disabled = false
       }
@@ -578,7 +580,7 @@
     function startSetupPoll() {
       stopSetupPoll()
       setupPollTimer = setInterval(async () => {
-        try { applyStatus(await api('/api/setup-token/status')) } catch (err) { /* transient: keep polling */ }
+        try { applyStatus(await api('/api/claude-login/status')) } catch (err) { /* transient: keep polling */ }
       }, SETUP_POLL_MS)
     }
 
@@ -587,57 +589,41 @@
       flow.classList.remove('hidden')
       lineEl.className = 'status-line pending'
       lineEl.textContent = C.claudeSubStarting
+      let r
       try {
-        applyStatus(await api('/api/setup-token/start', {
+        r = await api('/api/claude-login/start', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
-        }))
+        })
       } catch (err) {
         lineEl.className = 'status-line failure'
         lineEl.textContent = GEN(err.message)
         btn.disabled = false
         return
       }
+      // Open the authorize page in the user's browser (window.open ->
+      // main.cjs setWindowOpenHandler -> shell.openExternal). On a re-entrant
+      // start the server may return no URL (a flow is already live); keep the
+      // one the browser already has.
+      if (r && r.authorizeUrl) window.open(r.authorizeUrl, '_blank', 'noopener')
+      applyStatus(r)
       startSetupPoll()
     }
 
     cancelBtn.onclick = async () => {
       try {
-        applyStatus(await api('/api/setup-token/cancel', {
+        applyStatus(await api('/api/claude-login/cancel', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
         }))
       } catch (err) { stopSetupPoll() }
     }
 
-    codeBtn.onclick = async () => {
-      const code = codeInput.value.trim()
-      if (!code) return
-      codeBtn.disabled = true
-      try {
-        const s = await api('/api/setup-token/code', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }),
-        })
-        if (s.ok === false && s.reason === 'invalid_code') {
-          lineEl.className = 'status-line failure'
-          lineEl.textContent = C.claudeSubCodeInvalid
-        } else {
-          codeInput.value = ''
-          applyStatus(s)
-        }
-      } catch (err) {
-        lineEl.className = 'status-line failure'
-        lineEl.textContent = GEN(err.message)
-      } finally {
-        codeBtn.disabled = false
-      }
-    }
-
-    // Resume: a login left running by the wizard (or a reload of this page)
+    // Resume: a login left running (wizard hand-off or a reload of this page)
     // must restart its poll -- the server session outlives the page, the
-    // interval does not. Same rule the wizard pins in test-setup-token-copy.
-    api('/api/setup-token/status').then((s) => {
+    // interval does not.
+    api('/api/claude-login/status').then((s) => {
       if (!s || s.state === 'idle') return
       applyStatus(s)
-      if (s.state === 'running' || s.state === 'awaiting_code' || s.state === 'validating') startSetupPoll()
+      if (s.state === 'awaiting_authorize' || s.state === 'running' || s.state === 'exchanging') startSetupPoll()
     }).catch(() => {})
   }
 
@@ -1226,11 +1212,28 @@
     return { warn, stored: reusingStoredKey, priorUrl }
   }
 
+  // A preset pre-fills the Base URL, and (for the cloud providers) a starter
+  // Model ID; the fields stay editable afterward. `detect` is an optional
+  // predicate on a pasted API key that auto-selects the preset when the key's
+  // shape is UNAMBIGUOUS -- only a few are (sk-ant-api03 = a real Anthropic
+  // key, sk-or- = OpenRouter, the id.secret pair = z.ai/Zhipu). Kimi and
+  // DeepSeek both issue plain `sk-` keys indistinguishable from each other and
+  // from OpenAI, so they carry NO detector and rely on the user's pick -- a
+  // wrong guess that routes a key to the wrong vendor is worse than no guess.
   const CUSTOM_PRESETS = [
     { label: S.customPresetClinePass, url: 'http://localhost:18084' },
     { label: S.customPresetGrok, url: 'http://localhost:8766' },
     { label: S.customPresetOllamaCloud, url: 'http://localhost:11434' },
     { label: S.customPresetCodexApi, url: 'http://localhost:18080' },
+    // OpenAI-compatible cloud providers. Model IDs are editable starters --
+    // vendors rotate defaults (verified current 2026-08-31, but check the
+    // vendor's console if a call 404s on the model).
+    { label: S.customPresetKimi, url: 'https://api.moonshot.ai/v1', model: 'kimi-k2.6' },
+    { label: S.customPresetDeepSeek, url: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+    { label: S.customPresetZai, url: 'https://api.z.ai/api/paas/v4', model: 'glm-4.6',
+      // z.ai / Zhipu keys are the legacy `{32-hex-id}.{16-alnum-secret}` pair,
+      // structurally distinct from every plain `sk-` key here.
+      detect: (k) => /^[a-f0-9]{32}\.[A-Za-z0-9]{16,}$/.test(k) },
   ]
 
   async function renderCustomProvider(cfgIn) {
@@ -1255,10 +1258,17 @@
       opt.textContent = preset.label
       presetSel.appendChild(opt)
     }
-    // Populate the URL field on pick; the field stays a plain text input
-    // the user can still edit afterward -- the preset only pre-fills it.
+    // Populate the URL field on pick, and the Model ID field too when the
+    // preset carries a starter model. Both stay plain text inputs the user can
+    // still edit afterward -- the preset only pre-fills them. The option value
+    // is the base URL; the matching preset row carries the model.
     presetSel.onchange = () => {
-      if (presetSel.value) $('set-custom-url-input').value = presetSel.value
+      if (!presetSel.value) return
+      $('set-custom-url-input').value = presetSel.value
+      const picked = CUSTOM_PRESETS.find((p) => p.url === presetSel.value)
+      if (picked && picked.model && !$('set-custom-model-input').value.trim()) {
+        $('set-custom-model-input').value = picked.model
+      }
     }
 
     let cfg = cfgIn || {}
@@ -1287,7 +1297,19 @@
     // the pasted key was paired with, and the only correct thing to compare a
     // later URL change against.
     let pastedKeyBaseUrl = ''
-    $('set-custom-key-input').oninput = () => { keyFromPaste = false; pastedKeyBaseUrl = '' }
+    $('set-custom-key-input').oninput = () => {
+      keyFromPaste = false; pastedKeyBaseUrl = ''
+      // Unambiguous-key auto-detect: if the user has NOT already picked a
+      // preset or typed a Base URL, and the key they just entered matches a
+      // preset's `detect`, select that preset for them (fills URL + model).
+      // Only the structurally-unique key shapes carry a detector, so this can
+      // never mis-route a plain `sk-` key -- see CUSTOM_PRESETS.
+      if (presetSel.value || $('set-custom-url-input').value.trim()) return
+      const k = $('set-custom-key-input').value.trim()
+      if (!k) return
+      const hit = CUSTOM_PRESETS.find((p) => typeof p.detect === 'function' && p.detect(k))
+      if (hit) { presetSel.value = hit.url; presetSel.onchange() }
+    }
 
     // Pasted definition (2026-07-29). Resolves server-side and fills the three
     // fields above; it never saves. The status line stays visible after a

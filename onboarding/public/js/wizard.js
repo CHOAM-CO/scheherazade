@@ -697,16 +697,20 @@
         inAppPanel.appendChild(codeField)
         panel.appendChild(inAppPanel)
 
+        // Primary claude login = in-app loopback OAuth (G15). No CLI, no paste:
+        // the browser redirect lands on the app's 127.0.0.1 listener and the
+        // exchange runs in-process. This is the fix for the clean-machine case
+        // (no Claude Code installed) that the old setup-token path dead-ended
+        // on. The manual Terminal path below stays as the CLI escape hatch.
+        codeField.classList.add('hidden') // loopback flow never pastes a code
         function applySetupStatus(s) {
           const st = s && s.state
-          if (st === 'running' || st === 'awaiting_code') {
+          if (st === 'awaiting_authorize' || st === 'running') {
             statusEl.className = 'status-line pending'
             statusEl.textContent = A.waiting
             loginBtn.disabled = true
             cancelBtn.classList.remove('hidden')
-            // awaiting_code means the fallback is AVAILABLE, not required.
-            if (st === 'awaiting_code') codeField.classList.remove('hidden')
-          } else if (st === 'validating') {
+          } else if (st === 'exchanging' || st === 'validating') {
             statusEl.className = 'status-line pending'
             statusEl.textContent = A.validating
             loginBtn.disabled = true
@@ -716,7 +720,6 @@
             statusEl.textContent = A.success
             loginBtn.disabled = false
             cancelBtn.classList.add('hidden')
-            codeField.classList.add('hidden')
             // The server already validated AND stored the credential, so
             // Next must NOT re-run the key-validate handler -- there is no
             // key in the form to send. Advance directly.
@@ -728,7 +731,6 @@
             statusEl.textContent = A.failure(s.reason)
             loginBtn.disabled = false
             cancelBtn.classList.add('hidden')
-            codeField.classList.add('hidden')
           }
         }
 
@@ -738,7 +740,7 @@
         function startSetupPoll() {
           stopLoginPoll()
           loginPollTimer = setInterval(async () => {
-            try { applySetupStatus(await api('/api/setup-token/status')) } catch (err) { /* transient: keep polling */ }
+            try { applySetupStatus(await api('/api/claude-login/status')) } catch (err) { /* transient: keep polling */ }
           }, 2000)
         }
 
@@ -746,46 +748,27 @@
           loginBtn.disabled = true
           statusEl.className = 'status-line pending'
           statusEl.textContent = A.starting
+          let r
           try {
-            applySetupStatus(await api('/api/setup-token/start', {
+            r = await api('/api/claude-login/start', {
               method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
-            }))
+            })
           } catch (err) {
             statusEl.className = 'status-line failure'
             statusEl.textContent = C.genericError(err.message)
             loginBtn.disabled = false
             return
           }
+          // Open the authorize page (window.open -> shell.openExternal).
+          if (r && r.authorizeUrl) window.open(r.authorizeUrl, '_blank', 'noopener')
+          applySetupStatus(r)
           startSetupPoll()
         }
 
         cancelBtn.onclick = async () => {
-          try { applySetupStatus(await api('/api/setup-token/cancel', {
+          try { applySetupStatus(await api('/api/claude-login/cancel', {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
           })) } catch (err) { stopLoginPoll() }
-        }
-
-        codeBtn.onclick = async () => {
-          const code = codeInput.value.trim()
-          if (!code) return
-          codeBtn.disabled = true
-          try {
-            const s = await api('/api/setup-token/code', {
-              method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }),
-            })
-            if (s.ok === false && s.reason === 'invalid_code') {
-              statusEl.className = 'status-line failure'
-              statusEl.textContent = A.codeInvalid
-            } else {
-              codeInput.value = ''
-              applySetupStatus(s)
-            }
-          } catch (err) {
-            statusEl.className = 'status-line failure'
-            statusEl.textContent = C.genericError(err.message)
-          } finally {
-            codeBtn.disabled = false
-          }
         }
 
         // ── manual Terminal path (preserved, one click away) ─────────────
@@ -876,7 +859,7 @@
         // running (or already connected) renders immediately without
         // spawning anything. Failure to reach it degrades to the buttons
         // above, which is exactly the pre-existing manual onboarding.
-        api('/api/setup-token/status').then((s) => {
+        api('/api/claude-login/status').then((s) => {
           if (!s || s.state === 'idle') return
           applySetupStatus(s)
           // A flow still IN FLIGHT needs its poll restarted, not just its
@@ -884,11 +867,9 @@
           // the server and outlives this page, but the interval driving it
           // died with the previous render -- a reload, or navigating away and
           // back, mid-login. Without this the user sits on "waiting for the
-          // browser login to finish" forever while the child has already
-          // completed and stored the credential. Found by walking my own
-          // orderings, not by a test; the pin for it is in
-          // test-setup-token-copy.mjs.
-          if (s.state === 'running' || s.state === 'awaiting_code' || s.state === 'validating') startSetupPoll()
+          // browser login to finish" forever while the exchange has already
+          // completed and stored the credential.
+          if (s.state === 'awaiting_authorize' || s.state === 'running' || s.state === 'exchanging') startSetupPoll()
         }).catch(() => {})
       }
       // (The sk-ant BYOK fallback sub-mode that used to sit here is gone --

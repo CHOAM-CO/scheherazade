@@ -64,6 +64,14 @@ const TOKEN_URL = 'https://platform.claude.com/v1/oauth/token'
 // normal `claude` login.
 const SCOPES = ['user:profile', 'user:inference', 'user:sessions:claude_code', 'user:mcp_servers']
 
+// The Claude-login (agent-lane) variant requests ONLY this. Exactly what
+// `claude setup-token` asks for -- inference and nothing else -- which is what
+// mints the long-lived (~1yr) oat token instead of the short-lived,
+// refresh-backed pair the full scope set returns. Storing that raw token as
+// 'claude-subscription' makes the browser flow a drop-in for the CLI's
+// setup-token: same credential class, same store slot, lane reads it unchanged.
+const LOGIN_SCOPES = ['user:inference']
+
 const PROVIDER_ID = 'claude-usage'
 
 // Longer than setup-token's 300s is unnecessary -- this is one browser
@@ -73,10 +81,17 @@ const OAUTH_USAGE_TIMEOUT_MS = 300_000
 
 const TERMINAL_STATES = new Set(['connected', 'failed', 'cancelled'])
 
-let liveSessionForShutdown = null
+// A Set, not a single slot: this factory now builds TWO long-lived sessions
+// from one module (the usage gauge's full-scope flow and the agent lane's
+// login flow), each holding its own loopback /callback listener. A single
+// "last one wins" slot would leave the other flow's socket open across
+// shutdown -- the exact orphan the shutdown hook exists to prevent. Every
+// created session registers here and is cancelled on shutdown.
+const liveSessionsForShutdown = new Set()
 function killUsageOAuthChildOnShutdown() {
-  if (!liveSessionForShutdown) return
-  try { liveSessionForShutdown.cancel() } catch { /* already gone */ }
+  for (const s of liveSessionsForShutdown) {
+    try { s.cancel() } catch { /* already gone */ }
+  }
 }
 
 function b64url(buf) {
@@ -85,12 +100,14 @@ function b64url(buf) {
 
 /**
  * @param {object} deps
- * @param {(jsonString: string) => void} deps.storeUsageCredential  throws on failure; receives the serialized {accessToken, refreshToken, expiresAt, scope} blob
+ * @param {(storedValue: string) => void} deps.storeUsageCredential  throws on failure; receives whatever `serialize` returned (default: the serialized {accessToken, refreshToken, expiresAt, scope} blob)
  * @param {(msg: string) => void} [deps.log]
  * @param {typeof fetch} [deps.fetchImpl]  injectable for tests
  * @param {() => number} [deps.now]
  * @param {(handler: Function) => object} [deps.createServer]  injectable http server factory for tests
  * @param {number} [deps.timeoutMs]
+ * @param {string[]} [deps.scopes]  OAuth scopes to request. Default: the full CLI-login set (usage gauge needs user:profile). The Claude-login variant passes ['user:inference'] to mint the long-lived, setup-token-equivalent oat and nothing more.
+ * @param {(tokenBody: object, nowMs: number) => string} [deps.serialize]  turns the token endpoint's JSON into the string handed to storeUsageCredential. Default = serializeCredential (the access+refresh blob the gauge reads). The Claude-login variant passes (body) => body.access_token to store the raw oat string exactly as `claude setup-token` did, so the agent lane reads it unchanged.
  */
 function createUsageOAuthSession(deps) {
   const {
@@ -100,6 +117,8 @@ function createUsageOAuthSession(deps) {
     now = () => Date.now(),
     createServer = (handler) => http.createServer(handler),
     timeoutMs = OAUTH_USAGE_TIMEOUT_MS,
+    scopes = SCOPES,
+    serialize = serializeCredential,
   } = deps
 
   let server = null
@@ -178,7 +197,7 @@ function createUsageOAuthSession(deps) {
       return
     }
     try {
-      storeUsageCredential(serializeCredential(out.body, now()))
+      storeUsageCredential(serialize(out.body, now()))
       setState('connected')
     } catch (err) {
       if (myRun !== runId) return
@@ -283,7 +302,7 @@ function createUsageOAuthSession(deps) {
       client_id: CLIENT_ID,
       response_type: 'code',
       redirect_uri: redirectUri,
-      scope: SCOPES.join(' '),
+      scope: scopes.join(' '),
       code_challenge: challenge,
       code_challenge_method: 'S256',
       state: oauthState,
@@ -309,7 +328,7 @@ function createUsageOAuthSession(deps) {
   }
 
   const api = { start, cancel, status }
-  liveSessionForShutdown = api
+  liveSessionsForShutdown.add(api)
   return api
 }
 
@@ -372,4 +391,5 @@ module.exports = {
   TOKEN_URL,
   AUTHORIZE_URL,
   SCOPES,
+  LOGIN_SCOPES,
 }

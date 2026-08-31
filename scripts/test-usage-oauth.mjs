@@ -220,5 +220,36 @@ async function tick() { await new Promise((r) => setImmediate(r)) }
   check('refresh garbage json -> null', (await refreshUsageCredential('not json', {})) === null)
 }
 
+// ── 6. LOGIN VARIANT: inference-only scope + raw-token store ────────────────
+// The agent-lane login (getLoginOAuthSession in http-server.cjs) reuses this
+// same factory with two overrides: scopes=['user:inference'] and a serialize
+// that returns the bare access_token. This proves the parameterization mints a
+// setup-token-equivalent credential (inference scope only) and stores the RAW
+// oat string -- not the access+refresh blob -- so the dsh lane reads it exactly
+// as it read the CLI's setup-token.
+{
+  const { LOGIN_SCOPES } = require(path.join(ROOT, 'oauth-usage-session.cjs'))
+  const fs = fakeServerFactory(54399)
+  const stored = []
+  const session = createUsageOAuthSession({
+    storeUsageCredential: (v) => stored.push(v),
+    scopes: LOGIN_SCOPES,
+    serialize: (body) => body.access_token,
+    createServer: fs.create,
+    now: () => 2_000_000,
+    fetchImpl: async () => ({ status: 200, json: async () => ({ access_token: 'sk-ant-oat01-LOGIN', refresh_token: 'sk-ant-ort01-IGNORED', expires_in: 31536000, scope: 'user:inference' }) }),
+  })
+  const r = await session.start()
+  const u = new URL(r.authorizeUrl)
+  check('login authorize scope is user:inference ONLY', u.searchParams.get('scope') === 'user:inference', u.searchParams.get('scope'))
+  check('login LOGIN_SCOPES is exactly [user:inference]', Array.isArray(LOGIN_SCOPES) && LOGIN_SCOPES.length === 1 && LOGIN_SCOPES[0] === 'user:inference')
+  check('login still uses S256 PKCE + client_id', u.searchParams.get('code_challenge_method') === 'S256' && u.searchParams.get('client_id') === CLIENT_ID)
+  const state = u.searchParams.get('state')
+  fs.server._fire(`/callback?code=LC&state=${encodeURIComponent(state)}`)
+  await tick(); await tick()
+  check('login state -> connected', session.status().state === 'connected', session.status().state)
+  check('login stored the RAW oat string, not a JSON blob', stored.length === 1 && stored[0] === 'sk-ant-oat01-LOGIN', String(stored[0]))
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

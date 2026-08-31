@@ -39,10 +39,12 @@
   ],
   "messenger-connect/SKILL.md": [
    "152cd5c1aca82d096227abacc056fe7e5bd00dc792f5787fa951cca16b2efde4",
+   "9165c2a2e4c00ef75ad0276d6e2c2c94209f9e6f25c8e46c689ff39136e04370",
    "d7bc6b9ed60d30a50c5fbc983f9853af060129428c1d26c1156ce8a39f2e25de",
    "dd96b0b252ef915daa2ded9bb0a44b70d54470e272dc04dac87c1b39b1121442"
   ],
   "messenger-connect/slack-app-manifest.yaml": [
+   "044935b5cf1aea13ccaf81dbd702b83955a019534d2761f701feff71f285e2ff",
    "2a7890b66cd22ccc74fec0a32ead6d5db1a79009c518f6da5fafec0083f7ef33"
   ],
   "reminders/SKILL.md": [
