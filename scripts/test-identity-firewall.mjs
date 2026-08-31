@@ -105,7 +105,7 @@ const STAMP = path.join(SANDBOX, '.last-briefed-version')
 {
   assert(server.refreshHarnessIfOnboarded(), 'harness refresh succeeds in sandbox')
   const prompt = fs.readFileSync(PROMPT, 'utf8')
-  assert(prompt.includes('inherited archive from a previous agent'), 'standing identity line is rendered')
+  assert(prompt.replace(/\s+/g, ' ').includes('inherited archive from a previous agent'), 'standing identity line is rendered')
   assert(!prompt.includes('{PREDECESSOR_NOTE}') && !prompt.includes('{UPDATE_BRIEF}'), 'no raw placeholder survives rendering')
   assert(!prompt.includes('App update notice'), 'first render after install briefs nothing')
   assert(fs.readFileSync(STAMP, 'utf8').trim() === APP_VERSION, 'first render stamps the current version')
