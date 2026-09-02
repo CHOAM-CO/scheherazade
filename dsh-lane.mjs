@@ -367,7 +367,7 @@ function ensureLanePreset () {
     '# a web-UI answer no Scheherazade user can give -- turn hangs forever.\n' +
     '# Channel agents ask through the reply tool. Mino 08-27 16:58 hang.)\n'
   )
-  filtered = guardSubagentRows(filtered)
+  filtered = guardSubagentRows(filtered, subagentAgentOptions())
   const destDir = path.join(dshHome(), '.agent-presets', LANE_PRESET_ID)
   fs.mkdirSync(destDir, { recursive: true })
   fs.writeFileSync(path.join(destDir, 'agent.cordis.yml'), filtered)
@@ -396,7 +396,24 @@ const SUBAGENT_PERSONA =
   'You are not the user-facing agent: never message the user, never use ' +
   'channel/chat tools. Deliver everything you found as your final assistant ' +
   'message -- that text IS your report to the parent agent.'
-function guardSubagentRows (yamlText) {
+// Subagent model pin (0.2.19, Sera field report 2026-09-02: subagents ran the
+// parent's opus-tier model; directive = run them on haiku/sonnet tier). The
+// pin must live HERE, not in lane.patch.yml or a hand edit: tool-subagent's
+// agentOptions is PRESET-mounted config, and ensureLanePreset force-rewrites
+// the authored preset every boot -- the same "preset rows cannot be patched"
+// class as tool-web/tool-ask-user above (Sera measured the overwrite live).
+// Route-aware defaults: anthropic-catalog pins claude-sonnet-5 (current
+// subagent-tier id, verified against the API skill 2026-09-02; NEVER append
+// a date suffix); a declared route keeps the parent model (explicit, same
+// behavior as before) because we cannot guess a valid id on an arbitrary
+// endpoint -- a wrong id kills every spawn. DSH_SUBAGENT_MODEL overrides both.
+function subagentAgentOptions () {
+  const provider = DSH_ROUTE === 'anthropic-catalog' ? 'anthropic' : DSH_PROVIDER
+  const model = process.env.DSH_SUBAGENT_MODEL ||
+    (DSH_ROUTE === 'anthropic-catalog' ? 'claude-sonnet-5' : DSH_MODEL)
+  return { provider, model }
+}
+function guardSubagentRows (yamlText, agentOptions = null) {
   // Idempotent: ensureLanePreset always feeds the pristine shipped yaml, but
   // a future caller re-running on authored output must not stack the rows.
   if (yamlText.includes(SUBAGENT_DENY)) return yamlText
@@ -415,6 +432,13 @@ function guardSubagentRows (yamlText) {
       out.push(`${ind}  ${SUBAGENT_DENY}`)
       out.push(`${ind}persona: >-`)
       out.push(`${ind}  ${SUBAGENT_PERSONA}`)
+      // agentOptions schema per dsh-tool-subagent lib Config: { provider,
+      // model, maxTokens } -- provider+model only; maxTokens stays default.
+      if (agentOptions) {
+        out.push(`${ind}agentOptions:`)
+        out.push(`${ind}  provider: ${agentOptions.provider}`)
+        out.push(`${ind}  model: ${agentOptions.model}`)
+      }
     }
     // 2. disable the uncontainable spawn paths: mark at the row id, emit
     //    `disabled: true` right after the row's `name:` line.
@@ -431,6 +455,21 @@ function guardSubagentRows (yamlText) {
 // ── engine boot ─────────────────────────────────────────────────────────────
 let child = null
 let childExited = false
+
+// Turn-error recycle (0.2.19, Sera field report 2026-09-02): the supervisor's
+// stall watchdog reads claude-CLI transcripts under ~/.claude/projects, which
+// a dsh lane never creates -- so its stall lane idles forever on this route
+// ("no this-era transcript yet", every boot since 08-24). Sera sat 2h in a
+// `turn end (error: CONTEXT_WINDOW_EXCEEDED)` loop: the process is alive, so
+// no supervisor restart; every inbound burns a turn into the same wall. The
+// lane detects its own terminal shape instead: N CONSECUTIVE genuine turn-end
+// errors -> kill engine + exit(1), supervisor respawns, and main() mints a
+// FRESH session (createSession every boot) -- exactly what the manual
+// control-panel bounce did to revive her. EMPTY_RESPONSE is excluded (healthy
+// silent finish, see the turn-end label logic); any clean turn resets the
+// count. 0 disables.
+const TURN_ERROR_RECYCLE = Number(process.env.DSH_TURN_ERROR_RECYCLE ?? 3)
+let consecutiveTurnErrors = 0
 
 function spawnEngine (patchPath) {
   const env = {
@@ -849,6 +888,17 @@ async function main () {
             ? 'completed; silent final'
             : (reason.kind || '?') + (reason.kind === 'error' && code ? `: ${code}` : '')
           log(`turn end (${label})`)
+          // Terminal-shape self-detection -- see TURN_ERROR_RECYCLE above.
+          if (reason.kind === 'error' && code !== 'EMPTY_RESPONSE') {
+            consecutiveTurnErrors += 1
+            if (TURN_ERROR_RECYCLE > 0 && consecutiveTurnErrors >= TURN_ERROR_RECYCLE) {
+              errLog(`${consecutiveTurnErrors} consecutive turn errors (last: ${code || 'unknown'}) -- recycling lane for a fresh session`)
+              try { if (child && !child.killed) child.kill('SIGTERM') } catch {}
+              process.exit(1)
+            }
+          } else {
+            consecutiveTurnErrors = 0
+          }
         }
       } else if (event.type === 'assistant/chunk') {
         const c = event.data && event.data.chunk

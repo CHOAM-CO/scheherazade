@@ -88,7 +88,17 @@ const denyTwice = (twice.match(/deny: \[mcp__agent-channel__reply, mcp__agent-ch
 assert(denyTwice === 2, `transform is idempotent on deny rows (got ${denyTwice})`)
 
 // 5. source pin: ensureLanePreset actually calls the guard
-assert(/filtered = guardSubagentRows\(filtered\)/.test(src), 'ensureLanePreset routes the authored preset through guardSubagentRows')
+assert(/filtered = guardSubagentRows\(filtered, subagentAgentOptions\(\)\)/.test(src), 'ensureLanePreset routes the authored preset through guardSubagentRows (with the model pin)')
+
+// 4. subagent model pin (0.2.19, Sera field report 2026-09-02): agentOptions
+// rows land on the same two continuable rows, valid child-mapping yaml, and
+// only when a pin is passed -- the bare call (how this test ran the shipped
+// yaml above) must stay pin-free so declared-route behavior is explicit.
+assert(!/agentOptions:/.test(out), 'no agentOptions rows without a pin argument')
+const pinned = guardSubagentRows(fs.readFileSync(shipped, 'utf8'), { provider: 'anthropic', model: 'claude-sonnet-5' })
+const pinCount = (pinned.match(/agentOptions:\n\s+provider: anthropic\n\s+model: claude-sonnet-5/g) || []).length
+assert(pinCount === 2, `agentOptions pin lands on exactly the two continuable rows (got ${pinCount})`)
+assert(/^(\s+)agentOptions:\n\1 {2}provider: anthropic\n\1 {2}model: claude-sonnet-5$/m.test(pinned), 'agentOptions block is indented as a child mapping')
 
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)
