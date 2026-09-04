@@ -170,6 +170,19 @@
       ],
       "artifactName": "Scheherazade-Setup-${version}.exe"
     },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Scheherazade-${version}-x86_64.AppImage",
+      "category": "Utility",
+      "icon": "build/icon_1024.png"
+    },
     "asar": true,
     "npmRebuild": false,
     "publish": [
