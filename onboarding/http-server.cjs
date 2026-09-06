@@ -2954,6 +2954,16 @@ function contextCapForModel(model) {
   // (see the provenance block above). Merged from the old split 5.6→372k /
   // 5.[245]→272k pins once the 372k value was falsified against 0.6.5.
   if (/^gpt-5\.[23456]/.test(base)) return { cap: 272_000, capSource: 'codex-as-api-table' }
+  // gpt-6-astra (added 2026-09-06, v0.2.20): NOT in codex-as-api 0.6.5's
+  // model_capabilities_default, so the proxy serves its unknown-model default
+  // context_window 200_000 (verified in-process with an empty CODEX_HOME:
+  // /health -> {context_window: 200000}) and compacts at 0.9x that. The
+  // model itself is 372K; a user's ~/.codex/config.toml
+  // `model_context_window = 372000` overrides the proxy live (that is how the
+  // MAGI caspar lane reports 372000 on 0.6.3). Pin the proxy's default here
+  // so the gauge matches the compaction point on a fresh machine; re-verify
+  // when codex-as-api learns the gpt-6 family.
+  if (/^gpt-6/.test(base)) return { cap: 200_000, capSource: 'codex-as-api-table' }
   return { cap: null, capSource: null }
 }
 

@@ -123,7 +123,7 @@ console.log('\n-- context-cap drift guard (proxy /health vs the hand-pinned cap)
   process.env.CODEX_HOME = emptyHome
   try {
     // Every gpt-* row the static catalog offers for the chatgpt provider.
-    const CATALOG_GPT = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']
+    const CATALOG_GPT = ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']
     for (const model of CATALOG_GPT) {
       process.env.CODEX_AS_API_MODEL = model
       const health = await healthOf(loadFresh().createApp)
