@@ -10,7 +10,7 @@
 // path, so Node's module cache shares the object -- no IPC.
 //
 // Deliberately SEPARATE from agent-status.cjs rather than folded into it:
-// that module tracks the long-lived run.sh supervisor's process liveness;
+// that module tracks the long-lived supervisor's process liveness;
 // this one tracks short-lived, user-initiated login children, per provider,
 // with a different state vocabulary. Merging them would overload
 // agent-status's `state` enum that computeAgentStatus() and the Step 5
@@ -38,7 +38,7 @@
 //                      unenumerated path (never guess a more specific code)
 // `detail` is free-form prose for logs/UI, mirroring agent-status.cjs.
 
-// 'ollama' removed 2026-08-04 (Mino: "ollama -> API키") -- ollama's connect
+// 'ollama' removed 2026-08-04 (the owner: "ollama -> API키") -- ollama's connect
 // method is now an ollama.com API-key paste (see provider-env.cjs's ollama
 // row), so it has no login shell-out flow anymore. Only chatgpt remains a
 // login-flow provider (`codex login`).

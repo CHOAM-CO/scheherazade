@@ -1,52 +1,47 @@
 #!/usr/bin/env node
-// supervisor.mjs -- node port of run.sh (Windows-port Phase 1).
+// supervisor.mjs -- THE agent supervisor, on mac, Windows and Linux.
 //
-// This file REPLICATES run.sh's battle-tested semantics and FIXES exactly
-// the two things docs/supervisor-design.md's review verdicts approved: kill
-// by child HANDLE instead of blind pkill on the stop path, and a signal
-// handler that reaps the child before exiting. Everything else -- backoff
-// ladder, uptime-only restart policy, the 25s one-shot auto-answer window,
-// the verbatim prompt table (incl. the load-bearing bare-"1"-no-CR API-key
-// answer), asymmetric KST resets, once-per-lifetime env resolution -- is
-// copied deliberately, with run.sh line receipts in the comments. Do not
-// "improve" any of it here; improvements are their own loudly-noted changes
-// AFTER the port proves itself -- see docs/supervisor-design.md for the
-// full verdict rationale.
+// It began (Windows-port Phase 1) as a node port of the bash `run.sh` loop and
+// ran only on Windows while run.sh stayed production on mac and Linux. Since
+// design-0023 P3 there is one lane: run.sh is deleted and this file is what
+// main.cjs spawns everywhere, as `process.execPath supervisor.mjs __loop` with
+// ELECTRON_RUN_AS_NODE=1. What that bought: one restart ladder instead of two,
+// one watchdog instead of three (timeout(1) / a bash sleep+pkill subshell /
+// this file's timers), no `/bin/bash` hardcode to ENOENT on a minimal Linux
+// image, and a DETERMINISTIC runtime for the lane and the dsh engine
+// (process.execPath) instead of whatever `node` PATH happened to resolve.
 //
-// Runtime: plain node OR Electron with ELECTRON_RUN_AS_NODE=1. node-pty is
-// GONE (design-0020): the child is headless-lane.mjs -> claude -p
-// stream-json over plain pipes, so no native module, no ABI question, no
-// PTY. (The old node-pty receipts live in docs/supervisor-design.md and
-// git history.)
+// The semantics are still run.sh's, deliberately: backoff ladder 5/10/20/40/120,
+// uptime-only restart policy, the daily backoff reset, the `.agent-failed.json`
+// shape, and the PIDFILE/STOPFLAG/FAILFILE contract shared with main.cjs
+// (docs/supervisor-design.md -- a LOCKED contract, names and semantics). The
+// two deliberate improvements over the bash original are kill-by-HANDLE on the
+// stop path instead of a blind pkill, and a signal handler that reaps the child
+// before exiting. run.sh line receipts stay in the comments below: they are the
+// argument for why each rule exists, and they outlived the file.
 //
-// run.sh stays the production mac lane until this has run a full real
-// session on both platforms (design: "What run.sh keeps doing"). The seam in
-// main.cjs selects lanes via SUPERVISOR_LANE=node|bash, default bash.
+// Runtime: plain node OR Electron with ELECTRON_RUN_AS_NODE=1. No node-pty, no
+// PTY, no TUI: the child is dsh-lane.mjs (default) or headless-lane.mjs over
+// plain pipes.
 
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { execFileSync, spawn as cpSpawn } from 'node:child_process'
+import { spawn as cpSpawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
+// One process-control seam for all three platforms (design-0023 P3): the
+// absolute-powershell CommandLine read, the $PID-excluding orphan sweep, the
+// taskkill /T tree kill and the PATHEXT resolver all used to live HERE as the
+// best of four hand-copies. They now live in proc.cjs and every caller
+// (main.cjs, the onboarding server, ollama-daemon) shares them.
+import { isPidAlive, readCommandLine as procReadCommandLine, killTree, sweepByPattern, gracefulStop, resolveOnPath } from './proc.cjs'
+import { resolveDataHome } from './data-home.cjs'
+import { localDate, localStamp, agentTimeZone } from './local-date.cjs'
 
 const SELF_PATH = fileURLToPath(import.meta.url)
 const SCRIPT_DIR = path.dirname(SELF_PATH)
 const IS_WIN = process.platform === 'win32'
-
-// Absolute powershell path (2026-08-13, magi-win log: "orphan sweep failed
-// (spawnSync powershell.exe ENOENT)"). The supervisor spawns with a scrubbed
-// PATH (ensureNodeShim rebuilds it for the CLI child, but the supervisor's own
-// execFileSync calls run in the parent env, which on Windows does not
-// guarantee System32 is on PATH). A bare 'powershell.exe' then ENOENTs and the
-// CommandLine read + orphan sweep both silently no-op. Resolve against
-// %SystemRoot% when we can; fall back to the bare name (which still works
-// wherever PATH is intact) so a missing env var never makes this worse.
-const POWERSHELL_EXE = IS_WIN
-  ? (process.env.SystemRoot
-    ? path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-    : 'powershell.exe')
-  : 'powershell.exe'
 
 // ── auto-answer layer: REMOVED (design-0020, headless topology) ─────────────
 // The expect-parity dialog matcher (trust / confirm / local development /
@@ -68,21 +63,15 @@ export function backoffFor(restartCount) {
   return 120
 }
 
-// ── KST clock (run.sh uses TZ=Asia/Seoul date; we use Intl, no TZ env games) ─
-const KST_DATE_FMT = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' })
-const KST_TIME_FMT = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
-
-export function kstDate(nowMs = Date.now()) {
-  return KST_DATE_FMT.format(new Date(nowMs)) // en-CA => YYYY-MM-DD
-}
-
-function kstStamp(nowMs = Date.now()) {
-  // run.sh log(): [%Y-%m-%d %H:%M:%S %Z] with TZ=Asia/Seoul
-  return `${KST_DATE_FMT.format(new Date(nowMs))} ${KST_TIME_FMT.format(new Date(nowMs))} KST`
-}
+// ── local clock (design-0023 P3: one helper, AGENT_TZ, default Asia/Seoul) ──
+// The daily backoff reset and the log stamp used to hardcode Asia/Seoul here
+// and in six other files. Same default, so KST installs see no change; a user
+// who sets AGENT_TZ now gets a supervisor whose "new day" is the same day the
+// note filenames, the journal rows and the nightly cadence use.
+export { localDate }
 
 function makeLog(now = () => Date.now()) {
-  return (msg) => console.log(`[${kstStamp(now())}] ${msg}`)
+  return (msg) => console.log(`[${localStamp(now())}] ${msg}`)
 }
 
 // ── .agent-config parser ────────────────────────────────────────────────────
@@ -121,7 +110,7 @@ export function resolveConfig(env = process.env, scriptDir = SCRIPT_DIR) {
   if (fs.existsSync(configFile)) {
     fileVals = parseAgentConfig(fs.readFileSync(configFile, 'utf8'))
   } else if (!env.AGENT_NAME) {
-    throw new Error(`no .agent-config found at ${configFile}, and AGENT_NAME is not already set in the environment -- run ./setup.sh first, or invoke with AGENT_NAME (and optionally CLAUDE_BIN/MODEL/AGENT_DATA_HOME) pre-exported`)
+    throw new Error(`no .agent-config found at ${configFile}, and AGENT_NAME is not already set in the environment -- run the app once to complete onboarding (it writes .agent-config), or invoke with AGENT_NAME (and optionally CLAUDE_BIN/MODEL/AGENT_DATA_HOME) pre-exported`)
   }
   const merged = { ...env, ...fileVals }
   // Lane switch (0.2.2 full harness swap): EVERY provider row now emits
@@ -132,7 +121,7 @@ export function resolveConfig(env = process.env, scriptDir = SCRIPT_DIR) {
   const laneKind = merged.LANE_KIND === 'headless' ? 'headless' : 'dsh'
   const agentName = merged.AGENT_NAME
   if (!agentName) throw new Error('AGENT_NAME missing from config/env')
-  const mem = merged.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', agentName)
+  const mem = resolveDataHome({ env: merged, agentName, allowMem: false }) // the supervisor SETS MEM for its child; reading one from its own env would be circular
   const model = merged.MODEL || 'claude-opus-4-6'
   const claudeBin = merged.CLAUDE_BIN || 'claude'
   return {
@@ -144,7 +133,7 @@ export function resolveConfig(env = process.env, scriptDir = SCRIPT_DIR) {
     logfile: path.join(mem, 'logs', 'agent.log'),
     stopflag: path.join(mem, '.stop_requested'),
     failfile: path.join(mem, '.agent-failed.json'),
-    // Stop-time reaper patterns, lane parity with run.sh's
+    // Stop-time reaper patterns, carried over verbatim from run.sh's
     // PKILL_PATTERN/PKILL_LEAF_PATTERN (design-0020): the lane's FULL
     // script path (basename alone cross-matched any argv mentioning the
     // file -- editor, grep, the E2E driver's own pkill; live bite
@@ -189,12 +178,11 @@ export function resolveConfig(env = process.env, scriptDir = SCRIPT_DIR) {
   }
 }
 
-// Child argv: OWNED BY headless-lane.mjs (buildArgs) since design-0020.
-// Both lanes (run.sh and this supervisor) now exec the SAME lane script and
-// pass the SAME env contract (AGENT_NAME / MEM / CLAUDE_BIN / MODEL /
-// SYSTEM_PROMPT_FILE? / MCP_CONFIG_FILE? / tuning knobs) -- argv parity is
-// by construction, not by mirrored code. test-supervisor.mjs pins the env
-// contract instead of an argv table.
+// Child argv: OWNED BY headless-lane.mjs (buildArgs) since design-0020. This
+// supervisor only passes the env contract (AGENT_NAME / MEM / CLAUDE_BIN /
+// MODEL / SYSTEM_PROMPT_FILE? / MCP_CONFIG_FILE? / tuning knobs), so argv is
+// single-sourced by construction. test-supervisor.mjs pins the env contract
+// instead of an argv table.
 
 // ── node shim for the hook lane (v0.0.15 Root A fix) ────────────────────────
 // Claude Code hook commands (ours AND third-party plugins') start with bare
@@ -303,26 +291,27 @@ export function clearFailureMarker(failfile) {
   try { fs.rmSync(failfile, { force: true }) } catch {}
 }
 
-// ── identity check (run.sh is_our_supervisor, main.cjs isOurSupervisor) ─────
-// Signature = the CONTIGUOUS substring `<SELF_PATH> __loop`, same convention
-// as `<RUN_SH_PATH> __loop` (contiguity + ps -ww receipts: run.sh:126-174).
+// ── identity check (main.cjs isOurSupervisor's twin) ───────────────────────
+// Signature = the CONTIGUOUS substring `<SELF_PATH> __loop`, the exact
+// command line main.cjs spawns and the attach bootstrap execs (contiguity +
+// `ps -ww` receipts: run.sh:126-174, the argument outlived the file).
 // Fail SAFE: lookup erroring/empty/non-matching all resolve to "not
 // verified" -- callers never trust it as already-running, never force-kill.
 export function isOurSupervisor(pid, opts = {}) {
   return classifyPidfileOwner(pid, opts) === 'ours'
 }
 
-// Cross-LANE hazard (the reason 'foreign_supervisor' exists as a third
-// verdict): run.sh and supervisor.mjs share the same PIDFILE, and each
-// lane's stopper only recognizes its own spawn signature. Treating a LIVE
-// other-lane supervisor as "stale" would delete the pidfile out from under
-// it -- orphaning a running agent with a live Discord connection, and
-// letting the next start double-spawn a second supervisor onto the same
-// token (the exact Fix-C class disaster main.cjs's PIDFILE participation
-// exists to prevent). run.sh is frozen (production mac lane until the port
-// proves itself), so the tolerance lives HERE: a live pid whose command
-// line carries the bash lane's contiguous `run.sh __loop` marker is
-// FOREIGN, not stale -- refuse to touch its state, tell the caller.
+// UPGRADE hazard (the reason 'legacy_supervisor' exists as a third verdict):
+// an install updating from <=0.2.20 can still have a live `bash .../run.sh
+// __loop` supervisor holding this same PIDFILE. Calling it "stale" would
+// delete the pidfile out from under a running agent -- orphaning it with a
+// live Discord connection, and letting the next start double-spawn a second
+// supervisor onto the same token (the exact Fix-C class disaster main.cjs's
+// PIDFILE participation exists to prevent). So a live pid whose command line
+// carries the old contiguous `run.sh __loop` marker is LEGACY: recognized,
+// never adopted as ours, and stoppable (stopAgent below reaps it the same way
+// it reaps ours -- there is no `run.sh stop` left to delegate to). Remove this
+// verdict once no install can still be running a 0.2.x lane.
 export function classifyPidfileOwner(pid, {
   signature = `${SELF_PATH} __loop`,
   readCommandLine = defaultReadCommandLine,
@@ -332,26 +321,14 @@ export function classifyPidfileOwner(pid, {
   try { cmd = readCommandLine(pid) } catch { return 'stale' }
   if (!cmd) return 'stale'
   if (cmd.includes(signature)) return 'ours'
-  if (cmd.includes('run.sh __loop')) return 'foreign_supervisor'
+  if (cmd.includes(LEGACY_BASH_SIGNATURE)) return 'legacy_supervisor'
   return 'stale'
 }
 
-function isPidAlive(pid) {
-  try { process.kill(pid, 0); return true } catch (err) { return err.code === 'EPERM' }
-}
+// The pre-0.3 bash lane's contiguous spawn signature. Recognition only.
+const LEGACY_BASH_SIGNATURE = 'run.sh __loop'
 
-function defaultReadCommandLine(pid) {
-  if (IS_WIN) {
-    // VERIFIED BY EXECUTION 2026-08-01 (Idea spike on magi-win): CommandLine
-    // read from a node-spawned child, 3 runs 268/295/405ms (all <2s),
-    // CommandLine present and matching -- receipts in
-    // docs/supervisor-design.md (Architecture). Fail-safe posture stands:
-    // an error here just reads as "not verified".
-    return execFileSync(POWERSHELL_EXE, ['-NoProfile', '-Command',
-      `(Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}").CommandLine`], { encoding: 'utf8' }).trim()
-  }
-  return execFileSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8' })
-}
+const defaultReadCommandLine = procReadCommandLine
 
 // ── orphan sweep (run.sh:372 pre-spawn pkill, replicated per-iteration) ─────
 // Design verdict 1 keeps the pattern sweep ONLY as orphan cleanup mirroring
@@ -362,30 +339,7 @@ function defaultReadCommandLine(pid) {
 // are leaves that outlived their supervisor. stop-path blind sweeps
 // (run.sh:455,475) are DROPPED; the handle replaces them (verdict 1).
 function sweepOrphansDefault(pkillPattern, log) {
-  try {
-    if (IS_WIN) {
-      // VERIFIED BY EXECUTION 2026-08-18 (Idea repro on magi-win): the sweep
-      // powershell's OWN command line contains `*<pattern>*`, so the
-      // Where-Object matched the sweep process itself and Stop-Process
-      // -Force killed it mid-pipeline -- exit 0xFFFFFFFF, empty
-      // stdout/stderr, "orphan sweep failed" on EVERY win boot, and no
-      // orphan was ever actually swept. `-ne ${process.pid}` excludes the
-      // supervisor (node), not this powershell child; POSIX pkill never
-      // matches itself, which is why only win32 broke. Fix: also exclude
-      // $PID (powershell's own-process automatic variable). Receipts:
-      // repro matrix 2026-08-18, current shape FAIL -1 / +$PID OK, and a
-      // planted fake-cmdline orphan still gets swept.
-      const escaped = pkillPattern.replace(/'/g, "''")
-      execFileSync(POWERSHELL_EXE, ['-NoProfile', '-Command',
-        `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${escaped}*' -and $_.ProcessId -ne ${process.pid} -and $_.ProcessId -ne $PID } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`],
-        { encoding: 'utf8' })
-    } else {
-      execFileSync('pkill', ['-f', '--', pkillPattern], { encoding: 'utf8' })
-    }
-  } catch (err) {
-    // pkill exit 1 = "no process matched" -- the normal case, not an error.
-    if (err.status !== 1) log(`orphan sweep failed (${err.message}) -- continuing`)
-  }
+  sweepByPattern(pkillPattern, { log })
 }
 
 // ── stall/thrash watchdog (v0.0.15 Root B fix) ──────────────────────────────
@@ -423,7 +377,7 @@ function sweepOrphansDefault(pkillPattern, log) {
 // the exact silent-detector class this teardown was about.
 //
 // Munge rule: EVERY non-alphanumeric becomes '-', not just path.sep --
-// confirmed raw: ~/Documents/MAGI_Memory -> -Users-narr-Documents-MAGI-
+// confirmed raw: ~/Documents/Agent_Memory -> -Users-user-Documents-Agent-
 // Memory, and session_notes -> session-notes inside deeper project dirs.
 // A '_' or '.' in AGENT_DATA_HOME under sep-only munge would re-open the
 // same fail-quiet hole one layer down. Default MEM (~/Documents/<name>) only
@@ -543,7 +497,7 @@ export function stallVerdict(tail, { userStallMs, syntheticStallMs } = {}) {
 
 // The whole transcript-lane poll as ONE testable closure -- extracted from
 // the child spawner so the era-guard arithmetic is unit-attackable instead of
-// verified-by-inspection only (Melchior review focus, 07-15). Returns a
+// verified-by-inspection only (the reviewer review focus, 07-15). Returns a
 // bounce-reason string or null; the caller owns the actual kill.
 // Era guard, two layers: file binding (newestTranscript eraStart, gate G1)
 // keeps prior-generation files out entirely; the tail-timestamp check stays
@@ -587,6 +541,64 @@ export function createStallLane({
     }
     const verdict = stallVerdict(tail, { userStallMs, syntheticStallMs: stallMs })
     return verdict ? `transcript stalled ${Math.round(tail.ageMs / 60000)}min: ${verdict}` : null
+  }
+}
+
+// ── dsh watchdog lane: the LANE's own heartbeat (design-0023 P3 #7) ────────
+// createStallLane above reads the Claude CLI's transcript jsonl. The dsh lane
+// writes no such file -- it talks to the engine over a mux event stream -- so
+// on the DEFAULT lane that watchdog has been watching an empty directory since
+// 0.2.2, logging `no this-era transcript yet` exactly once and then nothing.
+// Silently inert, on the path almost every install actually runs.
+//
+// dsh-lane.mjs now beats into $MEM/.lane-heartbeat.json every 15s
+// ({bornTs, ts, lastEventTs, pendingSince}); this reads it. The JUDGEMENT and
+// the kill stay here on purpose: the restart ladder, the shared bounce budget
+// and the pidfile all live in this process, and a lane cannot enforce a budget
+// across its own restarts -- nor restart itself once it is the wedged thing.
+//
+// Two verdicts, both fail-QUIET (a missing or unparseable file is never a
+// bounce -- a watchdog that kills on its own read error is a crash loop):
+//   (1) the beat itself went stale -- the lane could not run a 15s timer for
+//       a whole stall window, so it is wedged, not merely idle;
+//   (2) an inbound has been pending past the same 2x user window the
+//       transcript lane uses -- accepted, never answered.
+// There is no thrash lane here: `autocompact thrash` is a Claude-Code
+// synthetic-error shape with no dsh equivalent to count.
+export function createLaneHeartbeatLane({
+  heartbeatFile, stallMs, spawnedAt,
+  now = () => Date.now(), log = () => {},
+  userStallMs = stallMs * 2,
+}) {
+  let noBeatLogged = false
+  const quiet = (msg) => {
+    if (noBeatLogged) return null
+    noBeatLogged = true
+    log(`watchdog: ${msg} -- heartbeat lane idle until one appears`)
+    return null
+  }
+  return function poll() {
+    let hb
+    try { hb = JSON.parse(fs.readFileSync(heartbeatFile, 'utf8')) } catch { return quiet(`no lane heartbeat at ${heartbeatFile}`) }
+    if (!hb || typeof hb !== 'object') return quiet(`lane heartbeat at ${heartbeatFile} is not an object`)
+    const born = Number(hb.bornTs) || 0
+    // Era guard, the same rule newestTranscript applies to birthtimes: a
+    // heartbeat left by the PREVIOUS child must never bounce this one.
+    if (born < spawnedAt) return quiet(`lane heartbeat predates this child (born ${born} < spawned ${spawnedAt})`)
+    noBeatLogged = false
+    const beat = Number(hb.ts) || 0
+    const beatAge = now() - beat
+    if (beat && beatAge > stallMs) {
+      return `lane heartbeat stale ${Math.round(beatAge / 60000)}min: the lane stopped beating (wedged event loop, not idle)`
+    }
+    const pendingSince = Number(hb.pendingSince) || 0
+    if (pendingSince) {
+      const pendingAge = now() - pendingSince
+      if (pendingAge > userStallMs) {
+        return `inbound pending ${Math.round(pendingAge / 60000)}min with no turn end (accepted, never answered)`
+      }
+    }
+    return null
   }
 }
 
@@ -699,8 +711,8 @@ function spawnHeadlessChild(cfg, { now = () => Date.now(), log, watchdogBounces 
   // half-disabled surprises for an operator opting out of bounces.
   //
   // Windows: ENABLED as of 2026-08-13. The transcript munge is now verified on
-  // magi-win -- DATA_HOME C:\Users\minom\Documents\Scheherazade produced the
-  // real CLI project dir C--Users-minom-Documents-Scheherazade, exactly what
+  // the Windows box -- DATA_HOME C:\Users\winuser\Documents\Scheherazade produced the
+  // real CLI project dir C--Users-winuser-Documents-Scheherazade, exactly what
   // transcriptDirFor's `[^a-zA-Z0-9] -> '-'` rule yields (pinned in
   // test-supervisor.mjs). The tester runs Windows, and leaving the ONE OS
   // where the silent-dead reports originated with no stall protection was the
@@ -730,11 +742,21 @@ function spawnHeadlessChild(cfg, { now = () => Date.now(), log, watchdogBounces 
         return v && typeof v.sessionId === 'string' && v.sessionId ? v.sessionId : null
       } catch { return null }
     }
-    const poll = createStallLane({
-      transcriptDir: transcriptDirFor(cfg.mem),
-      stallMs: cfg.stallTimeoutSec * 1000,
-      spawnedAt, now, log, readSessionId,
-    })
+    // ONE watchdog, two evidence sources, chosen by the lane that is actually
+    // running: the CLI lane leaves a transcript jsonl, the dsh lane beats into
+    // a heartbeat file. Before P3 only the transcript lane existed, so the
+    // DEFAULT lane had no stall protection at all while the log claimed it did.
+    const poll = cfg.laneKind === 'dsh'
+      ? createLaneHeartbeatLane({
+        heartbeatFile: path.join(cfg.mem, '.lane-heartbeat.json'),
+        stallMs: cfg.stallTimeoutSec * 1000,
+        spawnedAt, now, log,
+      })
+      : createStallLane({
+        transcriptDir: transcriptDirFor(cfg.mem),
+        stallMs: cfg.stallTimeoutSec * 1000,
+        spawnedAt, now, log, readSessionId,
+      })
     stallTimer = setInterval(() => {
       const reason = poll()
       if (reason) bounce(reason)
@@ -744,17 +766,14 @@ function spawnHeadlessChild(cfg, { now = () => Date.now(), log, watchdogBounces 
 
   function killHandle(sig) {
     try {
-      if (IS_WIN) {
-        // taskkill /T = whole tree. VERIFIED BY EXECUTION 2026-08-01 (Idea
-        // spike on magi-win): synthetic 3-level node tree, grandchild
-        // explicitly reported terminated -- receipts in
-        // docs/supervisor-design.md (Kill lane). Caveat kept honest: tree
-        // was plain node processes; re-run the same driver against the real
-        // CLI+MCP tree once a live win session exists.
-        execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { encoding: 'utf8' })
-      } else {
-        child.kill(sig)
-      }
+      // proc.killTree: taskkill /PID /T /F on win32 (whole tree -- VERIFIED BY
+      // EXECUTION 2026-08-01 on the Windows box against a synthetic 3-level
+      // node tree; the real CLI+MCP tree receipt is still owed), a plain
+      // handle kill here on POSIX because the child is not a group leader --
+      // it shares OUR group, so a negative-pid signal would hit this
+      // supervisor too.
+      if (IS_WIN) killTree(child.pid, sig)
+      else child.kill(sig)
     } catch {}
   }
 
@@ -826,7 +845,7 @@ export async function runLoop(cfg, deps = {}) {
 
   let restartCount = 0
   let spawnSeq = 0 // boot-event iteration counter (run.sh's SPAWN_SEQ twin)
-  let lastKstDate = kstDate(now())
+  let lastLocalDate = localDate(now())
   // Fresh loop start: don't carry a failure marker over from a previous life
   // (run.sh:353-356 -- e.g. the user fixed a bad key and relaunched).
   clearFailureMarker(cfg.failfile)
@@ -838,11 +857,11 @@ export async function runLoop(cfg, deps = {}) {
     log('stop requested, exiting')
   }
 
-  // Graceful-quit hold (129 loop, Mino live 2026-08-05 02:01): while
+  // Graceful-quit hold (129 loop, the owner live 2026-08-05 02:01): while
   // main.cjs's .shutdown-request marker sits in MEM, the app is inside its
   // quit grace window — respawning a child here just gets it killed at grace
   // expiry, and each respawn re-processes the shutdown turn (the "무한부팅"
-  // Mino watched). Hold instead of spawning until the marker clears; main
+  // the owner watched). Hold instead of spawning until the marker clears; main
   // always unlinks it (ack or timeout) and then stops this supervisor, so
   // the hold cannot outlive the quit. Freshness-capped like channel.mjs's
   // watcher so a crash-leftover marker cannot freeze a fresh boot forever.
@@ -864,17 +883,17 @@ export async function runLoop(cfg, deps = {}) {
       log('shutdown-request cleared -- resuming spawn loop')
     }
 
-    const curKst = kstDate(now())
-    if (curKst !== lastKstDate) {
+    const curLocalDate = localDate(now())
+    if (curLocalDate !== lastLocalDate) {
       // Verdict 6, REPLICATED asymmetry with the presumed reason written
       // down: a new day resets PATIENCE (the backoff count), it does not fix
       // a bad token -- so the failure marker deliberately survives the
       // rollover until a run actually lives past 300s. If this presumption
       // is wrong, this comment is where to find the decision; silence made
       // the bash version archaeology.
-      log(`KST date rolled over (${lastKstDate} -> ${curKst}), backoff reset`)
+      log(`local date rolled over in ${agentTimeZone()} (${lastLocalDate} -> ${curLocalDate}), backoff reset`)
       restartCount = 0
-      lastKstDate = curKst
+      lastLocalDate = curLocalDate
     }
 
     sweepOrphans()
@@ -929,25 +948,17 @@ export async function runLoop(cfg, deps = {}) {
 }
 
 // ── start / stop modes (run.sh start_agent/stop_agent) ──────────────────────
-function resolveOnPath(bin) {
-  if (bin.includes(path.sep)) return fs.existsSync(bin) ? bin : null
-  const exts = IS_WIN ? (process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';') : ['']
-  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
-    if (!dir) continue
-    for (const ext of exts) {
-      const candidate = path.join(dir, bin + ext.toLowerCase())
-      if (fs.existsSync(candidate)) return candidate
-      const candidateUpper = path.join(dir, bin + ext)
-      if (ext && fs.existsSync(candidateUpper)) return candidateUpper
-    }
-  }
-  return null
-}
-
 function startAgent(cfg) {
   const log = console.log
-  if (!resolveOnPath(cfg.claudeBin)) {
-    console.error(`FATAL: '${cfg.claudeBin}' not found on PATH`)
+  // The Claude CLI is a requirement of the HEADLESS lane only. dsh-lane.mjs
+  // has execed no `claude` since 0.2.2 (it drives the bundled dsh engine and
+  // ignores CLAUDE_BIN entirely), yet this gate refused to start the DEFAULT
+  // lane on any machine without a claude binary on PATH -- a hard FATAL for a
+  // dependency that lane does not have. On Windows, where nothing installs the
+  // CLI by default, that is the whole product refusing to boot over a tool it
+  // never runs. Gate the lane that actually needs it, and only that one.
+  if (cfg.laneKind === 'headless' && !resolveOnPath(cfg.claudeBin)) {
+    console.error(`FATAL: '${cfg.claudeBin}' not found on PATH (required by LANE_KIND=headless; the default dsh lane does not need it)`)
     process.exit(1)
   }
   const existingPid = readPid(cfg.pidfile)
@@ -956,10 +967,10 @@ function startAgent(cfg) {
     log(`${cfg.agentName} already running (pid ${existingPid})`)
     return
   }
-  if (owner === 'foreign_supervisor') {
+  if (owner === 'legacy_supervisor') {
     // Starting anyway would put two supervisors on one agent name / one
-    // Discord token. Fail loud, change nothing.
-    console.error(`a run.sh-lane supervisor (pid ${existingPid}) is already running for ${cfg.agentName} -- stop it with 'run.sh stop' before starting the node lane`)
+    // Discord token. Fail loud, change nothing. `stop` (below) can end it.
+    console.error(`a pre-0.3 (run.sh) supervisor (pid ${existingPid}) is already running for ${cfg.agentName} -- stop it first: '${SELF_PATH} stop'`)
     process.exitCode = 1
     return
   }
@@ -997,56 +1008,41 @@ async function stopAgent(cfg) {
   }
   const pid = readPid(cfg.pidfile)
   const owner = classifyPidfileOwner(pid)
-  if (owner === 'foreign_supervisor') {
-    // NOT ours to stop, and NOT ours to "clean up" either -- deleting a
-    // live supervisor's pidfile orphans it (see classifyPidfileOwner).
-    console.error(`pid ${pid} is a live run.sh-lane supervisor -- refusing to touch its pidfile; stop it with 'run.sh stop'`)
-    process.exitCode = 1
-    return
-  }
-  if (owner !== 'ours') {
+  // A leftover pre-0.3 bash supervisor IS this agent, in an older shape, and
+  // there is no `run.sh stop` left to delegate to -- so stop it here. What we
+  // must never do is fall through to the "stale" branch below and delete a
+  // LIVE supervisor's pidfile, which orphans it (see classifyPidfileOwner).
+  if (owner === 'legacy_supervisor') log(`pid ${pid} is a pre-0.3 (run.sh) supervisor -- stopping it with this lane's stop path`)
+  if (owner !== 'ours' && owner !== 'legacy_supervisor') {
     log(`stale/unverified pidfile (pid ${pid} is dead, or was recycled to an unrelated process), cleaning up`)
     try { fs.rmSync(cfg.pidfile, { force: true }) } catch {}
     return
   }
 
   log(`stopping ${cfg.agentName} (pid ${pid})...`)
-  // STOPFLAG stays as the belt (a lost signal still ends the loop at its
-  // next iteration); the signal is the actual stop. Unlike bash -- where
-  // TERM was deferred until the foreground child died, so stop had to pkill
-  // the LEAF -- the node supervisor's handler reaps its child itself
-  // (verdict 7), so there is no stop-path pattern sweep here (verdict 1).
-  fs.writeFileSync(cfg.stopflag, '')
-  if (IS_WIN) {
-    // Windows has no graceful cross-process signal: node's process.kill()
-    // is TerminateProcess (handler never runs, child would orphan). Kill
-    // the whole tree instead. UNVERIFIED on magi-win (design doc flag).
-    try { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { encoding: 'utf8' }) } catch {}
+  // proc.gracefulStop owns the mechanics and documents both platforms: POSIX
+  // gets STOPFLAG + a SIGTERM to the process GROUP (so the LANE's own handler
+  // runs and reaps the engine, not just this supervisor) and up to 15s before
+  // SIGKILL; win32 gets STOPFLAG + the SAME grace window -- the flag is the
+  // only stop channel there, both lanes poll it -- and only then taskkill /T
+  // /F. Before P3 Windows hard-killed the tree the instant stop was pressed,
+  // so no lane shutdown ran there at all. `verify` is the pid-recycling guard:
+  // 15s is long enough for the pid to die and be reissued, so re-confirm
+  // identity before the hard kill (run.sh:462-474 did the same, fail SAFE).
+  const res = await gracefulStop(pid, {
+    stopflag: cfg.stopflag,
+    graceMs: 15_000,
+    verify: (p) => classifyPidfileOwner(p) !== 'stale',
+    log,
+  })
+  if (res.stopped) log('stopped')
+  else log(`stop did NOT confirm the supervisor's death (pid ${pid}) -- leaving its pidfile in place rather than orphaning it silently`)
+  // Cleanup mirrors the loop's own exitOnStop(): both files go, so a later
+  // start is not blocked by a stale flag. Only when the stop actually landed
+  // -- an unconfirmed pid keeps its pidfile so the app can still find it.
+  if (res.stopped) {
     try { fs.rmSync(cfg.pidfile, { force: true }) } catch {}
-    try { fs.rmSync(cfg.stopflag, { force: true }) } catch {}
-    log('stopped')
-    return
   }
-  try { process.kill(pid, 'SIGTERM') } catch {}
-
-  for (let i = 0; i < 15; i++) {
-    if (!isPidAlive(pid)) {
-      log('stopped')
-      try { fs.rmSync(cfg.stopflag, { force: true }) } catch {}
-      return
-    }
-    await new Promise((r) => setTimeout(r, 1000))
-  }
-
-  // Re-verify identity before force-kill: up to 15s elapsed, enough for the
-  // pid to have died and been recycled (run.sh:462-474, fail SAFE).
-  if (isOurSupervisor(pid)) {
-    log('did not stop in time, forcing')
-    try { process.kill(pid, 'SIGKILL') } catch {}
-  } else {
-    log(`pid ${pid} no longer identifies as ${cfg.agentName} supervisor (exited and recycled?) -- skipping force-kill of an unconfirmed pid`)
-  }
-  try { fs.rmSync(cfg.pidfile, { force: true }) } catch {}
   try { fs.rmSync(cfg.stopflag, { force: true }) } catch {}
 }
 

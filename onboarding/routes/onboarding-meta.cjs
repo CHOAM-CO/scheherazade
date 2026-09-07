@@ -25,11 +25,59 @@ function createRoutes(staticCtx) {
     extractClaudeModelsFromBin, fetchOllamaCloudCatalog, fetchImageCaption,
     startClaudeCliInstall, getClaudeInstallStatus,
     readAppearance, writeAppearance, AppearanceModel,
-    path, DATA_HOME,
+    path, DATA_HOME, HOST,
   } = staticCtx
+
+  // ── live window material (design-0023 P4) ───────────────────────────────
+  // ONE owner of "apply the saved blur to the running window", replacing two
+  // inline `if (process.platform === ...)` blocks inside the PUT handler with
+  // no third arm -- so on Linux the setting was written to disk, never
+  // applied, and nothing told the user (read-C G1). The API literals are kept
+  // EXACTLY as they were (tests/test-appearance.mjs pins them by text, and
+  // the mac double-hop below is a real Electron workaround, not style).
+  //
+  //   vibrancy (mac)  -- setVibrancy is runtime-mutable (visualEffectState is
+  //     not, electron#25513). Electron reuses the existing vibrant view and
+  //     only calls setMaterial: on a direct swap, which does not reliably
+  //     force a repaint (native_window_mac.mm; docs: "animating between
+  //     different types of vibrancy is not supported") -- so go through null
+  //     first, then set the target on the next tick: the remove-and-reattach
+  //     path lays out the view every time. values.macMaterial: null = blur
+  //     off (vibrancy stays removed).
+  //   acrylic (win)   -- no strength axis; blur is on/off only (soft and
+  //     strong both mean acrylic). setBackgroundMaterial is runtime-callable
+  //     on Win11 22H2+; 'none' drops to the solid look.
+  //   none (linux)    -- there is no Electron API for GNOME/KDE blur. The
+  //     honest action is to do nothing HERE and to disable the control, which
+  //     is what supportsBlur on the GET does.
+  //
+  // Fail-soft outside a real Electron main process (dev-serve-ui).
+  function applyWindowMaterial(values) {
+    if (HOST.windowMaterial === 'vibrancy') {
+      try {
+        const win = getElectron().BrowserWindow.getAllWindows()[0]
+        if (win) {
+          win.setVibrancy(null)
+          if (values.macMaterial) setTimeout(() => { try { win.setVibrancy(values.macMaterial) } catch { /* window died mid-tick */ } }, 0)
+        }
+      } catch { /* not running under Electron -- config-only save */ }
+      return
+    }
+    if (HOST.windowMaterial === 'acrylic') {
+      try {
+        const win = getElectron().BrowserWindow.getAllWindows()[0]
+        if (win && typeof win.setBackgroundMaterial === 'function') {
+          win.setBackgroundMaterial(values.blur === 'off' ? 'none' : 'acrylic')
+        }
+      } catch { /* not running under Electron -- config-only save */ }
+    }
+    // windowMaterial 'none': nothing to call. The value is still SAVED (a
+    // user who moves the AppImage to a Mac gets their setting back) -- it is
+    // just not claimed to have an effect here.
+  }
   return [
     {
-      // Claude CLI install-assist status (2026-08-04, Mino "2로 가자").
+      // Claude CLI install-assist status (2026-08-04, the owner "2로 가자").
       // `present` is the live artifact truth (agentControls.resolveClaudeBin,
       // the SAME resolver the agent spawn uses -- never a cached flag), and
       // the install command/plan/license info rides along so the wizard can
@@ -48,7 +96,12 @@ function createRoutes(staticCtx) {
           planRequirement: info.planRequirement || null,
           licenseUrl: info.licenseUrl || null,
           docsUrl: info.docsUrl || null,
-          managed: process.platform !== 'win32',
+          // The Claude CLI's own installer is a POSIX shell script; Windows
+          // has a PowerShell one-liner we deliberately do not run for the
+          // user. This used to read `!== 'win32'`, which told a Linux box
+          // "managed" -- true by accident, and by the same accident it told
+          // an Intel Mac the same thing about the codex/ollama bootstrap.
+          managed: Boolean(HOST.claudeCliInstall),
         })
         return
       },
@@ -98,7 +151,7 @@ function createRoutes(staticCtx) {
       },
     },
     {
-      // Last turn error (2026-08-04, Mino "클로드도 동작안함" -- a
+      // Last turn error (2026-08-04, the owner "클로드도 동작안함" -- a
       // rate-limited/auth-dead lane produced ZERO user-visible signal).
       // Reads the lane's .last-turn-error.json marker; `fresh` = within 10
       // minutes, which is what the nav banner shows. Older errors stay
@@ -141,13 +194,13 @@ function createRoutes(staticCtx) {
       },
     },
     {
-      // Usage gauges (2026-08-04 evening, Mino: "ollama/Codex/Claude 사용량
+      // Usage gauges (2026-08-04 evening, the owner: "ollama/Codex/Claude 사용량
       // 게이지 ... 이게 킥임"). claude = OAuth usage endpoint (setup-token
       // 403 -> CLI-session fallback); codex = CodexBar's wham/usage source;
       // ollama = undocumented /api/usage probe (shape binds on first
       // real-key receipt). Each fetcher carries its own 60s cache +
       // stale-on-error; see their headers in http-server.cjs.
-      // Dynamic Claude model catalog (2026-08-13, Mino: "모델 리스트 하드코딩
+      // Dynamic Claude model catalog (2026-08-13, the owner: "모델 리스트 하드코딩
       // 말고 ... 다이나믹하게"). Scans the INSTALLED claude CLI binary's own
       // model table (see extractClaudeModelsFromBin in http-server.cjs) --
       // the picker's Claude group follows CLI updates instead of app
@@ -211,7 +264,7 @@ function createRoutes(staticCtx) {
       match: (pathname) => pathname === '/api/usage/claude',
       handler: async (req, res) => {
         // ?force=1 = the Refresh button bypassing the 60s cache (2026-08-05,
-        // Mino: manual refresh must actually parse). Page-enter loads omit it.
+        // the owner: manual refresh must actually parse). Page-enter loads omit it.
         sendJson(res, 200, await fetchClaudeSubscriptionUsage({ force: /[?&]force=1(&|$)/.test(String(req.url || '')) }))
         return
       },
@@ -233,7 +286,7 @@ function createRoutes(staticCtx) {
       },
     },
     {
-      // Appearance tab (2026-08-05, Mino "어피어런스 탭 만들고 ... CSS들
+      // Appearance tab (2026-08-05, the owner "어피어런스 탭 만들고 ... CSS들
       // 게이지로 쭉 나열"). GET returns the saved (normalized) config plus
       // the model's option catalog so the page renders choices from ONE
       // source; PUT saves whatever survives normalize() — invalid fields
@@ -241,6 +294,10 @@ function createRoutes(staticCtx) {
       method: 'GET',
       match: (pathname) => pathname === '/api/appearance',
       handler: async (req, res) => {
+        // supportsBlur (design-0023 P4): on Linux there is no Electron API
+        // for GNOME/KDE window blur at all, so the setting used to be saved
+        // and inert with nothing in the UI saying so. The page disables the
+        // row off the back of this flag instead of pretending.
         sendJson(res, 200, {
           values: readAppearance(),
           defaults: AppearanceModel.DEFAULTS,
@@ -249,6 +306,8 @@ function createRoutes(staticCtx) {
           bgs: AppearanceModel.PRESET_BGS,
           fgs: AppearanceModel.PRESET_FGS,
           blurLevels: AppearanceModel.BLUR_LEVELS,
+          supportsBlur: HOST.supportsBlur,
+          windowMaterial: HOST.windowMaterial,
         })
         return
       },
@@ -259,43 +318,14 @@ function createRoutes(staticCtx) {
       handler: async (req, res) => {
         const body = await readJsonBody(req)
         const values = writeAppearance(body)
-        // Apply the blur level LIVE. Fail-soft outside a real Electron main
-        // process (dev-serve-ui) or on unsupported platforms.
-        // macOS: setVibrancy is runtime-mutable (visualEffectState is not,
-        // electron#25513). Electron reuses the existing vibrant view and
-        // only calls setMaterial: on a direct swap, which does not reliably
-        // force a repaint (native_window_mac.mm; docs: "animating between
-        // different types of vibrancy is not supported") — so go through
-        // null first, then set the target on the next tick: the
-        // remove-and-reattach path lays out the view every time.
-        // values.macMaterial: null = blur off (vibrancy stays removed).
-        if (process.platform === 'darwin') {
-          try {
-            const win = getElectron().BrowserWindow.getAllWindows()[0]
-            if (win) {
-              win.setVibrancy(null)
-              if (values.macMaterial) setTimeout(() => { try { win.setVibrancy(values.macMaterial) } catch { /* window died mid-tick */ } }, 0)
-            }
-          } catch { /* not running under Electron -- config-only save */ }
-        }
-        // Windows: acrylic has no strength axis — blur is on/off only
-        // (soft and strong both mean acrylic). setBackgroundMaterial is
-        // runtime-callable on Win11 22H2+; 'none' drops to the solid look.
-        if (process.platform === 'win32') {
-          try {
-            const win = getElectron().BrowserWindow.getAllWindows()[0]
-            if (win && typeof win.setBackgroundMaterial === 'function') {
-              win.setBackgroundMaterial(values.blur === 'off' ? 'none' : 'acrylic')
-            }
-          } catch { /* not running under Electron -- config-only save */ }
-        }
+        applyWindowMaterial(values)
         sendJson(res, 200, { ok: true, values })
         return
       },
     },
     {
       // Update check (tester request 2026-08-04): notify + download link.
-      // In-place auto-update needs a signed mac app -- deferred (Mino 16:16,
+      // In-place auto-update needs a signed mac app -- deferred (the owner 16:16,
       // then re-scoped 16:21 to "check + one-click download page" v1).
       method: 'GET',
       match: (pathname) => pathname === '/api/update/check',
@@ -327,12 +357,20 @@ function createRoutes(staticCtx) {
         // 2026-07-25): computed live from the safeStorage credential store,
         // boolean-only (see hasStoredCustomApiKey()'s own header for why this
         // is never the key itself).
+        // hostPlatform/hostCapabilities ride along camelCase like the three
+        // above: computed, never stored. This is the SAME object the served
+        // HTML carries in <meta name="host-capabilities">, so the page's
+        // first paint and its first fetch cannot disagree about what this
+        // machine can do (design-0023 P4). Every render gate that used to
+        // ask `window.IS_MAC` reads a named capability from here instead.
         sendJson(res, 200, {
           ...readAgentConfig(),
           homeChannelId: readHomeChannelId(),
           routerWired: ROUTER_WIRED,
           availableProviders: computeAvailableProviders(),
           hasCustomApiKey: hasStoredCustomApiKey(),
+          hostPlatform: HOST.id,
+          hostCapabilities: HOST.clientView(),
         })
         return
       },

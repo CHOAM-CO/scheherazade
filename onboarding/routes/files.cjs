@@ -1,5 +1,5 @@
 // onboarding/routes/files.cjs -- recently-touched-files routes (group 14,
-// 같이보기 batch 2026-08-19: Mino "세라가 최근에 건드린 파일들 리스트도 볼
+// 같이보기 batch 2026-08-19: the owner "세라가 최근에 건드린 파일들 리스트도 볼
 // 수 있게").
 //
 // Reads the JSONL that hooks/post-tool-file-ledger.mjs appends (one row per

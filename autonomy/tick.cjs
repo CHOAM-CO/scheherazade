@@ -2,7 +2,7 @@
 //
 // This exists because the test was cheating and I did not notice for an hour.
 //
-// scripts/test-autonomy-night.mjs re-implemented channel.mjs's watcher body: the
+// tests/test-autonomy-night.mjs re-implemented channel.mjs's watcher body: the
 // cheap-exit gate, the cap parse, the inject selection, the persist ORDER. It
 // went green against its own copy. If channel.mjs's glue drifted -- if someone
 // flipped the persist order, or dropped the `settled` gate -- the test would have

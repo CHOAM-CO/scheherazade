@@ -1,5 +1,5 @@
 // tcc-probe.cjs — macOS TCC (Transparency, Consent, and Control) folder-
-// permission trigger for Documents/Downloads/Desktop (Mino directive,
+// permission trigger for Documents/Downloads/Desktop (the owner directive,
 // 2026-07-05: onboarding must grab read+write to all three; the app
 // process must actually TOUCH each folder so macOS raises its native
 // permission prompt -- listing an NSXFolderUsageDescription string in
@@ -39,7 +39,7 @@ const path = require('node:path')
 const PROBE_FILENAME = '.scheherazade-tcc-probe'
 const PROBE_CONTENTS = 'scheherazade tcc probe -- safe to delete\n'
 
-// The 3 folders Mino's directive names. Order matters only for log
+// The 3 folders the owner's directive names. Order matters only for log
 // readability (Documents first, matching the existing
 // NSDocumentsFolderUsageDescription's precedent as "the one that already
 // worked").

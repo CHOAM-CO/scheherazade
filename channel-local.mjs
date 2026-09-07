@@ -9,7 +9,7 @@
 //             -> transcript (role 'user', recorded only once delivered)
 //   outbound: `reply` tool -> transcript (role 'agent')
 //   reactions: POST /react (user taps an emoji on a bubble) -> notification
-//             ("[reaction] ..." -- the agent SEES it, MAGI-style, but is not
+//             ("[reaction] ..." -- the agent SEES it, fleet-style, but is not
 //             obliged to answer it); `react` tool (agent puts an emoji on the
 //             user's bubble). Both land in the transcript as kind:'reaction'
 //             items pointing at their target's seq, so a reload replays them.
@@ -88,7 +88,7 @@ export const MAX_QUEUE = 500
 // user messages lived here (v0.0.31), they existed only as DOM nodes in the
 // page that sent them, so any navigation erased the user's half of the
 // conversation and any reply that landed while the page was away was
-// swallowed by the reload's cursor seed (Mino's 07-30 repro, both symptoms).
+// swallowed by the reload's cursor seed (the owner's 07-30 repro, both symptoms).
 // Sequence numbers are monotonic across trims ON PURPOSE: a client holding
 // seq=N must be able to tell "nothing new yet" from "you fell behind and
 // lost some", and array indices cannot express that.
@@ -98,7 +98,7 @@ let queue = []
 // ── transcript persistence ────────────────────────────────────────────────
 // The queue IS the conversation record (see header) -- but until 2026-08-04
 // it lived only in this process, so every app relaunch erased the whole chat
-// (Mino: "앱 닫았다가 열면 인앱챗 대화내용 날아감"). Persisted to one JSON
+// (the owner: "앱 닫았다가 열면 인앱챗 대화내용 날아감"). Persisted to one JSON
 // file in DATA_HOME, restored once at boot, rewritten after every push.
 //
 // OPT-IN, not automatic: tests import this module to exercise the queue, and
@@ -208,7 +208,7 @@ function enqueue(role, text, now) {
 // thread.
 let draftText = null
 
-// Background subagent roster (0.2.15, Mino 08-24 "서브 스폰하면 서브도
+// Background subagent roster (0.2.15, the owner 08-24 "서브 스폰하면 서브도
 // working 정보에 띄우게"): the dsh lane posts kind:'bg' when the model
 // launches a background/continuable subagent and when its settlement notice
 // comes back. NOT a queue item -- same ephemeral presence class as the
@@ -439,7 +439,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
 
 // Exported so tests exercise the real tool logic without connecting a
 // transport; the MCP handler below is a thin shell around this.
-// GPT-loop guard (2026-08-04, Mino field report) -- see createOutboundDedup
+// GPT-loop guard (2026-08-04, the owner field report) -- see createOutboundDedup
 // (channel-runtime.mjs). Single fixed key: this backend has exactly one
 // conversation surface (the in-app chat page).
 const checkOutboundDup = createOutboundDedup({ log })
@@ -464,7 +464,7 @@ export async function handleToolCall(name, args) {
     // queue, losing a reply the model believed it had delivered -- and on
     // restart the transcript restore has nothing to replay. Length-correlated
     // because a larger payload widens the write window teardown can land in
-    // (Mino field report, Windows v0.1.7: msgs >=1KB lost 3/3; a short one
+    // (the owner field report, Windows v0.1.7: msgs >=1KB lost 3/3; a short one
     // lost too when teardown or a Windows rename-lock caught the window).
     // Awaiting here closes the race: by the time "sent" returns, the item is
     // on disk, so it survives any subsequent teardown.
@@ -486,7 +486,7 @@ export async function handleToolCall(name, args) {
     if (typeof filePath !== 'string' || !filePath.trim()) {
       return { content: [{ type: 'text', text: 'send failed: filePath is required' }], isError: true }
     }
-    // 0.1.18 (Mino 2026-08-19 11:21 "에이전트가 인앱메신저로 매체 보낼 수
+    // 0.1.18 (the owner 2026-08-19 11:21 "에이전트가 인앱메신저로 매체 보낼 수
     // 있어야함"): the old handler enqueued a bare "[file] <path>" text line —
     // a path the chat page rendered as prose, not a file the user could see.
     // Now the file is COPIED into chat_uploads (the one directory the
@@ -561,7 +561,7 @@ export async function deliverInbound(text, { notify, now = localNow } = {}) {
   return content
 }
 
-// The user's emoji tap reaches the agent the way MAGI fleet reactions do:
+// The user's emoji tap reaches the agent the way reference-fleet reactions do:
 // injected as a bracketed line the model can see and choose to ignore. The
 // "[reaction]" prefix is LOAD-BEARING -- stop-reply-guard exempts triggers
 // that start with it, so a tap never drafts the agent into a forced
@@ -580,7 +580,7 @@ export async function deliverReaction(emoji, target, { notify, now = localNow } 
   return content
 }
 
-// User-side reactions are a fixed menu (the two Mino named), so the emoji
+// User-side reactions are a fixed menu (the two the owner named), so the emoji
 // arriving over HTTP is an enum member, never free text riding into the
 // agent's context.
 export const USER_REACTIONS = ['👍', '❤️']
@@ -762,7 +762,7 @@ export async function writePortFile(dataHome, payload) {
   return file
 }
 
-// ── always-on surface (2026-08-05, colleague via Mino: "슬랙/디코/텔레그램
+// ── always-on surface (2026-08-05, colleague via the owner: "슬랙/디코/텔레그램
 // 이랑 인앱챗을 스위칭하는 방식이 아니라 인앱챗 기본 + 채널 하나 방식") ────
 // The whole local chat surface — transcript restore, loopback HTTP listener,
 // port file — as one bootable unit that a PLATFORM backend hosts alongside
@@ -796,7 +796,7 @@ export async function startLocalChatSurface({ notify, log: slog = log } = {}) {
 
 // ── boot ──────────────────────────────────────────────────────────────────
 // Same "am I the entry point" guard as the other backends, for the same
-// reason: scripts/test-local-channel.mjs imports this file to exercise its
+// reason: tests/test-local-channel.mjs imports this file to exercise its
 // exported functions without connecting real stdio or binding a port.
 const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])
 

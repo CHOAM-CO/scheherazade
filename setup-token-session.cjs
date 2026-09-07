@@ -1,5 +1,28 @@
-// setup-token-session.cjs -- runs `claude setup-token` under a pty and turns
+// setup-token-session.cjs -- ran `claude setup-token` under a pty and turned
 // its output into a stored claude-subscription credential.
+//
+// RETIRED AS A PRODUCTION LANE, 2026-09-07 (design-0023 P2). The top-level
+// node-pty dependency is gone -- 1.1.0 publishes no linux prebuild, its
+// postinstall repair deleted the build/ that node-gyp would have produced, and
+// it was the stated reason the win installer could only be built on Windows --
+// and this module was its ONE runtime caller. Nothing injects a pty spawner
+// any more, so start() refuses with reason 'unsupported' and the route says so.
+//
+// What replaced it, and why nothing is lost: since 0.2.18 the primary Claude
+// login is in-app loopback OAuth (/api/claude-login/*, onboarding/routes/
+// oauth-login.cjs -> getLoginOAuthSession() -> oauth-usage-session.cjs, which
+// requires nothing but node:crypto and node:http). It requests user:inference
+// and stores the raw oat under the SAME 'claude-subscription' provider id this
+// module used, byte-for-byte what the CLI printed -- and it works on a clean
+// machine with no Claude Code installed, which this lane never could. The
+// manual path is also still there: the wizard's Terminal panel still offers
+// `claude setup-token` with a copy button and a paste field that submits
+// provider 'claude-subscription' to /api/byok/validate.
+//
+// The state machine below is kept whole rather than deleted: scripts/
+// test-setup-token-session.mjs injects its own fake `spawnPty` and exercises
+// every generation/cancel/timeout path, and those are the invariants any future
+// pty-driving lane would have to satisfy again.
 //
 // WHAT THIS REPLACES: today the user opens Terminal, runs `claude
 // setup-token` themselves, and pastes the printed 1-year token into the app.
@@ -67,13 +90,15 @@ const TERMINAL_STATES = new Set(['connected', 'failed', 'cancelled'])
  * @param {(provider: string, key: string, opts?: object) => Promise<{ok: boolean}>} deps.validateProviderKey
  * @param {(provider: string, key: string) => void} deps.storeProviderKeyVerified  throws on failure
  * @param {(msg: string) => void} deps.log
- * @param {(bin: string, args: string[], opts: object) => object} [deps.spawnPty]  injectable for tests
+ * @param {(bin: string, args: string[], opts: object) => object} [deps.spawnPty]  a pty
+ *   spawner. There is no default any more (node-pty is gone): production passes
+ *   none and start() refuses with 'unsupported'; the tests inject a fake.
  * @param {() => number} [deps.now]
  */
 function createSetupTokenSession(deps) {
   const {
     resolveClaudeBin, validateProviderKey, storeProviderKeyVerified,
-    log = () => {}, spawnPty = defaultSpawnPty, now = () => Date.now(),
+    log = () => {}, spawnPty = null, now = () => Date.now(),
     timeoutMs = SETUP_TOKEN_TIMEOUT_MS,
   } = deps
 
@@ -191,6 +216,15 @@ function createSetupTokenSession(deps) {
 
   function start() {
     if (child || state === 'validating') return { ok: true, alreadyRunning: true }
+    // No pty spawner -> this lane cannot run at all. Refuse BEFORE resolving a
+    // binary: on a clean machine resolveClaudeBin() returns null and the honest
+    // -looking answer would be 'cli_missing', which sends the user off to
+    // install Claude Code for a flow that still could not run afterwards. The
+    // login they actually want needs no CLI (see this file's header).
+    if (typeof spawnPty !== 'function') {
+      setState('failed', 'unsupported')
+      return { ok: false, reason: 'unsupported' }
+    }
     const bin = resolveClaudeBin()
     if (!bin) {
       setState('failed', 'cli_missing')
@@ -354,14 +388,6 @@ function createSetupTokenSession(deps) {
   // hook is inert for any session with no child.
   liveSessionForShutdown = api
   return api
-}
-
-// Lazy require, matching supervisor.mjs: node-pty is a native module and only
-// this lane needs it, so a load failure must not take down the whole server
-// at import time.
-function defaultSpawnPty(bin, args, opts) {
-  const pty = require('node-pty')
-  return pty.spawn(bin, args, opts)
 }
 
 module.exports = {

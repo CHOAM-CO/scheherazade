@@ -1,4 +1,4 @@
-// logs.js — /logs session log viewer (v0.0.20, Mino 07-16 "로그 터미널 창").
+// logs.js — /logs session log viewer (v0.0.20, the owner 07-16 "로그 터미널 창").
 //
 // Cursor-polls GET /api/logs?since=N every second and appends only NEW
 // entries (never re-renders the pane -- at 3000 lines a full re-render every

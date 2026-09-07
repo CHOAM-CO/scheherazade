@@ -54,8 +54,8 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs'
 import path from 'node:path'
-import os from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
+import { resolveDataHome } from '../data-home.cjs' // one resolver: AGENT_DATA_HOME || MEM || ~/Documents/Scheherazade
 
 const HOOK = 'session-start-reflux-card'
 
@@ -72,7 +72,7 @@ const REFLUX_THRESHOLD = (() => {
 // DATA_HOME / DB_PATH resolution mirrors pre-reply-corrections-context.mjs
 // exactly, so this hook always reads the SAME database the memory MCP
 // server writes to.
-const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', 'Scheherazade')
+const DATA_HOME = resolveDataHome()
 const DB_PATH = process.env.SCHEHERAZADE_MEMORY_DB || path.join(DATA_HOME, 'memory.db')
 // Snooze state (see SNOOZE note in the header). Lives beside the rumination
 // gate's markers, same .gates/ convention.

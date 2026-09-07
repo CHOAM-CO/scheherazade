@@ -1,7 +1,7 @@
 'use strict'
 // onboarding/bootstrap.cjs — fresh-Mac dependency bootstrap (2026-07-07).
 //
-// Product constitution (Mino, 2026-07-07): "유저가 절대 CLI창 만지게 하지
+// Product constitution (the owner, 2026-07-07): "유저가 절대 CLI창 만지게 하지
 // 않는다" -- the app acquires its own dependencies during onboarding.
 // Target machine = a brand-new Mac: no brew, no node, no CLIs. Research
 // receipt (magi-researcher, 2026-07-07): Homebrew is structurally the
@@ -48,7 +48,11 @@ const { Readable } = require('node:stream')
 const { execFile } = require('node:child_process')
 
 // 0.2.9 unification: canonical home -- see onboarding/http-server.cjs DATA_HOME.
-const DATA_HOME = path.join(os.homedir(), 'Documents', 'Scheherazade')
+// design-0023 P3: through data-home.cjs, so an AGENT_DATA_HOME override puts
+// the managed codex/ollama binaries in the SAME home as everything else (this
+// literal used to ignore it and install into the default one).
+const { resolveDataHome } = require('../data-home.cjs')
+const DATA_HOME = resolveDataHome({ allowMem: false })
 const MANAGED_BIN_DIR = path.join(DATA_HOME, 'bin')
 const MANIFEST_PATH = path.join(MANAGED_BIN_DIR, '.manifest.json')
 const STAGING_DIR = path.join(DATA_HOME, 'bootstrap-staging')
@@ -357,14 +361,24 @@ async function startBootstrap(dep) {
   }
 }
 
-// win-port Phase 3 (Mino LOCKED call 2026-07-13 18:35: Windows v1 =
+// win-port Phase 3 (the owner LOCKED call 2026-07-13 18:35: Windows v1 =
 // detection-only deps). Managed download/install stays mac-only -- this
 // whole module is hdiutil/xattr/darwin-arch specific, and the Windows
 // analog (MSI/EXE + Authenticode pinning) was priced out of v1. On win the
 // app only DETECTS existing installs (resolveBin) and points at the
 // official install pages below; the wizard renders link + re-detect
 // instead of the download button.
-const MANAGED_INSTALL_SUPPORTED = process.platform !== 'win32'
+//
+// design-0023 P4: this used to read `!== 'win32'`, which is not what the
+// paragraph above describes. It described mac -- but it ANSWERED true for
+// Linux and for Intel Macs, and both then walked into installCodex, whose
+// very first line refuses `process.arch !== 'arm64'` with a Korean sentence
+// about Apple Silicon (and on Linux, into installOllama's /usr/bin/hdiutil,
+// which ENOENTs). The capability table says darwin && arm64, which is the
+// only combination this module's URLs and helpers actually support, so
+// Linux and Intel Macs now get the SAME honest manual page Windows gets.
+const { host } = require('./platform.cjs')
+const MANAGED_INSTALL_SUPPORTED = host().managedInstall
 const MANUAL_INSTALL_PAGES = {
   codex: 'https://github.com/openai/codex/releases/latest',
   ollama: 'https://ollama.com/download',

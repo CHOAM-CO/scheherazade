@@ -1,0 +1,331 @@
+// test-hooks-port.mjs -- the bash->node port of the 3 hooks + 3 cycle
+// scripts (win-port Phase 3) actually behaves like the bash it replaced.
+// Run: node tests/test-hooks-port.mjs
+//
+// Each section runs the REAL ported file as a child process against a temp
+// MEM and attacks the behavior the bash version was load-bearing for --
+// including the two boot-test lessons welded into persona-reflux (line-lead
+// 🔒 anchor; file:line key discipline) and felt-check's under-50-chars
+// threshold. The wiring section makes the deletion of the .sh originals
+// stick: a resurrected bash reference in the template or CLAUDE.md fails
+// loudly here.
+
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { localDate } from '../local-date.cjs'
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// The hooks under test key their filenames on local-date.cjs; the test must
+// ask the same helper, not re-hardcode a zone (the drift this whole change
+// exists to end).
+const TODAY = localDate()
+
+let pass = 0
+let fail = 0
+function ok(name, cond, detail = '') {
+  if (cond) { pass++; console.log(`  ok  ${name}`) }
+  else { fail++; console.log(`FAIL  ${name}${detail ? ` -- ${detail}` : ''}`) }
+}
+
+// stderr captured separately -- the cycle scripts talk to the agent on
+// stdout and to the operator on stderr, same split as the bash versions.
+// spawnSync, NOT execFileSync: execFileSync's success path returns stdout
+// only and lets stderr INHERIT, so every stderr assertion read '' while the
+// text printed to the test runner's own terminal (first run of this suite
+// convicted three innocent ports exactly that way).
+function runPorted(rel, mem, args = []) {
+  const r = spawnSync(process.execPath, [path.join(ROOT, rel), ...args],
+    { env: { ...process.env, MEM: mem }, encoding: 'utf8' })
+  return { stdout: r.stdout || '', stderr: r.stderr || '', code: r.status ?? 1 }
+}
+const runPortedFull = runPorted
+const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'hooks-port-'))
+
+// ── wiring: bash is actually GONE ───────────────────────────────────────────
+console.log('\n-- wiring: the .sh originals are gone and nothing still points at them')
+{
+  const dead = ['hooks/session-start.sh', 'hooks/felt-check.sh', 'hooks/checkpoint-nudge.sh',
+    'scripts/journal-compress.sh', 'scripts/madoromi-solo.sh', 'scripts/persona-reflux.sh']
+  for (const f of dead) ok(`${f} deleted`, !fs.existsSync(path.join(ROOT, f)))
+  const template = fs.readFileSync(path.join(ROOT, 'onboarding', 'templates', 'claude-settings.local.json'), 'utf8')
+  ok('settings template has NO bash hook commands', !template.includes('bash {AGENT_DIR}'))
+  ok('settings template wires the surviving ported hooks via node',
+    ['session-start.mjs', 'checkpoint-nudge.mjs'].every((f) => template.includes(`node {AGENT_DIR}/hooks/${f}`)))
+  const claudeMd = fs.readFileSync(path.join(ROOT, 'CLAUDE.md'), 'utf8')
+  ok('CLAUDE.md invokes the cycle scripts as node .mjs (no stale .sh instructions)',
+    !/scripts\/(journal-compress|persona-reflux|madoromi-solo)\.sh/.test(claudeMd) &&
+    claudeMd.includes('node {AGENT_DIR}/scripts/journal-compress.mjs scan'))
+}
+{
+  // EXISTING installs: seedSettingsLocal is seed-if-absent, so without a
+  // migration their settings keep saying `bash .../session-start.sh` after
+  // the .sh files are deleted -- the boot restore summary dies silently
+  // ("disk updated, config frozen" class, diagnosed live 07-13). The
+  // migration regex is extracted from onboarding/harness-render.cjs SOURCE
+  // (ensureSettingsLocalAdditions moved there, issue #9 PR-3) and executed
+  // here -- testing the actual rule, not a copy of it.
+  const renderSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'harness-render.cjs'), 'utf8')
+  const m = renderSrc.match(/const BASH_HOOK_PORT = \/(.+)\/\n/)
+  ok('harness-render carries the bash-hook port migration', Boolean(m))
+  if (m) {
+    const rx = new RegExp(m[1])
+    ok('migration matches the exact seeded bash shape',
+      rx.test('bash /Applications/S.app/Contents/Resources/app.asar.unpacked/hooks/session-start.sh') &&
+      rx.test('bash /some/repo/hooks/felt-check.sh') && rx.test('bash /some/repo/hooks/checkpoint-nudge.sh'))
+    ok('migration leaves hand-edited variants alone (extra args / other files / node commands)',
+      !rx.test('bash /x/hooks/session-start.sh --flag') && !rx.test('bash /x/hooks/my-custom.sh') &&
+      !rx.test('node /x/hooks/session-start.mjs'))
+  }
+}
+
+// ── detection-only deps gate (win-port Phase 3, Mino LOCKED 07-13 18:35) ───
+console.log('\n-- detection-only deps: the win gate exists and mac keeps managed installs')
+{
+  const { createRequire } = await import('node:module')
+  const req = createRequire(import.meta.url)
+  const b = req(path.join(ROOT, 'onboarding', 'bootstrap.cjs'))
+  // design-0023 P4: the gate is darwin AND arm64, not "not Windows". It used
+  // to answer true on Linux and on Intel Macs, both of which then walked into
+  // installCodex's aarch64-apple-darwin tarball and its Korean
+  // Apple-Silicon-only refusal. The equality is asserted against the
+  // capability table so the two can never drift apart again.
+  const caps = req(path.join(ROOT, 'onboarding', 'platform.cjs'))
+  ok('managed install == the capability table, on this host',
+    b.MANAGED_INSTALL_SUPPORTED === caps.host().managedInstall)
+  ok('managed install means darwin AND arm64 -- the only pair bootstrap.cjs URLs exist for',
+    b.MANAGED_INSTALL_SUPPORTED === (process.platform === 'darwin' && process.arch === 'arm64'))
+  const mk = (platform, arch) => caps.capabilities({ platform, arch, env: {}, home: '/h', dataHome: '/h/d', existsSync: () => false, hasTmux: () => false })
+  ok('Intel Mac and Linux are NOT offered the managed install (the bug this replaced)',
+    mk('darwin', 'x64').managedInstall === false && mk('linux', 'x64').managedInstall === false)
+  ok('Apple Silicon still is', mk('darwin', 'arm64').managedInstall === true)
+  ok('manual install pages are FIXED constants for both deps',
+    typeof b.MANUAL_INSTALL_PAGES.codex === 'string' && b.MANUAL_INSTALL_PAGES.codex.startsWith('https://github.com/openai/codex') &&
+    typeof b.MANUAL_INSTALL_PAGES.ollama === 'string' && b.MANUAL_INSTALL_PAGES.ollama.startsWith('https://ollama.com'))
+  // Bootstrap route BODIES moved to onboarding/routes/onboarding-meta.cjs
+  // (issue #9 PR-2) -- same assertions, new home. The BASH_HOOK_PORT /
+  // DIET_REMOVED_HOOKS migration pins elsewhere in this file moved to
+  // onboarding/harness-render.cjs (issue #9 PR-3 relocated
+  // ensureSettingsLocalAdditions there).
+  const routeSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'routes', 'onboarding-meta.cjs'), 'utf8')
+  const gateIdx = routeSrc.indexOf('if (!MANAGED_INSTALL_SUPPORTED)')
+  const startIdx = routeSrc.indexOf('startBootstrap(dep).catch')
+  ok('POST bootstrap route gates BEFORE ever reaching startBootstrap', gateIdx !== -1 && startIdx !== -1 && gateIdx < startIdx)
+  ok('status route tells the wizard which mode to render (managed flag)', routeSrc.includes('managed: MANAGED_INSTALL_SUPPORTED'))
+  const wizardSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'public', 'js', 'wizard.js'), 'utf8')
+  ok('wizard renders manual UI when managed === false', wizardSrc.includes('dep.managed === false') && wizardSrc.includes('function buildManualInstallUI'))
+  const copySrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'public', 'js', 'copy.js'), 'utf8')
+  ok('manual-flow copy strings exist', ['manualNeeded', 'manualOpenButton', 'manualOpened', 'redetectButton', 'stillMissing'].every((k) => copySrc.includes(k)))
+}
+
+// ── session-start ───────────────────────────────────────────────────────────
+console.log('\n-- session-start.mjs')
+{
+  const mem = tmp()
+  // yesterday's note with no journal -> pending; a skill with a frontmatter
+  // trigger AND a decoy body "trigger:" line (must not be picked up).
+  fs.mkdirSync(path.join(mem, 'session_notes'), { recursive: true })
+  fs.writeFileSync(path.join(mem, 'session_notes', '2020-01-01.md'), 'old note')
+  fs.mkdirSync(path.join(mem, 'skills'), { recursive: true })
+  fs.writeFileSync(path.join(mem, 'skills', 'sample.md'),
+    '---\nname: sample\ntrigger: "when the moon is full"\n---\nbody text\ntrigger: NOT THIS ONE\n')
+  const { stdout } = runPorted('hooks/session-start.mjs', mem)
+  const parsed = JSON.parse(stdout) // throws = fail loud
+  const ctx = parsed.hookSpecificOutput.additionalContext
+  ok('emits valid hookSpecificOutput JSON for SessionStart', parsed.hookSpecificOutput.hookEventName === 'SessionStart')
+  ok('creates today\'s note with the Felt template', fs.readFileSync(path.join(mem, 'session_notes', `${TODAY}.md`), 'utf8').includes('## 🔥 Felt'))
+  ok('reports the note as created fresh', ctx.includes('created fresh'))
+  ok('counts the prior-date note as pending compression', ctx.includes('1 prior-date session note(s)'))
+  ok('...and points at the PORTED compress script', ctx.includes('journal-compress.mjs scan'))
+  ok('skill listing reads the FRONTMATTER trigger', ctx.includes('sample.md: when the moon is full'))
+  ok('...and never the body decoy', !ctx.includes('NOT THIS ONE'))
+  fs.rmSync(mem, { recursive: true, force: true })
+}
+
+// session-start: permission wall map (P0, 2026-07-15). The snapshot is
+// written by /api/permissions/status; the hook's promises: denied walls get
+// ONE loud boot line, sip is excluded (informational, not a grantable wall),
+// granted/indeterminate rows stay silent, stale snapshots say their age,
+// and a garbage file says nothing rather than guessing.
+{
+  const permCtx = (snapshot) => {
+    const mem = tmp()
+    fs.mkdirSync(mem, { recursive: true })
+    if (snapshot !== undefined) fs.writeFileSync(path.join(mem, 'permission-status.json'), snapshot)
+    const ctx = JSON.parse(runPorted('hooks/session-start.mjs', mem).stdout).hookSpecificOutput.additionalContext
+    fs.rmSync(mem, { recursive: true, force: true })
+    return ctx
+  }
+  const snap = (rows, checkedAt = new Date().toISOString()) => JSON.stringify({ checkedAt, rows })
+
+  let ctx = permCtx(snap([
+    { class: 'screen', granted: false, kind: 'official' },
+    { class: 'fda', granted: true, kind: 'heuristic' },
+    { class: 'sudo', granted: 'indeterminate', kind: 'heuristic' },
+  ]))
+  ok('denied wall surfaces at boot by class name', ctx.includes('permission walls') && ctx.includes('screen'))
+  ok('granted/indeterminate rows stay out of the wall line', !/walls on this machine:.*(fda|sudo)/.test(ctx))
+
+  ctx = permCtx(snap([{ class: 'sip', granted: false, kind: 'info' }, { class: 'fda', granted: true, kind: 'heuristic' }]))
+  ok('sip-only denial -> no wall line (informational, not grantable)', !ctx.includes('permission walls'))
+
+  ctx = permCtx(snap([{ class: 'fda', granted: false, kind: 'heuristic' }], '2020-01-01T00:00:00Z'))
+  ok('stale snapshot carries its age', /may be stale/.test(ctx))
+
+  ok('no snapshot -> no wall line', !permCtx(undefined).includes('permission walls'))
+  ok('garbage snapshot -> silent, never guesses', !permCtx('{{{not json').includes('permission walls'))
+}
+
+// session-start: oversize restore-file guard (v0.0.15 Root B mitigation).
+// Promises: a restore-order file at/over 24KB gets named with its size and
+// the excerpt instruction; small files and absent files stay silent.
+{
+  const oversizeCtx = (files) => {
+    const mem = tmp()
+    fs.mkdirSync(path.join(mem, 'session_notes'), { recursive: true })
+    for (const [rel, kb] of files) {
+      const full = path.join(mem, rel)
+      fs.mkdirSync(path.dirname(full), { recursive: true })
+      fs.writeFileSync(full, 'x'.repeat(kb * 1024))
+    }
+    const ctx = JSON.parse(runPorted('hooks/session-start.mjs', mem).stdout).hookSpecificOutput.additionalContext
+    fs.rmSync(mem, { recursive: true, force: true })
+    return ctx
+  }
+
+  let ctx = oversizeCtx([[`session_notes/${TODAY}.md`, 78], ['checkpoint.md', 3]])
+  ok('oversized today-note surfaces with size', /OVERSIZED restore files:.*session_notes\/.*\(78KB\)/.test(ctx), ctx.split('\n')[1])
+  ok('small checkpoint stays out of the oversize line', !/checkpoint\.md \(\d+KB\)/.test(ctx))
+  ok('oversize line teaches the excerpt habit, names the thrash risk', ctx.includes('offset/limit') && ctx.includes('re-attached at every compaction'))
+
+  ctx = oversizeCtx([['self_persona.md', 30]])
+  ok('oversized self_persona.md is also caught', ctx.includes('self_persona.md (30KB)'))
+
+  ctx = oversizeCtx([])
+  ok('no oversized files -> no oversize line', !ctx.includes('OVERSIZED'))
+}
+
+// ── boot-context diet (2026-07-28): the two cut Stop hooks stay cut ─────────
+console.log('\n-- diet: felt-check + stop-skill-extraction-nudge are gone and unwired')
+{
+  for (const f of ['hooks/felt-check.mjs', 'hooks/stop-skill-extraction-nudge.mjs']) {
+    ok(`${f} deleted`, !fs.existsSync(path.join(ROOT, f)))
+  }
+  const template = fs.readFileSync(path.join(ROOT, 'onboarding', 'templates', 'claude-settings.local.json'), 'utf8')
+  ok('settings template no longer wires the cut hooks',
+    !template.includes('felt-check.mjs') && !template.includes('stop-skill-extraction-nudge.mjs'))
+  // The removal migration for EXISTING installs -- extracted from
+  // onboarding/harness-render.cjs SOURCE (issue #9 PR-3) and executed here,
+  // same discipline as the BASH_HOOK_PORT block above: test the actual
+  // rule, not a copy of it.
+  const renderSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'harness-render.cjs'), 'utf8')
+  const m = renderSrc.match(/const DIET_REMOVED_HOOKS = \/(.+)\/\n/)
+  ok('harness-render carries the cut-hook removal migration', Boolean(m))
+  if (m) {
+    const rx = new RegExp(m[1])
+    ok('removal matches the exact seeded shape for both cut hooks',
+      rx.test('node /Applications/S.app/Contents/Resources/app.asar.unpacked/hooks/felt-check.mjs') &&
+      rx.test('node /some/repo/hooks/stop-skill-extraction-nudge.mjs'))
+    ok('removal leaves hand-edited variants and survivors alone',
+      !rx.test('node /x/hooks/felt-check.mjs --flag') && !rx.test('node /x/hooks/checkpoint-nudge.mjs') &&
+      !rx.test('node /x/myhooks/my-felt-check.mjs'))
+    ok('removal runs AFTER the bash-hook port rewrite (one-boot convergence)',
+      renderSrc.indexOf('BASH_HOOK_PORT') < renderSrc.indexOf('DIET_REMOVED_HOOKS'))
+  }
+}
+
+// ── checkpoint-nudge ────────────────────────────────────────────────────────
+console.log('\n-- checkpoint-nudge.mjs')
+{
+  const mem = tmp()
+  const cp = path.join(mem, 'checkpoint.md')
+
+  let r = runPorted('hooks/checkpoint-nudge.mjs', mem)
+  ok('no checkpoint file -> silent', r.stdout.trim() === '')
+
+  fs.writeFileSync(cp, 'state')
+  r = runPorted('hooks/checkpoint-nudge.mjs', mem)
+  ok('fresh checkpoint -> silent', r.stdout.trim() === '')
+
+  const past = new Date(Date.now() - 2000 * 1000) // 33min ago
+  fs.utimesSync(cp, past, past)
+  r = runPorted('hooks/checkpoint-nudge.mjs', mem)
+  ok('33min-stale checkpoint -> nudge with the age', r.stdout.includes('33min'), r.stdout)
+  ok('throttle marker written', fs.existsSync(path.join(mem, '.last_checkpoint_nudge')))
+
+  r = runPorted('hooks/checkpoint-nudge.mjs', mem)
+  ok('immediate second stop -> throttled silent', r.stdout.trim() === '')
+  fs.rmSync(mem, { recursive: true, force: true })
+}
+
+// ── journal-compress ────────────────────────────────────────────────────────
+console.log('\n-- journal-compress.mjs')
+{
+  const mem = tmp()
+  fs.mkdirSync(path.join(mem, 'session_notes'), { recursive: true })
+  fs.mkdirSync(path.join(mem, 'journals'), { recursive: true })
+  fs.writeFileSync(path.join(mem, 'session_notes', '2020-01-01.md'), 'journaled old note')
+  fs.writeFileSync(path.join(mem, 'session_notes', '2020-01-02.md'), 'UNjournaled old note')
+  fs.writeFileSync(path.join(mem, 'session_notes', `${TODAY}.md`), 'today, never touched')
+  fs.writeFileSync(path.join(mem, 'journals', '2020-01-01.md'), 'its journal entry')
+
+  let r = runPortedFull('scripts/journal-compress.mjs', mem, ['scan'])
+  ok('scan lists ONLY the unjournaled old note', r.stdout.includes('2020-01-02.md') && !r.stdout.includes('2020-01-01.md') && !r.stdout.includes(`${TODAY}.md`), r.stdout)
+
+  r = runPortedFull('scripts/journal-compress.mjs', mem, ['archive'])
+  ok('archive moves ONLY the journaled note', fs.existsSync(path.join(mem, 'session_notes', '.archive', '2020-01-01.md')) && !fs.existsSync(path.join(mem, 'session_notes', '2020-01-01.md')))
+  ok('unjournaled note left alone (never silently lost)', fs.existsSync(path.join(mem, 'session_notes', '2020-01-02.md')))
+  ok('today\'s note untouched', fs.existsSync(path.join(mem, 'session_notes', `${TODAY}.md`)))
+  ok('.last_compress stamped', fs.existsSync(path.join(mem, '.last_compress')))
+
+  r = runPortedFull('scripts/journal-compress.mjs', mem, ['bogus-mode'])
+  ok('unknown mode -> usage + exit 1', r.code === 1)
+  fs.rmSync(mem, { recursive: true, force: true })
+}
+
+// ── persona-reflux ──────────────────────────────────────────────────────────
+console.log('\n-- persona-reflux.mjs (the two boot-test lessons must survive the port)')
+{
+  const mem = tmp()
+  fs.mkdirSync(path.join(mem, 'session_notes'), { recursive: true })
+  // ONE file only (the bash -H lesson's trigger condition), containing a
+  // line-lead 🔒, a bulleted 🔒, and a mid-line decoy.
+  fs.writeFileSync(path.join(mem, 'session_notes', '2020-01-03.md'),
+    'prose mentioning 🔒 lines below in passing\n- 🔒 real correction one\n  🔒 real correction two\n')
+  let r = runPortedFull('scripts/persona-reflux.mjs', mem)
+  const proposals = fs.readFileSync(path.join(mem, '.review', 'reflux-proposals.md'), 'utf8')
+  ok('line-lead 🔒 lines proposed (bulleted + indented)', proposals.includes('real correction one') && proposals.includes('real correction two'))
+  ok('LESSON 1: mid-line 🔒 mention is NOT a correction', !proposals.includes('lines below in passing'))
+  ok('marker stripped from the correction text', !proposals.includes('**Correction**: - 🔒'))
+  const seen = fs.readFileSync(path.join(mem, '.review', '.reflux-seen'), 'utf8').trim().split('\n')
+  // [\\/] : the KEY is correct on Windows ('...\\session_notes\\2020-01-03.md:2'
+  // -- real path plus :line); it was this regex that assumed a POSIX
+  // separator. Asserting the shape, not the platform (2026-08-04 win run).
+  ok('LESSON 2: single-file run still keys as file:line', seen.every((k) => /session_notes[\\/]2020-01-03\.md:\d+$/.test(k)), JSON.stringify(seen))
+  ok('reported 2 new corrections', r.stderr.includes('2 new correction(s)'), r.stderr)
+
+  r = runPortedFull('scripts/persona-reflux.mjs', mem)
+  ok('re-run dedupes to 0 (idempotent)', r.stderr.includes('0 new correction(s)'), r.stderr)
+  fs.rmSync(mem, { recursive: true, force: true })
+}
+
+// ── madoromi-solo ───────────────────────────────────────────────────────────
+console.log('\n-- madoromi-solo.mjs')
+{
+  const mem = tmp()
+  let r = runPortedFull('scripts/madoromi-solo.mjs', mem)
+  ok('no journals -> says so and exits 0', r.code === 0 && r.stderr.includes('nothing to dream from'))
+
+  fs.mkdirSync(path.join(mem, 'journals'), { recursive: true })
+  fs.writeFileSync(path.join(mem, 'journals', '2020-02-01.md'), 'the harbor crane entry')
+  r = runPortedFull('scripts/madoromi-solo.mjs', mem)
+  ok('prints the frame with the picked entry inline', r.stdout.includes('[MADOROMI]') && r.stdout.includes('the harbor crane entry') && r.stdout.includes('--- 2020-02-01.md ---'))
+  ok('names the dream target for today', r.stdout.includes(path.join('dreams', `${TODAY}.md`)))
+  ok('sources line carries the basenames', r.stdout.includes('Sources: 2020-02-01.md'))
+  fs.rmSync(mem, { recursive: true, force: true })
+}
+
+console.log(`\n${pass} passed, ${fail} failed`)
+process.exit(fail === 0 ? 0 : 1)

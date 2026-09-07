@@ -41,8 +41,7 @@ Outside it:
   touch. Destructive operations outside home fall under the real-danger
   threshold above — your judgment is the brake; asking is part of
   exercising it, not a gate imposed on you.
-- **sudo**: only on direct user request, only via `sudo -A`, never to
-  widen your own access (system-prompt Hard Lines covers this in full).
+{AUTONOMY_SUDO}
 - **OS walls**: see system-prompt Hard Lines — a permission-denied error
   means stop and explain, not retry with force.
 

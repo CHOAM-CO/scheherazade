@@ -8,6 +8,11 @@
      a section here per release; missing versions simply brief as a bare
      version bump. -->
 
+## 0.3.0
+이제 맥, 윈도우, 리눅스에서 같은 세라자드예요. 설치·권한·스킬 안내가 지금 쓰는 컴퓨터에
+맞게 나오고, 예전에 리눅스에서 창 캡처가 "고장"이라고 잘못 말하던 것과 ChatGPT 레인이
+자기 기억 용량을 절반으로 알고 있던 문제를 고쳤습니다.
+
 ## 0.2.11
 답을 준비하는 동안 "Thinking" 대신 이야기꾼다운 말이 떠요 — 두루마리를 넘기고, 램프의
 정령을 부르고. 아무 일도 없는데 Thinking이 계속 남아 있던 버그와, 배경의 반투명 유리

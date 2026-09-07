@@ -34,7 +34,7 @@
 // check is the least important thing it does.
 'use strict'
 
-// 0.2.9 unification (2026-08-21, Mino "진짜 통합"): back on the live public
+// 0.2.9 unification (2026-08-21, the owner "진짜 통합"): back on the live public
 // feed. The dsh track is the main line -- appId/productName/data home now
 // equal the 0.1.x line's, so a 0.2.9+ release on this feed IS a plain
 // upgrade for every installed copy, and the 0.1.x-era cross-coupling worry
@@ -167,10 +167,13 @@ function initMacNotifier({ app, dialog, shell, log }) {
 // updating is strictly less important than everything else the app does.
 function initAutoUpdate({ app, dialog, shell, log }) {
   const mode = pickUpdateMode({ platform: process.platform, isPackaged: app.isPackaged })
+  // Logged BEFORE the branch: the mode is already decided, and a throw inside
+  // init (electron-updater missing on a win32 box) must not eat the one line
+  // that says which lane we picked.
+  log(`updater: mode=${mode}`)
   try {
     if (mode === 'auto') initWindowsUpdater({ dialog, log })
     else if (mode === 'notify') initMacNotifier({ app, dialog, shell, log })
-    log(`updater: mode=${mode}`)
   } catch (err) {
     log('updater: init failed (non-fatal):', (err && err.message) || String(err))
   }

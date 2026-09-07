@@ -1,4 +1,4 @@
-// channels.js — channels page (multichannel v0.0.18, Mino 07-16: "맨 앞에
+// channels.js — channels page (multichannel v0.0.18, the owner 07-16: "맨 앞에
 // 채널 섹션 추가하고 Discord/Slack/Telegram 연동 갈아끼울 수 있게").
 // One card per messenger backend: live status from GET /api/channels/status
 // (never cached config), a connect/reconnect flow per backend, and a switch
@@ -27,7 +27,7 @@
 
   // Button label derives from LIVE state, not the backend's history: a
   // never-connected Discord said "Reconnect" and a connected Slack said
-  // "Connect" (Mino, clean-mac 2026-08-04 13:55). Discord's ids keep the
+  // "Connect" (the owner, clean-mac 2026-08-04 13:55). Discord's ids keep the
   // legacy reconnect-flow names; the label logic is shared.
   function connectBtnFor(key) {
     return $(key === 'discord' ? 'ch-discord-reconnect' : `ch-${key}-connect`)
@@ -44,7 +44,7 @@
     const info = status.backends[key]
     const isActive = status.active === key
     $(`ch-${key}-name`).textContent = C.names[key]
-    // On/off light (2026-08-05, Mino "초록불/회색불로 on off 인디케이팅"):
+    // On/off light (2026-08-05, the owner "초록불/회색불로 on off 인디케이팅"):
     // green = live. The in-app surface is hosted by EVERY backend now, so
     // its light is always green; for messengers, green = the one the agent
     // is actually on. The status TEXT keeps the configured/not distinction.
@@ -94,7 +94,7 @@
     }
   }
 
-  // connect != switch bit a real user within the hour (Mino, clean-mac
+  // connect != switch bit a real user within the hour (the owner, clean-mac
   // 13:58: Slack "Connected" but the agent still listened on in-app chat).
   // After a successful connect/apply on a non-active backend, offer the
   // switch right there instead of relying on the separate button being
@@ -426,7 +426,7 @@
       }
     }
 
-    // DM-default connect (2026-08-04, Mino "홈채널 방식 말고 DM 기본"):
+    // DM-default connect (2026-08-04, the owner "홈채널 방식 말고 DM 기본"):
     // tokens-only apply -- no channel pick, no enumerate. The server clears
     // any previously picked channel ('' write) and the conversation becomes
     // the bot's DM (message.im).

@@ -5,10 +5,10 @@
 // contract, the DATA_HOME marker files, and the outbound-target ladder — none
 // of which belongs to Discord, Slack, or Telegram. Backends keep only
 // transport behavior: client/login, fetch-target and send implementations,
-// message normalization, event wiring. scripts/test-channel-runtime.mjs is
+// message normalization, event wiring. tests/test-channel-runtime.mjs is
 // the tripwire that keeps it that way.
 //
-// resolveDataHome() MUST stay formula-identical to run.sh's MEM resolution
+// resolveDataHome() delegates to data-home.cjs, the ONE resolution
 // (`MEM="${AGENT_DATA_HOME:-$HOME/Documents/$AGENT_NAME}"`): same env var,
 // same fallback, keyed by AGENT_NAME. main.cjs / onboarding/http-server.cjs
 // compute DATA_HOME independently and poll the marker files written here —
@@ -21,6 +21,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
+import { resolveDataHome as resolveHome } from './data-home.cjs'
 
 // cadence/boot-announce.cjs is CommonJS on purpose (one decision module, two
 // callers — this file and onboarding/http-server.cjs, which cannot import ESM).
@@ -46,11 +47,67 @@ export function installStdoutHygiene() {
 // Resolved explicitly, never from process.cwd(): a differently-spawned
 // process must not silently write markers where no poller looks.
 export function resolveDataHome(agentName) {
-  return process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', agentName)
+  // Delegated to the one resolver (data-home.cjs, design-0023 P3) so the
+  // channel backends, the hooks, the supervisor and the memory DB can never
+  // disagree about where the agent lives. Same precedence, same default.
+  return resolveHome({ agentName })
+}
+
+// ── parent-death exit ──────────────────────────────────────────────────────
+// An MCP stdio server's stdin is its lifeline to the parent (the engine):
+// when the parent dies, stdin emits 'end'/'close'. The MCP transport reads
+// stdin but does NOT exit on its end, and anything long-lived the server holds
+// (a Discord gateway socket, a Slack Socket Mode connection, a Telegram long
+// poll, a SQLite handle) keeps the event loop alive forever -- so a dead
+// parent leaves the process ORPHANED. On Windows there are no POSIX process
+// groups, so the app's tree-kill cannot reach a grandchild either: every
+// mid-session recycle and every quit stranded a live channel server still
+// holding the bot token.
+//
+// design-0023 P3 #6: this used to exist as two full inline copies
+// (channel.mjs, memory/server.mjs) and two HALF copies -- channel-slack.mjs
+// and channel-telegram.mjs only did `process.stdin.on('end', surface.stop)`,
+// which stops the in-app chat surface and then keeps running with the socket
+// wide open. That is the exact orphan the Windows fix was written for, and
+// two of the four servers never got it. One implementation now, so the
+// asymmetry cannot come back.
+//
+// Contract: fire once, log, run `cleanup` (sync or async), exit 0 -- with an
+// unref'd safety timer so a hung teardown still exits. Only the stdin-EOF
+// path exits; normal (parent-alive) operation is untouched.
+export function installParentDeathExit({
+  name = 'MCP server',
+  cleanup = () => {},
+  log = console.log,
+  timeoutMs = 2500,
+  stdin = process.stdin,
+  exit = (code) => process.exit(code),
+} = {}) {
+  let shuttingDown = false
+  const onParentGone = () => {
+    if (shuttingDown) return
+    shuttingDown = true
+    log(`stdin closed (parent gone) -- shutting down ${name}`)
+    // Safety net: a hung disconnect must not hold the exit hostage. .unref()
+    // so the timer itself never keeps the process alive.
+    const t = setTimeout(() => {
+      log('graceful shutdown timed out -- forcing exit')
+      exit(0)
+    }, timeoutMs)
+    if (typeof t.unref === 'function') t.unref()
+    ;(async () => {
+      try { await cleanup() } catch (err) { log(`cleanup failed during shutdown: ${err.message}`) }
+      clearTimeout(t)
+      exit(0)
+    })()
+  }
+  stdin.on('end', onParentGone)
+  stdin.on('close', onParentGone)
+  return { onParentGone, uninstall: () => { stdin.off('end', onParentGone); stdin.off('close', onParentGone) } }
 }
 
 // ── atomic JSON write (temp file + rename) ─────────────────────────────────
-// Shared with run.sh's write_failure() convention: pollers read these files
+// Shared with the supervisor's failure-marker convention: pollers read these files
 // on a timer, and a plain writeFile leaves a window where a poll tick lands
 // mid-write and JSON.parses a truncated read. fs.rename is atomic on the
 // same filesystem, which a temp file in the same directory always is.
@@ -80,7 +137,7 @@ function localWeekday(ms = Date.now()) {
 
 export const localNow = () => `${localISO()} (${localWeekday()})`
 
-// ── agent config (.agent-config, the shell KEY="value" file run.sh sources) ─
+// ── agent config (.agent-config, the shell KEY="value" file the supervisor parses) ─
 // Read on demand, never cached by callers that gate spending: the settings
 // page can flip consent or a cap at any moment.
 export async function readAgentConfig(dataHome) {
@@ -103,7 +160,7 @@ export async function readAgentConfig(dataHome) {
 // process dies between writeFile and rename — a hard kill or OS reboot
 // landing inside any write window. The liveness heartbeat writes every 60s,
 // so that window recurs constantly, and the orphans accumulate forever
-// (magi-win 2026-08-18: three .agent-live.*.tmp from prior unclean
+// (the Windows box 2026-08-18: three .agent-live.*.tmp from prior unclean
 // shutdowns). Swept at backend boot (createMarkerStore — every transport
 // builds one) rather than per-write: one directory scan per boot.
 // Age gate (1h) protects a concurrent process's in-flight write; matching is
@@ -199,7 +256,7 @@ export function createLastChannelStore({ dataHome, log = console.log }) {
 // (Discord channel object / Slack channel id string / Telegram chat object).
 // opts (fetchFn/lastId/homeId) are test seams — production call sites pass
 // only requestedId and get live module state + the real fetch.
-// ── Outbound duplicate suppression (2026-08-04, Mino field report) ─────────
+// ── Outbound duplicate suppression (2026-08-04, the owner field report) ─────────
 // GPT-lane models (gpt-5.6-luna/terra via the codex-as-api proxy) were
 // observed re-sending the IDENTICAL message up to ~10x -- the model ignores
 // or never properly sees the tool result's "sent" receipt and re-calls the
@@ -371,7 +428,7 @@ export function createBootAnnouncer({ dataHome, homeId, lastChannelStore, fetchT
 // "매일 아침 메일 브리핑해줘" -> the agent registers a routine with the
 // `routine` tool -> the channel process fires the prompt back into the agent
 // at the scheduled time, and the result lands in the conversation like any
-// other turn (Mino, 2026-08-04).
+// other turn (the owner, 2026-08-04).
 //
 // DELIBERATELY NOT the autonomy cycle: that lane is unattended night work
 // behind its own consent gate (AUTONOMY=yes). A routine is something the
@@ -568,7 +625,7 @@ export function routineInjectContent(r) {
 // Inspired by Gemini Spark's Tasks/Schedules split.
 //
 // Rule lives in cadence/schedule-tick.cjs (pure, tested by
-// scripts/test-schedule-tick.mjs); THIS is only the IO, shared by every
+// tests/test-schedule-tick.mjs); THIS is only the IO, shared by every
 // backend the same way startRoutineTicker is -- so a backend that forgets
 // to call it is missing a wiring line, not missing an implementation.
 //
@@ -733,7 +790,7 @@ export function createInboundNotifier({ dataHome, mcpNotify, log = console.log, 
 }
 
 // ── mute-strike announcer ──────────────────────────────────────────────────
-// The messenger-side half of the mute net (2026-08-13, Mino field case: kimi
+// The messenger-side half of the mute net (2026-08-13, the owner field case: kimi
 // turn ends success turns=5 dur=765s, no reply ever reaches the messenger,
 // "계속 답 못받는중"). stop-reply-guard already convicts the mute and writes
 // the .mute-strikes.json ledger, and the PANEL shows a banner + revert offer

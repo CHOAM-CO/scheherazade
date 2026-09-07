@@ -30,7 +30,7 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import {
   installStdoutHygiene, resolveDataHome, localISO, localNow,
-  sweepStaleAtomicTmp,
+  sweepStaleAtomicTmp, installParentDeathExit,
   createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer, createMuteStrikeAnnouncer,
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
   createInboundNotifier, createOutboundDedup,
@@ -92,7 +92,7 @@ if (!SLACK_APP_TOKEN) {
   )
   process.exit(1)
 }
-// HOME_CHANNEL_ID is OPTIONAL since DM-default mode (2026-08-04, Mino "홈채널
+// HOME_CHANNEL_ID is OPTIONAL since DM-default mode (2026-08-04, the owner "홈채널
 // 방식 말고 DM 기본 방식으로 바꾸자"): with no home channel the conversation
 // binds to whoever DMs the bot (message.im events; lastInboundChannelId +
 // the persisted last-channel store carry the reply target from there). A
@@ -168,7 +168,7 @@ const resolveOutboundChannel = createOutboundResolver({
   guidance: GUIDANCE,
 })
 
-// GPT-loop guard (2026-08-04, Mino field report) -- see createOutboundDedup.
+// GPT-loop guard (2026-08-04, the owner field report) -- see createOutboundDedup.
 const checkOutboundDup = createOutboundDedup({ log })
 
 // ── User display-name resolution (hard constraint #8) ───────────────────────
@@ -315,7 +315,7 @@ function chunkText(text, size = REPLY_CHUNK_SIZE) {
 }
 
 // opts.postMessage / opts.fetchFn / opts.lastId / opts.homeId are test seams
-// (scripts/test-slack-channel.mjs) -- production call sites pass only the
+// (tests/test-slack-channel.mjs) -- production call sites pass only the
 // tool args and get live module state + the real WebClient.
 async function sendReply({ channelId, text, thread_ts: threadTs }, opts = {}) {
   const post = opts.postMessage || ((args) => slackWeb.chat.postMessage(args))
@@ -477,7 +477,7 @@ const MAX_IMAGE_BYTES = 20 * 1024 * 1024 // same cap as channel.mjs downloadBuff
 // Lane vision verdict, channel-side (0.1.4). Mirrors the onboarding
 // server's laneVision POLICY (first-party yes / default no / YES-list
 // exception) but from the channel process's vantage: PROVIDER is not in
-// this env (run.sh exports MODEL only), so first-party is detected by model
+// this env (the supervisor exports MODEL only), so first-party is detected by model
 // name. Default-'no' is the fail-safe: the worst case is telling a
 // vision-capable unlisted model to be honest about an image it could have
 // read; the old worst case (Read invitation on a non-vision lane) poisoned
@@ -601,7 +601,7 @@ async function handleInboundMessage(event, opts = {}) {
   const notify = opts.notify || (notifyInbound)
   const resolveSender = opts.resolveSender || resolveSenderName
 
-  // Bot handling, two layers (Mino 08-24 "에이전트/앱이 태그하면 못봄"):
+  // Bot handling, two layers (the owner 08-24 "에이전트/앱이 태그하면 못봄"):
   // SELF always filters (echo guard), but OTHER bots pass when they
   // explicitly mention this bot. Slack never fires app_mention for
   // bot-authored messages (its own loop guard), so a bot's tag arrives
@@ -614,13 +614,13 @@ async function handleInboundMessage(event, opts = {}) {
   const botMentionsUs = !isSelf && isBotEvent(event) &&
     Boolean(self.userId && String(event.text || '').includes(`<@${self.userId}>`))
   if ((isBotEvent(event) && !botMentionsUs) || isIgnorableSubtype(event)) return { skipped: true, reason: 'bot_or_subtype' }
-  // DM-default (2026-08-04, Mino): DMs to the bot (channel_type 'im',
+  // DM-default (2026-08-04, the owner): DMs to the bot (channel_type 'im',
   // message.im event -- needs im:history + the event subscription in the
   // app manifest) are ALWAYS accepted; a configured home channel is an
   // additional surface on top. The original home-channel-only scoping
   // ("hard constraint #2") applies only to non-DM channels: any other
   // channel/group the bot happens to be in stays ignored -- EXCEPT a
-  // mention (Mino 08-24 "멘션은 무조건 받게"): @-ing the bot is an explicit
+  // mention (the owner 08-24 "멘션은 무조건 받게"): @-ing the bot is an explicit
   // summon, so app_mention events are accepted from ANY channel.
   const isDm = event.channel_type === 'im'
   const isMention = event.type === 'app_mention' || botMentionsUs
@@ -681,7 +681,7 @@ async function handleInboundMessage(event, opts = {}) {
     const marker = markers.join('\n')
     content = text ? `${text}\n${marker}` : marker
   }
-  // messageTs/threadTs (2026-08-11, Mino): expose the raw Slack ts so the
+  // messageTs/threadTs (2026-08-11, the owner): expose the raw Slack ts so the
   // agent can thread replies. threadTs is set only when the inbound message
   // itself lives in a thread -- reply targeting rule: use threadTs when
   // present (stay in the existing thread), else messageTs (start a thread
@@ -866,7 +866,7 @@ async function validateAppToken(opts = {}) {
 
 // ── boot ─────────────────────────────────────────────────────────────────
 // Same "am I the entry point" guard as channel.mjs, for the same reason:
-// scripts/test-slack-channel.mjs imports this file to exercise its exported
+// tests/test-slack-channel.mjs imports this file to exercise its exported
 // functions without connecting real stdio/Socket Mode transport.
 const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])
 
@@ -875,13 +875,26 @@ async function boot() {
   log(`MCP server up (${AGENT_NAME})`)
 
   // Always-on in-app chat surface, fail-soft (see channel.mjs's twin block).
+  let localSurface = null
   try {
-    const surface = await startLocalChatSurface({ notify: (n) => { lastInboundSurface = 'in-app'; return notifyInbound(n.params) }, log })
-    process.stdin.on('end', surface.stop)
-    process.stdin.on('close', surface.stop)
+    localSurface = await startLocalChatSurface({ notify: (n) => { lastInboundSurface = 'in-app'; return notifyInbound(n.params) }, log })
   } catch (err) {
     log(`in-app chat surface failed to start (chat page off this session): ${err.message}`)
   }
+
+  // Parent-death exit (design-0023 P3 #6). This used to be
+  // `stdin.on('end', surface.stop)` and nothing else: the chat surface closed
+  // and the process kept running with the Socket Mode websocket wide open,
+  // holding the app token -- the exact orphan channel.mjs's 2026-08-18 fix was
+  // written for, never ported here. Disconnect the socket, then exit.
+  installParentDeathExit({
+    name: 'Slack channel MCP server',
+    log,
+    cleanup: async () => {
+      try { localSurface?.stop() } catch (err) { log(`surface stop failed during shutdown: ${err.message}`) }
+      try { await socketModeClient.disconnect() } catch (err) { log(`socket mode disconnect failed during shutdown: ${err.message}`) }
+    },
+  })
 
   // Bot token checked first (auth.test is a plain REST call, fails fast on a
   // revoked/invalid xoxb) -- app token checked second via the actual Socket

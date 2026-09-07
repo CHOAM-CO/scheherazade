@@ -7,7 +7,7 @@
 // .agent-config fresh, read+parse schedules.json, call this function, inject
 // the due prompts on the SAME rail the autonomy cycle uses, write back
 // lastRunISO). This file owns the rule: what is due, what is not, and why --
-// and scripts/test-schedule-tick.mjs calls THIS function, not a copy of it.
+// and tests/test-schedule-tick.mjs calls THIS function, not a copy of it.
 //
 // Before this feature, every background behavior (autonomy cycle, note
 // cadence, routines) was its own hardcoded setInterval with its own bespoke
@@ -31,7 +31,7 @@ const MIN_EVERY_MINUTES = 15
 // SMALLER number than cadence/note-tick.cjs's ACTIVITY_WINDOW_MS (1h): that
 // watcher is choosing not to NAG about note hygiene during a live chat;
 // this one is choosing not to inject a THIRD PARTY's scheduled turn into a
-// conversation the user is actively having. 10 minutes (Mino's design) is
+// conversation the user is actively having. 10 minutes (the owner's design) is
 // long enough to cover normal typing gaps, short enough that a schedule
 // does not starve just because the user is chatty that day -- the deferred
 // entry is due again the very next quiet tick, never lost, never
@@ -192,7 +192,7 @@ function planScheduleTick({ now, config, store, agentActiveMs }) {
   // store == null means the file does not exist -- nothing registered yet.
   // That is the NORMAL state of a fresh install, not a fault: warn-on-null
   // spammed the app log every 60s on every fresh 0.2.x DATA_HOME (measured
-  // on Mino's box, 2026-08-19) until this was split. A store that EXISTS
+  // on the owner's box, 2026-08-19) until this was split. A store that EXISTS
   // but has the wrong shape is still a fault and still warns below.
   if (store == null) {
     return { due, warnings, skipped }
@@ -255,7 +255,7 @@ function planScheduleTick({ now, config, store, agentActiveMs }) {
 // (headless lane, Claude Code SessionStart hook) and channel-runtime's
 // startScheduleTicker (dsh lane, where Claude Code hooks never run -- without
 // the ticker-side seed the Dreaming default silently never existed on 0.2.x,
-// found 2026-08-19 on Mino's box). Seeding is absence-only everywhere: once
+// found 2026-08-19 on the owner's box). Seeding is absence-only everywhere: once
 // the file exists it belongs to the user/agent. createdBy MUST stay "agent"
 // -- the consent gate above only lets agent-authored entries fire once
 // AUTONOMY=yes; "system" would bypass that gate.
@@ -273,7 +273,7 @@ function defaultScheduleStore() {
         createdBy: 'agent',
         lastRunISO: null,
       },
-      // Madoromi (0.2.12, Mino 08-23: "꿈 꾸면 그냥 먼저 톡했으면 좋겠음").
+      // Madoromi (0.2.12, the owner 08-23: "꿈 꾸면 그냥 먼저 톡했으면 좋겠음").
       // CLAUDE.md always SAID dreams happen in idle stretches, but nothing
       // ever fired one — the first live agent went 24h dreamless until the
       // human ran the script by hand. Daily, afternoon/evening window so

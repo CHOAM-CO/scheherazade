@@ -3,6 +3,17 @@
 // returns its status. No credential, no child output, and no caller-supplied
 // value is ever interpolated into a response.
 //
+// THE START ROUTE NO LONGER STARTS ANYTHING (2026-09-07, design-0023 P2). The
+// pty this lane drove came from the top-level node-pty dependency, which is
+// retired; setup-token-session.cjs refuses with reason 'unsupported' and this
+// route answers 409 with a line pointing at /api/claude-login/* -- the in-app
+// loopback OAuth that has been the wizard's primary Claude login since 0.2.18,
+// needs no CLI, and writes the same 'claude-subscription' credential. The
+// routes are kept (rather than deleted) so an old page, a bookmark, or a
+// half-migrated client gets a truthful refusal with somewhere to go instead of
+// a 404 it cannot interpret; status/code/cancel keep answering for a session
+// that can now only ever be idle or failed.
+//
 // That last clause is the one worth stating explicitly. The recurring defect
 // class on this server has been unbounded echo -- a refusal string quoting
 // whatever the caller sent, landing in a one-line status element. These
@@ -42,7 +53,19 @@ function createRoutes(staticCtx) {
         // reads as more load-bearing than it is and would send the next
         // person hunting for a failure that cannot happen here.
         if (!result.ok) {
-          sendJson(res, 409, { ...session.status(), ok: false, reason: result.reason })
+          // `error` is a human line, same convention as oauth-login.cjs's 409,
+          // so a client's api() surfaces something readable instead of a bare
+          // "HTTP 409". Fixed text from this module -- nothing caller-supplied,
+          // nothing derived from child output.
+          sendJson(res, 409, {
+            ...session.status(),
+            ok: false,
+            reason: result.reason,
+            error: result.reason === 'unsupported'
+              ? 'The Terminal capture is no longer available in this version. Use the in-app Claude login (POST /api/claude-login/start), which needs no Claude Code install and stores the same credential.'
+              : 'The login could not be started on this machine.',
+            useInstead: result.reason === 'unsupported' ? '/api/claude-login/start' : null,
+          })
           return
         }
         sendJson(res, 202, { ...session.status(), ok: true })

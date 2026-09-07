@@ -1,27 +1,32 @@
 {
   "name": "scheherazade",
-  "version": "0.2.20",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Mac-native local AI agent. Forked from agent-portable (Claude Code single-agent harness); P0 spike layers an Electron packaging shell on top.",
   "engines": {
     "node": ">=24.0.0"
   },
+  "packageManager": "npm@11.19.0",
   "main": "main.cjs",
   "scripts": {
+    "test": "node tools/run-tests.mjs",
     "start": "node channel.mjs",
     "electron:dev": "electron .",
-    "dist": "electron-builder --mac dmg --publish never",
-    "dist:mac": "npm run dist",
-    "dist:win": "node scripts/assert-win32.mjs && electron-builder --win nsis --publish never",
-    "postinstall": "node scripts/fix-pty-helper.mjs",
-    "predist": "node scripts/test-packaging.mjs",
-    "postdist": "node scripts/test-packaging.mjs",
-    "predist:win": "node scripts/test-packaging.mjs",
-    "postdist:win": "node scripts/test-packaging.mjs"
+    "dist": "node tools/assert-platform.mjs mac && electron-builder --mac dmg --publish never",
+    "dist:mac": "node tools/assert-platform.mjs mac && electron-builder --mac dmg --publish never",
+    "dist:win": "node tools/assert-platform.mjs win && electron-builder --win nsis --publish never",
+    "dist:linux": "node tools/assert-platform.mjs linux && electron-builder --linux AppImage --x64 --publish never",
+    "predist": "node tools/assert-platform.mjs mac && node tools/test-packaging.mjs",
+    "postdist": "node tools/test-packaging.mjs",
+    "predist:mac": "node tools/assert-platform.mjs mac && node tools/test-packaging.mjs",
+    "postdist:mac": "node tools/test-packaging.mjs",
+    "predist:win": "node tools/assert-platform.mjs win && node tools/test-packaging.mjs",
+    "postdist:win": "node tools/test-packaging.mjs",
+    "predist:linux": "node tools/assert-platform.mjs linux && node tools/test-packaging.mjs",
+    "postdist:linux": "node tools/test-packaging.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/claude-code": "^2.1.199",
     "@deepseek-ai/dsh": "0.1.0-rc.7",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@slack/socket-mode": "^3.0.0",
@@ -30,7 +35,6 @@
     "discord.js": "^14.26.4",
     "dotenv": "^17.4.2",
     "electron-updater": "^6.8.9",
-    "node-pty": "^1.1.0",
     "undici": "^7.28.0",
     "zod": "^4.4.3",
     "@deepseek-ai/cordis-plugin-group": "1.0.1",
@@ -60,7 +64,6 @@
       "output": "release"
     },
     "files": [
-      "main-v2.cjs",
       "main.cjs",
       "updater.cjs",
       "notify-agent-reply.cjs",
@@ -77,7 +80,9 @@
       "setup-token-session.cjs",
       "oauth-usage-session.cjs",
       "tcc-probe.cjs",
-      "run.sh",
+      "data-home.cjs",
+      "local-date.cjs",
+      "proc.cjs",
       "supervisor.mjs",
       "headless-lane.mjs",
       "dsh-client.cjs",
@@ -85,20 +90,18 @@
       ".mcp.json",
       "onboarding/**/*",
       "hooks/**/*",
-      "scripts/**/*",
+      "scripts/journal-compress.mjs",
+      "scripts/madoromi-solo.mjs",
+      "scripts/persona-reflux.mjs",
       "autonomy/**/*",
       "cadence/**/*",
       "calendar/**/*",
-      "docs/**/*",
       "memory/**/*",
       "procedures/**/*",
       "CLAUDE.md",
       "ONTOLOGY_GUIDE.md",
-      "README.md",
       "!node_modules/electron/**/*",
-      "!node_modules/electron-builder/**/*",
-      "!node_modules/@anthropic-ai/claude-code/**/*",
-      "!node_modules/@anthropic-ai/claude-code-*/**/*"
+      "!node_modules/electron-builder/**/*"
     ],
     "extraResources": [
       {
@@ -118,11 +121,14 @@
       "channel-telegram.mjs",
       "channel-local.mjs",
       "channel-runtime.mjs",
-      "run.sh",
+      "data-home.cjs",
+      "local-date.cjs",
+      "proc.cjs",
       "supervisor.mjs",
       "headless-lane.mjs",
       "dsh-client.cjs",
       "dsh-lane.mjs",
+      "onboarding/public/js/model-catalog.cjs",
       "hooks/**",
       "scripts/**",
       "autonomy/**",
@@ -198,9 +204,7 @@
     "electron-builder": "^26.15.3"
   },
   "allowScripts": {
-    "@anthropic-ai/claude-code": true,
     "electron": true,
-    "electron-winstaller": true,
-    "node-pty": true
+    "electron-winstaller": true
   }
 }

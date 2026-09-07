@@ -5,7 +5,7 @@
 // Discord client, a clock, or an agent. channel.mjs is the wiring; this is the
 // judgment.
 //
-// The three hard requirements (Mino, 2026-07-13 19:40) are encoded here as
+// The three hard requirements (the owner, 2026-07-13 19:40) are encoded here as
 // three gates, and they are AND-ed, never OR-ed:
 //   consent   -- AUTONOMY=yes, an explicit, separate yes. Not inherited.
 //   budget    -- a real measured cap. Cannot measure -> cannot run.
@@ -101,7 +101,7 @@ function anchorFor(st, now, forDayKey = null) {
   // The unit tests could not see this. They mocked the meter and reset the state
   // between cases, so every night they tested was the first night. It took
   // running two nights in a row against a real state file on disk.
-  // (scripts/test-autonomy-night.mjs, 2026-07-13.)
+  // (tests/test-autonomy-night.mjs, 2026-07-13.)
   if (forDayKey && st.cycleDay !== forDayKey) return { ok: true, ms: null }
   const ms = Date.parse(st.cycleStartedAt || '')
   if (!Number.isFinite(ms)) {

@@ -240,7 +240,7 @@ function createRoutes(staticCtx) {
       match: (pathname) => pathname === '/api/slack/connect/apply',
       handler: async (req, res, callCtx) => {
         const { agentControls } = callCtx // per-call value from createOnboardingServer, never staticCtx
-        // channelId is OPTIONAL since DM-default mode (2026-08-04, Mino
+        // channelId is OPTIONAL since DM-default mode (2026-08-04, the owner
         // "홈채널 방식 말고 DM 기본"): tokens alone are a complete config --
         // the conversation is the bot's DM (message.im). A picked channel is
         // the optional extra surface, and keeps its full reachability check.

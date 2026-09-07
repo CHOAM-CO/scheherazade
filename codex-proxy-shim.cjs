@@ -1,7 +1,7 @@
 // codex-proxy-shim.cjs -- strip Anthropic tool HINT fields the codex-as-api
 // backend rejects, in front of the in-process proxy.
 //
-// WHY (2026-08-20, Mino cto-mac field test): pi-ai's anthropic-messages
+// WHY (2026-08-20, the owner cto-mac field test): pi-ai's anthropic-messages
 // serializer marks EVERY tool `eager_input_streaming: true` (default-on,
 // dist/api/anthropic-messages.js line ~1008: `model.compat?.
 // supportsEagerToolInputStreaming ?? true`), and dsh exposes no compat switch
@@ -26,7 +26,7 @@
 //
 // Upstream (github.com/Eunho-J/codex-as-api) ignoring the hints instead of
 // throwing would make this shim removable; that is Eunho's repo, not ours to
-// hotfix -- candidate PR, Mino's call.
+// hotfix -- candidate PR, the owner's call.
 'use strict'
 const http = require('node:http')
 

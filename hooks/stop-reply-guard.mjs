@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // stop-reply-guard.mjs -- silent-text regression detector (Stop hook).
 //
-// Failure mode this blocks (Mino's install "춘식3", 2026-07-13 19:10 KST,
+// Failure mode this blocks (observed on a live install, 2026-07-13 19:10 KST,
 // agent's own transcript self-diagnosis): the agent COMPOSED reply text in
 // its transcript but never called the reply tool -- twice in a row -- so
 // from Discord it was indistinguishable from a hang/crash ("돌연사").
-// Port of MAGI fleet hooks/check-discord-reply.mjs (live on caspar/
-// balthazar/melchior since 2026-04), trimmed to this app's single-agent
+// Port of the reference fleet hooks/check-discord-reply.mjs (live on three fleet agents
+// since 2026-04), trimmed to this app's single-agent
 // shape: no B2B/consensus/soft-listen exceptions.
 //
 // Mechanism: on Stop, tail-parse the transcript jsonl, find the most recent
@@ -17,8 +17,8 @@
 // on any internal error -- a buggy guard must never trap the agent.
 
 import fs from 'fs'
-import os from 'os'
 import path from 'path'
+import { resolveDataHome } from '../data-home.cjs' // one resolver: AGENT_DATA_HOME || MEM || ~/Documents/Scheherazade
 
 // Escalating scan windows (red-team 2026-08-05 item 5, "tail anchor"): a
 // single fixed tail (was 500KB/80 events) let one large tool output push
@@ -49,7 +49,7 @@ const SCAN_STEPS = [
 // tool_choice, free tool_choice, 15-tool harness shape, 36k context, and the
 // REAL Claude Code CLI driving a REAL MCP server (which wrote a file receipt
 // proving the tool executed). kimi passes every probe I can construct, yet it
-// was demonstrably mute in Mino's install. So a pre-swap probe would have
+// was demonstrably mute in the owner's install. So a pre-swap probe would have
 // stamped the broken model HEALTHY: it can convict, it cannot acquit (absence
 // of a finding is not an acquittal). A gate that manufactures false acquittals
 // is worse than no gate.
@@ -72,10 +72,10 @@ const SCAN_STEPS = [
 // Every fs path here is best-effort and swallowed: a ledger that throws must
 // never trap the agent (same fail-open contract as the rest of this hook).
 // AGENT_DATA_HOME is exported into the agent's env by main.cjs:872 (and honored
-// by run.sh:49), and this hook runs inside that env -- so prefer it over
+// by the supervisor), and this hook runs inside that env -- so prefer it over
 // re-deriving the path. The literal fallback matches http-server.cjs's DATA_HOME
 // for the case where a hook is invoked outside a managed spawn.
-const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', 'Scheherazade')
+const DATA_HOME = resolveDataHome()
 const STRIKES_PATH = path.join(DATA_HOME, '.mute-strikes.json')
 const AGENT_CONFIG_PATH = path.join(DATA_HOME, '.agent-config')
 
@@ -144,7 +144,7 @@ async function main() {
   // v0.0.18 -- digits-only left the guard silently inert there), Slack =
   // C0ABC123, in-app = the literal "in-app" (v0.0.34 -- digits-only left
   // the guard inert on the LOCAL backend too, i.e. the 0.0.31 silent-agent
-  // class had no net exactly where Mino hit it).
+  // class had no net exactly where the owner hit it).
   const channelRegex = /<channel\s+[^>]*channelId="([\w-]+)"[^>]*>([\s\S]*?)<\/channel>/
   let entries = []
   let triggerIdx = -1
@@ -197,7 +197,7 @@ async function main() {
   if (triggerChannelId === 'system') process.exit(0)
 
   // Walk forward looking for a reply-class call that ANSWERED the trigger
-  // channel. Two layers, receipt first (2026-07-15 Melchior chain review):
+  // channel. Two layers, receipt first (2026-07-15 the reviewer chain review):
   //
   // 1. DELIVERY RECEIPT: channel.mjs stamps `delivered_channel=<id>` into
   //    every successful reply/send_file tool result -- where the message
@@ -207,7 +207,7 @@ async function main() {
   //    AIMED, so a confabulated-id reply that the server had already
   //    delivered to the trigger channel still drew exit 2 -> the model
   //    resent -> the user got the same answer twice (double-send class,
-  //    Melchior catch). Guard semantics are now "actually delivered", which
+  //    the reviewer catch). Guard semantics are now "actually delivered", which
   //    is what "answered" always meant.
   // 2. ARGS FALLBACK (receipt missing -- e.g. tool_result outside the tail
   //    window, or an older channel.mjs without the stamp): explicit args id
@@ -218,7 +218,7 @@ async function main() {
   //    -- rarer and milder than convicting every correct omitted reply).
   const pendingReplyCalls = new Map() // tool_use id -> args channelId ('' if omitted)
   let replyFound = false
-  // DUAL-CHANNEL storm guard (2026-08-13, Mino's live repro): when Discord AND
+  // DUAL-CHANNEL storm guard (2026-08-13, the owner's live repro): when Discord AND
   // in-app are both connected, inbound messages from the two surfaces interleave
   // in the ONE headless transcript. The trigger is the single newest channel
   // tag, but the agent may have just answered the OTHER surface (e.g. replied to
@@ -226,7 +226,7 @@ async function main() {
   // ping). Per-channel matching then convicts a turn where the agent DID speak
   // to a human -> exit 2 injects "you never replied" -> the model resends ->
   // and because pings keep arriving on both channels, every Stop re-convicts:
-  // a forced-reply storm (Mino: "계속 답장함", saw 4-5 dupes per message). The
+  // a forced-reply storm (the owner: "계속 답장함", saw 4-5 dupes per message). The
   // silent-death class this hook exists to block is "composed text, called NO
   // tool" -- an agent that delivered a message to ANY channel is demonstrably
   // NOT mute. So we track whether anything landed anywhere after the trigger and

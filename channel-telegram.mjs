@@ -29,7 +29,7 @@ import https from 'node:https'
 import { fileURLToPath } from 'node:url'
 import {
   installStdoutHygiene, resolveDataHome, localISO, localNow,
-  sweepStaleAtomicTmp,
+  sweepStaleAtomicTmp, installParentDeathExit,
   createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer, createMuteStrikeAnnouncer,
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
   createInboundNotifier, createOutboundDedup,
@@ -50,7 +50,7 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
 const HOME_CHANNEL_ID = process.env.HOME_CHANNEL_ID // Telegram chat id (string)
 
 // ── DATA_HOME + markers (channel-runtime) ──────────────────────────────────
-// Same marker files as every backend on purpose -- main.cjs/run.sh poll ONE
+// Same marker files as every backend on purpose -- main.cjs/the supervisor poll ONE
 // contract (.agent-live, .agent-failed.json, .boot-event.json, ...)
 // regardless of which channel backend is running.
 const DATA_HOME = resolveDataHome(AGENT_NAME)
@@ -134,7 +134,7 @@ async function downloadImageToTmp(url, mime) {
 // Every call goes through `telegramApi()`, which takes an injectable
 // `requestFn` (default: the real https implementation below). This is the
 // same test-seam shape as channel.mjs's resolveOutboundChannel(opts.fetchFn)
-// -- scripts/test-telegram-channel.mjs swaps requestFn to attack getUpdates/
+// -- tests/test-telegram-channel.mjs swaps requestFn to attack getUpdates/
 // sendMessage/getChat/getMe logic with canned responses, no live network
 // anywhere in that file.
 const TELEGRAM_API_HOST = 'api.telegram.org'
@@ -258,7 +258,7 @@ const resolveOutboundChannel = createOutboundResolver({
   guidance: GUIDANCE,
 })
 
-// GPT-loop guard (2026-08-04, Mino field report) -- see createOutboundDedup.
+// GPT-loop guard (2026-08-04, the owner field report) -- see createOutboundDedup.
 const checkOutboundDup = createOutboundDedup({ log })
 
 // ── Local history ledger (read_channel_history backing store) ──────────────
@@ -428,7 +428,7 @@ function chunkText(text, size = 4000) {
   return chunks
 }
 
-// Extracted from the "reply" tool branch so scripts/test-telegram-channel.mjs
+// Extracted from the "reply" tool branch so tests/test-telegram-channel.mjs
 // can drive the real chunk/send/log path with an injected sendFn instead of
 // hitting live Telegram -- same DI shape as resolveOutboundChannel(opts).
 async function handleReplyCall({ channelId, text }, opts = {}) {
@@ -574,7 +574,7 @@ async function resolveTelegramFileUrl(fileId, opts = {}) {
 
 // Pure builder: raw Telegram message -> the exact {content, meta} shape
 // mcp.notification() sends on. Split out from handleUpdate() so
-// scripts/test-telegram-channel.mjs can assert the injected tag-format
+// tests/test-telegram-channel.mjs can assert the injected tag-format
 // payload without a live MCP transport or network call.
 function buildInboundMessage(message, localPaths = []) {
   let content = message.text || message.caption || ''
@@ -710,7 +710,7 @@ const muteAnnouncer = createMuteStrikeAnnouncer({
 // ── boot ─────────────────────────────────────────────────────────────────
 // Does NOT itself call process.exit() -- boot() does, after checking the
 // return value. Keeping the exit call out of this function is what makes it
-// testable: scripts/test-telegram-channel.mjs injects a rejecting requestFn
+// testable: tests/test-telegram-channel.mjs injects a rejecting requestFn
 // and asserts (return === false) + (failure marker written with
 // code 'telegram_token_bad'), with no subprocess and no live network.
 async function verifyTokenOrFail(opts = {}) {
@@ -733,13 +733,23 @@ async function boot() {
   log(`MCP server up (${AGENT_NAME})`)
 
   // Always-on in-app chat surface, fail-soft (see channel.mjs's twin block).
+  let localSurface = null
   try {
-    const surface = await startLocalChatSurface({ notify: (n) => { lastInboundSurface = 'in-app'; return notifyInbound(n.params) }, log })
-    process.stdin.on('end', surface.stop)
-    process.stdin.on('close', surface.stop)
+    localSurface = await startLocalChatSurface({ notify: (n) => { lastInboundSurface = 'in-app'; return notifyInbound(n.params) }, log })
   } catch (err) {
     log(`in-app chat surface failed to start (chat page off this session): ${err.message}`)
   }
+
+  // Parent-death exit (design-0023 P3 #6). Same half-copy as Slack had: the
+  // surface stopped but the 50s getUpdates long poll kept the loop alive
+  // forever, so a dead parent left this process holding the bot token. There
+  // is no client handle to close -- the poll is an in-flight fetch -- so the
+  // cleanup is the surface and the exit itself does the rest.
+  installParentDeathExit({
+    name: 'Telegram channel MCP server',
+    log,
+    cleanup: () => { try { localSurface?.stop() } catch (err) { log(`surface stop failed during shutdown: ${err.message}`) } },
+  })
 
   const tokenOk = await verifyTokenOrFail()
   if (!tokenOk) {

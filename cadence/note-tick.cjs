@@ -1,11 +1,11 @@
 'use strict'
 // cadence/note-tick.cjs -- pure decision for the session-note cadence
-// watcher (v0.0.16, Mino 07-16 12:25: "아이들링 상태면 세시간에 한 번씩
+// watcher (v0.0.16, the owner 07-16 12:25: "아이들링 상태면 세시간에 한 번씩
 // 세션노트 갱신").
 //
 // IDLE-ONLY since the 2026-07-28 boot-context diet. The original port also
 // nagged every 30 minutes DURING active conversation -- that active lane
-// was the MAGI fleet's habit riding along in the port, not part of the
+// was the the reference fleet's habit riding along in the port, not part of the
 // 07-16 directive, and it competed with the user's actual conversation for
 // the agent's attention. An active session skips entirely now: while the
 // human is talking, the conversation is the cadence. The CLAUDE.md §2
@@ -14,7 +14,7 @@
 // notice a session note going stale.
 //
 // channel.mjs owns the IO (fs.stat, config read, mcp.notification); this
-// file owns the rule, and scripts/test-note-cadence.mjs calls THIS function.
+// file owns the rule, and tests/test-note-cadence.mjs calls THIS function.
 // Same split as autonomy/tick.cjs, for the same reason: a copy of a rule
 // is not the rule.
 

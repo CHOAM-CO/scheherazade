@@ -2,7 +2,7 @@
    Dark theme matching the P0 placeholder's palette (bg #111, fg #eee,
    accent #5b8dee), extended into a real design system.
 
-   가시성 대공사 (Mino 2026-08-05 02:42 "밤에 가시성 작업좀"):
+   가시성 대공사 (the owner 2026-08-05 02:42 "밤에 가시성 작업좀"):
    - spacing scale tokens (--s1..--s6) — every margin/padding snaps to the
      scale, no more ad-hoc rem soup
    - frosted glass: body carries a translucent bg; main.cjs sets mac
@@ -17,16 +17,16 @@
   /* Native popup surfaces (select dropdown list, scrollbars): Chromium
      paints these from color-scheme, not from our CSS — without it the
      model picker's popup opened as a white OS panel over the dark app
-     (Mino 08-21 "모델 프로바이더 창 톤앤매너 안맞는데"). The app's palette
+     (the owner 08-21 "모델 프로바이더 창 톤앤매너 안맞는데"). The app's palette
      grammar is dark-first (panel ladder mixes bg toward white), so dark is
      correct even under user-seeded palettes. */
   color-scheme: dark;
-  /* v2 (2026-08-05, Mino "제일 중요한 대원칙 : 일관성"): the user seeds TWO
+  /* v2 (2026-08-05, the owner "제일 중요한 대원칙 : 일관성"): the user seeds TWO
      colors (bg, accent) in the Appearance tab; appearance-model.cjs derives
      the whole palette — panel ladder rgb triplets, frost wash, hover, focus
      ring — and the server injects the result over these fallbacks. The
      fallbacks below EQUAL the model's defaults (0.2.6: midnight navy /
-     manuscript gold — the app icon's own palette, Mino 08-20 "우리만의
+     manuscript gold — the app icon's own palette, the owner 08-20 "우리만의
      색") so a page served without injection looks identical. */
   --bg: #0b111e;
   --frost-rgb: 11 17 30;
@@ -62,7 +62,7 @@
   --danger-hover: #c25850;
   --success: #5fae7c;
   --warn: #d9a15f;
-  /* Status-indicator palette (2026-08-13, Mino: green/orange/red only, and the
+  /* Status-indicator palette (2026-08-13, the owner: green/orange/red only, and the
      old --warn tan read jaundiced -- "좀 더 주황색으로, 애플 디자인시트 참고").
      Tuned to Apple's dark-mode system colors so the traffic-light dots read
      crisp on the dark shell. Kept SEPARATE from the muted --success/--danger
@@ -125,7 +125,7 @@ html, body {
      the opaque ground on body: since html,body are height:100% the body
      box stays one viewport tall while content overflows it, so scrolling
      past 100vh fell off body's paint area onto the frost-over-acrylic
-     canvas — a light gray band on Windows (Mino 08-21 field screenshot).
+     canvas — a light gray band on Windows (the owner 08-21 field screenshot).
      Painting the ground on html = the canvas = it covers the full scroll
      range and overscroll on every page. */
   color: var(--fg);
@@ -279,7 +279,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
 .status-line.success { color: var(--success); }
 .status-line.failure { color: var(--danger); }
 
-/* Status "bean" dot (2026-08-13, Mino: "Running같은 인디케이터는 텍스트 말고
+/* Status "bean" dot (2026-08-13, the owner: "Running같은 인디케이터는 텍스트 말고
    빨간콩/초록콩으로"). The agent status bar gets a colored dot as the primary,
    at-a-glance signal; the state word stays beside it as a quiet label. Scoped
    to .nav-status so provider/other status-lines keep their existing rendering.
@@ -307,7 +307,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
 }
 
 /* Agent lifecycle buttons: the ACTION must read at a glance, not just the
-   label (Mino 2026-08-13: "Stop/Restart 눌림/안눌림 비주얼적으로 바로 보이게").
+   label (the owner 2026-08-13: "Stop/Restart 눌림/안눌림 비주얼적으로 바로 보이게").
    Start = go (green), Stop = danger (red), Restart = neutral. A fired button
    shows a busy/pressed state (inset + ring + spinner) until the status poll
    settles, so a click is never ambiguous. */
@@ -320,7 +320,7 @@ button.nav-ctl.is-stop {
 button.nav-ctl.is-stop:hover:not(:disabled) { background: var(--danger); color: #fff; }
 button.nav-ctl.is-busy {
   /* Apple systemOrange, not blue: the status palette is green/orange/red only,
-     and a blue busy state next to a green Start reads ambiguous (Mino
+     and a blue busy state next to a green Start reads ambiguous (the owner
      2026-08-13). Orange, not the old jaundiced tan. */
   opacity: 1; cursor: default; color: transparent !important;
   background: var(--status-orange) !important; border-color: transparent !important;
@@ -705,12 +705,12 @@ button.nav-ctl.is-busy::after {
   font-size: 0.78rem;
 }
 
-/* usage gauges (2026-08-05, Mino: 텍스트 말고 진짜 게이지 UI "보기쉽게").
+/* usage gauges (2026-08-05, the owner: 텍스트 말고 진짜 게이지 UI "보기쉽게").
    Color steps: ok < 60 <= warn < 85 <= hot. A null pct NEVER renders as an
    empty green bar — the track goes striped + the label says unreadable
    (server null-not-zero contract, same as the old text lines). */
 .usage-lanes { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.4rem; }
-/* 2026-08-05 margin pass (Mino: "큰 칸 나누고 마진설계부터 한다음에 칸 안에
+/* 2026-08-05 margin pass (the owner: "큰 칸 나누고 마진설계부터 한다음에 칸 안에
    정보들 배치" -- the lanes sat crammed in one undivided block). Each
    provider is its own sub-panel: box first, then name as a header line,
    then gauges with their own vertical rhythm. */
@@ -796,7 +796,7 @@ button.nav-ctl.is-busy::after {
 
 .hidden { display: none !important; }
 
-/* Step 4 connect buttons (Mino 07-13 click-test feedback) */
+/* Step 4 connect buttons (the owner 07-13 click-test feedback) */
 .connect-list { display: flex; flex-direction: column; gap: 0.75rem; margin-top: 1.5rem; }
 .connect-item { display: flex; align-items: center; gap: 0.75rem; }
 .connect-item button { min-width: 11rem; }
@@ -874,7 +874,7 @@ button.nav-ctl.is-busy::after {
   /* The pane flexes to fill the window; the input stays reachable. */
   height: 100vh;
 }
-/* P1 v2 (Mino 2026-08-05 19:40 "깔끔하긴 한데 누가 누군지 잘 안보이잖아" +
+/* P1 v2 (the owner 2026-08-05 19:40 "깔끔하긴 한데 누가 누군지 잘 안보이잖아" +
    aside reference 19:41): asymmetric surface. USER turns are compact
    right-aligned glass bubbles (accent-derived, iMessage-shaped) — identity
    readable from across the room. AGENT turns were flat document flow in
@@ -924,7 +924,7 @@ button.nav-ctl.is-busy::after {
   /* anchor for reaction badges + the hover react bar */
   position: relative;
 }
-/* P1 v3 (Mino 2026-08-06 14:47 "메시지 좀 묶어주는게 좋지 않을까? 말풍선이
+/* P1 v3 (the owner 2026-08-06 14:47 "메시지 좀 묶어주는게 좋지 않을까? 말풍선이
    날아갔는데?" + screenshot: two consecutive agent turns rendered as one
    unbroken text wall): agent turns get a CONTAINER back so each turn reads
    as a unit. Asymmetry from v2 survives — identity is still carried by
@@ -1053,7 +1053,7 @@ button.nav-ctl.is-busy::after {
 .chat-activity-fold .fold-line:last-child::after { display: none; }
 /* live state: the summary reads as quiet working status */
 .chat-run-live summary { color: var(--fg-dim); }
-/* 0.2.1 Think fold (dsh lane reasoning; Mino 08-19 "띵크 접이식"). Same
+/* 0.2.1 Think fold (dsh lane reasoning; the owner 08-19 "띵크 접이식"). Same
    quiet class as the activity fold — collapsed by default, and the content
    is prose, not a timeline: an indented frosted slab with a hairline rail,
    the reasoning readable but visually one register below the reply. */
@@ -1241,7 +1241,7 @@ button.nav-ctl.is-busy::after {
 .chat-react-badge {
   position: absolute;
   bottom: -1rem;
-  /* 1.5x of the original 0.78rem (Mino 2026-08-24 "이모티콘 좀 더 크게, 1.5배")
+  /* 1.5x of the original 0.78rem (the owner 2026-08-24 "이모티콘 좀 더 크게, 1.5배")
      — the tapback overlay was too small to read at a glance. Overhang and
      .chat-has-react margin grew with it so the bigger chip still clears the
      next bubble. Known platform limit, NOT ours to fix here: Chromium on
@@ -1362,7 +1362,7 @@ button.nav-ctl.is-busy::after {
 /* color: the global `p` rule (line ~46) dims document prose to --fg-dim.
    Chat bubbles are NOT document prose -- the markdown renderer wraps plain
    message text in real <p> nodes, which silently picked up that dim color
-   while li/strong siblings kept the bubble's own --fg (Mino, 2026-08-04:
+   while li/strong siblings kept the bubble's own --fg (the owner, 2026-08-04:
    plain text dark, bullets/bold white). Inherit restores one color per
    bubble, and works for BOTH sides -- agent (--fg) and user (white). */
 .chat-msg p { margin: 0 0 0.5rem; color: inherit; }
@@ -1428,6 +1428,11 @@ button.nav-ctl.is-busy::after {
   accent-color: var(--accent);
 }
 .ap-options { display: flex; gap: var(--s2); flex-wrap: wrap; }
+/* A control the platform cannot honour (design-0023 P4: window blur on Linux,
+   where Electron exposes no material API at all). Same visual language as
+   .tab.disabled -- dimmed and inert, still readable, so the row explains
+   itself instead of disappearing. */
+.ap-options.disabled { opacity: 0.45; pointer-events: none; }
 .ap-option { padding: 0.3rem 0.7rem; }
 .ap-option.active {
   color: var(--fg);
@@ -1444,7 +1449,7 @@ button.nav-ctl.is-busy::after {
 }
 .ap-swatch.active { border-color: var(--fg); }
 .ap-swatch:hover { transform: scale(1.1); }
-/* Color picker wells (v2, Mino "colour Picker로 찍을 수 있게"). The native
+/* Color picker wells (v2, the owner "colour Picker로 찍을 수 있게"). The native
    input paints its own color as content — strip chrome so it reads as one
    more swatch, sized to the readout column. */
 .ap-color-picker {
@@ -1460,7 +1465,7 @@ button.nav-ctl.is-busy::after {
 .ap-color-picker::-webkit-color-swatch { border: none; border-radius: 4px; }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   0.2.6 UI pass (Mino 2026-08-20 "지금 UI/UX가 너무 작고 인지도 잘 안되고
+   0.2.6 UI pass (the owner 2026-08-20 "지금 UI/UX가 너무 작고 인지도 잘 안되고
    디자인도 구려보임 — 전체적으로 검증해서 디벨롭"). Benchmarked against the
    dsh web UI (dark depth, branded hero, one strong composer) and Aside
    (sender identity, timeline dividers). Everything below is an OVERRIDE
@@ -1468,7 +1473,7 @@ button.nav-ctl.is-busy::after {
    reviewable place. All colors derive from the seeded palette vars
    (Appearance tab contract, "제일 중요한 대원칙: 일관성" 2026-08-05).
 
-   v2 craft pass (Mino 20:13 "배경색보다 라운딩/마진에서 사람·AI 차이가
+   v2 craft pass (the owner 20:13 "배경색보다 라운딩/마진에서 사람·AI 차이가
    난다" → docs/research-ui-craft-20260820.md):
    - radius vocabulary s/m/l+pill ONLY; l is the concentric tier
      (l = m + s2, so a padded l-container's children land exactly on m —
@@ -1501,7 +1506,7 @@ button.nav-ctl.is-busy::after {
    scroll doesn't swim. On html, not body — the canvas paints the whole
    scroll range; body's box is only ever one viewport tall (see html,body). */
 html {
-  /* Bottom layer is the FROST wash, not opaque var(--bg) (Mino 08-21
+  /* Bottom layer is the FROST wash, not opaque var(--bg) (the owner 08-21
      "반투명 프로스티드 블러 안되는데...다시 되게" — the gray-band fix had
      painted the ground opaque and killed the glass). Frost on the canvas
      keeps BOTH properties: the OS blur reads through the page again, and
@@ -1515,7 +1520,7 @@ html {
 }
 
 /* ── shell header: agent identity gets a face ── */
-/* baseline, not center (Mino 21:22 screenshot: name and status word sat on
+/* baseline, not center (the owner 21:22 screenshot: name and status word sat on
    different lines-that-almost-align — the classic uncanny offset). The
    base .status-line also carries a margin-top meant for form contexts;
    zeroed here so the row owns its own rhythm. Dot centers against the
@@ -1547,7 +1552,7 @@ html {
 }
 /* BOTH tab species: .tab (page-local tabs) AND .nav-tab (the shell's
    primary tabs — missing from the first pass, which left the old accent
-   underline floating inside the pill track; Mino's 20:55 screenshot). */
+   underline floating inside the pill track; the owner's 20:55 screenshot). */
 .tab, .nav-tab {
   border-bottom: none;
   border-radius: var(--radius-pill);
@@ -1651,9 +1656,9 @@ html {
   align-items: center;
   gap: 8px;
 }
-/* agent controls row (0.2.12, Mino 08-23): model + effort chips out of the
+/* agent controls row (0.2.12, the owner 08-23): model + effort chips out of the
    composer bubble, own row aligned above it — left-set, quiet.
-   0.2.13 (Mino 08-24 01:05 "마진좀 넉넉하게"): breathing room on every
+   0.2.13 (the owner 08-24 01:05 "마진좀 넉넉하게"): breathing room on every
    side — the chips sat flush against the pane above and the composer
    card below in the first field capture. */
 .chat-agent-controls {
@@ -1664,7 +1669,7 @@ html {
 }
 .chat-effort-select { max-width: 9rem; }
 .chat-composer-spacer { flex: 1; }
-/* model quick-switch chip (Mino 08-20 19:09): native select dressed as a
+/* model quick-switch chip (the owner 08-20 19:09): native select dressed as a
    quiet pill — present but not shouting, claude.ai composer-corner pattern */
 .chat-model-select {
   appearance: none;
@@ -1716,7 +1721,7 @@ html {
   line-height: 30px;
 }
 .chat-status { font-size: 0.8rem; margin: 4px 4px 8px; }
-/* the status row exists ONLY when it says something abnormal (Mino 21:22:
+/* the status row exists ONLY when it says something abnormal (the owner 21:22:
    '정보량은 없는데 자리를 차지하고 있는 텍스트' — the standing
    "X is listening." line was chrome; the header dot already says it) */
 .chat-status:empty { display: none; }
@@ -1725,7 +1730,7 @@ html {
    the frame (measured on the 08-20 after-capture) */
 .chat-shell .chat-pane { padding: 12px 0 8px; }
 
-/* ── 0.2.6 sweep: memory / settings / logs pages (Mino 21:29) ── */
+/* ── 0.2.6 sweep: memory / settings / logs pages (the owner 21:29) ── */
 /* form controls follow the seeded accent EVERYWHERE — the scoped
    .agent-control-row rule left the logs Auto-scroll checkbox on the
    browser's default blue, one loud off-palette pixel cluster */
@@ -1736,12 +1741,12 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
    ragged column is a stronger not-hand-crafted signal than any one value) */
 #set-perms-rows .agent-control-row > span:last-child {
   display: inline-grid;
-  /* dot column (Mino 22:00: words → 초록불/빨간불): fixed 16px slot, so
+  /* dot column (the owner 22:00: words → 초록불/빨간불): fixed 16px slot, so
      the buttons align without needing the old wide text column.
      Columns beyond the dot are implicit (auto-flow): the automation row
      carries TWO buttons (Open Settings + Check) and a fixed `16px auto`
      template dropped the second one onto an implicit grid ROW — the
-     broken stacked-button capture from Mino, 08-24 10:55. */
+     broken stacked-button capture from the owner, 08-24 10:55. */
   grid-template-columns: 16px;
   grid-auto-flow: column;
   grid-auto-columns: max-content;

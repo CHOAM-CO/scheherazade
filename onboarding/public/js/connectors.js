@@ -92,7 +92,7 @@
         reloginBtn.onclick = () => startAuth(provider, statusEl, reloginBtn, true)
       }
       if (provider === 'ollama') {
-        // key-mode (2026-08-04, Mino "ollama -> API키"): there is no login
+        // key-mode (2026-08-04, the owner "ollama -> API키"): there is no login
         // shell-out for ollama anymore -- POSTing one would just 400 against
         // the server's LOGIN_PROVIDERS allowlist. Connect and Re-login both
         // open the key-paste flow instead (which is ALSO the rotation
@@ -172,7 +172,7 @@
   // ── usage gauge (tester request 2026-08-04): claude subscription only in
   // v1. The server's null-not-zero contract is honored verbatim here: a
   // null pct renders as 'unreadable', never as 0%. ────────────────────────
-  // ── usage gauges, one line per lane (2026-08-04 evening, Mino: "ollama/
+  // ── usage gauges, one line per lane (2026-08-04 evening, the owner: "ollama/
   // Codex/Claude 사용량 게이지 ... 이게 킥임") ──────────────────────────
   const at = (iso, dateToo) => {
     if (!iso) return ''
@@ -186,8 +186,8 @@
     ? (() => { try { const d = new Date(u.asOf); return C.usageStaleNote(d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })) } catch { return '' } })()
     : '')
 
-  // ── gauge DOM (2026-08-05, Mino: 텍스트 말고 진짜 게이지 "보기쉽게") ────
-  // Thresholds per Mino 11:55 ("80퍼센트 넘으면 주황색 / 90퍼센트 넘으면
+  // ── gauge DOM (2026-08-05, the owner: 텍스트 말고 진짜 게이지 "보기쉽게") ────
+  // Thresholds per the owner 11:55 ("80퍼센트 넘으면 주황색 / 90퍼센트 넘으면
   // 빨간색"): <80 ok(green), 80-89 warn(orange), 90+ hot(red).
   // pctVal == null renders a striped track labeled unreadable — the server's
   // null-not-zero contract survives the move from text to bars.
@@ -377,7 +377,7 @@
 
   // force=true (the Refresh icon) rides ?force=1 through to the server so a
   // manual refresh actually re-parses instead of bouncing off the 60s cache
-  // (Mino 11:55: 진입 시 1회 파싱 + 수동 리프레시 — 주기 폴링은 원래 없음,
+  // (the owner 11:55: 진입 시 1회 파싱 + 수동 리프레시 — 주기 폴링은 원래 없음,
   // 이 페이지가 진입 시 한 번 부르고 끝이다).
   async function renderUsage(force) {
     const label = $('conn-usage-label')
@@ -494,7 +494,7 @@
     }
   }
 
-  // ── Claude subscription re-login row (2026-08-04, Mino "connectors에서
+  // ── Claude subscription re-login row (2026-08-04, the owner "connectors에서
   // 클로드도 re-login 가능하게 해야겠는데?" + "claude API Key는 없애버리고")
   // -- replaces the BYOK key-paste row. Same in-app `claude setup-token`
   // capture the wizard runs (/api/setup-token/* -- the server session is a
@@ -627,7 +627,7 @@
     }).catch(() => {})
   }
 
-  // ── claude.ai connector intercept (IA v0.0.9, 춘식3 design) ───────────────
+  // ── claude.ai connector intercept (IA v0.0.9, internal design) ───────────────
   // List connectors, authorize via the in-app URL-capture flow. The lane
   // warning renders FIRST when the running lane can't use connectors even
   // after authorizing -- honesty over a dead button.
@@ -729,7 +729,7 @@
   }
 
 
-  // ══ ENGINE CARDS (moved from settings.js, tab merge 2026-08-06 — Mino
+  // ══ ENGINE CARDS (moved from settings.js, tab merge 2026-08-06 — the owner
   // "Settings 탭에 너무 많은 기능" → engine cluster lives beside the
   // provider sign-ins it configures). Copy keys stay under
   // COPY.settings.* (aliased as S below) — moving ~70 keys was churn
@@ -747,26 +747,26 @@
   // Model catalog + provider gate. A model is selectable only if its provider
   // is the onboarded PROVIDER (single-provider today; claude-subscription
   // counts as claude). Claude ids use CLI aliases (version-independent).
-  // Catalog reorg (Mino 2026-07-14 09:45, verbatim ask): "프로바이더별로
+  // Catalog reorg (the owner 2026-07-14 09:45, verbatim ask): "프로바이더별로
   // 정리좀 합시다 ... 버전까지 명시해줘". Groups render as <optgroup>; ids are
   // EXPLICIT versioned model ids, replacing the old version-independent CLI
   // aliases ('opus'/'sonnet'). Existing installs with an alias still stored
   // surface it via the pinned "(current)" passthrough below -- honest, and it
   // heals on the next swap.
   //
-  // Receipts for the Claude ids (all ran live in the MAGI fleet):
+  // Receipts for the Claude ids (all ran live in the the reference fleet):
   // claude-fable-5 + claude-opus-4-8 (ps-verified boots, 07-14),
   // claude-opus-4-6 (fleet default lane), claude-sonnet-5 (conf swap
-  // 57e4744, ran 07-05). GPT: gpt-5.6-terra ran live (Skia lane, 07-10);
-  // sol/luna are Mino-named siblings -- live-verify on first swap, the
+  // 57e4744, ran 07-05). GPT: gpt-5.6-terra ran live (a separate lane, 07-10);
+  // sol/luna are the owner-named siblings -- live-verify on first swap, the
   // mute-strike ledger is the backstop either way.
   // The real model rows live in the SHARED static catalog
-  // (js/model-catalog.js, loaded before this file) since the chat composer
-  // grew its own quick-switch dropdown (0.2.6, Mino 08-20 19:09) — one list,
+  // (js/model-catalog.cjs, loaded before this file) since the chat composer
+  // grew its own quick-switch dropdown (0.2.6, the owner 08-20 19:09) — one list,
   // two surfaces. This page adds its two ACTION sentinels on top: they are
   // settings-page interactions (reveal a form section), not models, so the
   // chat dropdown never sees them. Row provenance/verification history moved
-  // to model-catalog.js.
+  // to model-catalog.cjs.
   // Sentinel model-select value for the Custom catalog entry (custom-
   // provider addition, 2026-07-25) -- never sent to the server as a real
   // model id (see the onchange handler's early-return branch for it).
@@ -788,7 +788,7 @@
   MODEL_CATALOG.push(
     { id: CUSTOM_MODEL_SENTINEL, label: S.customCatalogLabel, group: 'Custom', custom: true, providers: [] })
 
-  // Effort selector (Mino 07-13 click-test item 2: sonnet-5 felt slow -- the
+  // Effort selector (the owner 07-13 click-test item 2: sonnet-5 felt slow -- the
   // old hardwired max bought thinking budget casual chat doesn't need).
   // 'high' is run.sh's own `${EFFORT_LEVEL:-high}` default; labels say so
   // rather than pre-selecting silently.
@@ -838,7 +838,7 @@
     }
   }
 
-  // Dynamic Claude rows (2026-08-13, Mino: "모델 리스트 하드코딩 말고
+  // Dynamic Claude rows (2026-08-13, the owner: "모델 리스트 하드코딩 말고
   // 다이나믹하게"). The server scans the installed CLI binary's own model
   // table; ids the static catalog does not know are spliced into the Claude
   // group, so a model that ships in a CLI update appears here without an app
@@ -902,7 +902,7 @@
       opt.selected = true
       sel.appendChild(opt)
     }
-    // Grouped by provider family (<optgroup>), per Mino 2026-07-14. Group
+    // Grouped by provider family (<optgroup>), per the owner 2026-07-14. Group
     // order follows catalog order; entries without a group land at top level.
     const groups = new Map()
     for (const m of MODEL_CATALOG) {
@@ -1044,7 +1044,7 @@
         if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' })
         return
       }
-      // Ollama by-URL picker (Mino 19:17): action row, same contract as
+      // Ollama by-URL picker (the owner 19:17): action row, same contract as
       // Custom above -- reset the select, reveal the paste field.
       if (model === OLLAMA_URL_SENTINEL) {
         e.target.value = currentModel
@@ -1071,7 +1071,7 @@
       settleApplyState()
     }
 
-    // ── ollama by-URL apply (Mino 19:17: "URL 입력받아서 ...
+    // ── ollama by-URL apply (the owner 19:17: "URL 입력받아서 ...
     // /library/{model_name} 파싱해서 드랍다운리스트에 없어도 모델 셀렉
     // 가능") ────────────────────────────────────────────────────────────
     $('set-ollama-url-hint').textContent = S.ollamaUrlHint
@@ -1188,7 +1188,7 @@
   // paired with. Pulled out as a PURE function on purpose: this predicate got
   // it wrong twice (once warning on the wrong comparison, once phrasing the
   // wrong key), and both times nothing could catch it because browser JS has
-  // no test harness here. scripts/test-custom-key-host.mjs extracts this
+  // no test harness here. tests/test-custom-key-host.mjs extracts this
   // function by name from this file's source and executes it -- so renaming it
   // breaks that test loudly, which is the intended trade.
   //
@@ -1633,11 +1633,16 @@
 
     // Engine cards (tab merge 2026-08-06). Topology is a macOS-only
     // surface, hidden rather than rendered empty on Windows -- same rule
-    // its settings.js home applied (Mino, first win install 2026-08-03).
+    // its settings.js home applied (the owner, first win install 2026-08-03).
     renderAgentConfig(cfg)
     renderCustomProvider(cfg).catch((err) => console.error(err))
     renderDoctor().catch((err) => console.error(err))
-    if (window.IS_MAC) {
+    // design-0023 P4: attachTopology is the server's capability, and it is a
+    // PROBE (mac AND a tmux this machine can actually run) rather than the
+    // page's own `IS_MAC` guess. The card's entire content is a tmux attach
+    // command; offering it where no tmux exists is the same class of lie as
+    // the x-apple deep links on Windows.
+    if (window.can('attachTopology')) {
       renderTopology().catch((err) => console.error(err))
     } else {
       const el = document.getElementById('set-topology')

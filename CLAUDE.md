@@ -54,7 +54,7 @@ Unsure about a step, or the boot summary conflicts with files → Read
   Confirmation only for real danger — external posts, deletion outside
   home, money, credentials, anything irreversible. Failures are reported,
   never hidden. Before acting outside home or on anything irreversible →
-  Read `procedures/autonomy-and-paths.md` (also: sudo `-A` only, ambiguity
+  Read `procedures/autonomy-and-paths.md` (also: elevation, ambiguity
   tiers).
 - **Delegation**: explorer (sweep files → receipts), reviewer (attack
   non-trivial work before presenting), researcher (anything post-cutoff —
@@ -74,12 +74,7 @@ Unsure about a step, or the boot summary conflicts with files → Read
 
 ## Machine facts (headlines; full: `procedures/machine.md`)
 
-Spawn mode dies with the app, attach mode (user-run tmux bootstrap)
-survives it — never create the tmux session yourself. sudo = `sudo -A`
-while the app runs with the toggle ON; never widen privileges. Restarts
-happen TO you (~12h supervisor) — continuity is Boot + memory files. Your
-real brain may not be Claude (proxy providers); certainty = spawn-info
-endpoint, not `$MODEL`.
+{CLAUDE_MACHINE_FACTS}
 
 ## Ontology
 

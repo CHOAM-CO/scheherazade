@@ -1,17 +1,17 @@
 # Slack app manifest — Scheherazade
-# Source: Mino's production day-work agent manifest (2026-08-05 11:45),
+# Source: the owner's production day-work agent manifest (2026-08-05 11:45),
 # masked per his instruction: name / description / display_name only.
 # DEVIATION, on purpose and on record: bot_events gained message.channels +
 # message.groups — his original carries only app_mention + message.im, which
 # leaves this app's home-channel mode silent (channel-slack.mjs consumes
 # plain `message` events in the home channel; DM mode alone would survive).
-# DEVIATION 2 (2026-08-24, Mino field test): messages_tab_enabled false -> true.
+# DEVIATION 2 (2026-08-24, the owner field test): messages_tab_enabled false -> true.
 # His original ships the Messages tab OFF, which locks the DM composer even
 # with all im:* scopes and message.im subscriptions in place — installs from
 # this manifest could never be DM'd. read_only stays false (input allowed).
 # Nothing was removed or reordered. Everything else is verbatim.
 # Canonical copy: the fenced yaml block in SKILL.md must stay byte-identical
-# to this file below the marker — scripts/test-slack-manifest.mjs enforces it.
+# to this file below the marker — tests/test-slack-manifest.mjs enforces it.
 # --- manifest ---
 display_information:
   name: Scheherazade

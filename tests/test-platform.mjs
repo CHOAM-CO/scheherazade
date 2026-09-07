@@ -1,0 +1,322 @@
+#!/usr/bin/env node
+// tests/test-platform.mjs -- the capability table, all three platforms, from
+// any host. Run: node tests/test-platform.mjs
+//
+// WHY THIS FILE EXISTS. onboarding/platform.cjs replaced 24 binary
+// mac-vs-Windows tests whose Linux behavior was whatever else-branch they
+// happened to fall into. That class of bug is INVISIBLE on a Mac: the
+// darwin branch is right, the suite is green, and the Linux user gets an
+// Apple Silicon tarball. So the table takes every input as a parameter, and
+// this file asserts the FULL matrix -- one expected value per flag per
+// platform, spelled out, not derived from the same expression the module
+// uses (a derivation would agree with any bug).
+//
+// The second half is the two things a wrong table costs at runtime: a Linux
+// answer that contains a mac-only value, and a Windows spawn that forgets
+// .cmd shims need a shell.
+
+import path from 'node:path'
+import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const require_ = createRequire(path.join(ROOT, 'package.json'))
+const platformMod = require_(path.join(ROOT, 'onboarding', 'platform.cjs'))
+const { capabilities, PLATFORMS, SKILL_REQUIREMENTS } = platformMod
+
+let pass = 0
+let fail = 0
+function assert(cond, label) {
+  if (cond) { pass++ } else { fail++; console.error(`  FAIL ${label}`) }
+}
+
+// Every table below is built with the SAME injected host so the only
+// variable is (platform, arch): a fake home, a fake data home, a filesystem
+// where nothing exists, and a tmux probe that says yes. "Nothing exists" is
+// deliberate -- it proves the rows are platform facts and not accidents of
+// this Mac's disk.
+const mk = (platform, arch, over = {}) => capabilities({
+  platform,
+  arch,
+  env: {},
+  home: platform === 'win32' ? 'C:\\Users\\t' : '/home/t',
+  dataHome: platform === 'win32' ? 'C:\\Users\\t\\Documents\\Scheherazade' : '/home/t/Documents/Scheherazade',
+  existsSync: () => false,
+  accessSync: () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) },
+  hasTmux: () => true,
+  ...over,
+})
+
+console.log('1. the matrix: one expected value per flag per platform')
+// Columns: darwin+arm64, darwin+x64 (Intel Mac), win32+x64, linux+x64.
+// Read a row across and you have the whole product decision for that
+// capability, which is the thing that did not exist before this file.
+const MATRIX = {
+  //                       darwin/arm64      darwin/x64        win32/x64    linux/x64
+  managedInstall:         [true,             false,            false,       false],
+  claudeCliInstall:       ['curl-bash',      'curl-bash',      false,       'curl-bash'],
+  inAppUninstall:         ['bundle-trash',   'bundle-trash',   'nsis',      'script'],
+  // A MODE, not a boolean, and derived from permission-probes.cjs's
+  // per-platform probe list rather than hand-kept here: 'tcc' where the walls
+  // are macOS TCC, 'posix' where they are sudo + the desktop keyring, false
+  // where the probe list is deliberately empty. tests/test-permission-probes.mjs
+  // pins this column against that list from the other side.
+  permissionsPanel:       ['tcc',            'tcc',            false,       'posix'],
+  attachLane:             [true,             true,             false,       false],
+  attachTopology:         [true,             true,             false,       false],
+  sudo:                   [true,             true,             false,       true],
+  windowMaterial:         ['vibrancy',       'vibrancy',       'acrylic',   'none'],
+  supportsBlur:           [true,             true,             true,        false],
+  calendarMcp:            [true,             true,             false,       false],
+  cliCredentialKeychain:  [true,             true,             false,       false],
+  appleApps:              [true,             true,             false,       false],
+  unixTools:              [true,             true,             false,       true],
+  execBit:                [true,             true,             false,       true],
+  windowCapture:          [true,             true,             true,        false], // linux is a PROBE: false because `mk` has nothing on disk (tests/test-windowshot.mjs drives the tooled host)
+  shellName:              ['Terminal',       'Terminal',       'PowerShell', 'Terminal'],
+  machineWord:            ['this Mac',       'this Mac',       'this PC',   'this computer'],
+}
+const COLUMNS = [['darwin', 'arm64'], ['darwin', 'x64'], ['win32', 'x64'], ['linux', 'x64']]
+const tables = COLUMNS.map(([p, a]) => mk(p, a))
+for (const [flag, expected] of Object.entries(MATRIX)) {
+  expected.forEach((want, i) => {
+    const got = tables[i][flag]
+    assert(got === want,
+      `${COLUMNS[i][0]}/${COLUMNS[i][1]} ${flag}: expected ${JSON.stringify(want)}, got ${JSON.stringify(got)}`)
+  })
+}
+// Non-vacuity: a typo in a flag name would make every row above compare
+// undefined === undefined and pass in silence.
+for (const flag of Object.keys(MATRIX)) {
+  assert(tables[0][flag] !== undefined, `${flag} is a real field on the table (not a typo that compares undefined)`)
+}
+assert(Object.keys(MATRIX).length >= 16, 'the matrix covers the whole product surface, not two flags')
+
+console.log('2. attachTopology is a PROBE, not a constant (mac ships tmux; nobody else does)')
+assert(mk('darwin', 'arm64', { hasTmux: () => false }).attachTopology === false,
+  'a Mac with no tmux anywhere reports attachTopology false -- the vendored copy is what makes it true')
+assert(mk('darwin', 'arm64', { hasTmux: () => false }).attachLane === true,
+  '...but attachLane stays true: the PLATFORM has the lane even in the moment before the vendored tmux is synced, which is when the harness render runs')
+assert(mk('linux', 'x64', { hasTmux: () => true }).attachTopology === false,
+  'a Linux box WITH a system tmux still gets false: no vendored binary ships there and the lane is unverified (locked scope)')
+
+console.log('3. a Linux answer never contains a mac-only value')
+const linux = mk('linux', 'x64')
+const linuxJson = JSON.stringify(linux.clientView())
+for (const macWord of ['Mac', 'Keychain', 'vibrancy', 'bundle-trash', 'nsis', 'PowerShell']) {
+  assert(!linuxJson.includes(macWord), `linux clientView contains no ${JSON.stringify(macWord)} (got: ${linuxJson})`)
+}
+const win = mk('win32', 'x64')
+const winJson = JSON.stringify(win.clientView())
+for (const macWord of ['Mac', 'Keychain', 'vibrancy', 'curl-bash']) {
+  assert(!winJson.includes(macWord), `win32 clientView contains no ${JSON.stringify(macWord)}`)
+}
+// clientView is what rides the <meta> tag and /api/config: no functions, no
+// user home paths.
+const view = linux.clientView()
+assert(Object.values(view).every((v) => typeof v !== 'function' && typeof v !== 'object'),
+  'clientView is flat scalars only (it is serialized into an HTML attribute)')
+assert(!JSON.stringify(view).includes('/home/t'), 'clientView leaks no filesystem paths')
+
+console.log('4. binCandidates: the Linux dirs that were missing are on the list')
+{
+  const l = mk('linux', 'x64', { env: { npm_config_prefix: '/opt/npm' } })
+  const cands = l.binCandidates('codex')
+  // No normalization: binDirsFor builds in the TARGET platform's dialect now,
+  // so a linux question answers in posix from any runner. If this ever needs a
+  // replaceAll again, the resolver regressed -- fix it there, not here.
+  const dirs = cands.map((c) => path.posix.dirname(c))
+  for (const want of ['/usr/bin', '/usr/local/bin', '/home/t/.local/bin', '/snap/bin', '/opt/npm/bin', '/home/t/Documents/Scheherazade/bin']) {
+    assert(dirs.includes(want), `linux candidates include ${want} (a fresh apt/npm/snap install lands in one of these)`)
+  }
+  assert(cands.every((c) => c.endsWith('/codex')), 'no extension is appended off Windows')
+  assert(!dirs.includes('/opt/homebrew/bin'), 'the mac brew dir is NOT probed on linux')
+  const m = mk('darwin', 'arm64').binCandidates('codex').map((c) => path.posix.dirname(c))
+  assert(m.includes('/opt/homebrew/bin') && m.includes('/usr/local/bin'), 'mac keeps both brew prefixes (unchanged behavior)')
+  assert(!m.includes('/snap/bin'), 'mac does not grow Linux dirs')
+}
+
+console.log('5. Windows resolution goes through PATHEXT, not a bare name')
+{
+  const w = mk('win32', 'x64', { env: { PATHEXT: '.COM;.EXE;.CMD', APPDATA: 'C:\\Users\\t\\AppData\\Roaming' } })
+  const base = (c) => String(c).split(/[\\/]/).pop()
+  const names = w.binCandidates('codex').map(base)
+  assert(names.includes('codex.exe') && names.includes('codex.EXE'), 'both PATHEXT spellings are tried (registry is upper, disk is lower)')
+  assert(names.includes('codex.cmd'), 'the npm .cmd shim is a candidate')
+  assert(w.binCandidates('codex').some((c) => /AppData[\\/]Roaming[\\/]npm/.test(c)), 'npm global bin is on the Windows list')
+  // A PATHEXT the host does not set must not collapse the list to nothing.
+  const noExt = mk('win32', 'x64', { env: {} }).binCandidates('codex').map(base)
+  assert(noExt.includes('codex.exe') && noExt.includes('codex.cmd'), 'a missing PATHEXT falls back to the documented default set')
+}
+
+console.log('6. spawnBin: .cmd shims get a shell and lose detached; exes do not')
+{
+  const calls = []
+  const fakeChild = () => ({ on() { return this } })
+  const spawnImpl = (bin, args, opts) => { calls.push({ bin, args, opts }); return fakeChild() }
+  const winExists = (p) => /\.(exe|cmd)$/i.test(String(p))
+  const w = capabilities({
+    platform: 'win32', arch: 'x64', env: { PATHEXT: '.EXE;.CMD' },
+    home: 'C:\\Users\\t', dataHome: 'C:\\Users\\t\\Documents\\Scheherazade',
+    existsSync: winExists,
+    accessSync: (p) => { if (!winExists(p)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) },
+    spawnImpl,
+  })
+  w.spawnBin('C:\\Users\\t\\AppData\\Roaming\\npm\\codex.cmd', ['login'], { detached: true })
+  assert(calls[0].opts.shell === true, '.cmd is spawned through a shell (CreateProcess cannot exec it)')
+  assert(calls[0].opts.detached === false, 'detached is dropped for the shell path (they are incompatible on Windows; taskkill /T still reaps the tree)')
+  assert(calls[0].opts.windowsHide === true, 'windowsHide is set so no console flashes')
+  w.spawnBin('C:\\Users\\t\\Documents\\Scheherazade\\bin\\codex.exe', ['login'], { detached: true })
+  assert(calls[1].opts.shell === false, 'a real .exe needs no shell')
+  assert(calls[1].opts.detached === true, '...and keeps its own process group')
+
+  // POSIX: never a shell, detached honored.
+  const posixCalls = []
+  const l = capabilities({
+    platform: 'linux', arch: 'x64', env: {}, home: '/home/t', dataHome: '/home/t/Documents/Scheherazade',
+    existsSync: (p) => p === '/usr/bin/codex',
+    accessSync: (p) => { if (p !== '/usr/bin/codex') throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) },
+    spawnImpl: (bin, args, opts) => { posixCalls.push({ bin, args, opts }); return fakeChild() },
+  })
+  l.spawnBin('codex', ['login'], { detached: true })
+  assert(posixCalls[0].bin === '/usr/bin/codex', 'a bare name resolves against the fixed Linux dirs (/usr/bin was never on the old list)')
+  assert(posixCalls[0].opts.shell === false && posixCalls[0].opts.detached === true, 'linux: no shell, own process group')
+
+  // The failure that used to reach main.cjs's uncaughtException handler.
+  let threw = null
+  try { l.spawnBin('nothing-here', []) } catch (err) { threw = err }
+  assert(threw && threw.code === 'ENOENT', 'an unresolvable bin THROWS synchronously instead of spawning nothing')
+
+  let seen = null
+  const boom = capabilities({
+    platform: 'linux', arch: 'x64', env: {}, home: '/home/t', dataHome: '/d',
+    existsSync: () => true, accessSync: () => {},
+    spawnImpl: () => ({ handlers: {}, on(ev, fn) { if (ev === 'error') setTimeout(() => fn(new Error('EACCES')), 0); return this } }),
+  })
+  boom.spawnBin('codex', [], { onError: (e) => { seen = e } })
+  await new Promise((r) => setTimeout(r, 5))
+  assert(seen && seen.message === 'EACCES', "spawnBin always attaches an 'error' listener (an unhandled one is app.exit(1) via main.cjs)")
+}
+
+console.log('7. no PATH walk unless a caller asks for one')
+{
+  let walked = false
+  const l = capabilities({
+    platform: 'linux', arch: 'x64', env: { PATH: '/evil' }, home: '/home/t', dataHome: '/d',
+    existsSync: (p) => { if (String(p).startsWith('/evil')) walked = true; return String(p).startsWith('/evil') },
+    accessSync: () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) },
+  })
+  assert(l.resolveBin('codex') === null, 'a binary that exists ONLY on PATH does not resolve (the security posture http-server has carried since its Codex review)')
+  assert(walked === false, '...and PATH is not even read')
+  assert(l.resolveBin('codex', { allowPath: true }) === '/evil/codex', 'the opt-in seam exists and is explicit at the call site')
+}
+
+console.log('8. seeded-skill allowlist is data, and it excludes what cannot run')
+{
+  const m = mk('darwin', 'arm64')
+  const w = mk('win32', 'x64')
+  const l = mk('linux', 'x64')
+  for (const name of ['calendar', 'mail-briefing', 'reminders']) {
+    assert(SKILL_REQUIREMENTS[name] === 'appleApps', `${name} is marked Apple-only`)
+    assert(m.skillAllowed(name) && !w.skillAllowed(name) && !l.skillAllowed(name),
+      `${name} seeds on mac only (it is osascript + an Apple app)`)
+  }
+  assert(!w.skillAllowed('file-organizer') && l.skillAllowed('file-organizer') && m.skillAllowed('file-organizer'),
+    'file-organizer is unix find/mv: mac + linux, not Windows')
+  assert(m.skillAllowed('windowshot') && w.skillAllowed('windowshot') && !l.skillAllowed('windowshot'),
+    'windowshot seeds on mac and Windows, and NOT on a bare Linux box -- its Linux lane needs wmctrl/xdotool + ImageMagick, which nothing here has')
+  // The one seeded skill whose requirement is a host fact rather than a
+  // platform fact: install the packages and the same Linux box gets it.
+  const lTooled = mk('linux', 'x64', {
+    accessSync: (p) => { if (/\/(wmctrl|import)$/.test(String(p))) return; throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) },
+  })
+  assert(lTooled.skillAllowed('windowshot') && lTooled.windowCapture === true,
+    '...and it DOES seed on a Linux box that has them (windowCapture is a probe there, not a constant)')
+  assert(m.skillAllowed('coding') && w.skillAllowed('coding') && l.skillAllowed('coding'),
+    'a skill with no requirement seeds everywhere (the default is portable)')
+}
+
+console.log('9. the table is frozen and the platform list is complete')
+{
+  const t = mk('darwin', 'arm64')
+  let mutated = false
+  try { t.sudo = false; mutated = t.sudo === false } catch { mutated = false }
+  assert(!mutated, 'the descriptor is frozen -- a caller cannot flip a capability under everyone else')
+  assert(PLATFORMS.length === 3 && ['darwin', 'win32', 'linux'].every((p) => PLATFORMS.includes(p)),
+    'PLATFORMS names all three, so a future row cannot forget one')
+}
+
+console.log('10. adoption: the spawn seam has exactly one owner, and no require cycle')
+{
+  const fs = await import('node:fs')
+  const server = fs.readFileSync(path.join(ROOT, 'onboarding', 'http-server.cjs'), 'utf8')
+  assert(!/^const \{ spawn, execFile \} = require\('node:child_process'\)/m.test(server),
+    'http-server no longer pulls spawn/execFile in for itself')
+  assert(!/[^.\w]spawn\(binPath/.test(server) && !/[^.\w]execFile\(binPath/.test(server),
+    'no bare spawn/execFile against a resolved binary survives in http-server')
+  assert(/HOST\.spawnBin\(/.test(server) && /HOST\.execFileBin\(/.test(server),
+    'the login, MCP and installer call sites go through the table')
+  const daemon = fs.readFileSync(path.join(ROOT, 'onboarding', 'ollama-daemon.cjs'), 'utf8')
+  assert(!/require\('\.\/http-server\.cjs'\)/.test(daemon),
+    'ollama-daemon.cjs no longer requires the server back (the one cycle in onboarding/)')
+  assert(/require\('\.\/platform\.cjs'\)/.test(daemon), '...it asks the capability table instead')
+}
+
+console.log('11. the page gates on named capabilities, not on "is this a Mac?"')
+{
+  const fs = await import('node:fs')
+  const read = (f) => fs.readFileSync(path.join(ROOT, 'onboarding', 'public', 'js', f), 'utf8')
+  const copy = read('copy.js')
+  assert(/window\.can = function can\(flag\)/.test(copy), 'copy.js defines the one gate reader')
+  assert(/window\.HOST_CAPS\[flag\] === true/.test(copy),
+    'an unknown capability is FALSE (the old IS_MAC gates defaulted to mac when the meta was missing)')
+  assert(/meta\[name="host-capabilities"\]/.test(copy), 'the capabilities come from the server, not from the platform id')
+
+  // Every conditional surface, and what it is gated on now.
+  const GATES = [
+    // The FDA card gates on the VALUE, not the truthiness: Linux has a
+    // permissions panel now (sudo + keyring) and no TCC in it, so
+    // `can('permissionsPanel')` would put a Full Disk Access card on a
+    // machine with no such concept -- the 2026-08-03 Windows bug, one
+    // platform over.
+    ['wizard.js', "window.HOST_CAPS.permissionsPanel === 'tcc'", 'the Full Disk Access card'],
+    ['settings.js', "window.can('permissionsPanel')", 'the permissions panel'],
+    ['settings.js', "window.can('sudo')", 'the sudo card (it had NO gate at all -- Windows stored an admin password nothing could use)'],
+    ['settings.js', "window.can('inAppUninstall')", 'the danger zone (it had no gate; the route answered 501 on two platforms)'],
+    ['connectors.js', "window.can('attachTopology')", 'the attach-topology card'],
+  ]
+  for (const [file, gate, what] of GATES) {
+    assert(read(file).includes(gate), `${file}: ${what} is gated on ${gate}`)
+  }
+  // And no page decides a SURFACE from the platform id any more. IS_MAC still
+  // exists for word choice (copy.js's own table reads it), so this checks the
+  // three page scripts that used to gate rendering on it.
+  for (const file of ['wizard.js', 'settings.js', 'connectors.js', 'memory.js']) {
+    assert(!/window\.IS_MAC/.test(read(file)),
+      `${file}: no window.IS_MAC left -- capability gates and copy.js's word table replaced every use`)
+  }
+}
+
+console.log('12. the BACKEND gates the attach lane too, not just the card that offers it')
+{
+  const fs = await import('node:fs')
+  const main = fs.readFileSync(path.join(ROOT, 'main.cjs'), 'utf8')
+  // connectors.js hides the attach card off mac, which is why this was easy to
+  // miss: the UI could not reach it. But .agent-config is a file the AGENT is
+  // told it may edit, and AGENT_TOPOLOGY=attach on a platform with no tmux
+  // walked into attachStartFromSession -> !tmuxPresent -> failed/bootstrap-
+  // needed, so the agent never started at all. A hidden card is not a gate.
+  assert(/attachLane/.test(main),
+    'main.cjs asks the capability table about the attach lane')
+  const gateIdx = main.indexOf('attachLane')
+  const callIdx = main.indexOf('attachStartFromSession(config)')
+  assert(gateIdx > 0 && callIdx > gateIdx,
+    'and it asks BEFORE it hands control to attachStartFromSession')
+  // Ignored-and-boot, not refuse-to-boot: asking for a lane this machine does
+  // not have must not be fatal, and the log has to say what was dropped.
+  assert(/AGENT_TOPOLOGY=attach ignored/.test(main),
+    'a platform without the lane logs what it ignored instead of failing to start')
+}
+
+console.log(`\n${pass} passed, ${fail} failed`)
+process.exit(fail === 0 ? 0 : 1)

@@ -3,7 +3,7 @@
 // setup-token-session.cjs, and deliberately shaped like it (fire-and-forget
 // start, client polls status, single-flight, timeout, terminal-state guard).
 //
-// WHY THIS EXISTS (measured 2026-08-13, Mino: the win tester's gauge is stuck
+// WHY THIS EXISTS (measured 2026-08-13, the owner: the win tester's gauge is stuck
 // on "HTTP 429" and "되게 만들어야지"): the credential the app already
 // captures -- `claude setup-token` -- carries scope ["user:inference"] and
 // NOTHING else (read out of the CLI binary, not assumed). The usage endpoint

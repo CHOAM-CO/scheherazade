@@ -13,13 +13,13 @@
 //    opposite -- user bubbles were DOM-only and the first poll seeded the
 //    cursor past everything already queued -- so navigating away erased the
 //    user's half and swallowed any reply that landed while the page was
-//    gone (Mino's 07-30 repro). User bubbles now come from the transcript
+//    gone (the owner's 07-30 repro). User bubbles now come from the transcript
 //    echo (a send triggers an immediate poll), never from a local append:
 //    one source of truth, no dedup bookkeeping.
 //  - A failed send KEEPS the text in the input. Losing the user's message
 //    to a restart race is the one unforgivable failure here.
 //
-// DM interaction states (v0.0.34, Mino 07-30 17:41 "인스타 DM쓰는것처럼"):
+// DM interaction states (v0.0.34, the owner 07-30 17:41 "인스타 DM쓰는것처럼"):
 //  - "Read" + typing dots both derive from ONE server value,
 //    state.awaitingReplySince (channel-local.mjs transcriptState) -- no
 //    client-side guessing about what the agent received. Read is honest by
@@ -60,7 +60,7 @@
   let channelUp = false // freshest signal: did the last /out poll succeed
   let typingEl = null
   let readEl = null
-  // P1 v2 live run fold (aside port, Mino 2026-08-05 19:49 "어사이드 렌더링
+  // P1 v2 live run fold (aside port, the owner 2026-08-05 19:49 "어사이드 렌더링
   // 잘 베끼셈"): while the agent works, steps render LIVE into an open
   // <details> timeline; the reply that ends the wait collapses the SAME
   // element into a "Worked for Ns" summary. (v1 showed one latest-wins
@@ -71,7 +71,7 @@
   let activityLog = []
   let activityStart = 0
   let lastActivityAt = 0
-  // 0.2.1 collapsible Think fold (Mino 08-19 "우리도 띵크 접이식으로
+  // 0.2.1 collapsible Think fold (the owner 08-19 "우리도 띵크 접이식으로
   // 가자"): the dsh lane streams the model's reasoning as kind:'think'
   // transcript items (paragraph-sized flushes). One <details> per turn,
   // COLLAPSED by default — the summary pulses while thinking, settles to
@@ -81,13 +81,13 @@
   let thinkEl = null
   let thinkSummary = null
   let thinkParas = 0
-  // 0.2.4 answer-stream draft (Mino "두두두둑"): /out returns a `draft`
+  // 0.2.4 answer-stream draft (the owner "두두두둑"): /out returns a `draft`
   // string while the dsh lane streams the answer's text-deltas. One agent
   // bubble grows in place (markdown re-render is destructive, so full-text
   // re-render each tick is safe); the real transcript message retires it.
   // The claude lane never streams, so the bubble simply never appears there.
   let draftEl = null
-  // 0.2.15 background-subagent pill (Mino 08-24 "서브 스폰하면 서브도
+  // 0.2.15 background-subagent pill (the owner 08-24 "서브 스폰하면 서브도
   // working 정보에 띄우게"): /out returns a live `bg` roster; while any
   // entry exists the pill stays visible EVEN AFTER the turn's run fold
   // collapsed -- turn end is not work end when children are running.
@@ -236,7 +236,7 @@
     }
   }
 
-  // 0.2.6 UI pass (Mino "UI/UX 검증해서 디벨롭"): system/boot announcements
+  // 0.2.6 UI pass (the owner "UI/UX 검증해서 디벨롭"): system/boot announcements
   // ("🔁 [system] 에이전트 세션 기동 — <ISO> (Thu)") used to render as
   // full agent bubbles, and after a few restarts they OUTNUMBERED the real
   // conversation (field capture 2026-08-20: 5 of 7 visible bubbles were
@@ -305,7 +305,7 @@
     renderMarkdown(el, shown)
     // P1 v2: no role labels — identity is carried by the asymmetry itself
     // (user = right-aligned accent glass bubble, agent = flat document
-    // flow), per Mino's 2026-08-05 19:40 verdict on the labeled flat look
+    // flow), per the owner's 2026-08-05 19:40 verdict on the labeled flat look
     // ("누가 누군지 잘 안보이잖아").
     for (const name of images) appendAttachmentImage(el, name, stick || role === 'user')
     for (const name of files) appendAttachmentFile(el, name)
@@ -327,7 +327,7 @@
 
   // Hover affordance on agent bubbles -- the fixed two-emoji menu the
   // channel accepts, plus a copy button (2026-08-05, colleague feedback via
-  // Mino). The badge itself renders from the transcript echo
+  // the owner). The badge itself renders from the transcript echo
   // (applyReaction), never optimistically.
   function attachReactBar(el, seq, copyText) {
     const bar = document.createElement('span')
@@ -622,7 +622,7 @@
     el.classList.remove('chat-status-up', 'chat-status-down')
     if (kind === 'up') {
       if (detail) agentName = String(detail) // sender-row name rides the same probe
-      // Healthy = SILENT (Mino 08-20 21:22): the standing "X is listening."
+      // Healthy = SILENT (the owner 08-20 21:22): the standing "X is listening."
       // line carried zero information the header dot doesn't — the row now
       // renders only for abnormal states (CSS collapses it when empty).
       el.textContent = ''
@@ -776,7 +776,7 @@
     }
   }
 
-  // ── image attachments (2026-08-04, Mino "인앱챗에 이미지 업로드할수
+  // ── image attachments (2026-08-04, the owner "인앱챗에 이미지 업로드할수
   // 있는 방법이 없음") ─────────────────────────────────────────────────
   // Flow: pick/paste -> POST /api/chat/upload (base64 JSON) -> pending
   // chip; send() appends one "[image attached: <path> — read it with the
@@ -785,7 +785,7 @@
   // live in DATA_HOME/chat_uploads/.
   let pendingAttachments = [] // { name, path, chip }
 
-  // Vision capability of the CURRENT lane (Mino 2026-08-04 19:56 "비전없는
+  // Vision capability of the CURRENT lane (the owner 2026-08-04 19:56 "비전없는
   // 모델 fallback은 생각해놓고 개발한거 맞지?" -- honest answer was no, this
   // is the fix). Three states, never a guess:
   //   'yes'     -> normal marker (agent Reads the image)
@@ -821,7 +821,7 @@
       const provider = String((spawn && spawn.provider) || '')
       const model = String((spawn && spawn.model) || '').replace(/:.*$/, '') // strip :tag
       // Mirror of http-server.cjs's laneVision -- change both together.
-      // 0.1.4 policy (Mino): first-party (Claude/Codex) = yes; everything
+      // 0.1.4 policy (the owner): first-party (Claude/Codex) = yes; everything
       // else defaults to NO (server attaches a Gemma caption) unless the
       // model is on the known-vision list. No 'unknown' state -- its marker
       // invited a Read-tool image read that poisoned non-vision transcripts.
@@ -950,11 +950,11 @@
     }
   }
 
-  // ── model quick-switch (0.2.6, Mino 08-20 19:09: "LLM 모델 바꾸는건 세팅
+  // ── model quick-switch (0.2.6, the owner 08-20 19:09: "LLM 모델 바꾸는건 세팅
   // 말고 챗쪽에 드랍다운으로 두는게 더 편할 것 같음") ─────────────────────
   // A chip-styled native <select> in the composer bar, claude.ai pattern
   // (composer-corner model chip, 08-20 reference capture). Reads the SHARED
-  // static catalog (js/model-catalog.js) and fires the same POST
+  // static catalog (js/model-catalog.cjs) and fires the same POST
   // /api/agent/model the Engine page fires -- one server contract, two
   // surfaces. Engine keeps the full picker (Custom proxy / Ollama-by-URL
   // action rows, effort, apply-state line); this is the quick lane only.
@@ -1018,7 +1018,7 @@
     }
   }
 
-  // Effort chip (0.2.12, Mino 08-23): same population rule as the Engine
+  // Effort chip (0.2.12, the owner 08-23): same population rule as the Engine
   // page's set-effort-select — static levels from the shared catalog file,
   // "(default)" marks the shipped default.
   function msPopulateEffort() {

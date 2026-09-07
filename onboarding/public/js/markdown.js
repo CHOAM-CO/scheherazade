@@ -15,7 +15,7 @@
 // everything else, so a non-web scheme has no path even if this check were
 // wrong.
 //
-// Deliberately small. This covers what the agent actually emits (Mino
+// Deliberately small. This covers what the agent actually emits (the owner
 // 2026-08-03: "이런식으로 md문법 안받거든") -- bold, italic, inline code, fences,
 // lists, headings, quotes, links. It is not a CommonMark implementation and
 // should not grow into one; anything it does not recognise renders as the

@@ -34,7 +34,7 @@
 
 const { app, BrowserWindow, shell, dialog } = require('electron')
 
-// 0.2.9 UNIFICATION (Mino 2026-08-21 "진짜 통합"): the dsh track is the main
+// 0.2.9 UNIFICATION (the owner 2026-08-21 "진짜 통합"): the dsh track is the main
 // line now. userData goes back to the 0.1.x dir ('scheherazade') so the
 // unified app IS the upgrade of a 0.1.x install -- one profile dir, one
 // Safe Storage keychain item ("Scheherazade Safe Storage"). The 0.2-test
@@ -47,7 +47,13 @@ const { app, BrowserWindow, shell, dialog } = require('electron')
 // below this block isn't initialized yet when this line runs)
 app.setPath('userData', require('node:path').join(app.getPath('appData'), 'scheherazade'))
 
-const { spawn, execFileSync } = require('node:child_process')
+const { spawn } = require('node:child_process')
+// One process-control seam for all three platforms (design-0023 P3):
+// killTree, the ps/CIM command-line read and the port-owner lookup used to
+// be hand-copied here, in supervisor.mjs, in the onboarding server and in
+// ollama-daemon -- four branches of differing quality, so a Linux fix meant
+// four edits. proc.cjs is the one implementation now.
+const proc = require('./proc.cjs')
 const attachTopology = require('./attach-topology.cjs')
 const { startShimmedProxy } = require('./codex-proxy-shim.cjs')
 const path = require('node:path')
@@ -96,7 +102,7 @@ const os = require('node:os')
   // is Chromium OSCrypt -- the blobs in DATA_HOME/.credentials decrypt only
   // with the os_crypt key in userData's 'Local State'. Moving the home
   // without its userData leaves every stored credential undecryptable
-  // (measured on magi-win 2026-08-21: readDiscordToken threw, agent never
+  // (measured on the Windows box 2026-08-21: readDiscordToken threw, agent never
   // spawned). Electron has not touched the new userData dir yet at module
   // load, so the rename is safe here and Chromium opens the folded dir as
   // its own. macOS keys live in the Keychain under the productName, so this
@@ -161,6 +167,10 @@ if (!gotSingleInstanceLock) {
   // double-spawn risk this fix exists to close.
   return
 }
+// Assigned once the app is ready (see its definition next to app.on('activate')
+// far below): re-opens the window when the app is resident but windowless.
+// Declared up here because 'second-instance' can fire before that point.
+let reopenMainWindow = null
 app.on('second-instance', () => {
   // A second launch attempt while this instance is running -- focus our
   // existing window instead of doing nothing (or, worse, without the lock
@@ -169,7 +179,15 @@ app.on('second-instance', () => {
   if (win) {
     if (win.isMinimized()) win.restore()
     win.focus()
+    return
   }
+  // Windowless but alive. Since design-0023 P3 that is a NORMAL state on
+  // win/linux too (closing the window leaves the agent supervising, as it
+  // always has on mac), and re-launching the app is how a Windows or Linux
+  // user asks for their window back -- there is no dock to click. Without
+  // this the second launch would silently do nothing and the app would look
+  // hung with no way in.
+  if (reopenMainWindow) reopenMainWindow()
 })
 
 // ── stdout/stderr hygiene ───────────────────────────────────────────────
@@ -203,11 +221,11 @@ function fatal(msg, err) {
   // so the killAgentSupervisor('SIGTERM') wired there (see app.on('before-
   // quit', ...) further down) is bypassed entirely. fatal() is wired to
   // uncaughtException/unhandledRejection, so ANY uncaught error after the
-  // agent has spawned would otherwise orphan the whole run.sh -> expect ->
+  // agent has spawned would otherwise orphan the whole supervisor -> lane ->
   // claude tree, still holding the Discord token, with no cleanup at all.
   // Best-effort, belt-and-suspenders: the synchronous group-SIGTERM inside
   // killAgentSupervisor() is the part that reliably fires before app.exit()
-  // tears this process down; the async 'run.sh stop' child it also spawns
+  // tears this process down; the async 'supervisor stop' child it also spawns
   // may or may not survive the immediate exit below, which is fine here --
   // it's the secondary/reliable path for the ORDINARY quit case, not this
   // crash-path's only line of defense. Wrapped in try/catch so a failure
@@ -334,7 +352,7 @@ function createMainWindow(url) {
 
   // Every renderer window.open() (wizard's Discord/Slack/Telegram console
   // links, bot-invite OAuth, connector auth URLs) goes to the USER'S DEFAULT
-  // BROWSER (Mino 07-30). Electron's default without this handler is a bare
+  // BROWSER (the owner 07-30). Electron's default without this handler is a bare
   // chromium child window: no address bar, no user sessions/passwords -- so
   // "log into the Discord developer portal" landed the user in a browser
   // where they are logged into nothing. http/https only: openExternal with
@@ -353,7 +371,7 @@ function createMainWindow(url) {
 }
 
 // ── (c) real agent child spawn ──────────────────────────────────────────
-// Spawns the actual long-lived `claude` CLI agent via run.sh (an internal
+// Spawns the actual long-lived agent via supervisor.mjs (an internal
 // bundled launcher, never exposed as a CLI surface to the user), triggered
 // both at boot (already-onboarded installs) and from the onboarding-complete
 // callback (fresh installs) -- see spawnRealAgentChildLocked() below for the
@@ -379,9 +397,9 @@ const NPM_GLOBAL_BIN_DIRS = () => {
         // edit, so PATH alone does not see it until they log out.
         path.join(home, '.local', 'bin'),
         path.join(process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'Programs', 'claude'),
-        // WinGet's shim directory. Measured, not assumed: on magi-win
+        // WinGet's shim directory. Measured, not assumed: on the Windows box
         // (2026-08-04) `Get-Command claude` resolves to
-        // C:\Users\minom\AppData\Local\Microsoft\WinGet\Links\claude.exe and
+        // C:\Users\winuser\AppData\Local\Microsoft\WinGet\Links\claude.exe and
         // nothing else -- that box's only Claude Code is a WinGet install.
         //
         // It is found today ONLY because that dir happens to be on the
@@ -411,7 +429,7 @@ function resolveClaudeBin() {
   // supervisor's pty.spawn can actually exec -- a claude.cmd npm shim would
   // "detect" here and then fail at ConPTY spawn time (CreateProcess does not
   // interpret .cmd), a false-working state worse than a clean not-found.
-  // UNVERIFIED on magi-win (flag class as supervisor.mjs's win lanes).
+  // UNVERIFIED on the Windows box (flag class as supervisor.mjs's win lanes).
   const exeName = isWin ? 'claude.exe' : 'claude'
   const pathDirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean)
   for (const [dirs, source] of [
@@ -507,48 +525,47 @@ function ensureClaudeCli() {
   }
 }
 
-// run.sh as an INTERNAL bundled launcher (BUG 2 fix, see comment block
-// above). toUnpackedPath (reused from onboarding/http-server.cjs, same
-// helper CHANNEL_SCRIPT_PATH/MEMORY_SERVER_SCRIPT_PATH there use) maps this
-// to the real on-disk unpacked copy in a packaged app -- see package.json's
-// build.files/build.asarUnpack, both of which now list run.sh. No-op in
+// The internal bundled launcher: supervisor.mjs, on EVERY platform
+// (design-0023 P3). Until 0.3.0 mac and Linux ran a bash `run.sh` loop and
+// only Windows ran this file, selected by a SUPERVISOR_LANE seam -- two
+// supervisors, three watchdog implementations, and a /bin/bash hardcode that
+// ENOENTs on minimal Linux images. There is one lane now: the app spawns its
+// OWN runtime (process.execPath under ELECTRON_RUN_AS_NODE) on supervisor.mjs,
+// which is also what makes the engine's runtime deterministic instead of
+// "whatever `node` PATH resolves first on this machine".
+// toUnpackedPath (reused from onboarding/http-server.cjs, same helper
+// CHANNEL_SCRIPT_PATH/MEMORY_SERVER_SCRIPT_PATH there use) maps this to the
+// real on-disk unpacked copy in a packaged app -- see package.json's
+// build.files/build.asarUnpack, both of which list supervisor.mjs. No-op in
 // dev (REPO_ROOT never contains "/app.asar/" there).
-const RUN_SH_PATH = toUnpackedPath(path.join(__dirname, 'run.sh'))
-const BASH_BIN = '/bin/bash' // confirmed present on stock macOS; hardcoded rather than PATH-resolved since a packaged app's PATH can be minimal
-
-// Windows-port Phase 1 seam (docs/supervisor-design.md, "What run.sh keeps
-// doing"): SUPERVISOR_LANE=node spawns supervisor.mjs under Electron-as-node
-// (ELECTRON_RUN_AS_NODE, probe-verified ABI lane); anything else -- including
-// unset -- keeps the battle-tested bash lane. Read ONCE at module load: a
-// lane is a process-lifetime decision, and flipping it mid-run would desync
-// the spawn/stop/identity trio that all key off it.
-// win32 has NO bash lane to fall back to -- BASH_BIN is a hardcoded /bin/bash,
-// so an unset SUPERVISOR_LANE there spawned ENOENT and parked the agent at
-// status 'failed' forever, making the entire node-pty supervisor built for
-// this port unreachable without a manually-set env var (found 2026-08-03,
-// first real win run). The env var still selects the lane on POSIX; on win32
-// the node lane is the only one that exists, so it is not a preference.
 const SUPERVISOR_MJS_PATH = toUnpackedPath(path.join(__dirname, 'supervisor.mjs'))
-const SUPERVISOR_LANE =
-  process.platform === 'win32'
-    ? 'node'
-    : (process.env.SUPERVISOR_LANE || '').trim().toLowerCase() === 'node'
-      ? 'node'
-      : 'bash'
+// The CONTIGUOUS spawn signature every identity check matches on. See
+// isOurSupervisor below for why contiguity (not two independent substring
+// tests) is load-bearing.
+const SUPERVISOR_SIGNATURE = `${SUPERVISOR_MJS_PATH} __loop`
+// Upgrade path, recognition ONLY: an install updating from <=0.2.20 can have a
+// live `bash .../run.sh __loop` supervisor on this same PIDFILE. Nothing here
+// can spawn one any more, but failing to RECOGNIZE it would read a live agent
+// as stale and double-spawn a second supervisor onto one Discord token -- the
+// exact Fix-C disaster. So: recognized, adopted for the purpose of stopping it,
+// never treated as stale while alive. Remove once no install can still be
+// running a 0.2.x lane.
+const LEGACY_BASH_SIGNATURE = 'run.sh __loop'
 
-// Fix C: this used to spawn `bash run.sh __loop` directly, bypassing
-// run.sh's OWN start_agent() PIDFILE entirely -- quit+reopen (or a second
+// Fix C: this used to spawn the loop directly, bypassing the launcher's OWN
+// start_agent() PIDFILE entirely -- quit+reopen (or a second
 // app instance) could spawn a
 // second supervisor while the first was still alive and orphaned, and the
 // two would fight over the same Discord token via pkill inside their
 // respective run_loop()s (and, worse, both reply on Discord). This process
-// now participates in the exact same PIDFILE run.sh's own start_agent()/
-// stop_agent() use, at the same path -- see run.sh's PIDFILE="$MEM/.agent.pid"
+// now participates in the exact same PIDFILE the supervisor's own
+// startAgent()/stopAgent() use, at the same path -- `$MEM/.agent.pid`, a
+// LOCKED contract name (docs/supervisor-design.md)
 // (MEM == DATA_HOME here, since AGENT_DATA_HOME is always set below to
 // this exact value).
 const AGENT_PIDFILE = path.join(DATA_HOME, '.agent.pid')
-// Critical B's second half: run.sh's write_failure() / channel.mjs's
-// writeFailureMarker() both write this same path -- see FAILFILE in run.sh
+// Critical B's second half: the supervisor's writeFailureMarker() and
+// channel.mjs's both write this same path -- see FAILFILE in supervisor.mjs
 // and FAILURE_MARKER_PATH in channel.mjs. Polled below (see
 // pollFailureMarker()) so a bad token/repeated-crash-loop reaches the user
 // as a 'failed' status within a bounded time instead of infinite
@@ -557,122 +574,61 @@ const AGENT_FAILFILE = path.join(DATA_HOME, '.agent-failed.json')
 const FAILURE_POLL_MS = 3_000
 
 // Shared by Fix C (PIDFILE liveness check) and Fix D's sibling check in
-// http-server.cjs -- same kill(pid, 0)-probe idiom run.sh's own is_alive()
-// uses. Not re-exported/shared as a module between the two files: it's a
-// six-line pure function, not worth a shared-module seam between a CJS
-// onboarding server and this CJS main process for.
-function isPidAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (err) {
-    return err.code === 'EPERM'
-  }
-}
+// http-server.cjs -- one implementation in proc.cjs since design-0023 P3.
+const isPidAlive = proc.isPidAlive
 
-// Bug 1 fix (agent-lifecycle, 2026-07-03, cross-model adversarial review):
-// isPidAlive() alone is IDENTITY-BLIND -- it only proves *some* process
-// holds this pid right now, not that it's OUR run.sh __loop supervisor. A
-// stale PIDFILE surviving a crash/reboot, combined with macOS recycling
-// that pid to an unrelated process, would otherwise make this app either
-// (a) silently never spawn its own agent (isPidAlive() true -> skip spawn,
-// UI stuck 'connecting' forever with no clue why), or (b) on quit,
-// SIGTERM an unconfirmed/unrelated process via killAgentSupervisor().
-// Verify PROCESS IDENTITY via its own command line -- require it to
-// contain the CONTIGUOUS spawn signature `<RUN_SH_PATH> __loop`, the
-// exact signature spawnRealAgentChild() below uses to spawn it
-// (`spawn(BASH_BIN, [RUN_SH_PATH, '__loop'])`), and the same convention
-// run.sh's own is_our_supervisor() checks on its side of this PIDFILE.
-// Fail SAFE: `ps` erroring, being unavailable, or returning nothing
-// (permission, already-exited race) all resolve to "not verified" --
-// callers must treat that as if the pid is NOT our supervisor (never
-// trust it as already-running, never signal it).
-//
-// Cross-model adversarial review follow-up (2026-07-03), two compounding
-// bugs fixed together:
-//   Fix A -- `-ww` forces `ps` to print the FULL, un-truncated command
-//     line. Without it, macOS/BSD `ps` width-limits its `command=`
-//     output; a legit supervisor launched from a long install path (e.g.
-//     inside a deeply-nested "*.app" bundle) can have `__loop` truncated
-//     clean off the printed line, false-negating a REAL supervisor as
-//     unverified -- which then makes start_agent() double-spawn a second
-//     live agent and makes killAgentSupervisor() skip signaling a live
-//     one.
-//   Fix B -- match the CONTIGUOUS substring `<RUN_SH_PATH> __loop`
-//     instead of two independent `.includes()` checks. Two separate
-//     substring tests pass if RUN_SH_PATH and '__loop' both appear
-//     ANYWHERE in the command line, even unrelated to each other (e.g. a
-//     recycled pid now held by an editor/grep/diagnostic process whose
-//     argv happens to mention both tokens) -- a false positive that then
-//     gets trusted as a live supervisor or signaled as one. The actual
-//     spawn is always `bash <RUN_SH_PATH> __loop`, so matching the two
-//     tokens back-to-back (space-joined) is both necessary and
-//     sufficient, and depends on Fix A: without `-ww`, truncation could
-//     also sever this exact contiguous match.
-// Kill a detached child AND its descendants. Negative-pid group signals do not
-// exist on Windows (and POSIX signal names are not deliverable there), so every
-// such call threw into its catch and killed NOTHING -- detached login flows and
-// daemons survived app quit as orphans, and an orphaned OAuth flow can still
-// complete and write credentials after the app is gone. taskkill /T is the
-// Windows equivalent; supervisor.mjs:684 already uses it.
-function killTree(pid, signal) {
-  if (process.platform === 'win32') {
-    // /F because a detached console child will not honour a polite close, /T
-    // for the descendants the process group would have covered on POSIX.
-    execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
-    return
-  }
-  process.kill(-pid, signal)
-}
+// Kill a detached child AND its descendants: POSIX process-group signal,
+// taskkill /T on win32 (where negative-pid signals do not exist and every such
+// call used to throw into its catch and kill NOTHING -- detached login flows
+// survived app quit as orphans, and an orphaned OAuth flow can still finish
+// and write credentials after the app is gone). See proc.cjs.
+const killTree = proc.killTree
 
 function isOurSupervisor(pid) {
-  // Recognition is deliberately LANE-AGNOSTIC (SUPERVISOR_LANE seam,
-  // Windows-port Phase 1): both signatures are OUR supervisors on the same
-  // PIDFILE. Recognizing only the configured lane would make a lane flip
-  // treat a live old-lane supervisor as stale -- and double-spawn a second
-  // supervisor onto the same Discord token, the exact Fix-C disaster.
   return readSupervisorCommandLine(pid) !== null
 }
 
-// Returns the verified command line when pid is a live supervisor of EITHER
-// lane, else null. Shared by isOurSupervisor() and the stop-path lane router.
+// Returns the verified command line when pid is a live supervisor of ours,
+// else null.
+//
+// Bug 1 fix (agent-lifecycle, 2026-07-03, cross-model adversarial review):
+// isPidAlive() alone is IDENTITY-BLIND -- it only proves *some* process holds
+// this pid right now. A stale PIDFILE surviving a crash/reboot, combined with
+// the OS recycling that pid, would otherwise make this app either silently
+// never spawn its own agent (UI stuck 'connecting' with no clue why) or, on
+// quit, signal an unrelated process.
+//   Fix A -- `-ww` (inside proc.readCommandLine) forces the FULL, un-truncated
+//     command line; a supervisor launched from a long path inside a *.app
+//     bundle otherwise gets `__loop` truncated off and false-negates.
+//   Fix B -- match the CONTIGUOUS substring `<path> __loop`, not two
+//     independent `.includes()` tests, which both pass for a recycled pid
+//     whose argv merely mentions each token separately.
+// Fail SAFE: a lookup that errors, is unavailable or returns nothing resolves
+// to "not verified" -- never trusted as already-running, never signaled.
 function readSupervisorCommandLine(pid) {
   if (!isPidAlive(pid)) return null
   let commandLine
-  // Windows has no `ps`. Without this branch EVERY lookup threw, so every
-  // supervisor read as UNVERIFIED: a live supervisor's PIDFILE was called
-  // stale and the next launch double-spawned onto the same Discord token --
-  // the Fix-C disaster the lane-agnostic matching above exists to prevent.
-  // Same CIM read supervisor.mjs's defaultReadCommandLine() uses, which was
-  // execution-verified on magi-win 2026-08-01 (268/295/405ms).
-  const reader = process.platform === 'win32'
-    ? () => execFileSync('powershell.exe', ['-NoProfile', '-Command',
-        `(Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}").CommandLine`], { encoding: 'utf8' })
-    : () => execFileSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8' })
+  // proc.readCommandLine: `ps -ww` on POSIX, Get-CimInstance on Windows
+  // (which has no `ps` -- without that branch EVERY lookup threw, so every
+  // supervisor read as UNVERIFIED and the next launch double-spawned onto the
+  // same Discord token).
   try {
-    commandLine = reader()
+    commandLine = proc.readCommandLine(pid)
   } catch (err) {
     log(`readSupervisorCommandLine(${pid}): process lookup failed (${err.message}) -- treating as UNVERIFIED, fail-safe`)
     return null
   }
-  if (commandLine.includes(`${RUN_SH_PATH} __loop`) || commandLine.includes(`${SUPERVISOR_MJS_PATH} __loop`)) return commandLine
+  if (commandLine.includes(SUPERVISOR_SIGNATURE) || commandLine.includes(LEGACY_BASH_SIGNATURE)) return commandLine
   return null
 }
 
-// Stop must be routed to the lane that matches the LIVE supervisor, not the
-// configured one: each lane's stopper only recognizes its own spawn
-// signature (run.sh is frozen as the production mac lane), and the wrong
-// stopper would "clean up" a pidfile whose owner is alive -- orphaning a
-// running agent. Falls back to the configured lane when nothing verifiable
-// is live (then the stopper only does stale-state cleanup anyway).
+// One stopper on every platform. It was a router while two lanes shared this
+// PIDFILE (each lane's stopper only recognized its own signature, and the
+// wrong one would "clean up" a live supervisor's pidfile). supervisor.mjs's
+// own `stop` handles both shapes now -- ours by signature, a leftover 0.2.x
+// bash loop as a legacy owner -- so there is nothing left to route.
 function supervisorStopCommand() {
-  let lane = SUPERVISOR_LANE
-  const commandLine = readSupervisorCommandLine(readPidFromFile(AGENT_PIDFILE))
-  if (commandLine) lane = commandLine.includes(`${SUPERVISOR_MJS_PATH} __loop`) ? 'node' : 'bash'
-  return lane === 'node'
-    ? { lane, bin: process.execPath, args: [SUPERVISOR_MJS_PATH, 'stop'], extraEnv: { ELECTRON_RUN_AS_NODE: '1' } }
-    : { lane, bin: BASH_BIN, args: [RUN_SH_PATH, 'stop'], extraEnv: {} }
+  return { bin: process.execPath, args: [SUPERVISOR_MJS_PATH, 'stop'], extraEnv: { ELECTRON_RUN_AS_NODE: '1' } }
 }
 
 function readPidFromFile(filePath) {
@@ -686,9 +642,9 @@ function readPidFromFile(filePath) {
   }
 }
 
-// Tracks the currently-live agent child (the persistent run.sh __loop
-// supervisor process, not an individual `claude` crash inside it -- those
-// are absorbed by run.sh's own restart/backoff ladder and never reach
+// Tracks the currently-live agent child (the persistent `supervisor.mjs
+// __loop` process, not an individual lane crash inside it -- those
+// are absorbed by the supervisor's own restart/backoff ladder and never reach
 // here). Guards against double-spawn (PART 1 requirement): both the
 // boot-time call and the onOnboardingComplete callback can legitimately
 // race/overlap (e.g. a returning already-onboarded user who somehow also
@@ -734,13 +690,13 @@ let codexProxyServer = null
 // comment).
 let codexProxyModel = null
 
-// Critical B: polls AGENT_FAILFILE (written by run.sh's write_failure() on
+// Critical B: polls AGENT_FAILFILE (written by the supervisor's marker on
 // a quick-fail restart streak, or by channel.mjs's writeFailureMarker() on
 // a Discord login/token failure) and surfaces it via setAgentStatus so the
 // Step 5 UI's poll (GET /api/agent/status) sees 'failed' within
 // FAILURE_POLL_MS of either layer detecting the problem, instead of
 // sitting on 'connecting' forever. mtime-gated so a repeatedly-rewritten
-// marker (run.sh re-writes it on every subsequent quick-fail restart)
+// marker (the supervisor re-writes it on every quick-fail restart)
 // doesn't spam redundant setAgentStatus calls.
 function pollFailureMarker() {
   try {
@@ -751,9 +707,9 @@ function pollFailureMarker() {
     const detail =
       parsed && typeof parsed.reason === 'string'
         ? parsed.reason
-        : 'agent supervisor reported a failure (see run.sh/channel.mjs logs)'
+        : 'agent supervisor reported a failure (see the supervisor/channel.mjs logs)'
     // Cause-code wiring (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 1):
-    // the marker is written by two independent emitters -- run.sh's
+    // the marker is written by two independent emitters -- the supervisor's
     // write_failure() (code: "crash_loop") and channel.mjs's
     // writeFailureMarker() (code: "discord_token_bad") -- both now stamp a
     // `code` field into the same JSON shape. Fall back to 'unknown' if it's
@@ -766,7 +722,7 @@ function pollFailureMarker() {
     setAgentStatus('failed', code, detail)
   } catch (err) {
     if (err.code !== 'ENOENT') console.error(`[scheherazade/main] pollFailureMarker: failed to read/parse ${AGENT_FAILFILE}:`, err)
-    // ENOENT (no marker yet, or since cleared by run.sh's clear_failure()):
+    // ENOENT (no marker yet, or since cleared by clearFailureMarker()):
     // nothing to surface. Deliberately NOT auto-flipping status back to
     // 'connecting' here on marker-disappearance -- that recovery path needs
     // a real re-validated credential, which today only happens via a fresh
@@ -797,7 +753,7 @@ function stopFailurePoll() {
 // UI, in addition to the existing console logging.
 // ── codex-as-api proxy, in-process (chatgpt provider, 2026-07-07) ────────
 // The chatgpt provider mode routes the agent at http://localhost:<port>
-// (provider-env.cjs), assuming a codex-as-api proxy is listening. On MAGI's
+// (provider-env.cjs), assuming a codex-as-api proxy is listening. On the reference fleet's
 // machine that proxy is an always-on external daemon; an end-user Mac has
 // none -- so the app runs one ITSELF, in-process, via the codex-as-api npm
 // package's createApp() (pinned dependency; it reads/refreshes
@@ -811,7 +767,7 @@ function stopFailurePoll() {
 //     base URL) may then be reused after a loopback liveness check;
 //     an occupied DEFAULT port blocks the agent spawn, loudly. lsof is
 //     kept for the diagnostic message only, never for the decision.
-//     This keeps the co-located-MAGI case working (dev opts in to the
+//     This keeps the co-located-fleet case working (dev opts in to the
 //     fleet proxy explicitly) without ever signaling that external proxy.
 //   - NO AUTO-RESTART in v1.1: if our in-process server errors, the
 //     agent's calls fail visibly and the next spawnRealAgentChild() pass
@@ -856,16 +812,11 @@ async function ensureCodexProxy(config) {
   }
   // Diagnostics ONLY (never a decision input -- see BIND-FIRST above).
   const listenerPidsForLog = () => {
-    try {
-      const out = execFileSync('/usr/sbin/lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {
-        encoding: 'utf8',
-        timeout: 3000,
-      })
-      const pids = out.split('\n').map((s) => s.trim()).filter(Boolean)
-      return pids.length ? pids.join(',') : 'unknown'
-    } catch {
-      return 'unknown'
-    }
+    // proc.listenerPids: /usr/sbin/lsof on mac, PATH lsof or `ss -ltnp` on
+    // linux (where /usr/sbin/lsof does not exist and this always returned
+    // 'unknown'), Get-NetTCPConnection on win32.
+    const pids = proc.listenerPids(port)
+    return pids.length ? pids.join(',') : 'unknown'
   }
 
   if (codexProxyServer) {
@@ -1013,7 +964,7 @@ async function spawnRealAgentChildLocked() {
     return agentChild
   }
 
-  // Harness gate (nogabi issue #6). The boot refresh re-renders CLAUDE.md,
+  // Harness gate (harness-refresh issue #6). The boot refresh re-renders CLAUDE.md,
   // ONTOLOGY_GUIDE.md and system_prompt.md so a shipped fix reaches installs
   // that already onboarded. When that render fails it used to log a line and
   // let the agent start anyway, which mixes a new runtime with an older
@@ -1035,7 +986,7 @@ async function spawnRealAgentChildLocked() {
   // quit+reopen, that variable is gone (fresh process), but a previous
   // supervisor can still be alive (window-all-closed doesn't kill it, and
   // before this fix nothing did on quit either). Check the on-disk PIDFILE
-  // run.sh's own start_agent()/stop_agent() use before spawning a second
+  // the supervisor's own start/stop verbs use before spawning a second
   // one.
   const existingPid = readPidFromFile(AGENT_PIDFILE)
   if (existingPid && isOurSupervisor(existingPid)) {
@@ -1103,7 +1054,20 @@ async function spawnRealAgentChildLocked() {
   // reports that bootstrap is needed. It never falls through to the spawn
   // code below, and it never creates a tmux server (attach-topology.cjs's
   // allowlist enforces that invariant mechanically).
-  if ((config.AGENT_TOPOLOGY || 'spawn') === 'attach') {
+  // ...but only where the lane exists. attachStartFromSession walks straight
+  // into `!state.tmuxPresent` -> setAgentStatus('failed', 'bootstrap-needed')
+  // on a platform that ships no tmux, and the agent then never starts at all.
+  // The Settings card is hidden off mac so the UI cannot get here -- but the
+  // manual tells the agent it may edit .agent-config itself, which makes this
+  // a reachable self-brick, and "you asked for a lane this machine does not
+  // have" is not a reason to refuse to boot. Fall through to spawn, loudly:
+  // the app comes up, and the log says exactly what was ignored and why.
+  const attachAsked = (config.AGENT_TOPOLOGY || 'spawn') === 'attach'
+  if (attachAsked && !require('./onboarding/platform.cjs').host().attachLane) {
+    log(`AGENT_TOPOLOGY=attach ignored: this platform (${process.platform}) has no attach lane -- `
+      + 'the vendored tmux ships on macOS only. Starting in the spawn topology instead; '
+      + 'remove AGENT_TOPOLOGY from .agent-config to silence this.')
+  } else if (attachAsked) {
     return attachStartFromSession(config)
   }
 
@@ -1144,11 +1108,9 @@ async function spawnRealAgentChildLocked() {
     return null
   }
 
-  // Per-lane launcher gate: the node lane never touches run.sh, so blocking on
-  // its absence there would fail a launch for a file the lane does not use.
-  const launcherPath = SUPERVISOR_LANE === 'node' ? SUPERVISOR_MJS_PATH : RUN_SH_PATH
-  if (!fs.existsSync(launcherPath)) {
-    const reason = `internal launcher not found at ${launcherPath} (${SUPERVISOR_LANE === 'node' ? 'supervisor.mjs' : 'run.sh'} missing from the packaged/unpacked app -- check build.files/build.asarUnpack)`
+  // Launcher gate: one file, one lane.
+  if (!fs.existsSync(SUPERVISOR_MJS_PATH)) {
+    const reason = `internal launcher not found at ${SUPERVISOR_MJS_PATH} (supervisor.mjs missing from the packaged/unpacked app -- check build.files/build.asarUnpack)`
     console.error(`[scheherazade/main] BLOCKER: ${reason}`)
     // NOT cli_missing: that one is "you have not installed Claude Code",
     // which the user fixes. This one is "a file we ship is absent from our
@@ -1160,9 +1122,8 @@ async function spawnRealAgentChildLocked() {
 
   // Critical A: BYOK key forward. A fresh Mac where `claude` was never
   // authenticated has NO credentials of its own -- without this, the CLI
-  // hangs at its own auth prompt inside run.sh's PTY forever (nothing in
-  // the expect script above matches an auth prompt, so it just sits past `set timeout -1;
-  // expect eof`). PROVIDER is written by onboarding/http-server.cjs's
+  // hangs at its own auth prompt forever, with nothing to answer it.
+  // PROVIDER is written by onboarding/http-server.cjs's
   // POST /api/onboarding/complete handler (see writeAgentConfig call
   // there); readProviderKey() decrypts the safeStorage-encrypted key
   // in-memory only -- see this function's own doc comment in
@@ -1173,7 +1134,7 @@ async function spawnRealAgentChildLocked() {
   // PROVIDERS values (claude, claude-subscription, chatgpt, ollama) now
   // route through buildProviderEnv() (provider-env.cjs) -- a pure,
   // Electron-free function so it can be unit-tested standalone (see
-  // scripts/test-provider-env.mjs). This function stays a flat if/else on
+  // tests/test-provider-env.mjs). This function stays a flat if/else on
   // buildProviderEnv()'s return shape; see provider-env.cjs's own doc
   // comment on `buildProviderEnv` for the full contract (env fields to
   // spread over the base env, and the 3 error.kind values below).
@@ -1224,7 +1185,7 @@ async function spawnRealAgentChildLocked() {
     }
   }
 
-  // ollama provider: NO local gate anymore (2026-08-04, Mino "ollama ->
+  // ollama provider: NO local gate anymore (2026-08-04, the owner "ollama ->
   // API키"). The lane is ollama.com CLOUD via ANTHROPIC_BASE_URL + a stored
   // API key (provider-env.cjs's ollama row) -- there is no local daemon to
   // confirm, and gating the spawn on ensureOllamaDaemon() here would block
@@ -1261,7 +1222,7 @@ async function spawnRealAgentChildLocked() {
       return null
     }
     // SLACK_HOME_CHANNEL_ID is OPTIONAL since DM-default mode (2026-08-04,
-    // Mino "홈채널 방식 말고 DM 기본"): tokens alone are a complete slack
+    // the owner "홈채널 방식 말고 DM 기본"): tokens alone are a complete slack
     // config -- the conversation binds to whoever DMs the bot. An empty
     // homeChannelId just means channel-slack.mjs boots without a home
     // channel (it logs the DM-default line and accepts message.im events).
@@ -1292,7 +1253,7 @@ async function spawnRealAgentChildLocked() {
     // so there is no third-party credential to read and NOTHING to gate the
     // spawn on -- which is the entire point of the backend: a fresh user
     // reaches the agent before configuring any messenger. Before this
-    // branch existed (bug, found 2026-07-30 via Mino's live repro), 'local'
+    // branch existed (bug, found 2026-07-30 via the owner's live repro), 'local'
     // fell through to the discord else below: an install WITH a discord
     // token spawned carrying a stale discord HOME_CHANNEL_ID, and a
     // local-only install (the slice-5 wizard user this backend was built
@@ -1311,7 +1272,7 @@ async function spawnRealAgentChildLocked() {
       token = readDiscordToken()
     } catch (err) {
       // log(), not console.error: this abort was INVISIBLE in the field
-      // (magi-win 2026-08-21, the OSCrypt fold-in case) -- stderr never
+      // (the Windows box 2026-08-21, the OSCrypt fold-in case) -- stderr never
       // reaches app.log, so the boot just looked like "no spawn line".
       log(`readDiscordToken failed, cannot spawn agent: ${(err && err.message) || err}`)
       // 'channel_token_error', deliberately distinct from its two neighbours:
@@ -1335,10 +1296,10 @@ async function spawnRealAgentChildLocked() {
   }
 
   const agentName = config.AGENT_NAME || FIXED_AGENT_NAME
-  const model = config.MODEL || 'claude-opus-4-6' // same default as run.sh's own MODEL fallback
+  const model = config.MODEL || 'claude-opus-4-6' // same default as the supervisor's own MODEL fallback
 
   log(
-    `spawning real agent via internal launcher: launcher=${RUN_SH_PATH} bin=${resolved ? `${resolved.bin} (${resolved.source})` : 'none (dsh lane; Claude Code not required)'} ` +
+    `spawning real agent via internal launcher: launcher=${SUPERVISOR_MJS_PATH} bin=${resolved ? `${resolved.bin} (${resolved.source})` : 'none (dsh lane; Claude Code not required)'} ` +
       `model=${model} name=${agentName} dataHome=${DATA_HOME}`
   )
 
@@ -1349,30 +1310,29 @@ async function spawnRealAgentChildLocked() {
   // own declared `env` block in .mcp.json. So DISCORD_BOT_TOKEN set on THIS
   // child's env below reaches channel.mjs unchanged, with no code change
   // needed here and no token ever touching .mcp.json or any other on-disk
-  // file. run.sh's `run_loop` re-exports CLAUDE_CMD/AGENT_NAME/MEM for its
-  // own use but never touches or logs DISCORD_BOT_TOKEN, so it passes
-  // through run.sh -> expect -> claude -> channel.mjs untouched at every
+  // file. The supervisor re-exports AGENT_NAME/MEM/CLAUDE_BIN/MODEL for the
+  // lane's own use but never touches or logs DISCORD_BOT_TOKEN, so it passes
+  // through supervisor -> lane -> engine -> channel.mjs untouched at every
   // hop. (history: docs/HISTORY.md)
   // --dangerously-skip-permissions is NOT set here -- and correctly so: this
-  // spawn() call's target is BASH_BIN (bash running run.sh), not the
-  // `claude` CLI binary itself, and the flag only means anything on the
-  // `claude` command line. run.sh passes --dangerously-skip-permissions on
-  // its own claude invocation (see run.sh); this spawn() call does not.
+  // spawn() call's target is our own runtime running supervisor.mjs, not the
+  // `claude` CLI binary, and the flag only means anything on the `claude`
+  // command line (headless-lane.mjs's buildArgs adds it there).
   const supervisorEnv = {
     ...process.env,
     ...channelEnv,
     HOME_CHANNEL_ID: homeChannelId,
     AGENT_NAME: agentName,
     MODEL: model,
-    // Effort selector (Mino 07-13 click-test item 2): only forwarded when
-    // the user picked one -- absent, run.sh's own `${EFFORT_LEVEL:-high}`
+    // Effort selector (the owner 07-13 click-test item 2): only forwarded when
+    // the user picked one -- absent, the supervisor's own EFFORT_LEVEL
     // default applies. The stop-path spawns deliberately don't carry this
-    // (run.sh stop never reads it).
+    // (the stop verb never reads it).
     ...(config.EFFORT_LEVEL ? { EFFORT_LEVEL: config.EFFORT_LEVEL } : {}),
     // 0.2.2: best-effort -- absent Claude Code is fine, the dsh lane never
     // execs it (see the softened cli_missing gate above).
     CLAUDE_BIN: resolved ? resolved.bin : (config.CLAUDE_BIN || 'claude'),
-    AGENT_DATA_HOME: DATA_HOME, // see run.sh's own comment: MEM = AGENT_DATA_HOME override
+    AGENT_DATA_HOME: DATA_HOME, // the one data-home spelling this app writes (data-home.cjs)
     // 4-provider-mode wiring (2026-07-04): spread LAST so buildProviderEnv()'s
     // fields (provider-env.cjs, computed above as providerEnvResult.env)
     // win over both ...process.env AND this object's own MODEL field --
@@ -1383,14 +1343,13 @@ async function spawnRealAgentChildLocked() {
     ...providerEnvResult.env,
   }
   // node shim, hoisted to the SHARED env layer (v0.0.21): v0.0.15 implemented
-  // ensureNodeShim inside supervisor.mjs's own spawn path -- the NODE lane
-  // only. Production spawns the BASH lane (run.sh, the launcher line in this
-  // very function), so packaged installs never got the shim and every Claude
-  // Code hook died with `/bin/sh: node: command not found` -- stop-reply-guard
-  // among them, which is exactly why a promised Discord reply could go
-  // unbounced. Patched HERE so both lanes inherit it: bash lane via this env,
-  // node lane idempotently (its own ensureNodeShim call sees the dir already
-  // on PATH). Single-sourced from supervisor.mjs via dynamic import (ESM); on
+  // ensureNodeShim inside supervisor.mjs's own spawn path, which production
+  // (the bash lane, until 0.3.0) never took -- so packaged installs never got
+  // the shim and every Claude Code hook died with `/bin/sh: node: command not
+  // found`, stop-reply-guard among them, which is exactly why a promised
+  // Discord reply could go unbounced. Patched HERE as well as there: the
+  // supervisor's own ensureNodeShim call is idempotent (it sees the dir
+  // already on PATH). Single-sourced from supervisor.mjs via dynamic import (ESM); on
   // any failure the child keeps the unpatched PATH = the pre-fix behavior,
   // loud. (history: docs/HISTORY.md)
   try {
@@ -1418,32 +1377,17 @@ async function spawnRealAgentChildLocked() {
   supervisorEnv.SCHEHERAZADE_LANE_VISION = laneVision({
     provider: config.PROVIDER, model: supervisorEnv.MODEL || config.MODEL,
   })
-  // SUPERVISOR_LANE seam (Windows-port Phase 1): identical env, stdio, and
-  // detached process-group contract in both lanes -- only the runtime
-  // differs (bash running run.sh vs Electron-as-node running
-  // supervisor.mjs). supervisor.mjs resolves the same config from this same
-  // env (its resolveConfig mirrors run.sh:38-109) and participates in the
-  // same PIDFILE/STOPFLAG/FAILFILE contract.
-  const child = SUPERVISOR_LANE === 'node'
-    ? spawn(process.execPath, [SUPERVISOR_MJS_PATH, '__loop'], {
-        cwd: DATA_HOME,
-        env: { ...supervisorEnv, ELECTRON_RUN_AS_NODE: '1' },
-        stdio: ['ignore', 'pipe', 'pipe'],
-        detached: true, // same Fix-C group isolation as the bash lane below
-      })
-    : spawn(BASH_BIN, [RUN_SH_PATH, '__loop'], {
-        cwd: DATA_HOME,
-        env: supervisorEnv,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        // Fix C: own process group (setsid-equivalent), so the app-quit handler
-        // below can SIGTERM the WHOLE tree (run.sh -> expect -> claude) with one
-        // negative-pid group signal without also taking down Electron's own
-        // process group. Without this, `cmd &` in bash inherits the parent's
-        // group (verified empirically, see run.sh's run_expect() comment on the
-        // exact same fact from the bash side) and a group-kill here would be
-        // unsafe.
-        detached: true,
-      })
+  // ONE lane, every platform (design-0023 P3): our own runtime as node, on
+  // supervisor.mjs, detached so it leads its own process group. The group is
+  // what lets app-quit signal the WHOLE tree (supervisor -> lane -> engine)
+  // with one negative-pid signal without touching Electron's own group; on
+  // win32, where no such thing exists, proc.killTree does taskkill /T instead.
+  const child = spawn(process.execPath, [SUPERVISOR_MJS_PATH, '__loop'], {
+    cwd: DATA_HOME,
+    env: { ...supervisorEnv, ELECTRON_RUN_AS_NODE: '1' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
+  })
 
   agentChild = child
   agentSupervisorPid = child.pid
@@ -1476,9 +1420,9 @@ async function spawnRealAgentChildLocked() {
   // needed, this IS it.
   setAgentStatus('connecting')
 
-  // Fix C: participate in run.sh's own PIDFILE convention (see
+  // Fix C: participate in the supervisor's own PIDFILE convention (see
   // AGENT_PIDFILE's doc comment above) so a future launch of this app (or
-  // a manual `run.sh start`/`stop` from a terminal) can see this supervisor
+  // a manual `supervisor.mjs start`/`stop` from a terminal) can see this supervisor
   // is alive.
   try {
     fs.writeFileSync(AGENT_PIDFILE, String(child.pid))
@@ -1499,14 +1443,15 @@ async function spawnRealAgentChildLocked() {
     logBuffer.append('agent!', chunk.toString())
   })
   child.on('error', (err) => {
-    // e.g. ENOENT on BASH_BIN -- never swallow. This is the launcher
-    // process itself failing to spawn at all, not a claude crash inside
-    // run.sh's own loop (that's absorbed by run.sh's restart ladder).
+    // e.g. the runtime itself failing to exec -- never swallow. This is the
+    // launcher process failing to spawn at all, not a lane crash inside the
+    // supervisor's loop (that one is absorbed by its restart ladder).
     console.error('[scheherazade/main] agent child spawn error:', err)
     logBuffer.append('main!', `agent child spawn error: ${err.message}`)
     // 'spawn_failed': the launcher process itself never started. Distinct from
-    // run.sh's OWN crash-loop detector, which can only fire once run.sh IS
-    // running and restarting claude inside itself (2026-08-04; was 'unknown').
+    // the supervisor's OWN crash-loop detector, which can only fire once the
+    // supervisor IS running and restarting the lane inside itself
+    // (2026-08-04; was 'unknown').
     setAgentStatus('failed', 'spawn_failed', `spawn error: ${err.message}`)
     agentChild = null
     agentSupervisorPid = null
@@ -1514,9 +1459,9 @@ async function spawnRealAgentChildLocked() {
     fs.rmSync(AGENT_PIDFILE, { force: true })
   })
   child.on('exit', (code, signal) => {
-    // run.sh's run_loop() only exits on SIGTERM/SIGINT (trapped, clean) or an
-    // internal `set -euo pipefail` failure. Historically ANY exit here meant a
-    // crash (stamp 'failed'). The control panel added two DELIBERATE kill paths
+    // The supervisor's loop only exits on SIGTERM/SIGINT (handled, clean), on
+    // the STOPFLAG, or on a fatal it reports through the failure marker.
+    // Historically ANY exit here meant a crash (stamp 'failed'). The control panel added two DELIBERATE kill paths
     // (user turned the agent off, or swapped its model); those set
     // intentionalStopMode before killing this supervisor. Consume it single-
     // shot. (App-quit via killAgentSupervisor() leaves the flag null and still
@@ -1551,34 +1496,22 @@ async function spawnRealAgentChildLocked() {
 
 // Fix C: app-quit cleanup. Quitting the app used to leave the supervisor
 // running with no cleanup at all -- orphaned, still holding the Discord
-// token, PIDFILE stale from this process's perspective. Two layers:
+// token, PIDFILE stale from this process's perspective. Two layers, both
+// still worth having now that there is one lane:
 //
-//   1. Best-effort direct signal, fast path. Correct ONLY when run.sh's
-//      run_expect() took its manual-watchdog fallback (no `timeout`/
-//      `gtimeout` binary on PATH) -- that path never re-groups its
-//      children, so a single process-group SIGTERM at the run.sh pid
-//      really does reach run.sh -> expect -> claude in one shot.
-//   2. Reliable path, ALWAYS also run: `bash run.sh stop`. Necessary
-//      because when GNU coreutils' `timeout`(1) IS present (common via
-//      Homebrew -- run_expect() prefers it), it puts ITS monitored
-//      command (expect, and everything expect spawns, including claude)
-//      into a **new, separate process group** so it can kill that subtree
-//      on its own 12h ceiling. Sending `kill(-run.sh_pid)` in that mode
-//      signals ONLY run.sh's own group (bash itself, and NOTHING else) --
-//      and bash won't even run its own TERM trap until its foreground
-//      `wait` on that (differently-grouped, still-alive) `timeout` child
-//      returns, which can be up to 12h, leaving the ENTIRE tree alive
-//      indefinitely with layer 1 alone. run.sh's OWN stop_agent()
-//      (STOPFLAG + `pkill -f PKILL_PATTERN`, already proven in this fork's
-//      lineage -- see run.sh) reaches the claude process by COMMAND-LINE
-//      PATTERN MATCH, which is completely unaffected by which process
-//      group it landed in -- that's why it, not a raw group signal, is
-//      the reliable mechanism. Uses freshly-read config (same
-//      AGENT_NAME/MODEL/CLAUDE_BIN resolution spawnRealAgentChild() uses)
-//      so PKILL_PATTERN/PIDFILE match exactly, whether this process
-//      spawned the supervisor itself or merely discovered it alive via
-//      AGENT_PIDFILE. Fired detached + unref'd so it can finish its own
-//      short poll-and-kill loop (up to ~15s, see run.sh's stop_agent())
+//   1. Best-effort direct signal, fast path: proc.killTree at the supervisor
+//      pid. The supervisor is spawned detached, so it leads its own process
+//      group and one negative-pid SIGTERM reaches supervisor -> lane ->
+//      engine in one shot (taskkill /T on win32, which has no groups).
+//   2. Reliable path, ALWAYS also run: `supervisor.mjs stop`. It does not
+//      depend on this process's view of the world -- it re-reads the PIDFILE,
+//      re-verifies identity by COMMAND LINE (unaffected by pid recycling),
+//      writes the STOPFLAG so the loop cannot respawn under us, waits out the
+//      lane's own shutdown, and only then forces. It also covers the case
+//      where this app merely DISCOVERED a running supervisor (adopted via
+//      AGENT_PIDFILE) rather than spawning it, and the upgrade case where the
+//      live supervisor is a leftover 0.2.x bash loop. Fired detached +
+//      unref'd so it can finish its own poll-and-kill window (up to ~15s)
 //      even after Electron itself has quit. (history: docs/HISTORY.md)
 // ── attach-lane helpers (0.1.0 prep, docs/design-0016-attach-topology.md) ──
 // The pane mirrors its output to DATA_HOME/logs/agent.log via pipe-pane
@@ -1711,7 +1644,7 @@ async function attachStartFromSession(config) {
 
 // Attach-mode counterpart of waitForAgentHandleCleared(): there is no
 // in-process child handle to clear (the app never spawned one), so
-// "confirmed dead" must come from the same identity check run.sh uses --
+// "confirmed dead" must come from the same identity check the supervisor uses --
 // poll until the PIDFILE pid stops verifying as our supervisor. Without
 // this, stop/restart in attach mode would confirm instantly-and-vacuously
 // (agentChild is always null here) and restart could double-book the token.
@@ -1745,10 +1678,10 @@ function killAgentSupervisor(signal = 'SIGTERM') {
   // Attach topology: the agent deliberately OUTLIVES the app (session
   // survival is one of the two differentiators in design-0016). App quit
   // must leave the external supervisor untouched -- the control panel's
-  // intentional stopAgent() path still works (it goes through run.sh stop,
-  // not through here).
+  // intentional stopAgent() path still works (it goes through the supervisor's
+  // stop verb, not through here).
   if (agentTopologyIsAttach()) {
-    log('app quit: attach topology -- external agent left running (by design; stop it from the control panel or `run.sh stop` if you mean it)')
+    log('app quit: attach topology -- external agent left running (by design; stop it from the control panel if you mean it)')
     return
   }
   try {
@@ -1771,11 +1704,11 @@ function killAgentSupervisor(signal = 'SIGTERM') {
       // killTree does taskkill /PID /T /F on win32 and a POSIX process-group
       // signal (-pid) on mac/Linux -- the same teardown the agentChild fast
       // path above already uses, and the discovered supervisor is the same
-      // detached run.sh __loop group leader.
+      // detached `supervisor.mjs __loop` group leader.
       killTree(agentSupervisorPid, signal)
       log(`sent ${signal} to discovered agent supervisor process tree (pid=${agentSupervisorPid}, identity re-verified via ps) -- best-effort fast path`)
     } else {
-      log(`skipping direct signal to agentSupervisorPid=${agentSupervisorPid}: no longer verifiable as our supervisor (dead, or pid recycled) -- relying on the 'run.sh stop' cleanup path below instead, which is identity-safe via PKILL_PATTERN command-line matching`)
+      log(`skipping direct signal to agentSupervisorPid=${agentSupervisorPid}: no longer verifiable as our supervisor (dead, or pid recycled) -- relying on the 'supervisor stop' cleanup path below instead, which is identity-safe via its own command-line check`)
     }
   } catch (err) {
     if (err.code !== 'ESRCH') console.error('[scheherazade/main] failed to signal agent supervisor process group:', err)
@@ -1803,7 +1736,7 @@ function killAgentSupervisor(signal = 'SIGTERM') {
     stopper.unref()
     log(`spawned '${stopCmd.lane}-lane stop' (pid=${stopper.pid}) as the reliable cleanup path (identity-safe on its own side of the PIDFILE)`)
   } catch (err) {
-    console.error('[scheherazade/main] failed to spawn run.sh stop cleanup:', err)
+    console.error('[scheherazade/main] failed to spawn the supervisor stop cleanup:', err)
   }
 }
 
@@ -1812,17 +1745,17 @@ function killAgentSupervisor(signal = 'SIGTERM') {
 // on/off). The app's FIRST intentional agent-lifecycle paths -- see
 // intentionalStopMode's declaration and child.on('exit')'s branch on it.
 //
-// Why NOT reuse killAgentSupervisor(): it fires `run.sh stop` DETACHED + unref
+// Why NOT reuse killAgentSupervisor(): it fires the stop DETACHED + unref
 // (fire-and-forget, correct for app-quit where nothing waits). A restart MUST
-// serialize -- run.sh's PKILL_PATTERN is `--name AGENT_NAME` (model-agnostic,
-// see run.sh's own comment on why --model was dropped), so a stop still in
-// flight would pkill the freshly-spawned replacement (a same-name new child).
-// stopAgentAwaited() AWAITS run.sh stop to completion (it blocks up to ~15s:
-// touch STOPFLAG, pkill leaf, poll, force-kill, remove PIDFILE) so the pkill
+// serialize -- the supervisor's orphan sweep matches the lane by SCRIPT PATH
+// (never by a post-spawn-mutable field like --model), so a stop still in
+// flight would reap a freshly-spawned replacement's lane too.
+// stopAgentAwaited() AWAITS the stop to completion (it blocks up to ~15s:
+// write STOPFLAG, signal the group, poll, force-kill, remove PIDFILE) so that
 // window is fully closed before any respawn.
 
 function stopAgentAwaited() {
-  // Resolves (never rejects) when `run.sh stop` has exited -- supervisor + leaf
+  // Resolves (never rejects) when the stop verb has exited -- supervisor + lane
   // confirmed dead, STOPFLAG + PIDFILE cleaned up. A failed stop still resolves
   // (logged) so the caller's next step can't hang on a stop error.
   return new Promise((resolve) => {
@@ -1869,7 +1802,7 @@ function stopAgentAwaited() {
 // Poll until child.on('exit') has cleared the in-process supervisor handle --
 // i.e. the OS process REALLY died and Node reaped it (the exit handler nulls
 // agentChild). This is the AUTHORITATIVE "supervisor is gone" signal, more
-// reliable than run.sh stop's exit code, which is 0 even when it killed nothing
+// reliable than the stop verb's exit code, which is 0 even when it killed nothing
 // (missing/stale PIDFILE -- Codex red-team, 2026-07-09). On timeout it does NOT
 // null defensively: a still-alive agentChild means the stop did NOT kill it, and
 // nulling would (a) let a restart double-spawn a second supervisor on one
@@ -1893,17 +1826,17 @@ function waitForAgentHandleCleared(timeoutMs = 3000, stepMs = 50) {
 
 // NOTE on intentionalStopMode (accepted limitation): the flag is global and
 // reason-blind, so a REAL crash inside a stop/restart's own window (flag set ->
-// run.sh stop actually kills) is consumed as intentional rather than stamped
+// the stop actually kills) is consumed as intentional rather than stamped
 // 'failed'. Low harm and self-correcting: the user's intent (stop/restart)
 // matches the outcome anyway, and for a crash-LOOP the flag is single-shot --
 // the very next crash (flag already null) surfaces as 'failed'.
 //
-// Concurrency (Mino 2026-07-09, YAGNI): these actions are deliberately NOT
+// Concurrency (the owner 2026-07-09, YAGNI): these actions are deliberately NOT
 // serialized server-side. Overlapping control actions (a user mashing stop/
 // start/model) are prevented at the source -- the control-panel UI disables its
 // buttons while an action is in flight. The single-action safety that IS load-
 // bearing lives right here: each action AWAITS CONFIRMED process death before
-// respawning, because run.sh stop's pkill is `--name` only (model-agnostic) and
+// respawning, because the stop's sweep matches the lane by script path and
 // would kill a too-early replacement even on a lone click. Confirmed-death also
 // makes the respawn strictly ordered after the old child's exit, so no stale-
 // exit-vs-new-handle race exists to guard against.
@@ -2107,7 +2040,7 @@ async function proxyHealth() {
 // mutate its agent-child state, so they can't live in http-server.cjs -- it
 // calls back into them.
 // resolveClaudeBin injected for the MCP-connector intercept (IA v0.0.9,
-// 춘식3 design): http-server's own resolveBin is FIXED-locations-only and
+// internal design): http-server's own resolveBin is FIXED-locations-only and
 // cannot find the bundled/native claude, but THIS resolver already locates
 // the exact binary the agent itself spawns (bundled claude-cli in packaged
 // builds, PATH claude in dev). The connector-auth child reads the user's
@@ -2121,7 +2054,7 @@ const agentControls = {
   proxyHealth,
   spawnInfo: () => lastSpawnInfo,
   resolveClaudeBin: () => { const r = resolveClaudeBin(); return r ? r.bin : null },
-  // Install-assist info (2026-08-04, Mino "2로 가자"): the wizard's CLI
+  // Install-assist info (2026-08-04, the owner "2로 가자"): the wizard's CLI
   // preflight renders install command / plan requirement / license link from
   // this -- data only, the install itself runs via startClaudeCliInstall.
   claudeCliInfo: () => ensureClaudeCli(),
@@ -2130,7 +2063,7 @@ const agentControls = {
 // ── boot sequence ────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
   try {
-    // TCC folder-permission trigger (Mino directive, 2026-07-05): actually
+    // TCC folder-permission trigger (the owner directive, 2026-07-05): actually
     // touch Documents/Downloads/Desktop on this very first post-ready tick,
     // BEFORE the onboarding window even opens, so macOS's native TCC prompts
     // for all 3 folders fire at first launch = onboarding entry (not
@@ -2186,19 +2119,22 @@ app.whenReady().then(async () => {
     app, Notification: require('electron').Notification, BrowserWindow, DATA_HOME, log,
   })
 
-  app.on('activate', () => {
-    // macOS convention: clicking the dock icon with no windows open
-    // re-shows one. Not exercised by this headless spike, kept for
-    // correctness since electron-builder targets mac.
+  // Re-open the window when the app is resident but windowless. TWO callers,
+  // one per platform convention: mac's dock click ('activate'), and win/linux's
+  // "launch it again" ('second-instance', wired at the top of this file) --
+  // which is the ONLY way back in on those platforms now that closing the last
+  // window no longer quits (see window-all-closed).
+  //
+  // REUSE the running server. This used to call startOnboardingServer() again
+  // on every dock click: nothing ever closes the previous one, so each click
+  // leaked a bound, fully-authenticated listener on a new ephemeral port,
+  // re-ran the whole boot prelude (re-seeding config, rewriting .mcp.json,
+  // re-rendering the harness), and rotated the askpass token out from under
+  // the pages already open. It also re-entered the boot-seed failure path with
+  // fatal() as its catch, so a config that went bad after boot killed the app
+  // on a dock click.
+  reopenMainWindow = () => {
     if (BrowserWindow.getAllWindows().length !== 0) return
-    // REUSE the running server. This used to call startOnboardingServer()
-    // again on every dock click: nothing ever closes the previous one, so each
-    // click leaked a bound, fully-authenticated listener on a new ephemeral
-    // port, re-ran the whole boot prelude (re-seeding config, rewriting
-    // .mcp.json, re-rendering the harness), and rotated the askpass token out
-    // from under the pages already open. It also re-entered the boot-seed
-    // failure path with fatal() as its catch, so a config that went bad after
-    // boot killed the app on a dock click.
     if (onboardingServerUrl) {
       // Through /boot again: the Electron session usually still holds the
       // cookie, but a fresh session partition (or cleared storage) must not
@@ -2211,29 +2147,38 @@ app.whenReady().then(async () => {
         onboardingServerUrl = url
         createMainWindow(new URL(bootPathFor('/'), url).href)
       })
-      .catch((err) => fatal('activate: failed to reopen window', err))
-  })
+      .catch((err) => fatal('reopen: failed to reopen window', err))
+  }
+
+  app.on('activate', reopenMainWindow)
 })
 
 app.on('window-all-closed', () => {
-  // macOS convention: apps stay resident after last window closes. Once
-  // this app is actually supervising the claude CLI + proxy as background
-  // daemons (P1), window-all-closed should NOT quit those daemons --
-  // that's a menu-bar-app pattern, not implemented in this spike (see
-  // task note: "dock/menu-bar presence is a plus, not required").
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
+  // Deliberately EMPTY on every platform (design-0023 P3 #6). This used to
+  // app.quit() on non-darwin, which ran before-quit and tore the agent down:
+  // closing the window STOPPED THE AGENT on Windows and Linux but not on mac
+  // -- the same gesture with two different meanings, and the one platform
+  // where an agent is most likely to be left running overnight was the one
+  // that killed it. The app supervises a background agent; the window is a
+  // control panel for it, not its life support.
+  //
+  // Getting back in: mac clicks the dock ('activate'); win/linux launch the
+  // app again ('second-instance' -> reopenMainWindow). Quitting for real is
+  // Cmd/Ctrl-Q or File > Quit from the default menu, which goes through the
+  // graceful-shutdown path below and stops the agent on purpose.
+  //
+  // Still owed (windows-port-scoping.md:261): a tray icon, so a windowless
+  // resident app is VISIBLE as one on win/linux. Not P3's scope.
 })
 
-// Graceful shutdown (v0.0.4, Mino 2026-07-13 19:33 directive): quit no
+// Graceful shutdown (v0.0.4, the owner 2026-07-13 19:33 directive): quit no
 // longer kills the agent mid-thought. First quit attempt writes
 // DATA_HOME/.shutdown-request; channel.mjs's watcher injects a [SYSTEM]
 // turn telling the agent to flush checkpoint/session-notes/memory and touch
 // .shutdown-ack; we proceed on ack or on the HARD timeout -- a hung agent
 // must never hold quit hostage. (history: docs/HISTORY.md)
 // Only attempted when agentChild is non-null: an ADOPTED supervisor (app
-// reinstalled over a live agent, run.sh "already running" path) has
+// reinstalled over a live agent, the "already running" path) has
 // agentChild == null and takes the immediate-kill path exactly as before --
 // no regression, just no grace (v1 scope).
 const SHUTDOWN_REQUEST_PATH = path.join(DATA_HOME, '.shutdown-request')
@@ -2252,7 +2197,7 @@ try { fs.unlinkSync(SHUTDOWN_REQUEST_PATH) } catch { /* absent = normal boot */ 
 try { fs.unlinkSync(SHUTDOWN_ACK_PATH) } catch { /* absent = normal boot */ }
 
 async function requestAgentShutdownGrace() {
-  // No-acker fast path (0.1.17, magi-win live receipt 2026-08-18): the ack
+  // No-acker fast path (0.1.17, the Windows box live receipt 2026-08-18): the ack
   // comes from a [SYSTEM] turn the CHANNEL process injects after seeing
   // .shutdown-request — so when no channel process is alive (lane dead or
   // mid-respawn at quit time), nothing can ever ack and the full grace
@@ -2296,7 +2241,7 @@ async function requestAgentShutdownGrace() {
 // token, PIDFILE now stale from this process's perspective since the
 // in-memory `agentChild` reference is gone). before-quit fires once per
 // quit attempt, before windows close; the kill path stays synchronous
-// signal-and-continue (SIGTERM is fire-and-forget, and run.sh's own
+// signal-and-continue (SIGTERM is fire-and-forget, and the supervisor's own
 // `trap ... TERM INT` handler removes the PIDFILE on its side). The
 // graceful branch above it defers the quit ONCE via preventDefault, then
 // re-enters with gracefulQuitDone set.

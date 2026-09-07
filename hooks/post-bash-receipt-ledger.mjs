@@ -27,13 +27,14 @@
 
 import { readFileSync, appendFileSync, mkdirSync, statSync, unlinkSync } from 'node:fs'
 import path from 'node:path'
-import os from 'node:os'
+import { resolveDataHome } from '../data-home.cjs' // one resolver: AGENT_DATA_HOME || MEM || ~/Documents/Scheherazade
 
 // Kill switch (product-prefixed, mirrors SCHEHERAZADE_RUMINATION_GATE).
 if (process.env.SCHEHERAZADE_RECEIPT_LEDGER === '0') process.exit(0)
 
-// DATA_HOME resolution matches channel.mjs / run.sh / the gate pack.
-const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', 'Scheherazade')
+// DATA_HOME resolution comes from data-home.cjs (channel.mjs / the
+// supervisor / the gate pack all share it).
+const DATA_HOME = resolveDataHome()
 const GATES_DIR = path.join(DATA_HOME, '.gates')
 const LEDGER_PATH = path.join(GATES_DIR, 'receipt-ledger.jsonl')
 const CURSOR_PATH = path.join(GATES_DIR, 'receipt-ledger.cursor')

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // pre-ask-user-question-redirect.mjs -- PreToolUse hook, AskUserQuestion only.
 //
-// WHY THIS HOOK EXISTS (v0.0.41, Mino live repro 2026-08-04): the agent asked
+// WHY THIS HOOK EXISTS (v0.0.41, the owner live repro 2026-08-04): the agent asked
 // "which mail account should the briefing use?" via AskUserQuestion, which
 // renders a numbered picker IN THE TERMINAL and blocks on Enter. In a channel
 // session the person never sees that terminal -- from the in-app chat the

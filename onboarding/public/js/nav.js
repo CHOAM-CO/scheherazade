@@ -7,7 +7,7 @@
 // 설정은 의도" -- read-only status + the command-shaped actions (start/stop/
 // restart/Discord open) + the mute-revert banner live here; the model/effort
 // SELECT config moved to settings.js. Same endpoints, same polling cadence,
-// same copy as before (still eng placeholder pending Mino's copy-track
+// same copy as before (still eng placeholder pending the owner's copy-track
 // localization pass -- unchanged by this move, just relocated).
 //
 // Also the new single home for window.api()/window.showToast(), previously
@@ -104,7 +104,7 @@
   // shipped as page titles (memoryPane.title / settings.title / the new
   // connectors.title) rather than inventing new ones. Active tab is derived
   // from the URL, never hand-set, so it can't drift from reality.
-  // IA v2 (2026-08-13, Mino "너무 잡다하고 어디에 뭐있는지 모르겠음 ... GUI 붙어있는
+  // IA v2 (2026-08-13, the owner "너무 잡다하고 어디에 뭐있는지 모르겠음 ... GUI 붙어있는
   // 에이전트들 참고해서 대공사"): 7 flat tabs read as an undifferentiated pile.
   // Collapsed to FOUR daily surfaces -- Chat (talk), Memory (what it remembers),
   // Settings (how it's set up), Logs (debug) -- with the config-family pages
@@ -115,13 +115,13 @@
   const TABS = [
     { id: 'chat', href: '/chat', label: NAV.tabs.chat },
     // Model & Providers promoted OUT of the Settings cluster to a primary
-    // tab between Chat and Memory (Mino 08-24 01:16) -- with the model/
+    // tab between Chat and Memory (the owner 08-24 01:16) -- with the model/
     // effort quick-switch living in the chat composer area, the full picker
     // is a daily surface now, not config-family.
     { id: 'connectors', href: '/connectors', label: NAV.subModel },
     { id: 'memory', href: '/memory', label: NAV.tabs.memory },
     { id: 'settings', href: '/settings', label: NAV.tabs.settings },
-    // logs LAST, deliberately low-key (Mino 07-16: "버튼 어딘가에 짱박아놓고")
+    // logs LAST, deliberately low-key (the owner 07-16: "버튼 어딘가에 짱박아놓고")
     // -- a dev/debug surface, not a daily destination.
     { id: 'logs', href: '/logs', label: NAV.tabs.logs },
   ]
@@ -191,7 +191,7 @@
         '<div class="mute-banner-text" id="nav-update-text"></div>' +
         '<button type="button" id="nav-update-open"></button>' +
       '</div>' +
-      // turn-error banner (2026-08-04, Mino "클로드도 동작안함. 인증
+      // turn-error banner (2026-08-04, the owner "클로드도 동작안함. 인증
       // 맛탱이간듯?"): when the model call itself fails (429 limit, 401
       // auth), the lane used to log to a file nobody reads and the UI
       // showed a healthy green "Running". This strip carries the actual
@@ -321,7 +321,7 @@
 
   function renderAgentStatus(state, status) {
     const line = $('nav-status-line')
-    // Healthy = dot only (Mino 08-20 21:26 "Running 빼고 초록색 인디케이터만"):
+    // Healthy = dot only (the owner 08-20 21:26 "Running 빼고 초록색 인디케이터만"):
     // same silence-when-normal rule as the chat status row. Every OTHER state
     // keeps its word — orange alone can't say connecting-vs-idle, grey alone
     // can't say stopped-vs-blank, and color-only fails colorblind users.

@@ -15,7 +15,7 @@
 // the user-facing display name collected in the wizard (Step 2, Korean by
 // default: "세헤라자드"). Two reasons this is NOT the same field:
 //   1. setup.sh's AGENT_NAME feeds directly into filesystem paths
-//      ($HOME/Documents/$AGENT_NAME) and a shell PKILL_PATTERN in run.sh --
+//      ($HOME/Documents/$AGENT_NAME) and the supervisor's own reaper pattern --
 //      arbitrary user text (Korean, spaces, shell metacharacters) is not
 //      safe there. (That's setup.sh's own CLI-launcher deployment path --
 //      separate from this file's DATA_HOME, see below.)
@@ -53,7 +53,12 @@ const OLLAMA_CLOUD_TIMEOUT_MS = 15_000
 // any FUTURE external-binary spawn (Codex security review, 2026-07-07):
 // resolve via resolveBin() below and use a FIXED argv -- the LOGIN_SPECS
 // table is the single existing site.
-const { spawn, execFile, execFileSync } = require('node:child_process')
+// design-0023 P4: this file no longer spawns anything directly. Every
+// external-binary call goes through HOST.spawnBin / HOST.execFileBin
+// (onboarding/platform.cjs), which owns the .cmd-needs-a-shell rule, the
+// detached/shell incompatibility on Windows, windowsHide, and the mandatory
+// 'error' listener -- five hand-copies of the first, three of the last, and
+// two call sites (the MCP pair) that had neither.
 
 // Kill a detached child AND its descendants. Negative-pid process-group signals
 // do not exist on Windows, so every group-kill below threw straight into its
@@ -61,13 +66,17 @@ const { spawn, execFile, execFileSync } = require('node:child_process')
 // children outlived app quit, and an orphaned OAuth flow can still finish its
 // exchange and write credentials after the app is gone -- the exact Codex
 // finding #3 these call sites exist to prevent. (Found 2026-08-03.)
-function killTree(pid, signal) {
-  if (process.platform === 'win32') {
-    execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
-    return
-  }
-  process.kill(-pid, signal)
-}
+const { killTree } = require('../proc.cjs')
+
+// ── the host capability table (design-0023 P4) ──────────────────────────
+// Every `process.platform === 'darwin'` / `!== 'win32'` test that used to
+// live in this file is a lookup on HOST now. The ones this file owned:
+// the calendar MCP registration, the safeStorage refusal wording, the
+// claude-cli keychain probe, resolveBin's candidate list, the claude
+// installer's platform gate, and readCliSessionToken. Each of them had
+// Linux as an unnamed else-branch; see onboarding/platform.cjs's header.
+const platformTable = require('./platform.cjs')
+const HOST = platformTable.host()
 
 // The autonomous cycle's meter and decision logic. The SAME modules the
 // channel.mjs watcher enforces against -- the settings page must not compute
@@ -78,12 +87,16 @@ const autonomyCycle = require(path.join(__dirname, '..', 'autonomy', 'cycle.cjs'
 const { LOGIN_PROVIDERS, setLoginStatus, getLoginStatus } = require('./login-status.cjs')
 const logBuffer = require('./log-buffer.cjs') // /api/logs read side; main.cjs owns the write side + sink init
 const attachTopology = require('../attach-topology.cjs') // /api/topology read side (0.1.0 prep); no Electron deps, safe here
-// In-app `claude setup-token` capture. Pure-JS state machine; node-pty is
-// required lazily inside it, so importing this here cannot fail the server
-// boot on a box where the native module did not build.
+// In-app `claude setup-token` capture. Pure-JS state machine, and now a
+// REFUSING one: the pty it drove came from the top-level node-pty dependency,
+// retired 2026-09-07 (design-0023 P2). getSetupTokenSession() injects no
+// spawner, so start() answers 'unsupported' and routes/setup-token.cjs points
+// the caller at /api/claude-login/* -- the in-app loopback OAuth below, which
+// has been the wizard's primary Claude login since 0.2.18, needs no CLI, and
+// stores the same 'claude-subscription' credential.
 const { createSetupTokenSession, killSetupTokenChildOnShutdown } = require('../setup-token-session.cjs')
 
-// Full-scope OAuth capture for the usage gauge (2026-08-13, Mino: the win
+// Full-scope OAuth capture for the usage gauge (2026-08-13, the owner: the win
 // tester's gauge is stuck on HTTP 429 because setup-token's user:inference
 // scope cannot read the usage endpoint). Loopback flow, no native module.
 const {
@@ -102,7 +115,40 @@ let askpassToken = null
 // Electron safeStorage, so it cannot read the ollama key itself) can ask
 // THIS process for a vision stand-in caption -- the key never leaves here.
 let captionToken = null
-const permissionProbes = require('./permission-probes.cjs')
+// Permission probes, bound to THIS host (design-0023 P4). The route bodies in
+// routes/permissions.cjs are deliberately platform-blind -- they call
+// probeAll/probeAutomation and serve DEEP_LINKS -- so the platform selection
+// happens once, here, where HOST already is. Three bindings:
+//   platform     the probe TABLE row to run (darwin/win32/linux). Without it
+//                probeAll falls back to process.platform, which is the same
+//                answer in production but not in a test that injects a host.
+//   safeStorage  the Linux keyring probe's OFFICIAL tier. Electron is
+//                required lazily by getElectron() and this file must stay
+//                loadable outside it (tools/dev-serve-ui.mjs), so the handle
+//                is fetched per call and a failure degrades to the probe's
+//                gdbus heuristic tier rather than throwing into a 500.
+//   DEEP_LINKS   the host's row, not the darwin constant: a Linux status
+//                payload must not carry x-apple.systempreferences: URLs, and
+//                POST /api/permissions/open must 400 for a class this host
+//                has no pane for -- which off macOS is every class.
+const permissionProbesModule = require('./permission-probes.cjs')
+function hostElectronProbeDeps() {
+  try {
+    const { safeStorage } = getElectron()
+    return { safeStorage }
+  } catch {
+    // No Electron (dev server, tests): the probes have honest non-Electron
+    // tiers and an absent dep is 'indeterminate', never a fabricated reading.
+    return {}
+  }
+}
+const permissionProbes = {
+  ...permissionProbesModule,
+  DEEP_LINKS: permissionProbesModule.deepLinksFor(HOST.id),
+  probeAll: (deps) => permissionProbesModule.probeAll({ platform: HOST.id, ...hostElectronProbeDeps(), ...deps }),
+  probeAutomation: (target, deps) => permissionProbesModule.probeAutomation(target, { platform: HOST.id, ...deps }),
+  probeSudoVerified: (deps) => permissionProbesModule.probeSudoVerified({ platform: HOST.id, ...deps }),
+}
 // Fresh-Mac dependency bootstrap (2026-07-07): app-managed download/install
 // of the codex/ollama CLIs into DATA_HOME/bin + sha256 manifest. See
 // bootstrap.cjs's header for the full design (brew-free, 0 admin prompts).
@@ -129,10 +175,10 @@ const AGENT_NAME = 'scheherazade'
 //
 // memory/service.mjs's DB_PATH resolves from this exact same fixed
 // directory now (not AGENT_NAME) -- see its DATA_HOME comment. Its
-// SCHEHERAZADE_MEMORY_DB env override (used by memory/smoke.mjs) still
+// SCHEHERAZADE_MEMORY_DB env override (used by tests/smoke.mjs) still
 // works unchanged.
 //
-// AGENT_DATA_HOME override: channel.mjs and run.sh (MEM=) have always
+// AGENT_DATA_HOME override: channel.mjs and the supervisor (MEM=) have always
 // honored this env var; production is unaffected -- main.cjs passes
 // AGENT_DATA_HOME into the env of the children it spawns, never into its
 // own process.env, and http-server runs inside main. (history: docs/HISTORY.md)
@@ -141,7 +187,9 @@ const AGENT_NAME = 'scheherazade'
 // into the canonical one at boot (see the fold-in block there). The other
 // two fixed resolutions (onboarding/bootstrap.cjs, memory/service.mjs)
 // carry the same name -- change all three together.
-const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', 'Scheherazade')
+const { resolveDataHome, resolveMemoryDb } = require('../data-home.cjs')
+const DATA_HOME = resolveDataHome({ allowMem: false }) // app process: MEM is the lane->hook spelling, never an input here
+const MEMORY_DB_PATH = resolveMemoryDb({ dataHome: DATA_HOME })
 
 // CONFIG_DIR: where every *writable* runtime config file lives -- the same
 // directory as DATA_HOME/memory.db, kept as a separate name below purely
@@ -159,7 +207,7 @@ const AGENT_CONFIG_PATH = path.join(CONFIG_DIR, '.agent-config')
 const ENV_PATH = path.join(CONFIG_DIR, '.env')
 const MCP_JSON_PATH = path.join(CONFIG_DIR, '.mcp.json')
 
-// ── appearance (Appearance tab, 2026-08-05 Mino "어피어런스 탭 만들고") ──
+// ── appearance (Appearance tab, 2026-08-05 the owner "어피어런스 탭 만들고") ──
 // User-tunable look knobs (glass gauge / font / accent). The mapping lives
 // in public/js/appearance-model.js — required HERE too, so the pre-paint
 // <style> the server injects and the browser's live slider apply can never
@@ -222,7 +270,7 @@ function readLivenessMarker() {
 // reported "live" for a broken agent. channel.mjs's writeLivenessMarker()
 // stamps its own process.pid into the marker (see channel.mjs); this checks
 // that pid is actually still alive on this machine before trusting the
-// timestamp at all. Uses the same kill(pid, 0)-probe idiom run.sh's own
+// timestamp at all. Uses the same kill(pid, 0)-probe idiom the supervisor's own
 // is_alive() uses, just from Node -- ESRCH means dead, EPERM means alive but
 // owned by another user (still "alive" for our purposes, just not ours).
 function isPidAlive(pid) {
@@ -305,7 +353,7 @@ function computeAgentStatus() {
   if (proc.state === 'connecting') {
     const connectingSince = Date.parse(proc.since)
     if (Number.isFinite(connectingSince) && Date.now() - connectingSince > TIMEOUT_MS) {
-      // Sleep/wake false-fail fix (2026-08-15, Mino field report): proc.state
+      // Sleep/wake false-fail fix (2026-08-15, the owner field report): proc.state
       // never leaves 'connecting' after a SUCCESSFUL boot -- "live" is derived
       // purely from marker freshness above. So this backstop used to fire for
       // an agent that had been live for HOURS whenever the marker merely went
@@ -366,15 +414,15 @@ const PROVIDERS = ['claude', 'claude-cli', 'claude-subscription', 'chatgpt', 'ol
 // what provider-env.cjs's 'claude-cli' branch arranges.
 const CLAUDE_CLI_CREDENTIALS_PATH = path.join(os.homedir(), '.claude', '.credentials.json')
 
-// Effort allowlist for POST /api/agent/effort (Mino 07-13 click-test item 2).
+// Effort allowlist for POST /api/agent/effort (the owner 07-13 click-test item 2).
 // Values become CLAUDE_CODE_EFFORT_LEVEL in the spawned agent's env via
-// main.cjs -> run.sh:56; run.sh's own fallback default is 'high'.
+// main.cjs -> the supervisor's childEnvExtra; its fallback default is 'high'.
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'max']
 
 // Shared pattern-validation for any model id accepted from the client, no
 // matter which route (POST /api/agent/model and POST /api/agent/custom-
 // provider both write this into MODEL, which becomes `--model <MODEL>`
-// argv at spawn -- run.sh). Extracted to one const (custom-provider
+// argv at spawn -- the supervisor). Extracted to one const (custom-provider
 // addition, 2026-07-25) so the two routes can never drift apart on what
 // counts as a safe model id.
 const MODEL_ID_PATTERN = /^[A-Za-z0-9._:/-]+$/
@@ -514,7 +562,7 @@ function ensureConfigDir() {
 // NOTE for source-text-pinned tests: the BASH_HOOK_PORT / DIET_REMOVED_HOOKS
 // migration regexes, the GAUGE_HOOK migration, and the attach-bootstrap.sh /
 // sudo-askpass.sh render lines now live in THAT file --
-// scripts/test-hooks-port.mjs, test-context-gauge.mjs, and
+// tests/test-hooks-port.mjs, test-context-gauge.mjs, and
 // test-attach-topology.mjs read its raw source.
 const harnessRender = require('./harness-render.cjs').createHarnessRender({
   log, toUnpackedPath, readAgentConfig, ensureConfigDir,
@@ -610,7 +658,7 @@ function writeAgentConfig(fields) {
   const merged = { ...readAgentConfig(), ...fields }
   const lines = Object.entries(merged).map(([k, v]) => `${k}=${shellQuote(v)}`)
   // Atomic (tmp + rename), NOT a plain writeFileSync (red-team 2026-07-13).
-  // This file has readers in OTHER processes -- run.sh sources it at spawn, and
+  // This file has readers in OTHER processes -- the supervisor parses it at spawn, and
   // hooks/stop-reply-guard.mjs reads MODEL out of it to stamp the strike ledger.
   // writeFileSync truncates first, so a reader landing inside that window sees a
   // half-written or empty config. For the hook that means a strike attributed to
@@ -787,6 +835,20 @@ function ensureMcpJsonAgentName() {
   // load): this function runs on every boot AND on every channel switch
   // (POST /api/channels/switch calls it before restarting the agent), so
   // the entry always tracks the currently-picked backend.
+  // Data-home contract for every MCP child (design-0023 P3). cwd alone was
+  // load-bearing before: channel.mjs resolved its home from cwd/AGENT_DATA_HOME
+  // and memory/service.mjs from a hardcoded literal, so a user with a moved
+  // AGENT_DATA_HOME got a channel in the new home and a database in the old
+  // one (read-D §6 #3). Both paths now ride in the row's env, which the claude
+  // lane merges over the inherited env and the dsh lane emits verbatim into
+  // its patch (dsh-lane.mjs mcpRowsFromClaudeConfig) -- one seam, both lanes.
+  // No secret ever goes here (see the BOT-TOKEN SEAM note below).
+  const MCP_CHILD_ENV = {
+    AGENT_NAME,
+    ELECTRON_RUN_AS_NODE: '1',
+    AGENT_DATA_HOME: DATA_HOME,
+    SCHEHERAZADE_MEMORY_DB: MEMORY_DB_PATH,
+  }
   const KNOWN_SERVERS = {
     'agent-channel': activeChannelScriptPath(),
     memory: MEMORY_SERVER_SCRIPT_PATH,
@@ -797,7 +859,7 @@ function ensureMcpJsonAgentName() {
     servers[name].command = process.execPath
     servers[name].args = [KNOWN_SERVERS[name]]
     servers[name].cwd = DATA_HOME
-    servers[name].env = { ...(servers[name].env || {}), AGENT_NAME, ELECTRON_RUN_AS_NODE: '1' }
+    servers[name].env = { ...(servers[name].env || {}), ...MCP_CHILD_ENV }
   }
   // If either expected server entry is missing (fresh clone before any
   // setup.sh run), seed it with the same corrected shape.
@@ -806,7 +868,7 @@ function ensureMcpJsonAgentName() {
       command: process.execPath,
       args: [activeChannelScriptPath()],
       cwd: DATA_HOME,
-      env: { AGENT_NAME, ELECTRON_RUN_AS_NODE: '1' },
+      env: { ...MCP_CHILD_ENV },
     }
   }
   if (!servers['memory']) {
@@ -814,18 +876,18 @@ function ensureMcpJsonAgentName() {
       command: process.execPath,
       args: [MEMORY_SERVER_SCRIPT_PATH],
       cwd: DATA_HOME,
-      env: { AGENT_NAME, ELECTRON_RUN_AS_NODE: '1' },
+      env: { ...MCP_CHILD_ENV },
     }
   }
   // darwin only: the calendar server is osascript + macOS Calendar all the way
   // down (calendar/read.cjs). Registering it on Windows handed the agent a tool
   // that can only ever fail, which is worse than not having one.
-  if (!servers['calendar'] && process.platform === 'darwin') {
+  if (!servers['calendar'] && HOST.calendarMcp) {
     servers['calendar'] = {
       command: process.execPath,
       args: [CALENDAR_SERVER_SCRIPT_PATH],
       cwd: DATA_HOME,
-      env: { AGENT_NAME, ELECTRON_RUN_AS_NODE: '1' },
+      env: { ...MCP_CHILD_ENV },
     }
   }
   // BUG 3 (bot-token seam, security review 2026-07-03): DISCORD_BOT_TOKEN
@@ -900,12 +962,8 @@ function storeProviderKey(provider, key) {
       // and telling a Windows user their macOS Keychain is unreachable is the
       // same class of visibly-false sentence as the "Claude Code is not
       // installed" one in main.cjs -- it teaches them to stop reading.
-      'safeStorage encryption unavailable on this system (' +
-        (process.platform === 'darwin'
-          ? 'macOS Keychain not reachable'
-          : process.platform === 'win32'
-            ? 'Windows DPAPI not reachable'
-            : 'no OS credential store reachable -- on Linux this needs a running keyring, e.g. gnome-keyring or kwallet') +
+      `safeStorage encryption unavailable on this system (${HOST.credStoreName} not reachable` +
+        (HOST.isLinux ? ' -- this needs a running keyring, e.g. gnome-keyring or kwallet' : '') +
         ') -- refusing to store the key in plaintext.'
     )
   }
@@ -1087,7 +1145,7 @@ async function validateProviderKey(provider, key, opts = {}) {
     return checkLocalLiveness(`http://localhost:${portResult.port}`, 'codex-as-api proxy')
   }
   if (provider === 'ollama') {
-    // Ollama CLOUD API-key mode (2026-08-04, Mino "ollama -> API키"; the
+    // Ollama CLOUD API-key mode (2026-08-04, the owner "ollama -> API키"; the
     // previous local-daemon check lived here -- see git history. The daemon's
     // port-answers-so-"connected" lie is what a real external tester paid
     // for the same day). Verdict = one authenticated 1-token POST to
@@ -1118,7 +1176,7 @@ async function validateProviderKey(provider, key, opts = {}) {
     // Same signin-era ':cloud' tag normalization the spawn env applies
     // (provider-env.cjs) -- validate must judge the NAME THE LANE WILL SEND,
     // not the raw config string, or an old config reads as broken when the
-    // runtime would actually work (Mino field receipt 2026-08-04 17:37).
+    // runtime would actually work (the owner field receipt 2026-08-04 17:37).
     const wanted = normalizeOllamaCloudModel(wantedRaw)
     const normNote = wantedRaw && wanted !== wantedRaw ? ` (checked as "${wanted}" -- the local ':cloud' tag suffix does not exist on ollama.com and is stripped at spawn too)` : ''
     // Probe with a model the catalog vouches for whenever the wanted one
@@ -1161,7 +1219,7 @@ async function validateProviderKey(provider, key, opts = {}) {
       if (wanted && modelPresent === false) {
         // Name the truncation: showing 8 of N unlabeled reads as "this IS the
         // catalog" -- that misread cost a wrong "glm-5.2 is gone" report on
-        // 2026-08-19 (Mino caught it against the live library page).
+        // 2026-08-19 (the owner caught it against the live library page).
         return { ok: true, reachable: true, modelPresent: false, detail: `ollama.com accepted the key, but model "${wanted}" is not in its model list (${names.length} available, first 8: ${names.slice(0, 8).join(', ')}). Check the name on ollama.com.${normNote}` }
       }
       return { ok: true, reachable: true, modelPresent, detail: (wanted ? `ollama.com accepted the key and model "${wanted}" answered.` : 'ollama.com accepted the key.') + normNote }
@@ -1426,7 +1484,7 @@ async function validateDiscordToken(token) {
 // to enumerate the candidates and let them pick. validateDiscordToken stays
 // verbatim for the onboarding path; this is a separate reader, not a rewrite.
 //
-// fetchImpl is injectable for tests (scripts/test-discord-reconnect.mjs
+// fetchImpl is injectable for tests (tests/test-discord-reconnect.mjs
 // drives every branch with fixture responses -- no live Discord API in CI).
 // Guild fan-out is capped; the cap is REPORTED (truncated flag), never
 // silent (no-silent-caps rule).
@@ -1605,7 +1663,7 @@ function channelBackendReadiness() {
     },
     slack: {
       // Tokens ALONE are a complete slack config since DM-default mode
-      // (2026-08-04, Mino): no home channel means the conversation is the
+      // (2026-08-04, the owner): no home channel means the conversation is the
       // bot's DM. A picked channel still shows as `home` when present.
       configured: Boolean(readOrUnconfigured(readSlackBotToken) && readOrUnconfigured(readSlackAppToken)),
       home: cfg.SLACK_HOME_CHANNEL_NAME || cfg.SLACK_HOME_CHANNEL_ID || 'DM',
@@ -1747,6 +1805,19 @@ async function getSessionEvents() {
 }
 
 // ── static file serving ──────────────────────────────────────────────────
+// Escape a string for use inside a double-quoted HTML attribute. The
+// capability JSON below carries `"` on every key, and `&`/`<` would let a
+// future field close the tag. Five entities, no HTML parser, same posture as
+// the literal-<head>-replace this file already documents.
+function htmlAttr(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+}
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -1806,12 +1877,18 @@ function serveStatic(req, res, urlPath) {
     // Platform rides along in the same injection. The UI used to be written
     // for macOS only -- "this Mac", "Run claude in Terminal", a Full Disk
     // Access card and a permissions panel that are macOS concepts with no
-    // Windows equivalent. Mino hit all of it on the first Windows install
+    // Windows equivalent. the owner hit all of it on the first Windows install
     // (2026-08-03 23:56). The renderer cannot see process.platform, so it
     // gets told. copy.js reads this before it builds any string.
+    // host-capabilities rides beside host-platform (design-0023 P4). The
+    // page needs the ANSWERS, not the platform id, at FIRST PAINT: copy.js
+    // and every render gate used to re-derive "is this a Mac?" from the id
+    // and get Linux wrong three different ways. Same JSON GET /api/config
+    // serves, so the pre-fetch page and the post-fetch page cannot disagree.
+    const capsJson = htmlAttr(JSON.stringify(HOST.clientView()))
     let injected = html.replace(
       '<head>',
-      `<head>\n    <meta name="onboard-token" content="${SERVER_TOKEN}">\n    <meta name="host-platform" content="${process.platform}">`
+      `<head>\n    <meta name="onboard-token" content="${SERVER_TOKEN}">\n    <meta name="host-platform" content="${HOST.id}">\n    <meta name="host-capabilities" content="${capsJson}">`
     )
     // Appearance overrides ride the SAME serve (Appearance tab, 2026-08-05):
     // injected before </head> so they land AFTER app.css's <link> and win
@@ -1871,7 +1948,7 @@ const LOGIN_SPECS = {
     artifact: () => path.join(os.homedir(), '.codex', 'auth.json'),
     installHint: 'codex CLI가 없습니다. https://github.com/openai/codex 에서 설치 후 다시 시도해주세요.',
   },
-  // 'ollama' REMOVED 2026-08-04 (Mino: "ollama -> API키"): its connect method
+  // 'ollama' REMOVED 2026-08-04 (the owner: "ollama -> API키"): its connect method
   // is now an ollama.com API-key paste stored via the same credential plumbing
   // as claude BYOK (see provider-env.cjs's ollama row + validateProviderKey's
   // ollama branch). No spec here means the login routes reject it and the
@@ -1881,11 +1958,11 @@ const LOGIN_SPECS = {
   // false-"connected" a real external tester hit the same day.
 }
 
-// ── MCP connector OAuth intercept (IA v0.0.9, 춘식3 design + Idea review) ──
+// ── MCP connector OAuth intercept (IA v0.0.9, an internal design + review) ──
 // In-app authorization of claude.ai connectors (Gmail/Calendar/Atlassian/…):
 // spawn `claude mcp login --no-browser "claude.ai <name>"`, capture the
 // authorize URL it prints to stdout, hand it to the UI for the user to open.
-// The user never touches a terminal (Mino constraint: non-programmers).
+// The user never touches a terminal (the owner constraint: non-programmers).
 //
 // Distinct from LOGIN_SPECS (chatgpt/ollama), which have static keys, fixed
 // argv, and a LOCAL artifact. Connectors have dynamic names, a name in argv,
@@ -1905,13 +1982,13 @@ const LOGIN_SPECS = {
 // proxy. connectorLaneWarning() drives the UI to say so vs a dead button.
 const MCP_CONNECTOR_SPEC = {
   argv: (connectorName) => ['mcp', 'login', '--no-browser', `claude.ai ${connectorName}`],
-  // Fix #1 (춘식3 counter-pass, Mino 07-14 re-flag): the query string is
+  // Fix #1 (a counter-pass, the owner 07-14 re-flag): the query string is
   // MANDATORY. The real authorize URL carries `?product_surface=sdk-cli`
   // and WITHOUT it the approval page does not appear, so the regex requires
   // both the query AND that param -- a bare .../mcpsrv_x with no query is a
   // capture MISS, not a match. Origin is pinned to https://claude.ai
   // literally, so a captured string can only ever be a claude.ai authorize
-  // endpoint (Idea hardening #3; the child is our own claude, but defense in
+  // endpoint (red-team hardening #3; the child is our own claude, but defense in
   // depth is cheap here).
   urlRegex: /https:\/\/claude\.ai\/api\/organizations\/[\w-]+\/mcp\/start-auth\/mcpsrv_[\w]+\?[^\s]*product_surface=sdk-cli[^\s]*/,
   installHint: 'claude 실행 파일을 찾을 수 없습니다. 앱을 다시 설치해주세요.',
@@ -2052,7 +2129,7 @@ function parseMcpConnectorList(text) {
 }
 
 // Which providers have a usable credential/auth artifact RIGHT NOW.
-// (post-onboarding multi-provider unlock, Mino 07-13 click-test item 3:
+// (post-onboarding multi-provider unlock, the owner 07-13 click-test item 3:
 // "인증키 있으면 Model Dropdown에서 셀렉 가능하게"). Rides along on GET
 // /api/config as camelCase `availableProviders`, and gates the provider
 // field of POST /api/agent/model server-side. Detection mirrors what spawn
@@ -2083,7 +2160,7 @@ function computeAvailableProviders() {
   try {
     if (fs.existsSync(CLAUDE_CLI_CREDENTIALS_PATH)) {
       out.push('claude-cli')
-    } else if (process.platform === 'darwin') {
+    } else if (HOST.cliCredentialKeychain) {
       // macOS CLI logins live in the login keychain, not the JSON file --
       // without this branch the found-login card NEVER shows on a typical
       // Mac (0.2.3 E2E find, 2026-08-19). Existence-only stays true to the
@@ -2181,38 +2258,19 @@ const loginStarting = { chatgpt: false, ollama: false }
 //      env-controlled.
 // A dev box with the CLI in some custom prefix can symlink it into
 // DATA_HOME/bin; consumer installs get it there via bootstrap.
+// design-0023 P4: the candidate LIST moved to onboarding/platform.cjs so
+// there is one per-platform answer instead of a mac list, a win list, and no
+// Linux list at all. The posture above is unchanged and is restated in that
+// file's header -- fixed absolute locations, no PATH walk (platform.cjs's
+// resolveBin takes an explicit `allowPath` that nothing here passes).
+//
+// What the move FIXED: the non-win arm was `[DATA_HOME/bin, /opt/homebrew/bin,
+// /usr/local/bin]`, so on Linux `codex login` reported cli_missing on every
+// apt (/usr/bin), npm (~/.npm-global/bin), snap (/snap/bin) and
+// installer-script (~/.local/bin) install -- i.e. on essentially every Linux
+// box, while telling the user their CLI was not installed.
 function resolveBin(name) {
-  // Same FIXED-locations-only posture on both platforms (no PATH walk --
-  // the Codex-review reasoning above is platform-independent). Win list
-  // (win-port Phase 2, UNVERIFIED on magi-win): DATA_HOME/bin is the
-  // app-managed bootstrap dir on both platforms; the Ollama entry is its
-  // installer's default user-scope location (harmlessly absent for other
-  // names, same shape as probing /opt/homebrew/bin/<name> on mac).
-  const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
-  const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')
-  const fixed = process.platform === 'win32'
-    ? [
-        path.join(DATA_HOME, 'bin', `${name}.exe`),
-        // Codex standalone installer (OpenAI's own MSI/setup, verified on magi-win)
-        path.join(localAppData, 'Programs', 'OpenAI', 'Codex', 'bin', `${name}.exe`),
-        // npm global install (.cmd shim — needs shell:true in spawn, see below)
-        path.join(appData, 'npm', `${name}.cmd`),
-        path.join(localAppData, 'Programs', 'Ollama', `${name}.exe`),
-      ]
-    : [
-        path.join(DATA_HOME, 'bin', name),
-        `/opt/homebrew/bin/${name}`,
-        `/usr/local/bin/${name}`,
-      ]
-  for (const candidate of fixed) {
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK)
-      return candidate
-    } catch {
-      // not here, keep looking
-    }
-  }
-  return null
+  return HOST.resolveBin(name)
 }
 
 function clearLoginChild(provider) {
@@ -2233,10 +2291,11 @@ function probeAlreadyLoggedIn(provider, binPath) {
     return Promise.resolve(fs.existsSync(spec.artifact()))
   }
   return new Promise((resolve) => {
-    // .cmd shims (npm global bin on Windows) need shell:true for execFile too
-    const opts = { timeout: LOGIN_PROBE_TIMEOUT_MS }
-    if (binPath.endsWith('.cmd')) opts.shell = true
-    execFile(binPath, spec.probe.argv, opts, (err) => resolve(!err))
+    // .cmd/.bat shims (npm global bin on Windows) need shell:true for
+    // execFile too -- HOST.execFileBin is the one owner of that rule now
+    // (design-0023 P4); this used to be one of five hand-copies, two of
+    // which (the MCP pair below) did not have it at all.
+    HOST.execFileBin(binPath, spec.probe.argv, { timeout: LOGIN_PROBE_TIMEOUT_MS }, (err) => resolve(!err))
   })
 }
 
@@ -2283,12 +2342,22 @@ async function startProviderLoginLocked(provider, { force }) {
   setLoginStatus(provider, 'running', null, `${spec.bin} ${spec.argv.join(' ')} started -- complete the flow in your browser`)
   log(`login shell-out: spawning ${binPath} ${spec.argv.join(' ')} (provider=${provider}, timeout=${LOGIN_TIMEOUT_MS}ms)`)
   // .cmd shims (npm global bin on Windows) need shell:true -- Node's spawn
-  // cannot exec a .cmd directly without it. Exe and unix binaries don't.
-  const needsShell = binPath.endsWith('.cmd')
-  const child = spawn(binPath, spec.argv, {
-    detached: !needsShell, // own pgroup -> group-SIGTERM reaps browser-opener grandchildren too (detached is incompatible with shell:true on Windows)
-    shell: needsShell,
+  // cannot exec a .cmd directly without it -- and detached is incompatible
+  // with shell:true there, so the own-pgroup request is dropped exactly on
+  // that path. Both rules live in HOST.spawnBin now (design-0023 P4), which
+  // also guarantees the 'error' listener below is never the only thing
+  // standing between a spawn failure and main.cjs's uncaughtException.
+  const child = HOST.spawnBin(binPath, spec.argv, {
+    detached: true, // own pgroup -> group-SIGTERM reaps browser-opener grandchildren too
     stdio: ['ignore', 'pipe', 'pipe'],
+    onError: (err) => {
+      // spawn-level failure (ENOENT raced away, EACCES, ...) -- close may
+      // never fire with a meaningful code.
+      if (getLoginStatus(provider).state === 'running') {
+        setLoginStatus(provider, 'failed', 'unknown', `spawn failed: ${err.message}`)
+      }
+      clearLoginChild(provider)
+    },
   })
   loginChildren[provider] = child
 
@@ -2302,15 +2371,6 @@ async function startProviderLoginLocked(provider, { force }) {
     stderrTail = (stderrTail + chunk.toString()).slice(-400)
   })
   child.stdout.resume() // drain so the child never blocks on a full pipe
-
-  child.on('error', (err) => {
-    // spawn-level failure (ENOENT raced away, EACCES, ...) -- close may
-    // never fire with a meaningful code.
-    if (getLoginStatus(provider).state === 'running') {
-      setLoginStatus(provider, 'failed', 'unknown', `spawn failed: ${err.message}`)
-    }
-    clearLoginChild(provider)
-  })
 
   loginTimers[provider] = setTimeout(() => {
     if (getLoginStatus(provider).state !== 'running') return
@@ -2413,7 +2473,7 @@ function killAllLoginChildren(signal = 'SIGTERM') {
   if (claudeInstallTimer) { clearTimeout(claudeInstallTimer); claudeInstallTimer = null }
 }
 
-// ── Claude Code CLI install-assist (2026-08-04, Mino "2로 가자") ───────────
+// ── Claude Code CLI install-assist (2026-08-04, the owner "2로 가자") ───────────
 // A truly clean machine has no claude CLI, and the app deliberately ships
 // none (no redistribution grant in its LICENSE -- see main.cjs's
 // resolveClaudeBin comment). Until now the fix was a curl one-liner the UI
@@ -2427,7 +2487,7 @@ function killAllLoginChildren(signal = 'SIGTERM') {
 // kill the whole tree, and completion is exit 0 AND the artifact check
 // (resolveClaudeBin() actually finding a binary) -- the same
 // exit-0-plus-artifact bar the login flows use. darwin-only, same
-// MANAGED_INSTALL_SUPPORTED precedent as bootstrap.cjs (Mino locked 07-13):
+// MANAGED_INSTALL_SUPPORTED precedent as bootstrap.cjs (the owner locked 07-13):
 // Windows stays detection-only with a manual command.
 const CLAUDE_INSTALL_TIMEOUT_MS = 300_000 // installer downloads a real binary; login-flow 180s is too tight on slow links
 const CLAUDE_INSTALL_ARGV = ['-c', 'curl -fsSL https://claude.ai/install.sh | bash'] // FIXED -- the exact command the manual instruction shows
@@ -2444,8 +2504,14 @@ function getClaudeInstallStatus() {
 }
 
 function startClaudeCliInstall({ resolveClaudeBin }) {
-  if (process.platform === 'win32') {
-    setClaudeInstallStatus('failed', 'unsupported_platform', 'managed install is mac-only -- run the PowerShell command manually')
+  // design-0023 P4: the gate is "does upstream ship an installer we can run
+  // here?" (HOST.claudeCliInstall), not "is this Windows?". Same answer on
+  // Windows, but it is now the same answer for the same REASON on Linux,
+  // where the curl|bash path is upstream's supported one and used to be
+  // reached only because Linux fell through a win32 test.
+  if (!HOST.claudeCliInstall) {
+    setClaudeInstallStatus('failed', 'unsupported_platform',
+      `no managed installer for this platform -- run the ${HOST.shellName} command manually`)
     return
   }
   if (claudeInstallChild) return // already in flight; status route reports it
@@ -2456,7 +2522,19 @@ function startClaudeCliInstall({ resolveClaudeBin }) {
   setClaudeInstallStatus('running')
   let child
   try {
-    child = spawn('/bin/bash', CLAUDE_INSTALL_ARGV, { detached: true, stdio: ['ignore', 'ignore', 'pipe'] })
+    // /bin/bash is an absolute path, so this is not a resolution question --
+    // it goes through HOST.spawnBin for the 'error'-listener guarantee and
+    // the one detached rule. On a bash-less Linux (Alpine, some Nix profiles)
+    // it still degrades to failed/spawn_failed, never a crash.
+    child = HOST.spawnBin('/bin/bash', CLAUDE_INSTALL_ARGV, {
+      detached: true,
+      stdio: ['ignore', 'ignore', 'pipe'],
+      onError: (err) => {
+        if (claudeInstallTimer) { clearTimeout(claudeInstallTimer); claudeInstallTimer = null }
+        claudeInstallChild = null
+        setClaudeInstallStatus('failed', 'spawn_failed', err.message)
+      },
+    })
   } catch (err) {
     setClaudeInstallStatus('failed', 'spawn_failed', err.message)
     return
@@ -2471,11 +2549,6 @@ function startClaudeCliInstall({ resolveClaudeBin }) {
     try { killTree(claudeInstallChild.pid, 'SIGTERM') } catch { /* already gone */ }
     setClaudeInstallStatus('failed', 'timeout', '설치가 시간 내에 끝나지 않았습니다. 네트워크를 확인하고 다시 시도해주세요.')
   }, CLAUDE_INSTALL_TIMEOUT_MS)
-  child.on('error', (err) => {
-    if (claudeInstallTimer) { clearTimeout(claudeInstallTimer); claudeInstallTimer = null }
-    claudeInstallChild = null
-    setClaudeInstallStatus('failed', 'spawn_failed', err.message)
-  })
   child.on('exit', (code) => {
     if (claudeInstallTimer) { clearTimeout(claudeInstallTimer); claudeInstallTimer = null }
     claudeInstallChild = null
@@ -2502,7 +2575,12 @@ function listMcpConnectors(binPath) {
   return new Promise((resolve) => {
     const childEnv = { ...process.env }
     delete childEnv.ANTHROPIC_API_KEY
-    execFile(binPath, ['mcp', 'list'], { timeout: 15_000, env: childEnv }, (err, stdout) => {
+    // HOST.execFileBin, not bare execFile (design-0023 P4): this call site
+    // never had the .cmd branch the login path has, so an npm-shim `claude`
+    // was an EINVAL on current Node rather than a connector list. Masked
+    // today only because main.cjs's resolveClaudeBin refuses to return a
+    // shim -- a mask, not a fix.
+    HOST.execFileBin(binPath, ['mcp', 'list'], { timeout: 15_000, env: childEnv }, (err, stdout) => {
       // `claude mcp list` exits non-zero if any server is unhealthy, but its
       // stdout still carries the rows we parse -- so we parse stdout
       // regardless of exit code, and only treat a truly empty stdout as a
@@ -2527,14 +2605,18 @@ function startMcpConnectorLogin(name, binPath) {
     // connectors are suppressed (verified 07-14).
     const childEnv = { ...process.env }
     delete childEnv.ANTHROPIC_API_KEY
-    const child = spawn(binPath, MCP_CONNECTOR_SPEC.argv(name), {
+    const child = HOST.spawnBin(binPath, MCP_CONNECTOR_SPEC.argv(name), {
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: childEnv,
+      onError: (err) => {
+        if (getMcpStatus(name).state === 'running') setMcpStatus(name, 'failed', 'unknown', `spawn failed: ${err.message}`)
+        clearMcpLoginChild(name)
+      },
     })
     mcpLoginChildren[name] = child
 
-    // Fix #2 (춘식3): accumulate stdout across chunks. A per-chunk match
+    // Fix #2 (same review): accumulate stdout across chunks. A per-chunk match
     // would drop the URL when it straddles a chunk boundary. Once captured,
     // keep draining (never re-match) so a late chunk can't overwrite it.
     let capturedUrl = ''
@@ -2561,10 +2643,6 @@ function startMcpConnectorLogin(name, binPath) {
       }
     }, LOGIN_TIMEOUT_MS)
 
-    child.on('error', (err) => {
-      if (getMcpStatus(name).state === 'running') setMcpStatus(name, 'failed', 'unknown', `spawn failed: ${err.message}`)
-      clearMcpLoginChild(name)
-    })
     child.on('close', (code) => {
       const st = getMcpStatus(name)
       // url_ready is terminal-good: the deliverable (URL) was captured; the
@@ -2704,7 +2782,7 @@ function createOnboardingServer(onOnboardingComplete, agentControls) {
         // (32-byte random, 0600 endpoint file, checked fail-closed in the
         // route body). The 2026-08-04 token-on-all-GETs hardening swept this
         // route in and silently killed every `sudo -A` with a gate 403 the
-        // helper's curl -f turned into exit 22 (found live 2026-08-05, Mino
+        // helper's curl -f turned into exit 22 (found live 2026-08-05, the owner
         // "sudo + 비밀번호 앱에서 에이전트한테 제대로 못 넘겨주는것같은데").
         const isAskpassFetch = req.method === 'GET' && pathname === '/api/sudo/password'
         // /api/agent/caption-image is the askpass exemption's POST sibling:
@@ -2840,7 +2918,7 @@ function createOnboardingServer(onOnboardingComplete, agentControls) {
   })
 }
 
-// ── dynamic Claude model catalog (2026-08-13, Mino: "모델 리스트 하드코딩
+// ── dynamic Claude model catalog (2026-08-13, the owner: "모델 리스트 하드코딩
 // 말고 더 좋은 방법 없냐? 다이나믹하게 긁어오는법 있음 좋을듯") ────────────
 // The claude CLI binary carries its own model table as literal
 // `"<id>",context:{window:<n>...}` entries -- the same table the static
@@ -2960,7 +3038,7 @@ function contextCapForModel(model) {
   // /health -> {context_window: 200000}) and compacts at 0.9x that. The
   // model itself is 372K; a user's ~/.codex/config.toml
   // `model_context_window = 372000` overrides the proxy live (that is how the
-  // MAGI caspar lane reports 372000 on 0.6.3). Pin the proxy's default here
+  // one reference-fleet lane reports 372000 on 0.6.3). Pin the proxy's default here
   // so the gauge matches the compaction point on a fresh machine; re-verify
   // when codex-as-api learns the gpt-6 family.
   if (/^gpt-6/.test(base)) return { cap: 200_000, capSource: 'codex-as-api-table' }
@@ -2983,7 +3061,7 @@ function contextCapForModel(model) {
 // (That rule is also spelled without the call syntax on purpose --
 // test-packaging.mjs's require-graph regex reads comments too.)
 // ── BYOS usage gauge + update check (tester requests, 2026-08-04) ─────────
-// Usage: the same Anthropic OAuth usage endpoint MAGI's own fleet gauges
+// Usage: the same Anthropic OAuth usage endpoint the reference fleet gauges
 // poll. Contract discipline inherited from that script: a failed read is
 // null/branch, NEVER 0 -- 0 means "window just reset" and must stay
 // distinguishable from "could not read".
@@ -2991,7 +3069,7 @@ const APP_VERSION = (() => {
   try { return require('../package.json').version } catch { return '0.0.0' }
 })()
 
-// Cache + stale-on-error (2026-08-04, Mino field: "usage는 429가 떠버리네" --
+// Cache + stale-on-error (2026-08-04, the owner field: "usage는 429가 떠버리네" --
 // the OAuth usage endpoint rate-limits fast, and v1 hit it fresh on every
 // page load AND every Refresh click). 60s success TTL absorbs refresh spam;
 // on any failure the LAST GOOD reading is served with stale:true + asOf so
@@ -2999,7 +3077,7 @@ const APP_VERSION = (() => {
 // HTTP 429 -- an error should annotate a gauge, not replace it.
 let usageCache = null // { at, payload } -- last GOOD reading only
 // Failure cooldown (2026-08-13, win-tester field: Claude row stuck on a bare
-// "HTTP 429" -- screenshot receipt in MAGI research notes). Success has a 60s
+// "HTTP 429" -- screenshot receipt in the reference fleet research notes). Success has a 60s
 // TTL but failures had NONE, so every page entry / refresh click hit the
 // rate-limited endpoint again while it was telling us to back off -- the one
 // caller pattern that keeps a 429 a 429. A failed read now also arms a
@@ -3007,10 +3085,10 @@ let usageCache = null // { at, payload } -- last GOOD reading only
 // without touching the network. Cleared by any successful read.
 let usageFailCooldown = null // { until, payload }
 
-// CLI-session token fallback (2026-08-04, Mino field: gauge stuck on
+// CLI-session token fallback (2026-08-04, the owner field: gauge stuck on
 // "HTTP 403"). The app-captured `claude setup-token` carries user:inference
 // ONLY -- the usage endpoint refuses it. The Claude Code CLI's own
-// interactive login token DOES read it (the MAGI fleet's gauge has polled
+// interactive login token DOES read it (the the reference fleet's gauge has polled
 // this endpoint with exactly that credential for weeks). So: try the
 // setup-token first (it's OUR credential, stored with consent), and on
 // 401/403 fall back to the CLI session this machine already has --
@@ -3026,7 +3104,7 @@ let usageFailCooldown = null // { until, payload }
 function readCliSessionToken() {
   try {
     let raw = null
-    if (process.platform === 'darwin') {
+    if (HOST.cliCredentialKeychain) {
       const r = require('child_process').spawnSync('security',
         ['find-generic-password', '-s', 'Claude Code-credentials', '-w'], { encoding: 'utf8' })
       if (r.status === 0 && r.stdout) raw = r.stdout.trim()
@@ -3078,7 +3156,7 @@ async function readUsageOAuthToken() {
   try { return JSON.parse(refreshed).accessToken } catch { return null }
 }
 
-// force (2026-08-05, Mino: 수동 리프레시는 진짜 파싱이어야 함): the Refresh
+// force (2026-08-05, the owner: 수동 리프레시는 진짜 파싱이어야 함): the Refresh
 // button passes ?force=1 to bypass the 60s read-cache -- without it a manual
 // refresh inside the window is a silent no-op. The cache still gets WRITTEN
 // (and stale-on-error still applies), only the read is skipped. All three
@@ -3199,7 +3277,7 @@ async function fetchClaudeSubscriptionUsage(opts = {}) {
   return payload
 }
 
-// ── Codex/ChatGPT usage gauge (2026-08-04, Mino: "ollama/Codex/Claude
+// ── Codex/ChatGPT usage gauge (2026-08-04, the owner: "ollama/Codex/Claude
 // 사용량 게이지 ... CodexBar같은것처럼 잘 보여야하는데, 이게 킥임") ──────
 // Mechanism = CodexBar's own (verified in its docs/codex.md and live
 // against this machine 19:3x: HTTP 200, plan_type/rate_limit shape below):
@@ -3263,7 +3341,7 @@ async function fetchCodexUsage(opts = {}) {
   return payload
 }
 
-// ── Ollama cloud usage gauge (2026-08-04, Mino "ollama도 사용량 받을 수
+// ── Ollama cloud usage gauge (2026-08-04, the owner "ollama도 사용량 받을 수
 // 있어야해, 어떻게든 해봐") ────────────────────────────────────────────
 // No DOCUMENTED usage API exists (ollama/ollama#15663/#16448/#15132), but
 // live probing tonight found UNDOCUMENTED auth-gated endpoints:
@@ -3293,7 +3371,7 @@ let ollamaUsageCache = null // { at, payload } -- last GOOD reading only
 // fetch. The chatgpt rows therefore stay a curated static catalog
 // (connectors.js), and the context caps stay hand-pinned (contextCapForModel
 // above). What keeps the hand-pin from rotting on the next bump is a live
-// drift guard, NOT a runtime scan: scripts/test-codex-proxy-model.mjs boots
+// drift guard, NOT a runtime scan: tests/test-codex-proxy-model.mjs boots
 // each catalog GPT model in-process and asserts the proxy's own /health
 // context_window still equals the pinned cap.)
 let ollamaCatalogCache = null // { at, names }
@@ -3333,7 +3411,7 @@ async function fetchOllamaUsage(opts = {}) {
   }
   if (!res.ok) return failWith('http_error', `HTTP ${res.status}`)
   if (!body || typeof body !== 'object') return failWith('empty_body')
-  // Shape BOUND from a real-key receipt (Mino's terminal, 2026-08-04
+  // Shape BOUND from a real-key receipt (the owner's terminal, 2026-08-04
   // 19:38): { activity: {cost, period, models}, limits: { session:
   // {usage: 0.918, models:[{name, request_count}...]}, weekly: {usage:
   // 0.428, models:[...]} } }. usage is a 0-1 fraction; NO reset timestamps
@@ -3362,7 +3440,7 @@ async function fetchOllamaUsage(opts = {}) {
   return payload
 }
 
-// ── vision stand-in captioning (0.0.56, Mino 2026-08-04 20:03 "비전이
+// ── vision stand-in captioning (0.0.56, the owner 2026-08-04 20:03 "비전이
 // 없으면 fallback으로 작은 비전모델 붙여서 같이 지원하면 되는거 아니냐") ──
 // When the LANE model cannot see images, the chat upload route asks a
 // small vision-capable cloud model -- same ollama key, same Messages API
@@ -3375,7 +3453,7 @@ async function fetchOllamaUsage(opts = {}) {
 //   vision: kimi-k2.7-code, kimi-k3, kimi-k2.6, gemma4, qwen3.5,
 //           minimax-m3, mistral-large-3
 // chat.js keeps a mirror of this list for its pre-send toast; change both.
-// 0.1.4 policy rewrite (Mino 2026-08-11 13:54): first-party providers are
+// 0.1.4 policy rewrite (the owner 2026-08-11 13:54): first-party providers are
 // vision-'yes'; EVERYTHING else defaults to 'no' (Gemma caption stand-in)
 // unless the model is on the known-vision YES list. There is no 'unknown'
 // state anymore -- 'unknown' was the dangerous one: it skipped the caption
@@ -3445,7 +3523,7 @@ async function fetchImageCaption(imageBase64, mediaType) {
 
 // Update check against the PUBLIC releases repo (the download surface
 // testers actually use). v1 is notify + one-click download page -- a real
-// in-place auto-update needs a signed app on macOS, deferred with Mino.
+// in-place auto-update needs a signed app on macOS, deferred with the owner.
 // Cache: GitHub unauthenticated API allows 60 req/h/IP; 6h on success,
 // 10min on failure so a rate-limit blip cannot wedge the check until
 // restart.
@@ -3456,7 +3534,7 @@ function parseSemverTriple(v) {
   return m.length === 3 && m.every(Number.isFinite) ? m : null
 }
 async function checkForUpdate(force = false) {
-  // force=true (Settings "Check now" button, Mino 19:14 "오토 업데이트
+  // force=true (Settings "Check now" button, the owner 19:14 "오토 업데이트
   // 버튼 어딨니?") bypasses the read side of the cache but still WRITES it,
   // so a manual check refreshes the banner's data too. Rate-limit safety
   // holds: the button is a human click, not a poll loop.
@@ -3534,7 +3612,7 @@ const staticCtx = {
   readAppearance, writeAppearance, AppearanceModel,
   // vision stand-in captioning (0.0.56)
   laneVision, fetchImageCaption,
-  // claude CLI install-assist (2026-08-04, Mino "2로 가자")
+  // claude CLI install-assist (2026-08-04, the owner "2로 가자")
   startClaudeCliInstall, getClaudeInstallStatus,
   // agent status / model table
   computeAgentStatus, contextCapForModel,
@@ -3542,6 +3620,9 @@ const staticCtx = {
   autonomyBudget, autonomyCycle, readAutonomyState,
   // logs / topology / permission probes
   logBuffer, attachTopology, permissionProbes,
+  // host capability table (design-0023 P4) -- routes ask it instead of
+  // re-testing process.platform. One require, one answer, three platforms.
+  HOST,
   // onboarding-complete side effects + the memory boundary
   writePersonaPreferences, renderAgentSubstrate: harnessRender.renderAgentSubstrate,
   getSessionEvents, getMemoryService, CATEGORY_TABLES,
@@ -3572,7 +3653,7 @@ const API_ROUTES = [
 
 module.exports = {
   createOnboardingServer,
-  // Exported for scripts/test-agent-status-read.mjs (sleep/wake false-fail
+  // Exported for tests/test-agent-status-read.mjs (sleep/wake false-fail
   // fix, 2026-08-15): the READ side of liveness (marker freshness + timeout
   // backstop) finally gets its own unit test. Pure fs/Date logic, no
   // Electron dependency.
@@ -3608,25 +3689,25 @@ module.exports = {
   // readDiscordToken).
   readProviderKey,
   // Exported for main.cjs's pre-spawn gate and
-  // scripts/test-harness-refresh.mjs (pure, no Electron dependency): a
+  // tests/test-harness-refresh.mjs (pure, no Electron dependency): a
   // failed boot harness refresh must stop the spawn, not just print a line.
   // Kept here rather than in main.cjs because this file owns both
   // DATA_HOME and the render itself.
   readHarnessFailure: harnessRender.readHarnessFailure,
   HARNESS_FAILURE_PATH: harnessRender.HARNESS_FAILURE_PATH,
   refreshHarnessIfOnboarded: harnessRender.refreshHarnessIfOnboarded,
-  // Exported for scripts/test-identity-firewall.mjs (vector #2): the
+  // Exported for tests/test-identity-firewall.mjs (vector #2): the
   // settings.local.json seed + additive migration path, which boot runs via
   // startOnboardingServer rather than the harness refresh above.
   seedConfigFromTemplates: harnessRender.seedConfigFromTemplates,
-  // Exported for scripts/test-credential-store.mjs (pure, no Electron
+  // Exported for tests/test-credential-store.mjs (pure, no Electron
   // dependency): getElectron() requires 'electron' lazily precisely so
   // this file stays testable outside an Electron main process, so the
   // harness injects a safeStorage stub and drives the real code --
   // including the two refusal branches (encryption unavailable,
   // round-trip mismatch) that must never leave a key in plaintext.
   storeProviderKeyVerified,
-  // Exported for scripts/test-custom-provider-validate.mjs (pure, no
+  // Exported for tests/test-custom-provider-validate.mjs (pure, no
   // Electron dependency): the 'custom' branch returns before any network
   // call, so a plain-node harness can pin the ok:false-on-invalid-URL
   // contract without Electron or a live proxy.
@@ -3638,15 +3719,15 @@ module.exports = {
   isMarkerFresh,
   readLivenessMarker,
   computeAgentStatus,
-  // Exported for scripts/test-session-feed.mjs (pure function, no db): the
+  // Exported for tests/test-session-feed.mjs (pure function, no db): the
   // net-change collapse is attackable without spinning up Electron or a
   // memory db.
   collapseSessionEvents,
-  // Exported for scripts/test-discord-reconnect.mjs (fetchImpl-injectable):
+  // Exported for tests/test-discord-reconnect.mjs (fetchImpl-injectable):
   // every branch (3-check failures, truncation, channel filtering) runs
   // against fixtures, never the live Discord API.
   enumerateDiscordTargets,
-  // Exported for scripts/test-mcp-connector.mjs (pure functions, no spawn):
+  // Exported for tests/test-mcp-connector.mjs (pure functions, no spawn):
   // the list parser (against real captured output), the mandatory-query URL
   // regex, and the lane-capability gate.
   parseMcpConnectorList,
@@ -3665,13 +3746,16 @@ module.exports = {
   // main.cjs's quit/fatal cleanup hook.
   LOGIN_TIMEOUT_MS,
   resolveBin,
+  // The host capability table, re-exported so a test (or main.cjs) can read
+  // the SAME answers the routes do without a second require path.
+  HOST,
   killAllLoginChildren,
   // Multichannel: backend resolution + per-backend credential readers for
   // main.cjs's spawn-time env injection (same seam as readDiscordToken
   // above), plus fetchImpl-injectable enumerators for
-  // scripts/test-channel-connect.mjs (pure, no Electron dependency).
+  // tests/test-channel-connect.mjs (pure, no Electron dependency).
   activeChannelBackend,
-  // Exported so scripts/test-packaging.mjs can DERIVE the list of channel
+  // Exported so tools/test-packaging.mjs can DERIVE the list of channel
   // backend scripts it must verify, instead of keeping its own copy. It kept
   // a hardcoded array of three until 2026-07-30 and a fourth backend shipped
   // unchecked by the very test that exists to catch an unpackaged channel

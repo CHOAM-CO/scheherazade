@@ -1,6 +1,6 @@
 // notify-agent-reply.cjs — OS notification when the agent replies while the
 // window is not being looked at (v0.1.11, pattern noted from Orca ADE's
-// finish-notifications — MAGI docs/research-orca-ade-20260814.md).
+// finish-notifications — internal research notes 2026-08-14).
 //
 // The user's real usage shape is "ask, then go do something else": a long
 // agent turn ends in a reply that sits unseen in a background window. The

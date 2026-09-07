@@ -104,14 +104,14 @@ function createRoutes(staticCtx) {
     // are token-gated like every /api route (X-Onboard-Token check above).
     //
     // Fire-and-forget + 202, matching the onboarding-complete pattern above:
-    // stop/restart await run.sh stop (up to ~15s worst case), so the client must
+    // stop/restart await the supervisor's stop (up to ~15s worst case), so the client must
     // NOT block on that -- it fires the action and polls GET /api/agent/status
     // (the same poll the Step 5 screen already uses) until state settles
     // (stopped for #5-off, connecting->live for start/restart). Errors surface
     // via agent-status ('failed') or the logged .catch, never a hung request.
     // Overlapping control actions are prevented by the UI (buttons disabled while
     // an action is in flight), so these are NOT serialized/busy-guarded here
-    // (Mino 2026-07-09, YAGNI) -- the load-bearing safety is main.cjs awaiting
+    // (the owner 2026-07-09, YAGNI) -- the load-bearing safety is main.cjs awaiting
     // CONFIRMED process death before any respawn.
     {
       method: 'POST',
@@ -268,9 +268,9 @@ function createRoutes(staticCtx) {
         return
       },
     },
-    // POST /api/agent/effort {effort} -- Mino 07-13 click-test item 2, same
+    // POST /api/agent/effort {effort} -- the owner 07-13 click-test item 2, same
     // shape as the model route: write EFFORT_LEVEL then restart. main.cjs
-    // forwards it into the spawn env only when set; run.sh:56 defaults 'high'.
+    // forwards it into the spawn env only when set; the supervisor defaults 'high'.
     {
       method: 'POST',
       match: (pathname) => pathname === '/api/agent/effort',

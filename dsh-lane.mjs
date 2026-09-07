@@ -36,12 +36,17 @@ import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
 const { DshClient, promptAndCollect } = require('./dsh-client.cjs')
+// The model catalog is the app's ONE list of ids and their context windows
+// (0.3 P4). The lane reads the same file the Engine page's picker loads, so a
+// window declared to the engine here and a window shown to the user there are
+// the same number by construction rather than by two people remembering.
+const MODEL_CATALOG = require('./onboarding/public/js/model-catalog.cjs')
 
 const MEM = process.env.MEM
 const MCP_CONFIG_FILE = process.env.MCP_CONFIG_FILE || ''
 const SYSTEM_PROMPT_FILE = process.env.SYSTEM_PROMPT_FILE || ''
 
-// ── route contract v2 (0.2.2 full harness swap, Mino 08-19 "클로드코드
+// ── route contract v2 (0.2.2 full harness swap, the owner 08-19 "클로드코드
 // 아예 의존성째로 날려버려") ────────────────────────────────────────────
 // Every app provider is now a dsh LLM route; provider-env.cjs's rows emit
 // this env instead of Claude-CLI plumbing:
@@ -58,7 +63,10 @@ const SYSTEM_PROMPT_FILE = process.env.SYSTEM_PROMPT_FILE || ''
 //   DSH_MODEL_VISION   '1' -> the MAIN model sees images: declared rows get
 //                      input:[text,image] and markers attach inline
 //   DSH_VISION_SIDECAR sidecar caption model id (local-ollama route only)
-//   DSH_MODEL_CONTEXT / DSH_MODEL_MAXTOK  declared model row numbers
+//   DSH_MODEL_CONTEXT / DSH_MODEL_MAXTOK  declared model row numbers.
+//                      DSH_MODEL_CONTEXT is now an OVERRIDE only: unset, the
+//                      window comes from the shared model catalog per model
+//                      id (see declaredContextFor below).
 // Defaults reproduce the 0.2.1 local-ollama lane so a bare `MEM=... node
 // dsh-lane.mjs` still boots the glm/qwen testbed.
 const DSH_ROUTE = process.env.DSH_ROUTE || 'declared'
@@ -69,7 +77,17 @@ const DSH_ROUTE_KEY_ENV = process.env.DSH_ROUTE_KEY_ENV || 'OLLAMA_API_KEY'
 const DSH_MODEL = process.env.DSH_MODEL || 'glm-5.2:cloud'
 const DSH_EFFORT = process.env.DSH_EFFORT || 'max'
 const DSH_MODEL_VISION = process.env.DSH_MODEL_VISION === '1'
-const DSH_MODEL_CONTEXT = Number(process.env.DSH_MODEL_CONTEXT) > 0 ? Number(process.env.DSH_MODEL_CONTEXT) : 131072
+// Declared window, in precedence order: an explicit DSH_MODEL_CONTEXT wins
+// (hand-tuned lane), then the catalog's number for THIS model, then the
+// catalog's floor -- which is the 131072 this line carried as a blanket
+// constant until 0.3 P4. Per-model matters: the codex route is a `declared`
+// route too, so every ChatGPT lane was telling the engine its gpt-5.x model
+// held 131072 tokens while codex-as-api 0.6.5 advertises 272000 and the app's
+// own gauge divided by 272000. The engine compacted against a window less
+// than half the real one, and nothing anywhere disagreed out loud.
+const declaredContextFor = (id) => Number(process.env.DSH_MODEL_CONTEXT) > 0
+  ? Number(process.env.DSH_MODEL_CONTEXT)
+  : MODEL_CATALOG.dshContextWindowFor(id)
 const DSH_MODEL_MAXTOK = Number(process.env.DSH_MODEL_MAXTOK) > 0 ? Number(process.env.DSH_MODEL_MAXTOK) : 16384
 // 같이보기/vision: three lanes, decided by the route --
 //   inline  (DSH_MODEL_VISION)   the main model sees the image part itself
@@ -109,7 +127,54 @@ if (!MEM) { errLog('MEM is required'); process.exit(2) }
 
 const endpointFile = () => path.join(MEM, '.ingest-endpoint.json')
 const pendingFile = () => path.join(MEM, '.pending-inbound.json')
+const heartbeatFile = () => path.join(MEM, '.lane-heartbeat.json')
 const dshHome = () => path.join(MEM, '.dsh-lane-home')
+
+// ── watchdog seam (design-0023 P3 #7) ──────────────────────────────────────
+// The supervisor's stall watchdog reads the CLAUDE CLI's transcript jsonl.
+// This lane does not write one -- it talks to dsh over a mux event stream --
+// so on the DEFAULT lane the watchdog has been watching an empty directory
+// since 0.2.2: `no this-era transcript yet ... stall lane idle until one
+// appears`, once, and then silence forever. A stall detector that is silently
+// inert on the default path is worse than none, because the log says it is on.
+//
+// This file is the evidence the supervisor can actually read. It stays on the
+// SUPERVISOR side to judge and kill, deliberately: the restart ladder, the
+// bounce budget (3 kills / 6h, shared across respawns) and the pidfile all
+// live there, and a lane cannot enforce a budget across its own restarts or
+// restart itself once it is the thing that is wedged.
+//   bornTs        -- era guard. A heartbeat from a previous incarnation must
+//                    never bounce a fresh child (same rule as the transcript
+//                    lane's birthtime filter).
+//   ts            -- last beat. Stale = this lane could not run a 15s timer.
+//   lastEventTs   -- last mux event from the engine.
+//   pendingSince  -- oldest un-answered inbound, or null when idle. An idle
+//                    agent is NOT a stalled one; without this the watchdog
+//                    would bounce an agent whose only sin was that nobody
+//                    talked to it.
+const LANE_BORN_TS = Date.now()
+const HEARTBEAT_MS = 15_000
+let lastEventTs = LANE_BORN_TS
+function writeHeartbeat () {
+  let pendingSince = null
+  try {
+    const pending = readPending()
+    for (const p of pending) {
+      const ts = Number(p && p.ts) || 0
+      if (ts && (pendingSince === null || ts < pendingSince)) pendingSince = ts
+    }
+  } catch { /* unreadable pending file: report liveness anyway */ }
+  // Clamp to this lane's birth. Boot REDELIVERS the previous incarnation's
+  // unfinished rows, whose ts is from before this process existed -- unclamped
+  // they read as "unanswered for hours" and the watchdog would bounce a lane
+  // that has been alive for one second.
+  if (pendingSince !== null && pendingSince < LANE_BORN_TS) pendingSince = LANE_BORN_TS
+  try {
+    writeJsonAtomic(heartbeatFile(), {
+      lane: 'dsh', pid: process.pid, bornTs: LANE_BORN_TS, ts: Date.now(), lastEventTs, pendingSince,
+    })
+  } catch { /* fail-open: an unwritable heartbeat is not worth dying over */ }
+}
 
 function writeJsonAtomic (file, obj, mode) {
   const tmp = `${file}.tmp.${process.pid}.${Date.now().toString(36)}`
@@ -164,7 +229,7 @@ function mcpRowsFromClaudeConfig (file) {
       if (Array.isArray(s.args) && s.args.length) {
         lines.push(`        args: [${s.args.map(yamlQuote).join(', ')}]`)
       }
-      // CHANNEL-SECRET SEAM (2026-08-21, Mino field case: discord setup on
+      // CHANNEL-SECRET SEAM (2026-08-21, the owner field case: discord setup on
       // the dsh lane died in a "DISCORD_BOT_TOKEN not set" FATAL loop). The
       // claude lanes forward the full parent env to MCP children, so
       // main.cjs's spawn-time token injection just arrived. The dsh harness
@@ -210,13 +275,21 @@ function personaRow () {
 }
 
 function buildPatch () {
-  const efforts = ['off', 'low', 'high', 'max']
+  // The ladder the lane DECLARES to the engine. It is deliberately not the
+  // same list as the picker's (model-catalog.cjs EFFORT_LEVELS): 'off' is
+  // declared here and offered nowhere, 'medium' is offered by the picker and
+  // declared nowhere. Both lists now live in the catalog file so the gap is
+  // readable in one place; closing it is a live-engine decision, not a
+  // refactor's.
+  const efforts = MODEL_CATALOG.DSH_REASONING_EFFORTS
     .map((e) => e === 'off' ? '              off:' : `              ${e}: ${e}`).join('\n')
+  // Per-model window, so the vision sidecar declares its OWN number instead
+  // of inheriting the main model's -- they are different models.
   const modelRow = (id, name, vision) => [
     `          - id: ${yamlQuote(id)}`,
     `            name: ${yamlQuote(name)}`,
     `            input: [${vision ? 'text, image' : 'text'}]`,
-    `            contextWindow: ${DSH_MODEL_CONTEXT}`,
+    `            contextWindow: ${declaredContextFor(id)}`,
     `            maxTokens: ${DSH_MODEL_MAXTOK}`,
     `            reasoningEfforts:`,
     efforts
@@ -273,7 +346,7 @@ function buildPatch () {
 - id: tool-ask-user
   # ask_user_question resolves through the dsh WEB UI's question provider,
   # which no Scheherazade user ever opens -- the tool call awaits an answer
-  # forever and the turn hangs (measured: Mino's box 2026-08-19 17:55, turn
+  # forever and the turn hangs (measured: the owner's box 2026-08-19 17:55, turn
   # never completed after ask_user_question). A channel-mediated agent asks
   # questions through the reply tool instead.
   disabled: true
@@ -300,7 +373,7 @@ function buildPatch () {
   # 0.2.4 websearch recovery: the model-facing web_search tool is mounted
   # by the agent PRESET (standard/agent.cordis.yml), not the profile -- the
   # profile-level tool-web row is disabled yet the E2E request header still
-  # carried web_search (measured 2026-08-20; Mino's 0.2.3 "DeepSeek API
+  # carried web_search (measured 2026-08-20; the owner's 0.2.3 "DeepSeek API
   # key" answer was REAL, not confabulated). Preset rows cannot be patched
   # and the launcher force-overwrites config.roots with the shipped root,
   # so the lane authors its OWN preset id into the always-scanned user root
@@ -353,7 +426,7 @@ function ensureLanePreset () {
   const cut = src.indexOf('- id: tool-web')
   let filtered = (cut === -1 ? src : src.slice(0, cut)) +
     '# (tool-web row removed by dsh-lane 0.2.4: web search is the chromux\n' +
-    '# websearch skill -- keyless, backend-independent. Mino 08-20.)\n'
+    '# websearch skill -- keyless, backend-independent. Locked 08-20.)\n'
   // tool-ask-user: PRESET-mounted, so the profile-level `tool-ask-user
   // disabled: true` patch row (added after the 08-19 hang) never reached the
   // session -- the exact "preset rows cannot be patched" class the tool-web
@@ -365,7 +438,7 @@ function ensureLanePreset () {
     /^- id: tool-ask-user\n(?:^ {2}.*\n|^\n)*?(?=^- id: |\Z)/m,
     '# (tool-ask-user row removed by dsh-lane 0.2.17: ask_user_question awaits\n' +
     '# a web-UI answer no Scheherazade user can give -- turn hangs forever.\n' +
-    '# Channel agents ask through the reply tool. Mino 08-27 16:58 hang.)\n'
+    '# Channel agents ask through the reply tool. 08-27 16:58 hang.)\n'
   )
   filtered = guardSubagentRows(filtered, subagentAgentOptions())
   const destDir = path.join(dshHome(), '.agent-presets', LANE_PRESET_ID)
@@ -375,7 +448,7 @@ function ensureLanePreset () {
     'name: Scheherazade standard\ndescription: shipped standard minus web_search (chromux skill carries search)\norder: 1\n')
 }
 
-// Subagent containment (2026-08-20, Mino cto field test: "서브에이전트 메세지가
+// Subagent containment (2026-08-20, the owner cto field test: "서브에이전트 메세지가
 // 계속 인앱챗으로 역류함"). A delegated child joins the SAME preset as its
 // parent (session header agentPreset: schz-standard, measured), so it inherits
 // the full channel surface: the agent-channel MCP reply/react tools AND the
@@ -479,7 +552,7 @@ function spawnEngine (patchPath) {
     // route (PI_AI_ERROR, measured); keyless local proxies get a dummy.
     [DSH_ROUTE_KEY_ENV]: process.env[DSH_ROUTE_KEY_ENV] || 'local-dummy',
     DSH_TELEMETRY_MODE: process.env.DSH_TELEMETRY_MODE || 'DISABLED',
-    // Product contract port (run.sh --dangerously-skip-permissions, Mino
+    // Product contract port (run.sh --dangerously-skip-permissions, the owner
     // 2026-07-04 "bypass까지만 바로 되도록"): full agent autonomy inside its
     // own DATA_HOME, no permission popups. dsh's approval plugin policy is
     // 'ask' under the default workspace-write mode, and the ask resolves
@@ -628,7 +701,7 @@ async function main () {
     postPresence(text.slice(0, 3900), 'think')
   }
 
-  // ── answer stream (0.2.4, Mino "두두두둑 생성되는거 보이잖아, 그런거 가능?") ──
+  // ── answer stream (0.2.4, the owner "두두두둑 생성되는거 보이잖아, 그런거 가능?") ──
   // Visible text-deltas mirror to the local chat page as a GROWING DRAFT
   // bubble: kind:'stream' posts append server-side draft text that /out
   // returns beside the queue (never a transcript item, never persisted).
@@ -795,7 +868,7 @@ async function main () {
       .catch((e) => errLog(`mute nudge failed: ${e.message.slice(0, 120)}`))
   }
 
-  // ── background-subagent roster (0.2.15, Mino "서브 스폰하면 서브도
+  // ── background-subagent roster (0.2.15, the owner "서브 스폰하면 서브도
   // working 정보에 띄우게") ─────────────────────────────────────────────
   // The subagent tool's result names what it launched ("started background
   // subagent job X" / "started subagent Y" -- dsh-tool-subagent's render);
@@ -813,6 +886,9 @@ async function main () {
   // Turn-close accounting: clear pending entries older than the turn end.
   const mux = client.openMux({
     onEvent (sid, event) {
+      // Liveness BEFORE the session filter: an event for any session still
+      // proves the engine is talking and this lane is reading it.
+      lastEventTs = Date.now()
       if (sid !== sessionId || !event) return
       // Settlement notice (any event type that carries the injected user
       // message): retire the child from the roster by its own id.
@@ -825,7 +901,7 @@ async function main () {
       if (event.type === 'turn/end') {
         flushThink(true)
         thinkSentThisTurn = 0
-        // Presence turn-close (0.2.11, Mino field report: idle app stuck on
+        // Presence turn-close (0.2.11, the owner field report: idle app stuck on
         // "Thinking…"): the chat page's live folds settle on an AGENT BUBBLE
         // -- but background turns (calendar nudge, watchdog pokes) stream
         // think/activity and end with no bubble at all, leaving the fold
@@ -926,7 +1002,7 @@ async function main () {
         log(`tool> ${d.name || '?'}`)
         if (isReplyClassTool(d.name)) sawReplyThisTurn = true
         // Retire the draft on EVERY tool call, not just reply-class (0.2.17,
-        // Mino 08-27 17:08: a multi-step turn's step narration -- "확인해볼게"
+        // the owner 08-27 17:08: a multi-step turn's step narration -- "확인해볼게"
         // / "비교해볼게" between tool calls -- accumulated into one glued
         // wall in the chat pane). Body text before a tool call is step
         // commentary: show it while the step is being written, wipe it when
@@ -1171,13 +1247,41 @@ async function main () {
     }
   })
 
+  // First beat now, so the supervisor sees this era's marker immediately
+  // rather than 15s into a boot it might already be judging.
+  writeHeartbeat()
+  const heartbeatTimer = setInterval(writeHeartbeat, HEARTBEAT_MS)
+  heartbeatTimer.unref()
+
+  let shuttingDown = false
   const shutdown = () => {
+    if (shuttingDown) return
+    shuttingDown = true
+    clearInterval(heartbeatTimer)
     try { if (child && !child.killed) child.kill('SIGTERM') } catch {}
     try { fs.unlinkSync(endpointFile()) } catch {}
+    try { fs.unlinkSync(heartbeatFile()) } catch {}
     process.exit(0)
   }
   process.on('SIGTERM', shutdown)
   process.on('SIGINT', shutdown)
+  // The STOPFLAG is the ONLY portable stop channel (design-0023 P3 #2).
+  // Windows has no deliverable SIGTERM -- node's process.kill there is
+  // TerminateProcess, so neither handler above ever runs and this lane used to
+  // be hard-killed with the engine mid-write and .ingest-endpoint.json left
+  // behind for the next boot to trip over. The supervisor's stop writes
+  // $MEM/.stop_requested first and then waits out a grace window, so polling
+  // it here is what makes that window mean anything. Cheap (one existsSync per
+  // 500ms), unref'd so it never holds the loop open, and correct on POSIX too
+  // -- there it is a belt for a signal that got lost.
+  const stopflag = path.join(MEM, '.stop_requested')
+  const stopWatch = setInterval(() => {
+    if (!fs.existsSync(stopflag)) return
+    log('stop requested (.stop_requested) -- shutting down')
+    clearInterval(stopWatch)
+    shutdown()
+  }, 500)
+  stopWatch.unref()
 }
 
 main().catch((e) => { errLog(`boot failed: ${e.message}`); try { if (child) child.kill('SIGTERM') } catch {}; process.exit(1) })

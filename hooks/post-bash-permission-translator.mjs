@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // post-bash-permission-translator.mjs — PostToolUse hook, Bash tool only.
 //
-// WHY THIS HOOK EXISTS (춘식3 permission proposal P1, 2026-07-15; adopted by
-// Idea/PO same day): when a command dies on a macOS permission wall the agent
+// WHY THIS HOOK EXISTS (the internal permission proposal P1, 2026-07-15; adopted by
+// design/PO same day): when a command dies on a macOS permission wall the agent
 // tends to go silent and diagnose (worst observed: 16 minutes of "됐어?
 // 대답 빨리" while the agent quietly collected receipts). The failure is
 // perfectly translatable the moment it happens — command + stderr pattern
@@ -15,7 +15,7 @@
 // error exits 0 silently (pack convention: only the rumination gate is
 // blocking/fail-loud). It never denies the tool call — Bash already ran.
 //
-// Pattern table source: 춘식3's proposal §P1 (command+stderr combos, his
+// Pattern table source: that proposal §P1 (command+stderr combos, his
 // direct receipts 2026-07-15). rc alone is never enough — command + stderr
 // text is the discriminator. TCC vs SIP vs sudo separation is his; keeping
 // it verbatim because collapsing them misroutes the user ("어디서 켜야

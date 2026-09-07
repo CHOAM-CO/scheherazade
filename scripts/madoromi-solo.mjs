@@ -8,14 +8,13 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { localDate, localTime } from '../local-date.cjs' // AGENT_TZ, default Asia/Seoul
 
 const MEM = process.env.MEM || process.cwd()
 const JOURNAL_DIR = path.join(MEM, 'journals')
 const DREAMS_DIR = path.join(MEM, 'dreams')
-const KST_DATE = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' })
-const KST_TIME = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false })
-const TODAY = KST_DATE.format(new Date())
-const NOW_TIME = KST_TIME.format(new Date())
+const TODAY = localDate()
+const NOW_TIME = localTime()
 
 fs.mkdirSync(DREAMS_DIR, { recursive: true })
 

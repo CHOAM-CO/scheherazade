@@ -114,9 +114,12 @@
         </div>
 
         <!-- Permission checklist (P0, 2026-07-15 — docs/permission-visibility-
-             design.md). Shows the macOS wall map BEFORE the agent hits walls
-             mid-task. Rows render from /api/permissions/status; probes that
-             cannot measure say so (❓) instead of pretending ✅/❌. -->
+             design.md). Shows this host's wall map BEFORE the agent hits the
+             walls mid-task. Rows render from /api/permissions/status; probes
+             that cannot measure say so instead of pretending granted/denied.
+             design-0023 P4: which rows exist is per-platform (macOS TCC +
+             sudo + SIP; Linux sudo + keyring; Windows nothing), and the whole
+             block is gated on the server's permissionsPanel capability. -->
         <div class="category" id="set-perms">
           <div class="category-label" id="set-perms-label"></div>
           <p class="subtitle" id="set-perms-note"></p>
@@ -125,7 +128,7 @@
         </div>
       </section>
 
-      <!-- ── ABOUT / UPDATE (2026-08-04, Mino "오토 업데이트 버튼 어딨니?"
+      <!-- ── ABOUT / UPDATE (2026-08-04, the owner "오토 업데이트 버튼 어딨니?"
            -- the nav banner only appears WHEN an update exists, so a user
            on the latest version had no surface at all. This row is the
            manual check: current version + Check-now button, force=1

@@ -1,7 +1,7 @@
 // copy.js — single source of truth for every user-facing string in the
 // onboarding wizard + memory pane. Sourced VERBATIM from:
-//   ~/Documents/MAGI_Memory/projects/scheherazade_onboarding_copy_v0_2026-07-03.md
-//   ~/Documents/MAGI_Memory/projects/scheherazade_pane_copy_opener_criteria_2026-07-03.md §A
+//   the onboarding copy v0 source note (2026-07-03)
+//   the pane-copy / opener-criteria source note (2026-07-03) §A
 // Register: 간결 존댓말, no 이모지, no 느낌표, no cheerleading.
 //
 // Only the 제목:/본문:/버튼: lines and the code→copy table rows from the
@@ -12,7 +12,7 @@
 // Strings marked "AUTHORED (not in copy file)" below are new UI surfaces the
 // copy files did not specify (settings page, generic infra-error banner).
 // Written in the same register, flagged here so they are easy to find and
-// replace if Idea/PO writes real copy for them later.
+// replace if design/PO writes real copy for them later.
 
 // getOnboardToken() -- reads the per-launch localhost-auth token that
 // onboarding/http-server.cjs's serveStatic() injects into every page's
@@ -37,35 +37,116 @@ window.HOST_PLATFORM = (function () {
 })()
 window.IS_WIN = window.HOST_PLATFORM === 'win32'
 window.IS_MAC = window.HOST_PLATFORM === 'darwin'
+window.IS_LINUX = window.HOST_PLATFORM === 'linux'
 
-// The two words that appear all over this file. THIS_MACHINE replaces the
-// literal "this Mac" -- deliberately not "this PC", because the same string
-// ships to Linux dev runs too. SHELL_APP is what the user opens to type a
-// command: Terminal on mac, PowerShell on Windows.
-const THIS_MACHINE = window.IS_MAC ? 'this Mac' : 'this computer'
-const SHELL_APP = window.IS_WIN ? 'PowerShell' : 'Terminal'
-// Where safeStorage actually puts things: Keychain on mac, DPAPI on Windows.
-// Naming the real store matters -- a user who goes looking for "the keychain"
-// on Windows finds nothing and concludes we lied about where their token is.
-const CRED_STORE = window.IS_MAC ? "this Mac's keychain" : "this computer's encrypted credential store"
-const CRED_STORE_THE = window.IS_MAC ? 'the macOS keychain' : "the OS's encrypted credential store"
+// What this machine can actually DO, injected beside the platform id by the
+// same serveStatic pass (design-0023 P4). The page used to derive every
+// capability from `IS_MAC` -- so "not a Mac" silently meant "no uninstall, no
+// permissions panel, no blur, no sudo card... except the sudo card, which
+// rendered anyway". These are the SERVER's answers (onboarding/platform.cjs),
+// identical to the ones GET /api/config returns, so a pre-fetch render and a
+// post-fetch render cannot disagree. `{}` when the meta is absent (a stale
+// cached page, dev-serve): every gate below treats a missing flag as false
+// except where the pre-P4 default was mac, which is what HOST_PLATFORM's own
+// 'darwin' default preserves.
+window.HOST_CAPS = (function () {
+  const meta = document.querySelector('meta[name="host-capabilities"]')
+  if (!meta) return {}
+  try { return JSON.parse(meta.getAttribute('content') || '{}') || {} } catch { return {} }
+})()
+
+// One reader for every capability gate on every page. Named so a grep for
+// `can(` finds all of them at once, and so an UNKNOWN capability is false --
+// the old `window.IS_MAC` gates defaulted the other way round on a page whose
+// meta was missing, which is how a Windows user got a Full Disk Access card.
+window.can = function can(flag) {
+  return window.HOST_CAPS[flag] === true || (typeof window.HOST_CAPS[flag] === 'string' && window.HOST_CAPS[flag] !== '')
+}
+
+// ── the three-way word table ──────────────────────────────────────────────
+// Before P4 there were two arms and an else: `IS_MAC ? 'this Mac' : 'this
+// computer'`, `IS_WIN ? 'PowerShell' : 'Terminal'`. Linux was never named, it
+// was the leftover of two unrelated ternaries -- which is why it read
+// tolerably in four places and wrongly in a dozen others ("This Mac already
+// has a Claude Code login", "Mac login password", "already in the Trash").
+// One table, one row per platform, and the row is SELECTED, never fallen into.
+//
+// machine/shell/credStore mirror onboarding/platform.cjs's clientView
+// (machineWord/shellName); tests/test-setup-token-copy.mjs pins that the two
+// agree, because the server writes sentences too and they must not contradict
+// the page's.
+const PLATFORM_WORDS = {
+  darwin: {
+    machine: 'this Mac',
+    shell: 'Terminal',
+    credStore: "this Mac's keychain",
+    credStoreThe: 'the macOS keychain',
+    // Where a deleted app goes. On Windows the NSIS uninstaller removes it
+    // outright and on Linux the AppImage is unlinked -- neither has a Trash
+    // the user can go look in, which is what the old line promised everyone.
+    deletedPlace: 'in the Trash',
+    // What the sudo/admin password IS called by the OS the user is on.
+    adminPasswordLabel: 'Mac login password',
+    // Package managers the user might otherwise reach for; named only to say
+    // the official installer needs none of them.
+    packageTools: 'npm or Homebrew',
+  },
+  win32: {
+    machine: 'this PC',
+    shell: 'PowerShell',
+    // safeStorage is DPAPI here, not a keychain. A user who goes looking for
+    // "the keychain" on Windows finds nothing and concludes we lied about
+    // where their token is.
+    credStore: "this PC's encrypted credential store",
+    credStoreThe: "Windows' encrypted credential store",
+    deletedPlace: 'removed',
+    adminPasswordLabel: 'Administrator password',
+    packageTools: 'npm',
+  },
+  linux: {
+    machine: 'this computer',
+    shell: 'Terminal',
+    // safeStorage needs a Secret Service keyring here (gnome-keyring,
+    // kwallet). Naming it is the difference between "we lost your key" and
+    // "your desktop has no keyring running".
+    credStore: "this computer's encrypted credential store",
+    credStoreThe: "the OS's encrypted credential store",
+    deletedPlace: 'removed',
+    adminPasswordLabel: 'Your login password (sudo)',
+    packageTools: 'npm or your package manager',
+  },
+}
+// Unknown platform -> linux row: the most conservative wording of the three
+// (no Mac, no Windows, no keychain), never a mac default.
+const P = PLATFORM_WORDS[window.HOST_PLATFORM] || PLATFORM_WORDS.linux
+const THIS_MACHINE = P.machine
+// Sentence-initial form, so no string has to hardcode "This Mac".
+const THIS_MACHINE_CAP = THIS_MACHINE.charAt(0).toUpperCase() + THIS_MACHINE.slice(1)
+const SHELL_APP = P.shell
+const CRED_STORE = P.credStore
+const CRED_STORE_THE = P.credStoreThe
+// Exposed for the page-local copy blocks that live outside this file
+// (memory.js's JOURNAL_COPY/POINTERS_COPY), which used to re-derive the word
+// from window.IS_MAC with their own inline ternary.
+window.PLATFORM_WORDS = P
+window.THIS_MACHINE = THIS_MACHINE
 
 window.COPY = {
   step0: {
     title: 'Start setup',
-    // Full-autonomy disclosure (Mino 2026-07-04 16:26 "에이전트한테 권한 다
+    // Full-autonomy disclosure (the owner 2026-07-04 16:26 "에이전트한테 권한 다
     // 주기" + 2026-07-05 02:12 "권한 최대한 열어주기, 반박 안받음"): the old
-    // macOS-protected-folders sentence was REMOVED on Mino's direct order --
+    // macOS-protected-folders sentence was REMOVED on the owner's direct order --
     // onboarding now requests Documents/Downloads/Desktop TCC grants, so
     // that sentence would be false. The folder line below states the new
     // reality honestly. FDA: no longer deferred -- requested at setup via
-    // the Step-0 card below (Mino 2026-07-07 16:58 "full disk access도
+    // the Step-0 card below (the owner 2026-07-07 16:58 "full disk access도
     // 온보딩중에 그냥 설정창 켜버리고 받아버리셈"). Source doc §Step 0
     // updated in the same pass -- keep verbatim-synced.
     body: 'Takes about 3 minutes. Everything stays on this computer. Once set up, the agent works on its own without asking permission every time. It reads and writes directly to your Documents, Downloads, and Desktop folders.',
     button: 'Start',
     // AUTHORED (not in copy source file) -- Full Disk Access card
-    // (2026-07-07, Mino directive above). Honest about the two macOS
+    // (2026-07-07, the owner directive above). Honest about the two macOS
     // constraints: the toggle itself must be clicked by the user (no
     // programmatic grant exists), and the grant needs an app restart
     // (TCC caches at process launch).
@@ -84,14 +165,14 @@ window.COPY = {
   // provider's PRIMARY path is now account login (subscription billing),
   // API key is a folded-away fallback. Ground: key issuance was the
   // highest-friction point in onboarding, and the wrong billing axis for
-  // Max/Plus subscribers -- Mino himself dropped off at Step 1 (01:09) and
+  // Max/Plus subscribers -- the owner himself dropped off at Step 1 (01:09) and
   // NEO logs showed existing subscription OAuth silently beating an
   // injected key anyway.
   //
-  // UI-SCOPE NOTE (2026-07-04 06:xx, Idea/Melchior): the backend's
+  // UI-SCOPE NOTE (2026-07-04 06:xx, design + review): the backend's
   // ROUTER_WIRED flag flipped true overnight (own-infra-first found no
   // router build is needed, direct env wiring suffices) -- but that is a
-  // BACKEND capability fact, separate from the 22:02 Mino-approved UI scope
+  // BACKEND capability fact, separate from the 22:02 the owner-approved UI scope
   // lock (Claude-only ships v1, chatgpt/ollama = v1.1). Do not wire tab
   // visibility straight off GET /api/config's routerWired field. Both the
   // real primary-path copy AND the disabled/coming-soon copy are included
@@ -110,7 +191,7 @@ window.COPY = {
     //   3. `alt` keeps the other paths visible. A found login is an offer, not
     //      a fait accompli.
     foundLogin: {
-      title: 'This Mac already has a Claude Code login',
+      title: `${THIS_MACHINE_CAP} already has a Claude Code login`,
       body: "You can use that login as-is. We don't copy it, store it separately, or open its contents (we only checked that it exists). No key to paste.",
       cost: 'Usage is deducted from your Claude subscription.',
       use: 'Use this login',
@@ -138,7 +219,7 @@ window.COPY = {
         // paste. Same "don't imply one-click" principle as the Ollama
         // honesty note below -- copy corrected to match implementation.
         primary: {
-          // validating/failure (2026-07-04 06:4x, Melchior's wizard.js gate
+          // validating/failure (2026-07-04 06:4x, the reviewer's wizard.js gate
           // caught this): the submit handler is shared between this
           // sub-mode (provider=claude-subscription, pasting an OAuth token)
           // and the fallback sub-mode (provider=claude, pasting an x-api-key)
@@ -198,6 +279,16 @@ window.COPY = {
             failure: (reason) => ({
               cli_missing: `The claude command was not found on ${THIS_MACHINE}. Install it, then try again.`,
               spawn_failed: 'The login could not be started. Try the manual steps below.',
+              // 2026-09-07 (design-0023 P2): the flow that drove the CLI under
+              // a terminal is retired with the native module it needed, so
+              // /api/setup-token/start now answers `unsupported`. Nothing in
+              // the shipped wizard calls that route any more -- the button
+              // above is the in-app loopback login -- but a stale page or a
+              // bookmarked client can still land here, and a refusal with no
+              // next step is the thing this whole map exists to prevent.
+              // Platform-neutral wording on purpose: this one is not about a
+              // shell the user should open.
+              unsupported: 'This version no longer logs in through the command line. Use the "Log in with Claude" button above, or the manual steps below.',
               timeout: 'The login was not finished in time. Try again.',
               // Capture-failure family. These five differ only in how the
               // read went wrong, and the user's remedy is identical for all
@@ -291,32 +382,35 @@ window.COPY = {
         done: 'Installed. You can log in now.',
         failed: 'Install failed. Check your network and try again.',
         retryButton: 'Retry',
-        // Windows v1 = detection-only (managed install is mac-only): the
-        // wizard shows link + re-detect instead of the download button.
-        manualNeeded: (name) => `${name} isn't installed on this PC yet. On Windows, install it from the official install page, then check again.`,
+        // Shown wherever managed install is off -- Windows, Linux, and (since
+        // design-0023 P4) Intel Macs, which used to be offered the automatic
+        // button and then handed an Apple-Silicon-only tarball. The sentence
+        // named Windows and only Windows, so two of those three audiences
+        // read a line about an OS they are not running.
+        manualNeeded: (name) => `${name} isn't installed on ${THIS_MACHINE} yet. Install it from the official install page, then check again.`,
         manualOpenButton: 'Open install page',
         manualOpened: 'Opened the install page in your browser. Click "Check again" once install finishes.',
         redetectButton: 'Check again',
         stillMissing: (name) => `${name} still not found. Finish installing, then check again.`,
       },
     },
-    // AUTHORED -- Claude CLI preflight (2026-08-04, Mino "2로 가자"): the
+    // AUTHORED -- Claude CLI preflight (2026-08-04, the owner "2로 가자"): the
     // truly-clean-machine panel. Honesty requirements baked into the copy:
     // the app does NOT bundle claude (license), the install agreement is
     // with Anthropic, and Claude Code needs a PAID plan -- said BEFORE the
     // user invests in the flow, not after a failed spawn.
     cliPreflight: {
-      title: 'Claude Code is not on this Mac yet',
+      title: `Claude Code is not on ${THIS_MACHINE} yet`,
       body: 'Scheherazade runs on top of your own Claude Code — it does not ship one. Install it with the button below (runs Anthropic’s official installer; the agreement is between you and Anthropic).',
       plan: (req) => (req ? `Note: Claude Code requires a paid plan — ${req}.` : 'Note: Claude Code requires a paid Claude plan.'),
       installButton: 'Install Claude Code',
       installing: 'Installing… (downloads from claude.ai, usually under a minute)',
       done: 'Installed. You can continue below.',
-      failed: (detail) => `Install did not complete${detail ? ` — ${detail}` : ''}. Try again, or run the command below in Terminal.`,
+      failed: (detail) => `Install did not complete${detail ? ` — ${detail}` : ''}. Try again, or run the command below in ${SHELL_APP}.`,
       manualLead: 'Manual route:',
       docsLink: 'Setup docs',
     },
-    // AUTHORED -- ollama key-mode strings (2026-08-04 Mino: "ollama ->
+    // AUTHORED -- ollama key-mode strings (2026-08-04 the owner: "ollama ->
     // API키"): the ollama tab is a key-paste + model-name form now, not a
     // login button. Key hint reuses the fallback tab's proven wording.
     ollamaKey: {
@@ -373,7 +467,7 @@ window.COPY = {
     q3YesPrefix: 'Yes, between',
     q3YesSuffix: 'only',
     q3No: 'No',
-    // Flag-follows-copy (Idea copy spec, her lines 46-48): the note has an ON
+    // Flag-follows-copy (the copy spec, lines 46-48): the note has an ON
     // and an OFF version, and it must track the proactive-feature flag so no
     // landing lies. That flag ships default OFF (proactive cycle is not wired
     // this build; only routerWired is in the API surface), so the OFF copy is
@@ -391,7 +485,7 @@ window.COPY = {
     body: (name) => `${name} can talk right here in the app — no accounts, no tokens. Connecting a messenger is optional, now or anytime from the Channels tab.`,
     startChat: 'Start chatting now',
     startChatNote: 'Finishes setup and opens the conversation',
-    // Mino 07-13 click-test: three platform buttons, each a redirect.
+    // the owner 07-13 click-test: three platform buttons, each a redirect.
     // Discord keeps the real flow (opens the dev portal AND enters the
     // existing tutorial -- redirect alone would kill the guided steps,
     // 2FA warning and Sirin's friction fixes included). Slack/Telegram
@@ -413,9 +507,9 @@ window.COPY = {
       telegram: 'https://t.me/botfather',
     },
     // History, kept because it reads like a contradiction otherwise: an
-    // early local-chat fallback idea was rejected (Mino 07-13, "localhost
+    // early local-chat fallback idea was rejected (the owner 07-13, "localhost
     // is onboarding-only") and this section long said so. The in-app chat
-    // BACKEND (channel-local.mjs + /chat, Mino go 07-30 00:28 on
+    // BACKEND (channel-local.mjs + /chat, the owner go 07-30 00:28 on
     // docs/in-app-chat-plan.md) supersedes that -- it is a real channel,
     // not the rejected localhost stopgap, and the "later — save and wait"
     // button this comment used to describe is gone with it.
@@ -435,7 +529,7 @@ window.COPY = {
         shot: true,
       },
       {
-        // Mino 07-13 click-test: the bare oauth2/authorize link (no scope,
+        // the owner 07-13 click-test: the bare oauth2/authorize link (no scope,
         // no permissions) doesn't install correctly, and the URL Generator
         // dance was the most error-prone part of the old tutorial (Sirin #1
         // was a symptom of it). The invite URL is now minted in-app from the
@@ -467,7 +561,7 @@ window.COPY = {
   // not on ONBOARDING_COMPLETE -- see wizard.js's pollAgentStatus(). The
   // "failed" cause table is sourced verbatim from the source file's §상태3
   // code→copy table; the server only ever sends a stable `code` enum (never
-  // a free-form reason string to render directly -- Melchior 2026-07-03:
+  // a free-form reason string to render directly -- the reviewer 2026-07-03:
   // that class of bug leaks English debug prose into the user-facing UI).
   step5: {
     connecting: {
@@ -475,12 +569,12 @@ window.COPY = {
       body: (name) => `Starting ${name}. This screen updates once Discord connection is confirmed.`,
       button: 'Open Discord',
     },
-    // channelName (2026-07-04 06:35, Melchior raw-verified http-server.cjs:940
+    // channelName (2026-07-04 06:35, the reviewer raw-verified http-server.cjs:940
     // -- validateAndInvite's return already carried channelId/guildId, this
     // adds homeChannel.name, a real field on the Discord API channel object,
     // no extra fetch). DM positive-exposure (source file §상태2 정정,
-    // 2026-07-04 06:2x): DM is a v1-mandatory, already-shipped path (Mino
-    // 01:24 directive, Melchior 02:23 12/12 tests) -- staying silent about a
+    // 2026-07-04 06:2x): DM is a v1-mandatory, already-shipped path (the owner
+    // 01:24 directive, the reviewer 02:23 12/12 tests) -- staying silent about a
     // working required feature is its own copy/implementation gap, same
     // class as promising something that doesn't work, just inverted. Home
     // channel stays the headline (that's where the onboarding funnel points
@@ -497,14 +591,14 @@ window.COPY = {
     failed: {
       title: 'Failed to start',
       causes: {
-        // action text (2026-07-04 06:5x, Melchior's wizard.js gate caught
+        // action text (2026-07-04 06:5x, the reviewer's wizard.js gate caught
         // this): settings.js is rename+Slack-placeholder only -- no real
         // key/model repair UI exists (http-server.cjs:1208 says so in its
         // own comment: "no re-onboarding/provider-switch UI today"). The
         // old action text promised a fix settings can't perform, and this
         // cause is actually reachable now (a junk setup-token passes Step 1
         // and crash-loops at spawn). Real settings repair UI = v1.1 flag
-        // (Melchior's call, separate from this copy fix). Button left as-is
+        // (the reviewer's call, separate from this copy fix). Button left as-is
         // -- opening settings is harmless, just not sufficient, and the v1.1
         // repair UI will land on the same button without another copy pass.
         crash_loop: {
@@ -583,7 +677,7 @@ window.COPY = {
         // That rule is right for the other codes and wrong for this one; making
         // the detail renderable is a bigger change than a copy row, so this row
         // states the situation generically and the specific command still only
-        // reaches the console. Left as a decision for Mino, not silently taken.
+        // reaches the console. Left as a decision for the owner, not silently taken.
         'bootstrap-needed': {
           cause: (name) => `${name} is set to attach mode, but there is no session to attach to yet.`,
           action: () => 'Restart the app once -- the bundled tmux sets itself up on boot. If it persists, switch topology to spawn on the Engine page.',
@@ -601,11 +695,16 @@ window.COPY = {
         // that cannot fix it; if it is theirs, we owe them the specific step.
         cli_missing: {
           cause: () => 'Claude Code is not installed on this machine. Scheherazade runs on top of your own Claude Code -- it does not ship one.',
-          // Install-assist exists now (2026-08-04, Mino "2로 가자"): the
+          // Install-assist exists now (2026-08-04, the owner "2로 가자"): the
           // setup screen's preflight panel has a one-click install button,
           // so the action points there AND carries the manual command for
-          // anyone who prefers Terminal.
-          action: () => 'The setup screen now has an "Install Claude Code" button (one click, official installer). Manual route: curl -fsSL https://claude.ai/install.sh | bash — then reopen this app.',
+          // anyone who prefers a shell. The curl|bash line is upstream's
+          // POSIX installer -- printing it to a Windows user (which is what
+          // this string did) sends them to a command their shell cannot run,
+          // so Windows gets the install PAGE instead of a fake command.
+          action: () => (window.IS_WIN
+            ? 'The setup screen now has an "Install Claude Code" button (one click, official installer). Manual route: install Claude Code from docs.anthropic.com, then reopen this app.'
+            : 'The setup screen now has an "Install Claude Code" button (one click, official installer). Manual route: curl -fsSL https://claude.ai/install.sh | bash — then reopen this app.'),
           buttons: ['openLogs'],
         },
         ollama_unavailable: {
@@ -717,7 +816,7 @@ window.COPY = {
       empty: (name) => `${name} hasn't written this yet. It's rewritten overnight, during a scheduled memory-consolidation pass — that requires autonomy to be turned on in Settings, and at least one night to have gone by since.`,
       loadError: (msg) => `Couldn't load this (${msg}).`,
     },
-    // AUTHORED -- recently-touched files (같이보기 batch, Mino 2026-08-19:
+    // AUTHORED -- recently-touched files (같이보기 batch, the owner 2026-08-19:
     // "세라가 최근에 건드린 파일들 리스트도 볼 수 있게"). Register rules:
     // failed touches render dimmed with a mark, never hidden -- hiding a
     // failed write is the silent-false-success class this app keeps killing.
@@ -736,7 +835,7 @@ window.COPY = {
     deleteCancel: 'Cancel',
     deleteToast: 'Deleted.',
     deleteLabel: 'Delete',
-    // AUTHORED (not in copy file) -- manual refresh, Mino 07-13 click-test:
+    // AUTHORED (not in copy file) -- manual refresh, the owner 07-13 click-test:
     // "기억페이지 리프레시 버튼이라도 있으면 좋겠어"
     refreshLabel: 'Refresh',
     refreshToast: 'Reloaded.',
@@ -746,10 +845,10 @@ window.COPY = {
   // 2026-07-14 per docs/ia-subpage-plan.md. tabs{} is genuinely new UI (the
   // 3-way split didn't exist before); everything else here is MOVED verbatim
   // from memory.js's inline AGENT_COPY const (Slice 2, 2026-07-09) -- still
-  // eng placeholder pending Mino's copy-track localization pass, unchanged
+  // eng placeholder pending the owner's copy-track localization pass, unchanged
   // by the move itself.
   nav: {
-    // channels FIRST (multichannel v0.0.18, Mino 07-16: "맨 앞에 채널 섹션") --
+    // channels FIRST (multichannel v0.0.18, the owner 07-16: "맨 앞에 채널 섹션") --
     // tab order is meaning here: the messenger the agent lives through
     // outranks what it remembers and how it runs.
     tabs: { chat: 'Chat', channels: 'Channels', memory: 'Memory', connectors: 'Engine', settings: 'Settings', appearance: 'Appearance', logs: 'Logs' },
@@ -779,7 +878,7 @@ window.COPY = {
     updateAvailable: (latest, current) => `Update available: v${latest} (you're on v${current}).`,
     updateOpen: 'Download',
     muteWarn: (n, m) => `${m} was asked to reply ${n}× and didn't. The agent may be unable to send messages.`,
-    // Turn-error strip (2026-08-04, Mino "클로드도 동작안함"): carries the
+    // Turn-error strip (2026-08-04, the owner "클로드도 동작안함"): carries the
     // RAW upstream error text -- that text is the only thing that tells a
     // rate-limit hit ("429/limit reached", wait it out) apart from dead
     // auth ("401/authentication", re-login on Connectors). Paraphrasing it
@@ -801,7 +900,7 @@ window.COPY = {
     autonomyBadge: (start, end) => `autonomy ${start}-${end}`,
   },
 
-  // AUTHORED -- in-app chat page (in-app chat slice 4, Mino go 07-30
+  // AUTHORED -- in-app chat page (in-app chat slice 4, the owner go 07-30
   // 00:28, docs/in-app-chat-plan.md). Same no-false-promise register as
   // logs: statusUnreachable says restarts "usually" clear on their own (a
   // stale port file is exactly that), never "will".
@@ -811,13 +910,11 @@ window.COPY = {
     placeholder: 'Message the agent…',
     send: 'Send',
     statusChecking: 'Checking the chat channel…',
-    statusUp: (agent) => (agent ? `${agent} is listening.` : 'Connected.'),
     statusNotRunning: "The agent isn't running — start it from the bar above.",
     statusUnreachable: "The agent isn't answering. If it's restarting, this usually clears on its own.",
     // wrongBackend retired 2026-08-05: in-app chat is hosted by every
     // backend now, so that state no longer exists.
     gapMarker: '— some earlier messages fell out of the buffer —',
-    empty: 'No messages yet. Say hi.',
     // P1 (design-research 2026-08): empty state doubles as example prompts
     // (Notion pattern). Click fills the composer — never auto-sends.
     emptyTitle: 'No messages yet. Try one of these, or just say hi:',
@@ -833,7 +930,7 @@ window.COPY = {
     // agent works, then collapse into the "Worked for" summary when the
     // reply lands.
     activityRunning: (n) => `Working… · ${n} step${n === 1 ? '' : 's'}`,
-    // 0.2.11 storyteller status (Mino 08-21 "'세헤라자드'라는 캐릭터리스틱에
+    // 0.2.11 storyteller status (the owner 08-21 "'세헤라자드'라는 캐릭터리스틱에
     // 맞춰서... 에이전트가 지금 무슨 일을 하고 있는지 알아보기 쉽게"): the
     // LIVE summary names the current move in the storyteller's own register
     // and updates on every event — the pace of change is what reads as
@@ -841,7 +938,7 @@ window.COPY = {
     // the concrete label rides along so it stays informative, not just cute.
     // Labels arrive as `WebFetch: url` / `name: path` / bare bash prose
     // (dsh-lane activityLabelFor + hooks/pre-tool-activity.mjs conventions).
-    // Vocabulary drawn from the Nights themselves (Mino: "천일야화에서
+    // Vocabulary drawn from the Nights themselves (the owner: "천일야화에서
     // 따와서"): scrolls and ink for the scribe's work, caravans for word
     // from the wider world, the lamp's djinn for commands carried out, the
     // astrolabe for computation, and the magic word for a practiced art.
@@ -859,12 +956,12 @@ window.COPY = {
     thinkLive: 'Weaving the tale…',
     activityFoldSummary: (n, secs) => `Worked for ${secs}s · ${n} step${n === 1 ? '' : 's'}`,
     activityFoldAria: 'What the agent did during this turn',
-    // 0.2.1 collapsible Think fold (dsh lane reasoning stream; Mino 08-19
+    // 0.2.1 collapsible Think fold (dsh lane reasoning stream; the owner 08-19
     // "우리도 띵크 접이식으로 가자"). Collapsed by default — the reasoning
     // is there when wanted, never in the way.
     thinkSummary: 'Thinking…',
     thinkFoldSummary: 'Thought process',
-    // 0.2.15 background-subagent pill (Mino 08-24 "서브 스폰하면 서브도
+    // 0.2.15 background-subagent pill (the owner 08-24 "서브 스폰하면 서브도
     // working 정보에 띄우게"): stays visible across turn ends while any
     // background child is still working, so "Worked for Ns" cannot read as
     // "everything is finished".
@@ -882,11 +979,11 @@ window.COPY = {
     activityAria: 'What the agent is working on right now',
     reactAria: (emoji) => `React with ${emoji}`,
     reactFailed: "Couldn't react — try again.",
-    // Message copy button (2026-08-05, colleague feedback via Mino).
+    // Message copy button (2026-08-05, colleague feedback via the owner).
     copyAria: 'Copy this message',
     copied: 'Copied.',
     copyFailed: 'Copy failed. Select the text manually and copy it.',
-    // Image attachments (2026-08-04, Mino "인앱챗에 이미지 업로드할수있는
+    // Image attachments (2026-08-04, the owner "인앱챗에 이미지 업로드할수있는
     // 방법이 없음"). The 10MB number matches the server's hard cap in
     // routes/chat.cjs -- if that changes, change both.
     attachTitle: 'Attach an image (or paste one into the box)',
@@ -915,14 +1012,13 @@ window.COPY = {
     newConversationFailed: "Couldn't start a new conversation — try again.",
   },
 
-  // AUTHORED (v0.0.20) -- session log viewer (Mino 07-16: 개발 중 앱이
+  // AUTHORED (v0.0.20) -- session log viewer (the owner 07-16: 개발 중 앱이
   // 깜깜이라 로그 창 요청). Register matches the rest: 간결 존댓말, no
   // promises the code doesn't keep -- redaction is best-effort, so the
   // copy says tokens are "가려집니다" (mechanism) and never "안전합니다"
   // (guarantee it can't make).
   logs: {
     title: 'Logs',
-    backToMemory: 'Back to Memory',
     subtitle: 'Live logs from the app and agent session. Known secrets like tokens are masked automatically.',
     copyButton: 'Copy all',
     copied: 'Copied. Paste it as-is to share.',
@@ -940,7 +1036,20 @@ window.COPY = {
     title: 'Appearance',
     subtitle: 'Tune the look. Every change applies instantly — this page is the preview — and saves on its own.',
     glassLabel: 'Background',
-    glassNote: 'Tint is how much your background color covers the window glass. Blur is the glass itself — it has three levels because the OS only offers blur in steps, and Windows pauses it while the window is in the background.',
+    // Three-way (design-0023 P4): the old single sentence explained a
+    // Windows quirk to everyone and told Linux users their blur setting was
+    // doing something. It is not -- Electron has no compositor API for
+    // GNOME/KDE blur, so the value was saved and inert with nothing saying
+    // so. The row itself is disabled off the back of GET /api/appearance's
+    // supportsBlur; this is the sentence beside it.
+    glassNote: window.IS_MAC
+      ? 'Tint is how much your background color covers the window glass. Blur is the glass itself — it has three levels because the OS only offers blur in steps.'
+      : window.IS_WIN
+        ? 'Tint is how much your background color covers the window glass. Blur is the glass itself — it has three levels because the OS only offers blur in steps, and Windows pauses it while the window is in the background.'
+        : 'Tint is how much your background color covers the window glass.',
+    // Shown INSTEAD of a working blur control where the platform has no
+    // window-material API at all. Saying nothing was the old behavior.
+    blurUnsupported: 'Window blur is not available on this desktop — there is no system API for it here, so this setting would do nothing.',
     glassRangeLabel: 'Tint',
     blurLabel: 'Blur',
     blurLevels: { off: 'Off', soft: 'Soft', strong: 'Strong' },
@@ -959,7 +1068,6 @@ window.COPY = {
 
   settings: {
     title: 'Settings',
-    backToMemory: 'Back to Memory', // unused since the IA pass removed the back link; kept so a future page can reuse it
     // Three group headings (IA pass 2026-07-25). The page used to run seven
     // flat blocks; these name the question each group answers, so the answer
     // to "where do I change X" is one read instead of a scan.
@@ -970,7 +1078,7 @@ window.COPY = {
     // shared with the user's own Claude Code). No euphemisms: "deletes the
     // agent's memory" is the sentence a user must read before clicking.
     groupDanger: 'Danger zone',
-    // AUTHORED -- About / manual update check (2026-08-04, Mino "오토
+    // AUTHORED -- About / manual update check (2026-08-04, the owner "오토
     // 업데이트 버튼 어딨니?"). The nav banner appears only when an update
     // exists; this row is the always-there surface. "Check now" honesty:
     // failure shows the server's detail, up-to-date says so plainly.
@@ -1008,7 +1116,7 @@ window.COPY = {
     updateAvailableLine: (latest) => `v${latest} is available.`,
     updateOpenButton: 'Open download page',
     updateCheckFailed: (detail) => `Couldn't check: ${detail || 'unknown error'}`,
-    // AUTHORED -- Ollama by-URL model picker (2026-08-04, Mino: paste an
+    // AUTHORED -- Ollama by-URL model picker (2026-08-04, the owner: paste an
     // ollama.com/library/{model} URL to run models the dropdown doesn't
     // list). The model-absent line WARNS instead of blocking: the public
     // catalog probe is best-effort and can lag a brand-new model.
@@ -1022,24 +1130,21 @@ window.COPY = {
     ollamaUrlModelWarn: (m) => `ollama.com's catalog doesn't list "${m}" right now — it may still work if it's brand new.`,
     ollamaUrlApplyFailed: 'Switch failed — the agent kept its previous model.',
     ollamaUrlApplied: (m) => `Switched to ${m}. The agent is restarting.`,
-    // Usage gauge cli-session source label (403-scope fix): honest about
-    // WHICH login the number describes.
-    usageCliSourceNote: 'via this Mac\'s Claude CLI login',
-    usageSetupTokenSourceNote: 'via the setup-token — may not read usage; connect below for accuracy',
-    // Full-scope usage-login CTA (2026-08-13, the real fix for the stuck 429).
-    usageConnectCta: 'Connect Claude usage',
-    usageConnectStarting: 'Opening a login window…',
-    usageConnectWaiting: 'Finish signing in in the browser — this updates on its own.',
-    usageConnectDone: 'Connected — reading usage.',
-    usageConnectFailed: 'Login did not finish. Try again.',
-    usageConnectTimeout: 'Login timed out. Try again.',
+    // (settings.usage* deleted, design-0023 P4: nine keys duplicating
+    // connectors.usage*, referenced by connectors.js off ITS own block and by
+    // settings.js not at all. The dead copy is where "via this Mac's Claude
+    // CLI login" survived the platform pass -- an unused string nobody could
+    // have seen go wrong.)
     dangerLabel: 'Delete the app and everything it made',
-    dangerNote: "Removes the agent, its memory and journals, saved credentials, caches, and the app itself — everything, without Terminal. Your personal Claude Code settings (~/.claude.json) are left untouched.",
+    dangerNote: `Removes the agent, its memory and journals, saved credentials, caches, and the app itself — everything, without ${SHELL_APP}. Your personal Claude Code settings (~/.claude.json) are left untouched.`,
     dangerButton: 'Delete everything…',
     dangerConfirm: (name) => `This permanently deletes ${name} — the agent, all of its memory and journals, saved tokens, and the app itself. There is no undo. The app will close when it's done.`,
     dangerConfirmButton: 'Delete everything',
     dangerCancel: 'Keep it',
-    dangerDone: 'Deleting. The app will close itself in a moment — it is already in the Trash.',
+    // "already in the Trash" was true on exactly one of three platforms: the
+    // mac lane trashes the .app bundle, Windows hands off to the NSIS
+    // uninstaller, and Linux unlinks the AppImage. P.deletedPlace says which.
+    dangerDone: `Deleting. The app will close itself in a moment — it is already ${P.deletedPlace}.`,
     renameLabel: 'Name',
     renameButton: 'Save',
     renameSaved: 'Saved.',
@@ -1078,7 +1183,7 @@ window.COPY = {
     sudoLabel: 'Admin privileges (sudo)',
     sudoNote: `When on, the agent can use sudo commands. The password is encrypted and stored in a vault backed by ${CRED_STORE_THE}, and is designed to never appear in chat, logs, or conversation history. sudo doesn't work while the app is off.`,
     sudoEnableLabel: 'Allow sudo',
-    sudoPasswordLabel: 'Mac login password',
+    sudoPasswordLabel: P.adminPasswordLabel,
     sudoSave: 'Save',
     sudoSaved: 'Saved.',
     sudoStateStored: 'A password is stored in the vault. To change it, enter a new one and save.',
@@ -1232,10 +1337,24 @@ window.COPY = {
     // pane (SIP/sudo) never grow an open button -- offering a toggle that
     // cannot fix the problem is the misroute this feature exists to kill.
     permsLabel: 'Permission status',
-    permsNote:
-      'What macOS currently allows. Granting always happens in System Settings — this page only checks and points.',
+    // design-0023 P4: this panel is no longer mac-only. permission-probes.cjs
+    // carries a real Linux row (sudo, and the keyring safeStorage encrypts
+    // against), so the note cannot tell a Linux user what "macOS currently
+    // allows". Selected per platform, same rule as PLATFORM_WORDS above — a
+    // row is chosen, never fallen into, and an unknown host gets the linux
+    // row because it is the one that names no OS. The win32 row is written
+    // for completeness; that platform's probe list is empty, so the panel
+    // itself never renders there.
+    permsNote: ({
+      darwin: 'What macOS currently allows. Granting always happens in System Settings — this page only checks and points.',
+      win32: 'What this PC currently allows. This page only checks — it never changes a setting for you.',
+      linux: 'What this computer currently allows. This page only checks — the fixes are outside the app.',
+    })[window.HOST_PLATFORM] || 'What this computer currently allows. This page only checks — the fixes are outside the app.',
     permsLoading: 'Checking…',
     permsLoadFailed: "Couldn't check permission status",
+    // Shown instead of an empty box. A blank panel reads as "everything is
+    // fine", which is the one lie this feature exists to kill.
+    permsNone: 'Nothing to check on this computer.',
     permsGranted: 'Granted',
     permsDenied: 'Denied',
     permsIndeterminate: "Can't determine",
@@ -1244,6 +1363,12 @@ window.COPY = {
     permsVerifiedMark: 'verified just now',
     permsOpenButton: 'Open Settings',
     permsProbeButton: 'Check',
+    // One label per probe class the SERVER can send. A row whose class is
+    // missing here is skipped by the renderer (nothing honest to call it),
+    // so this table and permission-probes.cjs's PROBE_TABLE have to stay in
+    // step -- tests/test-permission-probes.mjs pins that they do. Classes
+    // from a platform other than this one are harmless: the server sends
+    // only its own platform's rows.
     permsClassNames: {
       fda: 'Full Disk Access',
       screen: 'Screen Recording',
@@ -1251,18 +1376,22 @@ window.COPY = {
       automation: 'Automation (control other apps)',
       sudo: 'Admin commands (sudo)',
       sip: 'System Integrity Protection (SIP)',
+      keyring: 'Password store (keyring)',
     },
     permsClassNotes: {
       screen: 'Needed for 같이보기 — the agent taking a screenshot of one of your app windows when you ask it to look.',
       automation: 'Clicking Check may prompt a macOS permission dialog',
       sudo: 'Granted (stored key) means the admin password saved during setup arms sudo -A through the app. Check actually runs sudo with it — the one honest test of the stored password.',
       sip: 'A fixed system condition, unrelated to app permissions. Not something you change in Settings.',
+      // Linux only. Deliberately says what breaks rather than naming a fix
+      // this app cannot perform: starting a keyring is desktop-session work.
+      keyring: 'Where API keys and tokens are encrypted. Denied means no keyring service is running (gnome-keyring, kwallet), so the app will refuse to store new keys rather than write them unprotected.',
     },
     permsRelaunchNote: 'If you changed a permission in Settings, some changes need an app restart to show up here',
     permsRelaunchButton: 'Restart App',
   },
 
-  // AUTHORED -- channels page (multichannel v0.0.18, Mino 07-16 15:07:
+  // AUTHORED -- channels page (multichannel v0.0.18, the owner 07-16 15:07:
   // "맨 앞에 채널 섹션 추가하고 Discord/Slack/Telegram 연동 갈아끼울 수
   // 있게" + 15:13 "셋 다 실작동까지 이번에"). The discord reconnect strings
   // MOVED here verbatim from `connectors` (that page no longer renders
@@ -1359,10 +1488,7 @@ window.COPY = {
   // 존댓말, no 이모지, no 느낌표, no cheerleading.
   connectors: {
     title: 'Connectors',
-    backToMemory: 'Back to Memory',
-    slackLabel: 'Slack',
-    slackNote: 'Support coming later',
-    // AUTHORED -- post-onboarding provider auth (Mino 07-13 click-test:
+    // AUTHORED -- post-onboarding provider auth (the owner 07-13 click-test:
     // "온보딩 끝낸 이후에 ollama cloud 인증 추가 / chatGPT인증 추가").
     providersLabel: 'Providers',
     // providersNote removed (대공사 — subtitle row retired; the label carries it)
@@ -1406,7 +1532,7 @@ window.COPY = {
     doctorPresent: 'Found',
     doctorMissing: 'Missing',
     doctorCredentialFix: 'Connect it in the Providers card above.',
-    doctorInstallHint: 'Run this in Terminal, then Re-check. It installs the official CLI without needing npm or Homebrew.',
+    doctorInstallHint: `Run this in ${SHELL_APP}, then Re-check. It installs the official CLI without needing ${P.packageTools}.`,
     doctorInstallCopy: 'Copy command',
     doctorInstallCopied: 'Install command copied.',
     doctorDocs: 'Open install guide',
@@ -1414,7 +1540,7 @@ window.COPY = {
     usageLabel: 'Usage',
     usageRefresh: 'Refresh',
     usageLoading: 'Reading usage…',
-    // AUTHORED — gauge-UI lane names (2026-08-05, Mino: 텍스트 말고 진짜
+    // AUTHORED — gauge-UI lane names (2026-08-05, the owner: 텍스트 말고 진짜
     // 게이지 "보기쉽게"). Replaced the old one-line text prefixes.
     usageLaneClaude: 'Claude',
     usageLaneCodex: 'Codex',
@@ -1433,7 +1559,7 @@ window.COPY = {
     usageConnectFailed: 'Login did not finish. Try again.',
     usageConnectTimeout: 'Login timed out. Try again.',
     usageNoToken: 'no Claude login on file',
-    usageCodexNoLogin: 'no Codex login on this Mac (~/.codex)',
+    usageCodexNoLogin: `no Codex login on ${THIS_MACHINE} (~/.codex)`,
     usageOllamaNoKey: 'no ollama.com API key on file',
     // unknown_shape = the undocumented ollama.com endpoint answered with a
     // shape we have not bound yet; the field list IS the receipt to send us.
@@ -1455,7 +1581,7 @@ window.COPY = {
       exit_nonzero: 'Authentication failed. Try again.',
       unknown: 'Authentication failed. Try again.',
     },
-    // AUTHORED -- discord reconnect (Mino 07-14 11:31: "이미 세팅한 상태에서
+    // AUTHORED -- discord reconnect (the owner 07-14 11:31: "이미 세팅한 상태에서
     // 디코 -> 슬랙 -> 텔레그램 해보게"). Failure branches deliberately reuse
     // discordTutorial.failures VERBATIM at the call site (same three causes,
     // same fixes) -- no duplicate strings here, connectors.js reads that map.
@@ -1478,7 +1604,7 @@ window.COPY = {
     discordApplyOk: 'Move',
     discordApplying: 'Applying and restarting the agent…',
     discordApplied: (guild, channel) => `Connected: ${guild} / #${channel}`,
-    // AUTHORED -- Claude subscription re-login row (2026-08-04, Mino
+    // AUTHORED -- Claude subscription re-login row (2026-08-04, the owner
     // "connectors에서 클로드도 re-login 가능하게" + "claude API Key는
     // 없애버리고" -- the claudeKey* BYOK block that lived here is gone with
     // the API-key mode). Wording mirrors the wizard's setup-token panel;
@@ -1501,11 +1627,9 @@ window.COPY = {
     // proxy actually answers; no line when it doesn't run.
     chatgptServing: (model) => `Currently serving: ${model}`,
     chatgptServingUnknown: 'The proxy response has no model info',
-    // AUTHORED -- future client slots (Mino 07-14 11:31 directive names the
+    // AUTHORED -- future client slots (the owner 07-14 11:31 directive names the
     // path: 디코 -> 슬랙 -> 텔레그램).
-    telegramLabel: 'Telegram',
-    telegramNote: 'Support coming later',
-    // AUTHORED -- claude.ai connector intercept (춘식3 design, 07-14). The
+    // AUTHORED -- claude.ai connector intercept (internal design, 07-14). The
     // lane warning is the load-bearing honesty line: on a non-subscription
     // lane an authorized connector is inert, so we SAY so instead of shipping
     // a dead button.
@@ -1526,7 +1650,7 @@ window.COPY = {
   },
 
   // Sourced from the source file's Step 4 폴백 note: "waiting.html 카피
-  // (폴백 착지 화면)". Not a chat body (Mino rejected web-chat) -- status +
+  // (폴백 착지 화면)". Not a chat body (the owner rejected web-chat) -- status +
   // a single CTA back into the Discord tutorial only.
   waiting: {
     title: 'Settings saved',

@@ -1,7 +1,7 @@
 ---
 name: windowshot
 description: See the user's screen with them (같이보기). When the user says "같이 보자", "내 화면 봐", "이 창 좀 봐", "look at my Discord/calendar/app", capture a clean screenshot of ONE app window and read it, then talk about what you saw. Read-only — this never clicks, types, or controls anything.
-version: 0.1.0
+version: 0.2.0
 ---
 
 # 같이보기 — look at one of the user's windows
@@ -31,6 +31,13 @@ resolved command literally in every call:
 
 - macOS/Linux: `<data-home>/bin/windowshot` (or plain `windowshot` if on PATH)
 - Windows: `<data-home>\bin\windowshot.cmd`
+
+On macOS and Windows the tool is built out of things the OS already has. On
+Linux it is not: it drives `wmctrl` (or `xdotool`) and ImageMagick's `import`,
+which are ordinary packages. This skill is only seeded on a Linux host where
+those were installed when the app last started — so if you are reading it
+there, they were present then. If one has been removed since, the tool says
+which and how to reinstall it; relay that rather than guessing.
 
 If the wrapper is missing, `node <data-home>/bin/agent-tools/windowshot.cjs`
 is the same thing. If that does not exist either, say so honestly — the app
@@ -69,6 +76,37 @@ version predates 같이보기 — and do not improvise with raw `screencapture`.
   enumeration only sees the interactive desktop. This is session isolation,
   not a permission problem — say the capture needs to run in the user's
   desktop session.
+- **A Linux package is missing (`list` or `shoot`)**: the error names the
+  program (`wmctrl`/`xdotool`, or ImageMagick) and the install line for
+  apt / dnf / pacman. Pass that on. Do NOT translate it into "no windows are
+  open" — a missing enumerator and an empty desktop look identical from the
+  outside, and only the tool can tell them apart.
+- **`list` says this is a Wayland session**: Wayland gives no command-line
+  tool any way to enumerate or grab another app's window. That is a protocol
+  decision, not a permission anyone can grant, so do NOT retry and do NOT
+  suggest installing something. The honest options are: the user logs in to an
+  Xorg (X11) session, or the user takes the screenshot and sends it to you.
+- **`list` prints a Wayland "PARTIAL" note and then some windows**: those are
+  XWayland (legacy X11) windows only; native Wayland windows are invisible to
+  it. Say the list is partial before the user concludes their app is missing.
+- **`list` says the lister failed, and the package IS installed**: the tool is
+  there and the window manager will not answer it. The one we have actually hit
+  is WSLg (Windows Subsystem for Linux's built-in desktop): `wmctrl -m` happily
+  answers "Weston WM", but Weston never publishes `_NET_CLIENT_LIST`, so
+  `wmctrl -l` fails and `xdotool --onlyvisible` sees nothing. Report the quoted
+  error. Do NOT tell the user to install anything — they already did — and do
+  NOT say the desktop is empty.
+- **`list` says one lister found nothing and the other could not answer**: that
+  is a half answer, not an empty desktop. Say both halves. "No windows are
+  open" needs two tools that work and agree.
+- **`shoot` fails on Linux with "no plausible image"**: without a compositing
+  window manager, X11 cannot hand over the contents of an obscured or
+  minimized window. Ask the user to bring it to the front and try once more;
+  if it fails again, say that this window resists capture.
+- **`list` says DISPLAY is unset (Linux)**: you are not inside the user's
+  graphical session — an ssh shell, a systemd service and a container all have
+  no display. Same wall as the Windows remote-session case, same answer: the
+  capture has to run in the user's own desktop session.
 - Never screenshot the whole desktop as a fallback unless the user explicitly
   asks for the full screen.
 

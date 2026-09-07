@@ -1,5 +1,5 @@
 // appearance-model.cjs — the ONE definition of appearance knobs (Appearance
-// tab, Mino 2026-08-05 "어피어런스 탭 만들고 ... CSS들 게이지로 쭉 나열";
+// tab, the owner 2026-08-05 "어피어런스 탭 만들고 ... CSS들 게이지로 쭉 나열";
 // v2 same day: "제일 중요한 대원칙 : 일관성 ... 악센트 컬러 / 백그라운드
 // 컬러 colour Picker로 찍을 수 있게").
 // Dual-environment on purpose: the browser loads it as a plain script
@@ -17,12 +17,12 @@
 //   glass      0..100   one gauge for the whole frosted-glass look.
 //   fontSize   12..16   base px (half steps). Everything else is rem/em.
 //   fontFamily system | serif | mono | rounded
-//   bg         hex — canvas seed. Default black (Mino 2026-08-05).
-//   accent     hex — accent seed. Default blue (Mino 2026-08-05).
+//   bg         hex — canvas seed. Default black (the owner 2026-08-05).
+//   accent     hex — accent seed. Default blue (the owner 2026-08-05).
 ;(function (root) {
   'use strict'
 
-  // Defaults = the app's own identity palette (0.2.6, Mino 08-20 "우리만의
+  // Defaults = the app's own identity palette (0.2.6, the owner 08-20 "우리만의
   // 색"): midnight navy + manuscript gold, sampled from build/icon_1024.png
   // (field #121d31, crescent/book linework #d5a458). Prior defaults
   // (black/#5b8dee blue) remain one click away in the preset rows.
@@ -38,7 +38,7 @@
   // saved file from 0.0.63 must not silently reset the user's color.
   const LEGACY_ACCENTS = { blue: '#5b8dee', violet: '#8b7bee', green: '#5fae7c', amber: '#d9a15f', rose: '#d9695f' }
 
-  // v3 (Mino 2026-08-05 16:12 "Background Tint / Background Blur << 이거
+  // v3 (the owner 2026-08-05 16:12 "Background Tint / Background Blur << 이거
   // 두개로 간단하게"): the 7-material switcher tested as "slider
   // sensitivity" — differences too subtle to justify seven names. Folded
   // into a 3-step Blur control. HONESTY CONSTRAINT: macOS does not expose a
@@ -48,7 +48,7 @@
   //   off    → no platform effect (CSS goes solid — see cssVars)
   //   soft   → under-window (the calibrated default backdrop)
   //   strong → hud (the brightest/most-diffuse of the seven, max contrast
-  //            against soft per the 7-way probe + Mino's eyes 16:09)
+  //            against soft per the 7-way probe + the owner's eyes 16:09)
   const BLUR_LEVELS = ['off', 'soft', 'strong']
   const MAC_BLUR_MATERIALS = { off: null, soft: 'under-window', strong: 'hud' }
   // Legacy v2 configs stored macMaterial by name; map to the nearest step.

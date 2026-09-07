@@ -1,7 +1,7 @@
 // attach-topology.cjs -- tmux IPC helpers for the attach lane (0.1.0 prep).
 //
 // TOPOLOGY (docs/design-0016-attach-topology.md, O2): the agent supervisor
-// (`run.sh __loop`) lives in a pane of a tmux server the USER bootstrapped
+// (`supervisor.mjs __loop`) lives in a pane of a tmux server the USER bootstrapped
 // from their own terminal (onboarding/templates/attach-bootstrap.sh, rendered
 // into DATA_HOME). TCC attributes permissions to the tmux server's terminal
 // ancestry, so grants survive the app's per-release ad-hoc signature churn --
@@ -15,7 +15,7 @@
 //   - every command here goes through tmuxIpc(), whose allowlist contains
 //     ONLY verbs that error out when no server is running (live-verified
 //     2026-07-16: `has-session`/`list-panes` on a dead socket exit 1 and
-//     leave no server/socket behind; see scripts/test-attach-topology.mjs).
+//     leave no server/socket behind; see tests/test-attach-topology.mjs).
 //   - `new-session` is BANNED app-side even though it would usually attach
 //     to the live server: in the server-just-died race it would START one,
 //     app-descended. Restart uses `respawn-pane` (cannot create a server,
@@ -36,9 +36,10 @@ const { execFileSync } = require('node:child_process')
 const ATTACH_SOCKET = 'scheherazade'
 const ATTACH_SESSION = 'agent'
 
-// Same DATA_HOME convention as the hooks (stop-reply-guard.mjs): honor the
-// managed-spawn env first, fall back to the literal install path.
-const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', 'Scheherazade')
+// Same DATA_HOME convention as every other component -- one resolver since
+// design-0023 P3 (data-home.cjs): AGENT_DATA_HOME || MEM || ~/Documents/<name>.
+const { resolveDataHome } = require('./data-home.cjs')
+const DATA_HOME = resolveDataHome({ allowMem: false })
 
 // Verbs that cannot create a tmux server (all error with "no server running"
 // on a dead socket). Anything not listed here throws before reaching tmux.
@@ -128,8 +129,8 @@ function attachSessionState() {
   }
 }
 
-// Revive a dead agent pane: respawn (same original command = fresh
-// `bash run.sh __loop`, which re-sources .agent-config -- so a model swap
+// Revive a dead agent pane: respawn (same original command = a fresh
+// `supervisor.mjs __loop`, which re-reads .agent-config -- so a model swap
 // written to config before this call takes effect), re-apply pipe-pane (it
 // does not reliably survive respawn), return the new pane pid.
 function respawnAttachPane({ logFile }) {

@@ -14,9 +14,10 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { localDate } from '../local-date.cjs' // AGENT_TZ, default Asia/Seoul
 
 const MEM = process.env.MEM || process.cwd()
-const TODAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+const TODAY = localDate()
 const SESSION_DIR = path.join(MEM, 'session_notes')
 const JOURNAL_DIR = path.join(MEM, 'journals')
 const ARCHIVE_DIR = path.join(SESSION_DIR, '.archive')

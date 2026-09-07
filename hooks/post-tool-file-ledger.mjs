@@ -2,7 +2,7 @@
 // post-tool-file-ledger.mjs — PostToolUse hook, file-writing tools only
 // (Write|Edit|MultiEdit|NotebookEdit).
 //
-// WHY (같이보기 batch, Mino 2026-08-19 11:21: "세라가 최근에 건드린 파일들
+// WHY (같이보기 batch, the owner 2026-08-19 11:21: "세라가 최근에 건드린 파일들
 // 리스트도 볼 수 있게"): nothing recorded which files the agent touched —
 // design-0017 v1 explicitly scoped Edit/Write coverage out, and the
 // activity feed deliberately excludes them (a busy turn floods it). This
@@ -19,12 +19,12 @@
 
 import { readFileSync, appendFileSync, mkdirSync, statSync, renameSync } from 'node:fs'
 import path from 'node:path'
-import os from 'node:os'
+import { resolveDataHome } from '../data-home.cjs' // one resolver: AGENT_DATA_HOME || MEM || ~/Documents/Scheherazade
 
 // Kill switch (product-prefixed, mirrors SCHEHERAZADE_RECEIPT_LEDGER).
 if (process.env.SCHEHERAZADE_FILE_LEDGER === '0') process.exit(0)
 
-const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', 'Scheherazade')
+const DATA_HOME = resolveDataHome()
 const GATES_DIR = path.join(DATA_HOME, '.gates')
 const LEDGER_PATH = path.join(GATES_DIR, 'file-ledger.jsonl')
 // Rotation differs from the receipt ledger: this history HAS a consumer (the

@@ -17,15 +17,15 @@
 // TWO SURFACES, deliberately:
 //   1. Legacy (db, args) implementations — moved VERBATIM from server.mjs
 //      (their provenance comments kept). initDb() still opens a FRESH
-//      connection per call: scripts/test-journal-e2e.cjs opens one, writes
+//      connection per call: tests/test-journal-e2e.cjs opens one, writes
 //      fixtures, closes it, and only then boots the HTTP server — a shared
 //      singleton behind initDb() would hand the server a closed handle.
 //   2. The singleton-backed public API (write/query/confirm/remove/...) —
 //      no db threading; this module owns one lazily-opened connection per
 //      process (the same shape http-server's old getMemory() cache had).
 //
-// Spec: ~/Documents/MAGI_Memory/projects/scheherazade_memory_schema_v0_melchior_2026-07-03.md
-// Pattern source (ported, not reinvented): ~/Desktop/MAGI/ontology/server.mjs
+// Spec: the memory schema v0 design note (2026-07-03)
+// Pattern source (ported, not reinvented): the reference fleet's ontology server
 //   — handleUpdate's read-back-verify (UPDATE...RETURNING + valuesEquivalent +
 //     numericCoerce + null-mirror). Same shape applied here to insert/upsert
 //     too, since memory_write covers both.
@@ -43,24 +43,32 @@ import { DatabaseSync } from 'node:sqlite'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { resolveDataHome, resolveMemoryDb } from '../data-home.cjs'
+import { localDayKey } from '../local-date.cjs'
 import * as entityIndex from './entity-index.mjs'
 
 // ── Config ──────────────────────────────────────────────────────────────
 // DATA_HOME: fixed, product-keyed data directory -- matches
 // onboarding/http-server.cjs's DATA_HOME exactly (PO correction,
 // 2026-07-03): the DB path must NOT be keyed on AGENT_NAME. AGENT_NAME can
-// legitimately vary per launch context (env override, memory/smoke.mjs sets
+// legitimately vary per launch context (env override, tests/smoke.mjs sets
 // it to 'smoketest') but the on-disk database location must never move just
 // because that string changes -- a rename in the onboarding wizard's
 // Settings page only ever edits a DISPLAY_NAME value, and even AGENT_NAME
 // drifting would otherwise silently orphan memory.db (total memory loss).
 // Only SCHEHERAZADE_MEMORY_DB -- an explicit, deliberate override -- may
-// redirect DB_PATH; that's exactly what memory/smoke.mjs still uses to
+// redirect DB_PATH; that's exactly what tests/smoke.mjs still uses to
 // point at a disposable temp db. Read ONCE, at import time — callers that
 // override it (smoke, tests) must set the env var BEFORE importing.
 // 0.2.9 unification: canonical home -- see onboarding/http-server.cjs DATA_HOME.
-const DATA_HOME = path.join(os.homedir(), 'Documents', 'Scheherazade')
-const DB_PATH = process.env.SCHEHERAZADE_MEMORY_DB || path.join(DATA_HOME, 'memory.db')
+// design-0023 P3: resolved through data-home.cjs like every other component,
+// so an AGENT_DATA_HOME override finally moves the DATABASE too. Before this,
+// the literal below ignored the override and a user who moved their data home
+// kept writing memories into the OLD one -- everything else followed, memory
+// did not (read-D §6 #3). The fixed default name is unchanged and still not
+// keyed on AGENT_NAME (see data-home.cjs's lock note and the comment above).
+const DATA_HOME = resolveDataHome({ allowMem: false })
+const DB_PATH = resolveMemoryDb({ dataHome: DATA_HOME })
 
 const log = (msg) => process.stderr.write(`[memory] ${msg}\n`)
 const nowISO = () => new Date().toISOString()
@@ -152,7 +160,7 @@ CREATE TABLE IF NOT EXISTS memory_events (
 --
 -- The topic column is the closest thing to content, and it is deliberately only a
 -- markdown heading (the file's table of contents, never its body — asserted in
--- scripts/test-pointer-scan.mjs). The agent that wants to know what a pointed-at
+-- tests/test-pointer-scan.mjs). The agent that wants to know what a pointed-at
 -- file SAYS has to open it, with a visible tool call, in front of the user.
 --
 -- CRITICALLY: this table is absent from WRITABLE_TABLES below, so memory_write
@@ -276,7 +284,7 @@ function tableColumns(db, table) {
 // no triggers anywhere, so this is currently dormant; closing it needs
 // either a follow-up SELECT after RETURNING (reintroduces a race window) or
 // a documented "v1 has no triggers" invariant enforced at DDL-review time.
-// Ported verbatim (semantics) from ~/Desktop/MAGI/ontology/server.mjs
+// Ported verbatim (semantics) from the reference fleet's ontology server
 // handleUpdate — conservative equivalence between an intended value and the
 // value actually persisted, read back via ...RETURNING in the SAME atomic
 // statement (no follow-up SELECT, no race window). Must NEVER flag a
@@ -451,7 +459,7 @@ function memoryWriteInsertOrUpsert(db, table, cleanData, cols) {
   // Session-attribution default (2026-08-19): every table's sessionField is
   // NOT NULL by DDL, but weaker models routinely omit it and then flail on
   // the constraint error (measured: deepseek-v4-flash failed memory_write
-  // twice in a row on Mino's box before landing a valid call). The column is
+  // twice in a row on the owner's box before landing a valid call). The column is
   // provenance, not content -- an honest "unattributed" placeholder beats a
   // failed write that costs the model a retry loop.
   if (cfg.sessionField && cleanData[cfg.sessionField] == null && cols.has(cfg.sessionField)) {
@@ -680,11 +688,11 @@ function memoryDelete(db, args) {
 
 // ── memory_recall_material: session-start helper, raw structured data ────
 //
-// Bloat advisory (Mino 2026-07-24): MAGI's markdown memory had no write-side
+// Bloat advisory (the owner 2026-07-24): the reference fleet's markdown memory had no write-side
 // caps and regrew to pre-prune size within 1-3 months.  Scheherazade's DB
 // avoids the flat-file class of that problem, but row counts can still grow
 // unchecked (especially corrections, which had no LIMIT here until now).
-// Rather than a write-side gate (tried and abandoned in early MAGI for false
+// Rather than a write-side gate (tried and abandoned in the early reference fleet for false
 // positives), this is a READ-SIDE advisory: total row counts are returned with
 // every recall, and when any table exceeds its threshold the agent gets a
 // one-line suggestion to ask the user about cleanup.  Advisory only -- never
@@ -762,9 +770,9 @@ function memoryRecallMaterial(db, args) {
 // ── DB init ────────────────────────────────────────────────────────────
 // Opens a FRESH connection every call — deliberately NOT the singleton
 // below. This is the legacy contract every existing consumer relies on:
-// scripts/test-journal-e2e.cjs opens one, writes fixtures, CLOSES it, then
+// tests/test-journal-e2e.cjs opens one, writes fixtures, CLOSES it, then
 // boots the HTTP server (which must get a live connection of its own);
-// memory/smoke.mjs closes its connection at teardown. Folding this into the
+// tests/smoke.mjs closes its connection at teardown. Folding this into the
 // singleton would hand later callers a closed handle.
 // Owner-only, applied on EVERY open, not just on create (2026-08-04).
 //
@@ -826,7 +834,7 @@ function initDb() {
   // alone does not clean the -wal file).
   db.exec('PRAGMA secure_delete = ON')
   db.exec(DDL)
-  // Identity firewall (2026-08-15, Artaban bug — design:
+  // Identity firewall (2026-08-15, identity-bleed bug — design:
   // docs/design-identity-firewall-and-selfops.md): the journal is a
   // first-person surface and DISPLAY_NAME is renameable, so every entry now
   // carries its writer's identity. Idempotent ALTER (duplicate-column throws
@@ -859,7 +867,7 @@ function initDb() {
 // public API below exports the historical names journalWrite/journalRead with
 // the (args)-only signature; memory/server.mjs re-exports THESE under the
 // historical (db, args) names for the legacy test surface
-// (scripts/test-journal.mjs, scripts/test-journal-e2e.cjs).
+// (tests/test-journal.mjs, tests/test-journal-e2e.cjs).
 const MAX_JOURNAL_APPEND_CHARS = 20000
 const MAX_JOURNAL_DAY_CHARS = 200000
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -867,12 +875,13 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 // The agent's day is the LOCAL day. A journal keyed on UTC would roll over
 // mid-evening for the user it belongs to, which is the kind of small lie that
 // makes a memory feel like a machine's.
-function localToday(now = new Date()) {
-  const y = now.getFullYear()
-  const m = String(now.getMonth() + 1).padStart(2, '0')
-  const d = String(now.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
-}
+// design-0023 P3: "local" is now the AGENT'S day (local-date.cjs, AGENT_TZ,
+// default Asia/Seoul) rather than the host process's timezone. Before this the
+// DB rolled over on system time while the note filenames and the nightly
+// cadence rolled over on KST -- off KST those two disagreed by a day, so the
+// journal row and the session note of the same evening carried different
+// dates. One helper, one boundary, everywhere.
+const localToday = localDayKey
 
 // Identity firewall (2026-08-15): the journal writer's identity, read from
 // the .agent-config sitting NEXT TO the DB (http-server's CONFIG_DIR ===
@@ -951,7 +960,7 @@ function journalWriteImpl(db, args) {
 
   // Zero-model-call entity index refresh (2026-08-16): FULL rebuild, not
   // incremental — measured at 21-30ms on a 790-row seeded corpus and
-  // 111-146ms on an extreme 3860-row corpus (scripts/test-entity-index.mjs
+  // 111-146ms on an extreme 3860-row corpus (tests/test-entity-index.mjs
   // and the ad hoc bench both under this cap), comfortably under the 200ms
   // budget for any corpus size this app's own BLOAT_THRESHOLDS would ever
   // let a user reach before nagging them to clean up. A full rebuild also
