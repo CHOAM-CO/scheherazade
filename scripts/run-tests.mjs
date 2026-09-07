@@ -83,9 +83,19 @@ function parseArgs(argv) {
     if (a === '--live') opts.live = true
     else if (a === '--list') opts.list = true
     else if (a === '--help' || a === '-h') opts.help = true
-    else if (a === '--filter' || a.startsWith('--filter=')) opts.filters.push(String(take(inline('--filter')) ?? ''))
-    else if (a === '--timeout' || a.startsWith('--timeout=')) opts.timeoutS = Number(take(inline('--timeout')))
-    else if (a === '--logs' || a.startsWith('--logs=')) opts.logDir = String(take(inline('--logs')) ?? '')
+    else if (a === '--filter' || a.startsWith('--filter=')) {
+      const v = take(inline('--filter'))
+      if (!v) { console.error('run-tests: --filter needs a substring'); process.exit(2) }
+      opts.filters.push(String(v))
+    } else if (a === '--timeout' || a.startsWith('--timeout=')) {
+      const v = Number(take(inline('--timeout')))
+      if (!Number.isFinite(v) || v <= 0) { console.error('run-tests: --timeout needs a positive number of seconds'); process.exit(2) }
+      opts.timeoutS = v
+    } else if (a === '--logs' || a.startsWith('--logs=')) {
+      const v = take(inline('--logs'))
+      if (!v) { console.error('run-tests: --logs needs a directory'); process.exit(2) }
+      opts.logDir = String(v)
+    }
     else {
       console.error(`run-tests: unknown argument ${JSON.stringify(a)}`)
       usage()
