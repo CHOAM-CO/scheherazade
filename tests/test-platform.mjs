@@ -67,7 +67,7 @@ const MATRIX = {
   appleApps:              [true,             true,             false,       false],
   unixTools:              [true,             true,             false,       true],
   execBit:                [true,             true,             false,       true],
-  windowCapture:          [true,             true,             true,        false],
+  windowCapture:          [true,             true,             true,        false], // linux is a PROBE: false because `mk` has nothing on disk (tests/test-windowshot.mjs drives the tooled host)
   shellName:              ['Terminal',       'Terminal',       'PowerShell', 'Terminal'],
   machineWord:            ['this Mac',       'this Mac',       'this PC',   'this computer'],
 }
@@ -216,7 +216,14 @@ console.log('8. seeded-skill allowlist is data, and it excludes what cannot run'
   assert(!w.skillAllowed('file-organizer') && l.skillAllowed('file-organizer') && m.skillAllowed('file-organizer'),
     'file-organizer is unix find/mv: mac + linux, not Windows')
   assert(m.skillAllowed('windowshot') && w.skillAllowed('windowshot') && !l.skillAllowed('windowshot'),
-    'windowshot has a mac and a Windows implementation and no Linux one')
+    'windowshot seeds on mac and Windows, and NOT on a bare Linux box -- its Linux lane needs wmctrl/xdotool + ImageMagick, which nothing here has')
+  // The one seeded skill whose requirement is a host fact rather than a
+  // platform fact: install the packages and the same Linux box gets it.
+  const lTooled = mk('linux', 'x64', {
+    accessSync: (p) => { if (/\/(wmctrl|import)$/.test(String(p))) return; throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) },
+  })
+  assert(lTooled.skillAllowed('windowshot') && lTooled.windowCapture === true,
+    '...and it DOES seed on a Linux box that has them (windowCapture is a probe there, not a constant)')
   assert(m.skillAllowed('coding') && w.skillAllowed('coding') && l.skillAllowed('coding'),
     'a skill with no requirement seeds everywhere (the default is portable)')
 }

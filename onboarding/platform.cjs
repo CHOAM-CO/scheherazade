@@ -298,9 +298,25 @@ function capabilities({
     // Does chmod mean anything here? The 0700/0755 asserts in the suite are
     // gated on exactly this fact today, in nine separate hand-written ifs.
     execBit: !isWin,
-    // Window capture: mac = osascript + screencapture, win = PrintWindow.
-    // Linux would need xdotool + import and has no Wayland answer at all.
-    windowCapture: isMac || isWin,
+    // Window capture: mac = osascript + screencapture, win = PrintWindow --
+    // both OS built-ins, so on those two the platform alone settles it. Linux
+    // is the one row where it does not: wmctrl/xdotool and ImageMagick are
+    // ordinary packages a stock desktop ships without, so this is a HOST
+    // PROBE there rather than a constant. Seeding the windowshot skill on a
+    // box with none of them hands the agent a tool that can only fail, which
+    // is the mistake calendarMcp above exists to avoid; probing means the
+    // skill simply appears on the next boot after the user installs one.
+    // Eager, unlike attachTopology: nothing this app does installs xdotool
+    // later in the boot, so there is no ordering hazard to defer around.
+    // The probe cannot see a tool reachable only through a custom PATH --
+    // binDirsFor does not walk PATH on purpose, and erring toward "absent"
+    // only withholds a skill, it never runs an untrusted binary. The helper
+    // itself is more permissive (it runs in the agent's own shell, where PATH
+    // is the user's own); the terms below mirror exactly what its Linux lane
+    // will accept: one enumerator, and one of the three capture paths.
+    windowCapture: isMac || isWin || (isLinux
+      && Boolean(resolveBin('wmctrl') || resolveBin('xdotool'))
+      && Boolean(resolveBin('import') || resolveBin('magick') || (resolveBin('xwd') && resolveBin('convert')))),
 
     // ── words the SERVER has to write ──────────────────────────────────
     shellName: isWin ? 'PowerShell' : 'Terminal',
