@@ -368,7 +368,17 @@ async function startBootstrap(dep) {
 // app only DETECTS existing installs (resolveBin) and points at the
 // official install pages below; the wizard renders link + re-detect
 // instead of the download button.
-const MANAGED_INSTALL_SUPPORTED = process.platform !== 'win32'
+//
+// design-0023 P4: this used to read `!== 'win32'`, which is not what the
+// paragraph above describes. It described mac -- but it ANSWERED true for
+// Linux and for Intel Macs, and both then walked into installCodex, whose
+// very first line refuses `process.arch !== 'arm64'` with a Korean sentence
+// about Apple Silicon (and on Linux, into installOllama's /usr/bin/hdiutil,
+// which ENOENTs). The capability table says darwin && arm64, which is the
+// only combination this module's URLs and helpers actually support, so
+// Linux and Intel Macs now get the SAME honest manual page Windows gets.
+const { host } = require('./platform.cjs')
+const MANAGED_INSTALL_SUPPORTED = host().managedInstall
 const MANUAL_INSTALL_PAGES = {
   codex: 'https://github.com/openai/codex/releases/latest',
   ollama: 'https://ollama.com/download',

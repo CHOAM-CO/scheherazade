@@ -2483,8 +2483,14 @@ function getClaudeInstallStatus() {
 }
 
 function startClaudeCliInstall({ resolveClaudeBin }) {
-  if (process.platform === 'win32') {
-    setClaudeInstallStatus('failed', 'unsupported_platform', 'managed install is mac-only -- run the PowerShell command manually')
+  // design-0023 P4: the gate is "does upstream ship an installer we can run
+  // here?" (HOST.claudeCliInstall), not "is this Windows?". Same answer on
+  // Windows, but it is now the same answer for the same REASON on Linux,
+  // where the curl|bash path is upstream's supported one and used to be
+  // reached only because Linux fell through a win32 test.
+  if (!HOST.claudeCliInstall) {
+    setClaudeInstallStatus('failed', 'unsupported_platform',
+      `no managed installer for this platform -- run the ${HOST.shellName} command manually`)
     return
   }
   if (claudeInstallChild) return // already in flight; status route reports it

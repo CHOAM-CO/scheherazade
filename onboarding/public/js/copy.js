@@ -301,9 +301,12 @@ window.COPY = {
         done: 'Installed. You can log in now.',
         failed: 'Install failed. Check your network and try again.',
         retryButton: 'Retry',
-        // Windows v1 = detection-only (managed install is mac-only): the
-        // wizard shows link + re-detect instead of the download button.
-        manualNeeded: (name) => `${name} isn't installed on this PC yet. On Windows, install it from the official install page, then check again.`,
+        // Shown wherever managed install is off -- Windows, Linux, and (since
+        // design-0023 P4) Intel Macs, which used to be offered the automatic
+        // button and then handed an Apple-Silicon-only tarball. The sentence
+        // named Windows and only Windows, so two of those three audiences
+        // read a line about an OS they are not running.
+        manualNeeded: (name) => `${name} isn't installed on ${THIS_MACHINE} yet. Install it from the official install page, then check again.`,
         manualOpenButton: 'Open install page',
         manualOpened: 'Opened the install page in your browser. Click "Check again" once install finishes.',
         redetectButton: 'Check again',

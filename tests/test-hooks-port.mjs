@@ -87,7 +87,20 @@ console.log('\n-- detection-only deps: the win gate exists and mac keeps managed
   const { createRequire } = await import('node:module')
   const req = createRequire(import.meta.url)
   const b = req(path.join(ROOT, 'onboarding', 'bootstrap.cjs'))
-  ok('mac still reports managed installs supported', b.MANAGED_INSTALL_SUPPORTED === (process.platform !== 'win32'))
+  // design-0023 P4: the gate is darwin AND arm64, not "not Windows". It used
+  // to answer true on Linux and on Intel Macs, both of which then walked into
+  // installCodex's aarch64-apple-darwin tarball and its Korean
+  // Apple-Silicon-only refusal. The equality is asserted against the
+  // capability table so the two can never drift apart again.
+  const caps = req(path.join(ROOT, 'onboarding', 'platform.cjs'))
+  ok('managed install == the capability table, on this host',
+    b.MANAGED_INSTALL_SUPPORTED === caps.host().managedInstall)
+  ok('managed install means darwin AND arm64 -- the only pair bootstrap.cjs URLs exist for',
+    b.MANAGED_INSTALL_SUPPORTED === (process.platform === 'darwin' && process.arch === 'arm64'))
+  const mk = (platform, arch) => caps.capabilities({ platform, arch, env: {}, home: '/h', dataHome: '/h/d', existsSync: () => false, hasTmux: () => false })
+  ok('Intel Mac and Linux are NOT offered the managed install (the bug this replaced)',
+    mk('darwin', 'x64').managedInstall === false && mk('linux', 'x64').managedInstall === false)
+  ok('Apple Silicon still is', mk('darwin', 'arm64').managedInstall === true)
   ok('manual install pages are FIXED constants for both deps',
     typeof b.MANUAL_INSTALL_PAGES.codex === 'string' && b.MANUAL_INSTALL_PAGES.codex.startsWith('https://github.com/openai/codex') &&
     typeof b.MANUAL_INSTALL_PAGES.ollama === 'string' && b.MANUAL_INSTALL_PAGES.ollama.startsWith('https://ollama.com'))
