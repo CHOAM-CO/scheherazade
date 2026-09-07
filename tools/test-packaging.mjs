@@ -912,7 +912,47 @@ console.log('\n-- SCHEHERAZADE_MANUAL.md stays welded to the real option surface
   ok('onboarding/templates/SCHEHERAZADE_MANUAL.md exists', fs.existsSync(manualPath),
     'the agent has no inventory of its own app without it')
   if (fs.existsSync(manualPath)) {
-    const manual = fs.readFileSync(manualPath, 'utf8')
+    // THE TEMPLATE IS NO LONGER THE WHOLE MANUAL (design-0023 P4 tail). Four
+    // of its sections -- admin access, permissions, topology, the starter
+    // skill list -- are now {PLACEHOLDER}s that harness-render fills from the
+    // capability table, because the mac bodies they used to hold were being
+    // rendered verbatim onto Windows. So this gate renders the manual before
+    // reading it, or it would report every key documented only inside a
+    // per-platform body as undocumented.
+    //
+    // RENDERED FOR DARWIN, DELIBERATELY, and not for the host running this
+    // file: predist/postdist run this on the Windows and Linux build boxes
+    // too, and the Windows manual documents no sudo switch ON PURPOSE -- a
+    // host-rendered gate would fail the win lane for telling the truth.
+    // darwin is the superset host (every capability-gated section renders
+    // there: sudo, the permissions panel, the attach lane, every skill). If a
+    // switch is ever added that exists only OFF mac, this gate goes blind to
+    // it and must widen to render all three.
+    const { createHarnessRender } = require(path.join(ROOT, 'onboarding', 'harness-render.cjs'))
+    const platformMod = require(path.join(ROOT, 'onboarding', 'platform.cjs'))
+    const macBlocks = createHarnessRender({
+      log: () => {}, toUnpackedPath: (p) => p, readAgentConfig: () => ({}), ensureConfigDir: () => {},
+      REPO_ROOT: ROOT, AGENT_NAME: 'test',
+      DATA_HOME: path.join(os.tmpdir(), 'sch-manual-gate'),
+      CONFIG_DIR: path.join(os.tmpdir(), 'sch-manual-gate', 'config'),
+      AGENT_CONFIG_PATH: '', ENV_PATH: '', MCP_JSON_PATH: '',
+      HOST: platformMod.capabilities({
+        platform: 'darwin', arch: 'arm64', env: {}, home: '/Users/t',
+        dataHome: '/Users/t/Documents/Scheherazade',
+        existsSync: () => false,
+        accessSync: () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) },
+        hasTmux: () => false,
+      }),
+    }).platformDocBlocks()
+    let manual = fs.readFileSync(manualPath, 'utf8')
+    for (const [name, body] of Object.entries(macBlocks)) manual = manual.replaceAll(`{${name}}`, body)
+    // A placeholder nobody fills renders as literal `{FOO}` into the agent's
+    // data directory -- the one failure this mechanism can have that still
+    // ships. It is caught here rather than only in the render test because
+    // this file is what predist runs before a build.
+    const orphans = [...new Set((manual.match(/\{[A-Z][A-Z_]{2,}\}/g) || []))]
+    ok('every placeholder in the manual has a platform body to fill it', orphans.length === 0,
+      `${orphans.join(', ')} -- add it to platformDocBlocks() in onboarding/harness-render.cjs`)
     // Keys that describe onboarding bookkeeping rather than a user-facing
     // choice. Everything else must appear in the manual by name or by the
     // plain-language label the agent would actually say out loud.

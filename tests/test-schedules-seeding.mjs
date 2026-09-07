@@ -154,8 +154,17 @@ console.log('-- procedures/memory-consolidation.md is harness-rendered like its 
   fs.rmSync(mem, { recursive: true, force: true })
 }
 
-// ── 4. {PLATFORM_SECTION}: three bodies, and the prompt cannot lie about ──
-//      which skills exist on the machine it is running on.
+// ── 4. the per-platform harness documents: three bodies each, and none of ──
+//      them can lie about what the machine it is running on actually has.
+//
+//      {PLATFORM_SECTION} in the system prompt was the first of these. The
+//      four documents asserted alongside it below were the tail of the same
+//      bug: SCHEHERAZADE_MANUAL.md, procedures/machine.md, CLAUDE.md and
+//      procedures/autonomy-and-paths.md are rendered into the agent's data
+//      directory on EVERY host, and every one of them described `sudo -A`, a
+//      Keychain vault, a tmux attach lane or an osascript skill set as a
+//      universal fact. Driven from this Mac by injecting the capability
+//      table, for the same reason: the darwin branch was never the broken one.
 console.log('-- agent system prompt: {PLATFORM_SECTION} across darwin / win32 / linux')
 {
   const templatePath = path.join(ROOT, 'onboarding', 'templates', 'agent-system-prompt.md')
@@ -200,6 +209,123 @@ console.log('-- agent system prompt: {PLATFORM_SECTION} across darwin / win32 / 
       must: ['POSIX shell', 'gnome-keyring', 'sudo -A <cmd>'],
       never: ['osascript', 'Apple Event', 'PowerShell', 'DPAPI', 'Keychain'],
     },
+  }
+
+  // The other four rendered documents. Same shape, same reason for the
+  // `never` lists: what must be ABSENT is the half that was broken.
+  //
+  // The needles are phrases, not single words, on purpose. The manual's
+  // uninstall section names macOS, Windows and Linux in one sentence
+  // deliberately (all three uninstall paths are real and the agent has to
+  // describe whichever one it is about to run), so a blanket "no Apple words
+  // off darwin" gate would fail on correct prose. The cross-platform leak
+  // check after the loop is the generic half that needs no needle at all.
+  // src = where the template lives in the repo, out = where it lands in the
+  // agent's data directory. They differ for the manual (the one document that
+  // is a template rather than a file the repo also uses).
+  const PLATFORM_DOCS = [
+    { src: path.join('onboarding', 'templates', 'SCHEHERAZADE_MANUAL.md'), out: 'SCHEHERAZADE_MANUAL.md' },
+    { src: 'CLAUDE.md', out: 'CLAUDE.md' },
+    { src: path.join('procedures', 'machine.md'), out: path.join('procedures', 'machine.md') },
+    { src: path.join('procedures', 'autonomy-and-paths.md'), out: path.join('procedures', 'autonomy-and-paths.md') },
+  ]
+  const DOC_EXPECT = {
+    darwin: {
+      'SCHEHERAZADE_MANUAL.md': {
+        must: ['## Admin access (sudo)', '`sudo -A <cmd>`', '## macOS permissions',
+          'Full Disk Access', 'external tmux session'],
+        never: ['no elevation path', 'no permissions checklist', 'Windows DPAPI'],
+      },
+      'CLAUDE.md': {
+        must: ['attach mode (user-run tmux bootstrap)', 'sudo = `sudo -A`'],
+        never: ['no elevation lane', 'no attach lane'],
+      },
+      'procedures/machine.md': {
+        must: ['`sudo -A <cmd>`', 'sealed with macOS Keychain', 'In attach mode you live in a tmux'],
+        never: ['no elevation path', 'no durable mode'],
+      },
+      'procedures/autonomy-and-paths.md': {
+        must: ['only via `sudo -A`'],
+        never: ['no elevation lane'],
+      },
+    },
+    win32: {
+      'SCHEHERAZADE_MANUAL.md': {
+        must: ['## Admin access', 'no elevation path on this PC', '## Permissions',
+          'Windows DPAPI', 'One mode here'],
+        // Deliberately NOT a bare 'Keychain': the uninstall section names the
+        // mac, Windows and Linux teardown in one sentence on purpose, and that
+        // sentence is correct on every host. The vacuity check after the loop
+        // is what keeps this list from drifting into needles nobody writes.
+        never: ['sudo -A', '## macOS permissions', 'Full Disk Access',
+          'gnome-keyring', 'external tmux session'],
+      },
+      'CLAUDE.md': {
+        must: ['no attach lane on this machine', 'No sudo and no elevation lane'],
+        never: ['sudo -A', 'user-run tmux bootstrap'],
+      },
+      'procedures/machine.md': {
+        must: ['there is no lane for it here', 'no durable mode'],
+        never: ['sudo -A', 'Keychain', 'bootstrap command to paste'],
+      },
+      'procedures/autonomy-and-paths.md': {
+        must: ['no elevation lane on this machine'],
+        never: ['sudo -A'],
+      },
+    },
+    linux: {
+      'SCHEHERAZADE_MANUAL.md': {
+        must: ['## Admin access (sudo)', '`sudo -A <cmd>`', '## Linux permissions',
+          'gnome-keyring', 'One mode here'],
+        never: ['## macOS permissions', 'Full Disk Access', 'Windows DPAPI',
+          'external tmux session'],
+      },
+      'CLAUDE.md': {
+        must: ['no attach lane on this machine', 'sudo = `sudo -A`'],
+        never: ['user-run tmux bootstrap', 'no elevation lane'],
+      },
+      'procedures/machine.md': {
+        must: ['`sudo -A <cmd>`', 'gnome-keyring', 'no durable mode'],
+        never: ['Keychain', 'bootstrap command to paste'],
+      },
+      'procedures/autonomy-and-paths.md': {
+        must: ['only via `sudo -A`'],
+        never: ['no elevation lane'],
+      },
+    },
+  }
+  // Kept per platform so the vacuity check after the loop can ask the other
+  // two hosts whether a `never` needle is a real absence or a typo.
+  const renderedDocs = {}
+  // Every block body, per platform, straight from the renderer -- so the leak
+  // check below needs no hand-written needles and covers a block added next
+  // year without anyone remembering this file.
+  const blocksByPlatform = {}
+  for (const [platform, arch] of [['darwin', 'arm64'], ['win32', 'x64'], ['linux', 'x64']]) {
+    blocksByPlatform[platform] = createHarnessRender({
+      log: () => {}, toUnpackedPath: (p) => p, readAgentConfig: () => ({}), ensureConfigDir: () => {},
+      REPO_ROOT: ROOT, AGENT_NAME: 'TestAgent', DATA_HOME: path.join(ROOT, 'no-such-dir'),
+      CONFIG_DIR: path.join(ROOT, 'no-such-dir', 'config'),
+      AGENT_CONFIG_PATH: '', ENV_PATH: '', MCP_JSON_PATH: '',
+      HOST: mkHost(platform, arch),
+    }).platformDocBlocks()
+  }
+  // A placeholder with no block renders as literal `{FOO}` into the agent's
+  // data directory; a block no template carries is dead prose nobody reads.
+  // Both directions, because the first is a visible defect and the second is
+  // an invisible one.
+  {
+    const templates = PLATFORM_DOCS.map((d) => fs.readFileSync(path.join(ROOT, d.src), 'utf8')).join('\n')
+    const GENERIC = new Set(['AGENT_DIR', 'AGENT_NAME', 'MEMORY_DIR', 'EXEC_PATH'])
+    const used = new Set([...templates.matchAll(/\{([A-Z][A-Z_]{2,})\}/g)].map((m) => m[1])
+      .filter((n) => !GENERIC.has(n)))
+    const known = new Set(Object.keys(blocksByPlatform.darwin))
+    const orphans = [...used].filter((n) => !known.has(n))
+    const dead = [...known].filter((n) => !used.has(n))
+    ok('every platform placeholder in the four documents has a block to fill it',
+      orphans.length === 0, `${orphans.join(', ')} -- would render as literal text`)
+    ok('every block platformDocBlocks() returns is actually used by a template',
+      dead.length === 0, `${dead.join(', ')} -- written and never rendered`)
   }
 
   for (const [platform, arch] of [['darwin', 'arm64'], ['win32', 'x64'], ['linux', 'x64']]) {
@@ -257,7 +383,59 @@ console.log('-- agent system prompt: {PLATFORM_SECTION} across darwin / win32 / 
       disowned.join(',') === GATED.filter((n) => !onDisk.includes(n)).join(','),
       `prompt=[${disowned}] withheld=[${GATED.filter((n) => !onDisk.includes(n))}]`)
 
+    // ── the other four documents, same render, same host ────────────────
+    renderedDocs[platform] = {}
+    for (const doc of PLATFORM_DOCS) {
+      const key = doc.out.split(path.sep).join('/')
+      const text = fs.readFileSync(path.join(mem, doc.out), 'utf8')
+      const flatText = text.replace(/\s+/g, ' ')
+      renderedDocs[platform][key] = flatText
+      ok(`${platform}: ${key} keeps no raw placeholder`, !/\{[A-Z][A-Z_]{2,}\}/.test(text),
+        (text.match(/\{[A-Z][A-Z_]{2,}\}/g) || []).join(' '))
+      const spec = DOC_EXPECT[platform][key]
+      for (const needle of spec.must) {
+        ok(`${platform}: ${key} says ${JSON.stringify(needle)}`, flatText.includes(needle))
+      }
+      for (const needle of spec.never) {
+        ok(`${platform}: ${key} never says ${JSON.stringify(needle)}`, !flatText.includes(needle),
+          'another platform\'s body leaked in')
+      }
+    }
+    // The generic half, over all four documents at once: this host's body for
+    // every block landed WHOLE, and neither of the other two hosts' bodies is
+    // anywhere in the set. No needle list to keep current -- a body reworded
+    // next year is still covered, which is the property the spelled-out lists
+    // above cannot have.
+    {
+      const all = PLATFORM_DOCS.map((d) => fs.readFileSync(path.join(mem, d.out), 'utf8')).join('\n')
+      for (const [name, body] of Object.entries(blocksByPlatform[platform])) {
+        ok(`${platform}: the ${name} body reached a rendered document intact`, all.includes(body))
+        for (const other of ['darwin', 'win32', 'linux']) {
+          if (other === platform) continue
+          const foreign = blocksByPlatform[other][name]
+          if (foreign === body) continue // the two hosts genuinely share this one fact
+          ok(`${platform}: the ${other} body for ${name} is nowhere in the rendered set`,
+            !all.includes(foreign), 'a foreign platform body was rendered here')
+        }
+      }
+    }
+
     fs.rmSync(mem, { recursive: true, force: true })
+  }
+  // A `never` needle for a phrase no host ever writes is a green row that
+  // proves nothing -- the same "a gate whose subject does not exist passes
+  // vacuously" trap tools/test-packaging.mjs guards for its forbidden dirs.
+  // Every absence asserted above has to be a real presence somewhere else.
+  for (const platform of ['darwin', 'win32', 'linux']) {
+    for (const key of Object.keys(DOC_EXPECT[platform])) {
+      for (const needle of DOC_EXPECT[platform][key].never) {
+        const elsewhere = ['darwin', 'win32', 'linux']
+          .filter((p) => p !== platform)
+          .some((p) => renderedDocs[p][key].includes(needle))
+        ok(`${platform}: the absence of ${JSON.stringify(needle)} in ${key} is real (another host writes it)`,
+          elsewhere, 'no host writes this phrase -- the row passes vacuously')
+      }
+    }
   }
   // Linux's windowCapture is a host probe (wmctrl/xdotool + import), so the
   // body must ASK it, not assert its absence: on a box with those packages

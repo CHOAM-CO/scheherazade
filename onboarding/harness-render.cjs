@@ -50,6 +50,31 @@ const TONE_GUIDANCE = {
   casual: 'Casual means a relaxed, friendly register: in Korean, 반말 is fine unless the person consistently uses 존댓말 — then mirror them; in English, contractions and everyday words.',
 }
 
+// Hand-wrap a computed paragraph to the width of the document it lands in.
+//
+// Every harness template is hand-wrapped by a human near a column that varies
+// per document (~70 in the system prompt, ~78 in the manual, ~75 in CLAUDE.md),
+// and the platform blocks below are BUILT rather than typed -- one extra skill
+// name or a longer credential-store word would otherwise render a 120-column
+// line in the middle of an otherwise wrapped file. `indent` is the hanging
+// indent for a markdown bullet's continuation lines, so a block can be dropped
+// into a `- **Label.** ...` list and keep the list's shape.
+function wrapParas(paras, { width = 70, indent = '' } = {}) {
+  return paras.map((text) => {
+    const lines = []
+    let line = ''
+    for (const word of String(text).split(/\s+/).filter(Boolean)) {
+      // The first line carries the caller's own prefix; every later line pays
+      // for the indent, so the budget shrinks after the first break.
+      const budget = width - (lines.length === 0 ? 0 : indent.length)
+      if (line && line.length + 1 + word.length > budget) { lines.push(line); line = word }
+      else line = line ? `${line} ${word}` : word
+    }
+    if (line) lines.push(line)
+    return lines.map((l, i) => (i === 0 ? l : indent + l)).join('\n')
+  }).join('\n\n')
+}
+
 function createHarnessRender(ctx) {
   const {
     log, toUnpackedPath, readAgentConfig, ensureConfigDir,
@@ -823,9 +848,12 @@ function createHarnessRender(ctx) {
     const writeFileFn = opts.writeFileFn || fs.writeFileSync
     const agentDir = toUnpackedPath(REPO_ROOT)
     const staged = []
+    // Computed once for the whole render: the blocks are a function of the
+    // host, not of the document, so every template sees the same answers.
+    const docBlocks = platformDocBlocks()
     const renderHarness = (srcName, dstName, mode) => {
       const src = readFileFn(path.join(REPO_ROOT, srcName), 'utf8')
-      const rendered = src
+      let rendered = src
         .replaceAll('{AGENT_DIR}', agentDir)
         .replaceAll('{AGENT_NAME}', AGENT_NAME)
         .replaceAll('{MEMORY_DIR}', DATA_HOME)
@@ -834,6 +862,13 @@ function createHarnessRender(ctx) {
         // an app-spawned child are the SAME command line; re-rendered every
         // boot, so an app move or update repoints it.
         .replaceAll('{EXEC_PATH}', process.execPath)
+      // Per-platform bodies (design-0023 P4 tail). Applied to EVERY harness
+      // template rather than to a named list, for the same reason the four
+      // above are: a document that does not carry a placeholder is untouched,
+      // and a new document can use one without a second wiring edit.
+      for (const [name, body] of Object.entries(docBlocks)) {
+        rendered = rendered.replaceAll(`{${name}}`, body)
+      }
       staged.push({ dstName, rendered, mode })
     }
 
@@ -960,16 +995,7 @@ function createHarnessRender(ctx) {
     // skill lists are computed, so the paragraphs are written as one string
     // each and wrapped here -- otherwise a platform with one more skill on
     // it silently renders a 120-column line in the middle of the document.
-    const body = (paras) => paras.map((text) => {
-      const out = []
-      let line = ''
-      for (const word of text.split(/\s+/).filter(Boolean)) {
-        if (line && line.length + 1 + word.length > 70) { out.push(line); line = word }
-        else line = line ? `${line} ${word}` : word
-      }
-      if (line) out.push(line)
-      return out.join('\n')
-    }).join('\n\n')
+    const body = (paras) => wrapParas(paras, { width: 70 })
 
     if (HOST.isWin) {
       return body([
@@ -1028,6 +1054,287 @@ function createHarnessRender(ctx) {
       `Keys your person saved through this app are sealed in the ${HOST.credStoreName}`
         + ' and handed to whatever needs them. You never read that store yourself.',
     ])
+  }
+
+  // ── the OTHER harness documents' platform blocks (design-0023 P4 tail) ────
+  // {PLATFORM_SECTION} above fixed the system prompt and stopped there. It was
+  // never the only document written as if every machine were a Mac. Four more
+  // are rendered into the agent's data directory on EVERY host and each stated
+  // a mac fact as a universal one: SCHEHERAZADE_MANUAL.md described `sudo -A`
+  // and a password vault as things every install has and carried a section
+  // literally titled "macOS permissions"; procedures/machine.md put the
+  // password in "the app's Keychain vault" and described a tmux attach lane as
+  // the durable mode anywhere; CLAUDE.md's machine headlines repeated both in
+  // one sentence; procedures/autonomy-and-paths.md told every agent that root
+  // work goes "via `sudo -A`". A Windows agent read all four and was told
+  // about an elevation path it does not have, a durability mode it cannot
+  // switch to, and four skills that were deliberately never seeded for it.
+  //
+  // Same contract as platformSection(), for the same reasons. One body per
+  // host, never one body with "on Windows, instead..." attached: a hedge costs
+  // the other platforms tokens, reads as optional advice, and lets the model
+  // pick the branch it has seen most, which is always the mac one. And every
+  // fact comes from the capability table -- HOST.sudo, HOST.attachLane,
+  // HOST.permissionsPanel + the probe list behind it, HOST.credStoreName,
+  // HOST.skillAllowed -- rather than being written down a second time here,
+  // where it could drift from the code that actually decides.
+  //
+  // THE BRANCH IS THE CAPABILITY, NOT THE PLATFORM ID. `HOST.sudo` is true on
+  // mac and Linux and those two share one real lane, so they share one body;
+  // that is one fact, not a hedge. If a row ever flips (a Linux attach lane,
+  // an elevation path on Windows) the prose follows the table instead of
+  // being re-litigated here.
+  //
+  // Returned as a placeholder->body map and applied by renderHarness to every
+  // harness template, so a document that does not use a block simply does not
+  // carry its placeholder. Exported for tools/test-packaging.mjs, which has to
+  // read the manual's real full text now that part of it lives here.
+  function platformDocBlocks() {
+    // Wrap widths are per document, matching the hand-wrap of the file each
+    // block lands in (measured, not guessed: the manual runs to ~78 columns,
+    // machine.md to ~76, CLAUDE.md to ~75, autonomy-and-paths.md to ~74).
+    const para = (text, width) => wrapParas([text], { width })
+    const bullets = (items, width) => items
+      .map((t) => wrapParas([`- ${t}`], { width, indent: '  ' })).join('\n')
+    const listWords = (items) => items.join(', ')
+
+    // The permission checklist's ROWS come from the probe table, the same one
+    // permissionsPanel is derived from -- so a probe added for a platform
+    // shows up in that platform's manual with no second edit. An unknown class
+    // prints its raw id rather than vanishing: a silently shorter checklist
+    // reads exactly like "that permission is fine", which is the failure
+    // permission-probes.cjs's own catch block exists to avoid.
+    const PERM_ROW_WORDS = {
+      fda: 'Full Disk Access',
+      screen: 'Screen Recording',
+      accessibility: 'Accessibility',
+      automation: 'Automation (driving other apps)',
+      sudo: 'admin commands (sudo)',
+      sip: 'System Integrity Protection',
+      keyring: 'the password store',
+    }
+    const permRows = require('./permission-probes.cjs').probeClassesFor(HOST.id)
+      .map((cls) => PERM_ROW_WORDS[cls] || cls)
+
+    // Which starter skills actually landed. Same filter seedSkillDefinitions
+    // runs, over the same directory, so the manual cannot name a skill the
+    // seeder withheld (the bug this whole pass is about) in either direction.
+    // Best-effort: an unreadable template dir degrades to "no list" prose, it
+    // never fails the render -- a harness render that throws blocks the spawn.
+    let skillNames = []
+    try {
+      skillNames = fs.readdirSync(TEMPLATE_SKILLS_DIR, { withFileTypes: true })
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name)
+        .filter((n) => fs.existsSync(path.join(TEMPLATE_SKILLS_DIR, n, 'SKILL.md')))
+        .sort()
+    } catch (err) {
+      console.error(`[scheherazade/onboarding] manual skill list skipped: ${err.message}`)
+    }
+    const skillsHere = skillNames.filter((n) => HOST.skillAllowed(n))
+    const skillsWithheld = skillNames.filter((n) => !HOST.skillAllowed(n))
+
+    // ── SCHEHERAZADE_MANUAL.md ─────────────────────────────────────────────
+    const manualAdmin = HOST.sudo
+      ? [
+        '## Admin access (sudo)',
+        '',
+        bullets([
+          'Off by default. Only your person can turn it on, in Settings.',
+          'When on: `sudo -A <cmd>`. Plain `sudo` and `sudo -n` cannot reach the vault.',
+          'Works only while the app is running. App closed = no admin.',
+          '**Never** edit sudoers, add NOPASSWD, or read the vault or token files to'
+            + ' get the password another way. If sudo is refused, that is an answer —'
+            + ' take it to your person instead of widening your own access.',
+        ], 78),
+        '',
+        para('**Risk, and say this one in full when they ask to enable it**: with the'
+          + ' toggle on there is no approval dialog between you and the machine. A'
+          + ' mistake of yours runs as root. That is the deal the design makes on'
+          + ' purpose — it trusts your judgment rather than caging it — and they should'
+          + ' know they are the one accepting it.', 78),
+      ].join('\n')
+      : [
+        '## Admin access',
+        '',
+        bullets([
+          `There is none to offer. This app has no elevation path on ${HOST.machineWord}:`
+            + ' no `sudo`, no stored admin password, and no switch in Settings that'
+            + ' would create one.',
+          'An administrator command is one you hand to your person — say what it does'
+            + ' and why, and let them run it themselves. The consent prompt in front of'
+            + ' it is theirs to answer, not yours.',
+          '**Never** go looking for another way in. There is no vault and no token'
+            + ' file to read here, and nothing to widen. A task that needs'
+            + ' administrator rights is one you name and stop at.',
+        ], 78),
+      ].join('\n')
+
+    let manualPerms
+    if (HOST.permissionsPanel === 'tcc') {
+      manualPerms = [
+        '## macOS permissions',
+        '',
+        para(`Settings carries a permission checklist: ${listWords(permRows)}.`
+          + ' SIP is on that list as a fixed condition of the machine rather than'
+          + ' something anyone flips, so you stop rediscovering it one EPERM at a'
+          + ' time. Calendar access is read-only by design — the app'
+          + ' asks to read what is on their day, never to add or change events.', 78),
+        '',
+        para('**Risk**: Full Disk Access is exactly as broad as it sounds. If they are'
+          + ' uncomfortable, most of what you do still works without it; find out what'
+          + ' they actually want to do before asking for the widest grant.', 78),
+      ].join('\n')
+    } else if (HOST.permissionsPanel === 'posix') {
+      manualPerms = [
+        '## Linux permissions',
+        '',
+        para(`Settings carries a short permission checklist: ${listWords(permRows)}.`
+          + ` The password store is the one worth explaining: keys and tokens go to`
+          + ` ${HOST.credStoreName}, so with no keyring running the app refuses to`
+          + ' store a new key at all rather than write it unprotected. There is no'
+          + ' Settings pane in the app that fixes that — it is desktop-session work,'
+          + ' outside this app entirely.', 78),
+        '',
+        para('**Risk**: "the key would not save" sounds like something they did wrong'
+          + ' and usually is not. Say which of the two it is — a refused write with no'
+          + ' keyring, or a genuinely bad key — before they retype it a third time.', 78),
+      ].join('\n')
+    } else {
+      manualPerms = [
+        '## Permissions',
+        '',
+        para(`This app has no permissions checklist on ${HOST.machineWord}: nothing`
+          + ' here is gated behind a grant your person has to go and give, so the'
+          + ' Settings screen shows no permissions panel at all. Their keys and tokens'
+          + ` are sealed with ${HOST.credStoreName}, which belongs to their login and`
+          + ' has no separate service that can be missing or locked.', 78),
+        '',
+        para('So when something is blocked here, it is an ordinary file permission or'
+          + ' another program on the machine — not a switch they can flip in this app.'
+          + ' Say that plainly instead of sending them hunting through Settings for a'
+          + ' grant that does not exist.', 78),
+      ].join('\n')
+    }
+
+    const manualTopology = HOST.attachLane
+      ? [
+        '## Topology',
+        '',
+        para('`spawn` (the app runs you) or `attach` (you run in an external tmux'
+          + ' session the app connects to). Attach survives the app closing; spawn'
+          + ' does not.', 78),
+      ].join('\n')
+      : [
+        '## Topology',
+        '',
+        para('One mode here: the app runs you as its own child, so quitting the app'
+          + ' stops you. The durable alternative — living in an external terminal'
+          + ' session the app merely connects to — needs a tmux this app ships only on'
+          + ' macOS, so Settings does not offer the switch on this machine.'
+          + ' `AGENT_TOPOLOGY=attach` in your `.agent-config` is not a way around'
+          + ' that: set by hand here it does not make you durable, it stops you from'
+          + ' starting at all.', 78),
+      ].join('\n')
+
+    const manualSkills = [
+      '## Default skills',
+      '',
+      para('You ship with a starter set of skills in your `.claude/skills/`'
+        + (skillsHere.length ? ` directory: ${listWords(skillsHere)}.` : ' directory.')
+        + ' Each SKILL.md carries verified recipes and its own judgment rules; read'
+        + ' the skill before improvising the same job badly. skill-creator is the meta'
+        + ' one: when your person teaches you a repeatable workflow, that is how you'
+        + ' keep it. messenger-connect carries the EXACT Slack app manifest and scope'
+        + ' table — never write a Slack manifest from memory.', 78),
+      ...(skillsWithheld.length ? [
+        '',
+        para(`Deliberately NOT installed, because ${HOST.machineWord} cannot run them:`
+          + ` ${listWords(skillsWithheld)}. If your person asks for one of those, say`
+          + ' this app has no way to do it here rather than improvising a replacement'
+          + ' that can only fail.', 78),
+      ] : []),
+      '',
+      para('They are yours to edit — an edited skill survives app updates. A deleted'
+        + ' one comes back on the next boot, so "don\'t want it" means editing it'
+        + ' down, not deleting it.', 78),
+    ].join('\n')
+
+    // ── procedures/machine.md ──────────────────────────────────────────────
+    const machinePersistence = HOST.attachLane
+      ? bullets(['**Persistence — spawn vs attach.** By default you run as a child of'
+        + ' the app (spawn): quit the app and you stop. In attach mode you live in a'
+        + ' tmux session the user bootstrapped from their own terminal, and you'
+        + ' survive the app quitting or updating. If the user wants the durable mode,'
+        + ' the Settings screen hands them a bootstrap command to paste into their'
+        + ' terminal — the app never runs it for them, and that is deliberate: it'
+        + ' keeps the OS permissions attributed to their terminal, not to an app that'
+        + ' re-signs every update. So if durability or a permission that keeps'
+        + ' resetting comes up, point them at that bootstrap command; don\'t try to'
+        + ' create the tmux session yourself.'], 76)
+      : bullets(['**Persistence — you are the app\'s child.** You run as a child of'
+        + ' the app: quit the app and you stop, every time. There is no durable mode'
+        + ' on this machine — the attach lane (an external terminal session that'
+        + ' outlives the app) exists only on macOS, so Settings does not offer the'
+        + ' switch and there is no bootstrap command to hand anyone. If durability'
+        + ' comes up, the honest answer is that the app has to stay open; setting'
+        + ' `AGENT_TOPOLOGY=attach` by hand does not build the lane, it stops you from'
+        + ' starting.'], 76)
+
+    const machineAdmin = HOST.sudo
+      ? bullets(['**Admin (sudo).** For a task that genuinely needs root, `sudo -A'
+        + ' <cmd>` (see the system-prompt hard line for the full rule). The password'
+        + ` lives in the app's vault, sealed with ${HOST.credStoreName}, and is served`
+        + ' only while the app runs and the Settings toggle is ON — a sudo failure'
+        + ' means one of'
+        + ' those is off, not a wall for you to climb. Never widen your own privileges'
+        + ' (sudoers/NOPASSWD/reading the token files); if blocked, say so and stop.'], 76)
+      : bullets(['**Admin — there is no lane for it here.** This machine has no `sudo`'
+        + ' and this app has no elevation path: no askpass helper, no stored admin'
+        + ' password, no toggle in Settings that would make one. A task that genuinely'
+        + ' needs administrator rights is one you describe to the user and hand over'
+        + ' for them to run. Never go hunting for another way in; if blocked, say so'
+        + ' and stop.'], 76)
+
+    // ── CLAUDE.md machine headlines ────────────────────────────────────────
+    // One paragraph, two platform sentences and a portable tail. The tail is
+    // written once and appended to whichever branch runs, so a change to the
+    // restart or spawn-info wording is still a one-place edit.
+    const CLAUDE_FACTS_TAIL = 'Restarts happen TO you (~12h supervisor) —'
+      + ' continuity is Boot + memory files. Your real brain may not be Claude (proxy'
+      + ' providers); certainty = spawn-info endpoint, not `$MODEL`.'
+    const claudeMachineFacts = para([
+      HOST.attachLane
+        ? 'Spawn mode dies with the app, attach mode (user-run tmux bootstrap)'
+          + ' survives it — never create the tmux session yourself.'
+        : 'The app runs you as its child: quit it and you stop, and there is no attach'
+          + ' lane on this machine to outlive it.',
+      HOST.sudo
+        ? 'sudo = `sudo -A` while the app runs with the toggle ON; never widen'
+          + ' privileges.'
+        : 'No sudo and no elevation lane here — an admin command goes to your person;'
+          + ' never widen privileges.',
+      CLAUDE_FACTS_TAIL,
+    ].join(' '), 75)
+
+    // ── procedures/autonomy-and-paths.md ───────────────────────────────────
+    const autonomySudo = HOST.sudo
+      ? bullets(['**sudo**: only on direct user request, only via `sudo -A`, never to'
+        + ' widen your own access (system-prompt Hard Lines covers this in full).'], 74)
+      : bullets(['**Admin rights**: there is no elevation lane on this machine — hand'
+        + ' the command to the user instead of looking for another way in'
+        + ' (system-prompt Hard Lines covers this in full).'], 74)
+
+    return {
+      MANUAL_ADMIN_SECTION: manualAdmin,
+      MANUAL_PERMISSIONS_SECTION: manualPerms,
+      MANUAL_TOPOLOGY_SECTION: manualTopology,
+      MANUAL_SKILLS_SECTION: manualSkills,
+      MACHINE_PERSISTENCE: machinePersistence,
+      MACHINE_ADMIN: machineAdmin,
+      CLAUDE_MACHINE_FACTS: claudeMachineFacts,
+      AUTONOMY_SUDO: autonomySudo,
+    }
   }
 
   // Post-update briefing (Phase B of the 2026-08-15 design; red-teamed to
@@ -1431,6 +1738,11 @@ function createHarnessRender(ctx) {
     ensureClaudeOnboardingDone,
     refreshHarnessIfOnboarded,
     renderAgentSubstrate,
+    // Exported for tools/test-packaging.mjs: the manual's option surface gate
+    // has to read the WHOLE manual, and since design-0023 P4's tail part of it
+    // (admin, permissions, topology, the skill list) lives in these blocks
+    // rather than in the template file.
+    platformDocBlocks,
     readHarnessFailure,
     syncTmuxPortable,
     syncChromuxPortable,
