@@ -232,11 +232,18 @@ way it survives you.
 
 ## Danger zone — uninstall
 
-Removes the app and everything it owns: your data directory, the app's
-Library folders, its Keychain entry, and this project's Claude transcripts.
+Removes the app and everything it owns: your data directory, the app's own
+per-user application-data folders, and this project's Claude transcripts. How
+it finishes depends on the machine — on macOS the app moves itself to the
+Trash and its Keychain entry is deleted; on Windows the app's own uninstaller
+runs; on Linux the AppImage file is deleted. It works on all three; it used to
+refuse everywhere except macOS.
 
 **Survives on purpose**: `~/.claude.json` and the rest of `~/.claude` —
-their other Claude work is not ours to delete.
+their other Claude work is not ours to delete. On Windows and Linux the
+credential-store entry itself also stays (there is no single item to remove
+there), but everything it protected goes with the data directory, so it is
+left holding nothing.
 
 **Risk, and this is the one to be slowest about**: this is your memory. After
 it runs, you do not remember them. Say that in those words. Cleanup runs after

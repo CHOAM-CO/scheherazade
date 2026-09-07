@@ -30,100 +30,136 @@ function assert(cond, label) {
 }
 
 // ── 0. the platform table, exercised on EVERY host ────────────────────────
-// design-0023 P1: linux was never a row here -- it fell into "not darwin",
-// which on a Linux box meant the file asserted two source-text pins and
-// exited. The route decides at CALL time (process.platform inside the
-// handler), so the linux row can be driven from any host by overriding
-// process.platform around one call. Both sections below pin CURRENT behavior;
-// P4/R6 changes it, and these are what will notice.
-console.log('\n0. linux row: the in-app uninstall REFUSES through the real route')
+// design-0023 P4 (deliverable 5): /api/uninstall used to answer 501
+// `unsupported_platform` off macOS while settings.js rendered the danger-zone
+// button on every platform -- so the whole feature was an error toast for two
+// thirds of users, for a promise the rendered manual makes in writing.
+// buildUninstallPlan is a pure function of (dataHome, home, {platform, env,
+// exePath, pid}) now, so all three plans are asserted from any host, as DATA.
+//
+// The route handler is deliberately NOT called here any more. It used to be
+// safe to call under a linux override precisely because it refused; now it
+// performs a real uninstall on every platform (a detached reaper that waits
+// for this pid to die, then rm -rf's and pkills). The old comment warned
+// about exactly that for darwin -- it applies to all three now, so the route
+// is pinned by source and the behavior by the plan.
+console.log('\n0. three plans, one shape')
+const PLATFORM_CASES = {
+  darwin: { home: '/Users/testuser', dataHome: '/Users/testuser/Documents/Scheherazade', exePath: '/Applications/Scheherazade.app/Contents/MacOS/Scheherazade' },
+  linux: { home: '/home/testuser', dataHome: '/home/testuser/Documents/Scheherazade', exePath: '/tmp/.mount_x/Scheherazade' },
+  win32: { home: 'C:\\Users\\testuser', dataHome: 'C:\\Users\\testuser\\Documents\\Scheherazade', exePath: 'C:\\Users\\testuser\\AppData\\Local\\Programs\\Scheherazade\\Scheherazade.exe' },
+}
+const plans = {}
+for (const [platform, c] of Object.entries(PLATFORM_CASES)) {
+  plans[platform] = buildUninstallPlan(c.dataHome, c.home, { platform, env: {}, exePath: c.exePath, pid: 4242 })
+}
 {
-  const sent = []
-  const routes = createRoutes({
-    sendJson: (res, code, body) => { sent.push({ code, body }) },
-    readJsonBody: async () => ({ confirm: 'DELETE' }), // past the fat-finger gate
-    writeAgentConfig: () => ({}),
-    DATA_HOME: '/home/testuser/Documents/Scheherazade',
-    getElectron: () => { throw new Error('no Electron in a test') },
-  })
-  const route = routes.find((r) => r.method === 'POST' && r.match('/api/uninstall'))
-  assert(Boolean(route), 'the uninstall route is registered')
-  const realPlatform = process.platform
-  let overridden = false
-  try {
-    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
-    overridden = process.platform === 'linux'
-    // The handler is called ONLY once the override is confirmed. On darwin its
-    // very next move is a DETACHED /bin/bash reaper that rm -rf's this
-    // machine's real residue paths and deletes the Keychain entry. A test in
-    // the default gate must not be one failed defineProperty away from running
-    // a real uninstall -- so a failed override skips the section, loudly.
-    if (overridden) await route.handler({}, {}, {})
-  } finally {
-    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true })
+  assert(plans.darwin.mode === 'bundle-trash', 'darwin: trash the .app after the residue')
+  assert(plans.win32.mode === 'nsis', 'win32: hand off to the NSIS uninstaller electron-builder wrote')
+  assert(plans.linux.mode === 'script', 'linux: unlink the AppImage; there is no bundle and no package entry')
+  // The interpreter is the part that used to crash: spawn('/bin/bash') on a
+  // Windows box is an ENOENT, and an unhandled 'error' event there is
+  // app.exit(1) via main.cjs's uncaughtException handler.
+  assert(plans.darwin.runner.cmd === '/bin/bash', 'darwin runs bash')
+  assert(plans.linux.runner.cmd === '/bin/sh', 'linux runs sh (POSIX, not a bashism -- Debian /bin/sh is dash)')
+  assert(/powershell\.exe$/i.test(plans.win32.runner.cmd), 'win32 runs PowerShell, never bash')
+  assert(plans.win32.runner.args[0] === '-NoProfile', 'the PowerShell child skips the user profile')
+  // The four invariants that are platform-INDEPENDENT, on all three.
+  for (const [platform, plan] of Object.entries(plans)) {
+    const c = PLATFORM_CASES[platform]
+    const norm = (p) => String(p).split('\\').join('/')
+    const dirs = plan.dirs.map(norm)
+    const home = norm(c.home)
+    assert(dirs.includes(norm(c.dataHome)), `${platform}: DATA_HOME is on the list (the agent itself)`)
+    assert(!dirs.some((d) => d === `${home}/.claude`), `${platform}: ~/.claude itself is NEVER on the list`)
+    assert(!dirs.some((d) => d.endsWith('.claude.json')), `${platform}: ~/.claude.json is NEVER on the list`)
+    assert(!dirs.some((d) => d === `${home}/.claude/projects`), `${platform}: the projects PARENT dir is never on the list`)
+    assert(dirs.every((d) => d.startsWith(home)), `${platform}: every target lives under the user home -- nothing system-wide`)
+    assert(plan.dirs.length >= 4, `${platform}: all three residue classes are covered (${plan.dirs.length} paths)`)
   }
-  if (!overridden) {
-    console.log('  SKIP linux route row -- process.platform is not overridable on this runtime; the handler is NOT called on a real host; NOT a pass')
-  } else {
-    assert(sent.length === 1, 'the handler answers exactly once')
-    assert(sent[0] && sent[0].code === 501, 'linux: 501, not a half-run cleanup (the mac plan is ~/Library + security + pkill top to bottom)')
-    assert(sent[0] && sent[0].body && sent[0].body.reason === 'unsupported_platform',
-      "linux: the refusal carries reason 'unsupported_platform' (the UI switches on it)")
-    // CURRENT, and wrong for a Linux user: the message names only the Windows
-    // remedy, and settings.js renders the danger-zone button on every platform,
-    // so a Linux user gets this text as an error toast (read-C G9).
-    assert(sent[0] && /Windows/i.test(sent[0].body.error) && !/Linux/i.test(sent[0].body.error),
-      'CURRENT: the 501 message names only the Windows NSIS path -- nothing for Linux (design-0023 P4/R6)')
-  }
-  assert(process.platform === realPlatform, 'process.platform is restored for the rest of the file')
+  // The CLI transcript slug, per platform. Windows munges the drive colon and
+  // the backslashes the same way POSIX munges slashes.
+  assert(plans.darwin.dirs.includes('/Users/testuser/.claude/projects/-Users-testuser-Documents-Scheherazade'),
+    'darwin: our slug only')
+  assert(plans.linux.dirs.includes('/home/testuser/.claude/projects/-home-testuser-Documents-Scheherazade'),
+    'linux: our slug only')
+  assert(plans.win32.dirs.some((d) => d.endsWith('C--Users-testuser-Documents-Scheherazade')),
+    'win32: the drive letter and backslashes munge into the same one-segment slug the CLI writes')
+  // No mixed separators: a plan built for Windows on a Mac used to come out
+  // as C:\Users\t/AppData/Roaming/... -- unrunnable, and the reason nobody
+  // could test this lane.
+  assert(plans.win32.dirs.every((d) => !d.includes('/')), 'win32 paths are pure backslash even when built from a Mac')
+  assert(plans.linux.dirs.every((d) => !d.includes('\\')), 'linux paths are pure forward-slash even when built from Windows')
 }
 
-console.log('\n0b. linux row: buildUninstallPlan has no Linux form yet')
+console.log('\n0b. the Linux residue classes the mac list never had')
 {
-  // Separator-agnostic: path.join returns backslashes on Windows, which is the
-  // 2026-08-04 lesson this file's header records.
-  const norm = (p) => String(p).split('\\').join('/')
-  const home = '/home/testuser'
-  const dataHome = '/home/testuser/Documents/Scheherazade'
-  const dirs = buildUninstallPlan(dataHome, home).dirs.map(norm)
-  assert(dirs.includes(dataHome), 'DATA_HOME is on the list for a linux home too (the agent itself)')
-  assert(dirs.includes('/home/testuser/.claude/projects/-home-testuser-Documents-Scheherazade'),
-    'the CLI transcript slug for OUR workspace is on the list on any platform')
-  assert(!dirs.includes('/home/testuser/.claude'), '~/.claude itself is NEVER on the list, on any platform')
-  assert(!dirs.some((d) => d.endsWith('.claude.json')), '~/.claude.json is NEVER on the list, on any platform')
-  assert(dirs.every((d) => d.startsWith(home)), 'every target lives under the user home -- nothing system-wide')
-  // The gap, pinned as data rather than left implied.
-  assert(dirs.some((d) => d.includes('/Library/')),
-    'CURRENT: the residue list is macOS-shaped (~/Library/...) even for a linux home')
-  assert(!dirs.some((d) => d.includes('/.config/Scheherazade')),
-    'CURRENT: no ~/.config/Scheherazade (Electron userData on linux) on the list -- P4/R6 adds it')
-  assert(!buildUninstallPlan(dataHome, home).script.includes('APPIMAGE'),
-    'CURRENT: nothing removes the AppImage itself ($APPIMAGE) -- P4/R6 adds it')
+  const dirs = plans.linux.dirs
+  assert(dirs.includes('/home/testuser/.config/Scheherazade'), 'Electron userData on linux is ~/.config/Scheherazade')
+  assert(dirs.includes('/home/testuser/.cache/Scheherazade'), '...and the cache dir goes too')
+  assert(!dirs.some((d) => d.includes('/Library/')), 'no macOS ~/Library paths leak into the linux plan')
+  assert(!plans.linux.script.includes('security delete-generic-password'),
+    'no `security` (a macOS binary) in the linux script -- the keyring has no portable one-item CLI, and the sealed blobs go with DATA_HOME')
+  assert(plans.linux.script.includes('$APPIMAGE'), 'the AppImage itself is unlinked -- it IS the application')
+  assert(/if \[ -n "\$APPIMAGE" \] && \[ -f "\$APPIMAGE" \]/.test(plans.linux.script),
+    'the unlink is guarded: an unpacked/dev run has no $APPIMAGE and must not rm -f ""')
+  // XDG overrides are honored, because a user who moved them expects us to
+  // clean where we actually wrote.
+  const xdg = buildUninstallPlan('/home/t/d', '/home/t', { platform: 'linux', env: { XDG_CONFIG_HOME: '/home/t/cfg', XDG_CACHE_HOME: '/home/t/cch' }, pid: 1 })
+  assert(xdg.dirs.includes('/home/t/cfg/Scheherazade') && xdg.dirs.includes('/home/t/cch/Scheherazade'),
+    'XDG_CONFIG_HOME / XDG_CACHE_HOME are honored')
 }
 
-// darwin only from here down. buildUninstallPlan emits macOS residue classes (~/Library/...,
-// a .plist, `security delete-generic-password`) and this file asserts them as
-// literal POSIX paths; path.join inside the builder returns backslashes on
-// Windows, so every includes() missed (2026-08-04 win suite). The Windows
-// uninstall path is the NSIS uninstaller, and the route now refuses with 501
-// there -- which is what gets asserted below instead, so this file still
-// tests something real on Windows rather than being skipped whole.
-if (process.platform !== 'darwin') {
-  console.log('\n1. non-darwin: the in-app uninstall must REFUSE, not half-run')
+console.log('\n0c. the Windows lane: PowerShell, the uninstaller, and no bash')
+{
+  const plan = plans.win32
+  assert(plan.uninstaller === 'C:\\Users\\testuser\\AppData\\Local\\Programs\\Scheherazade\\Uninstall Scheherazade.exe',
+    'the NSIS uninstaller is derived from the running exe, not a guessed install root')
+  assert(plan.script.includes('Wait-Process -Id 4242'), 'the script waits for THIS process to die before touching anything')
+  assert(plan.script.includes('Remove-Item -LiteralPath'), '-LiteralPath: a path with [] is not a wildcard')
+  assert(/Test-Path -LiteralPath .* \{ Start-Process/.test(plan.script),
+    'the uninstaller is launched only if it is really there -- half a clean uninstall beats a crash')
+  assert(!/\bbash\b|rm -rf/.test(plan.script), 'not one POSIX construct survives in the Windows script')
+  // A default install path when Electron cannot tell us the exe.
+  const noExe = buildUninstallPlan('C:\\d', 'C:\\Users\\t', { platform: 'win32', env: {}, pid: 1 })
+  assert(noExe.uninstaller.includes('AppData\\Local\\Programs\\Scheherazade'),
+    'no exePath falls back to electron-builder oneClick per-user default, never to nothing')
+  // Single quotes in a home path must not break out of the PowerShell string.
+  const hostile = buildUninstallPlan("C:\\Users\\o'brien\\d", "C:\\Users\\o'brien", { platform: 'win32', env: {}, pid: 1 })
+  assert(hostile.script.includes("'C:\\Users\\o''brien\\d'"), "a single quote is doubled, PowerShell's own escape")
+}
+
+console.log('\n0d. the route no longer refuses off-mac')
+{
   const settingsSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'routes', 'settings.cjs'), 'utf8')
-  assert(/process\.platform !== 'darwin'/.test(settingsSrc) && /unsupported_platform/.test(settingsSrc),
-    'the /api/uninstall handler refuses on non-darwin')
-  assert(/reaper\.on\('error'/.test(settingsSrc),
-    "the reaper spawn carries an 'error' listener (an unhandled one reaches uncaughtException -> app.exit(1))")
-  console.log(`\n${pass} passed, ${fail} failed`)
-  process.exit(fail === 0 ? 0 : 1)
+  const handler = settingsSrc.slice(settingsSrc.indexOf("pathname === '/api/uninstall'"))
+  assert(!/if \(process\.platform !== 'darwin'\)/.test(handler),
+    'the darwin-only early return is gone')
+  assert(!/sendJson\(res, 501/.test(handler) && !/unsupported_platform/.test(handler),
+    'and with it the 501 the danger-zone button turned into an error toast on two platforms')
+  assert(/spawn\(plan\.runner\.cmd, plan\.runner\.args/.test(handler),
+    'the interpreter comes from the plan, not a hardcoded /bin/bash')
+  assert(/reaper\.on\('error'/.test(handler),
+    "the reaper spawn still carries an 'error' listener (an unhandled one reaches uncaughtException -> app.exit(1))")
+  assert(/plan\.mode === 'bundle-trash'/.test(handler),
+    'trashing the .app is gated on the mac plan rather than assumed')
+  assert(/confirm !== 'DELETE'/.test(handler), 'the typed-confirm gate is untouched')
 }
 
-console.log('\n1. the list: four residue classes in, the protected paths out')
+// Sections 0-0d above run everywhere and are the whole contract. What follows
+// needs a real POSIX shell to EXECUTE a generated script against fake residue,
+// so it runs on mac and Linux and is skipped (loudly) on Windows -- the
+// PowerShell lane's equivalent needs a Windows host and is named in the report
+// rather than faked here.
+const POSIX_SHELL = process.platform !== 'win32'
+
+console.log('\n1. the mac list: four residue classes in, the protected paths out')
 {
   const home = '/Users/testuser'
   const dataHome = '/Users/testuser/Documents/Scheherazade'
-  const { dirs, script } = buildUninstallPlan(dataHome, home)
+  // Explicit platform (P4): the builder used to read process.platform, so this
+  // section only tested anything on a Mac. It is a pure function now.
+  const { dirs, script } = buildUninstallPlan(dataHome, home, { platform: 'darwin' })
   assert(dirs.includes(dataHome), 'DATA_HOME is on the list (the agent itself)')
   assert(dirs.includes('/Users/testuser/Library/Application Support/Scheherazade'), 'Electron userData is on the list')
   assert(dirs.includes('/Users/testuser/Library/Preferences/com.choam.scheherazade.plist'), 'prefs plist is on the list')
@@ -140,40 +176,53 @@ console.log('\n1. the list: four residue classes in, the protected paths out')
 
 console.log('\n2. quoting: a hostile-looking path cannot escape its rm')
 {
-  const { script } = buildUninstallPlan("/Users/o'brien/Documents/Scheherazade", "/Users/o'brien")
+  const { script } = buildUninstallPlan("/Users/o'brien/Documents/Scheherazade", "/Users/o'brien", { platform: 'darwin' })
   assert(script.includes(`'/Users/o'\\''brien/Documents/Scheherazade'`), "single quotes in a home path are shell-escaped")
   const rmLines = script.split('\n').filter((l) => l.startsWith('rm -rf '))
   assert(rmLines.length > 0 && rmLines.every((l) => /^rm -rf '/.test(l) && l.endsWith("'")),
     'every rm target is single-quoted end to end')
 }
 
-console.log('\n3. the script actually cleans (functional, fake residue, real bash)')
-{
+console.log('\n3. the scripts actually clean (functional, fake residue, real shell)')
+if (!POSIX_SHELL) {
+  console.log('  SKIP functional shell runs -- this host has no POSIX shell; the PowerShell lane needs a Windows host (see the report); NOT a pass')
+} else for (const platform of ['darwin', 'linux']) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-uninst-'))
   const fakeHome = path.join(tmp, 'home')
   const dataHome = path.join(fakeHome, 'Documents', 'Scheherazade')
   const survivor = path.join(fakeHome, '.claude.json')
   const slugDir = path.join(fakeHome, '.claude', 'projects', dataHome.replaceAll('/', '-'))
   const otherProject = path.join(fakeHome, '.claude', 'projects', '-some-other-project')
-  for (const d of [dataHome, slugDir, otherProject, path.join(fakeHome, 'Library', 'Application Support', 'Scheherazade')]) {
+  // The per-platform Electron dir, so each run proves ITS OWN residue class
+  // gets removed and not just the shared ones.
+  const electronDir = platform === 'linux'
+    ? path.join(fakeHome, '.config', 'Scheherazade')
+    : path.join(fakeHome, 'Library', 'Application Support', 'Scheherazade')
+  for (const d of [dataHome, slugDir, otherProject, electronDir]) {
     fs.mkdirSync(d, { recursive: true })
     fs.writeFileSync(path.join(d, 'x'), 'residue')
   }
   fs.writeFileSync(survivor, '{}')
+  // A fake AppImage: the linux plan's last act unlinks $APPIMAGE, and this
+  // proves the guard fires on a real file rather than only parsing.
+  const fakeAppImage = path.join(tmp, 'Scheherazade.AppImage')
+  fs.writeFileSync(fakeAppImage, 'ELF')
 
   // A short-lived watched process stands in for the app; strip the
   // security/pkill lines (they touch the REAL keychain/process table).
   const watched = spawn('/bin/sleep', ['0.5'])
-  const { script } = buildUninstallPlan(dataHome, fakeHome)
-  const testScript = script
-    .replace(`kill -0 ${process.pid}`, `kill -0 ${watched.pid}`)
+  const plan = buildUninstallPlan(dataHome, fakeHome, { platform, env: {}, pid: watched.pid })
+  const testScript = plan.script
     .split('\n').filter((l) => !l.startsWith('security') && !l.startsWith('pkill')).join('\n')
-  const runner = spawn('/bin/bash', ['-c', testScript])
+  const runner = spawn(plan.runner.cmd, [plan.runner.args[0], testScript], { env: { ...process.env, APPIMAGE: fakeAppImage } })
   await new Promise((resolve) => runner.on('exit', resolve))
-  assert(!fs.existsSync(dataHome), 'DATA_HOME is gone')
-  assert(!fs.existsSync(slugDir), 'our transcript slug is gone')
-  assert(fs.existsSync(survivor), '~/.claude.json SURVIVES')
-  assert(fs.existsSync(otherProject), "another project's transcripts SURVIVE")
+  assert(!fs.existsSync(dataHome), `${platform}: DATA_HOME is gone`)
+  assert(!fs.existsSync(slugDir), `${platform}: our transcript slug is gone`)
+  assert(!fs.existsSync(electronDir), `${platform}: the Electron per-app dir is gone`)
+  assert(fs.existsSync(survivor), `${platform}: ~/.claude.json SURVIVES`)
+  assert(fs.existsSync(otherProject), `${platform}: another project's transcripts SURVIVE`)
+  assert(fs.existsSync(fakeAppImage) === (platform !== 'linux'),
+    platform === 'linux' ? 'linux: $APPIMAGE is unlinked' : 'darwin: nothing touches $APPIMAGE')
   fs.rmSync(tmp, { recursive: true, force: true })
 }
 
