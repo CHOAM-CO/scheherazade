@@ -48,7 +48,15 @@
 
 const { spawn } = require('node:child_process')
 
-const { resolveBin } = require('./http-server.cjs')
+// design-0023 P4: this file used to require http-server.cjs back, purely for
+// resolveBin -- the ONE module in onboarding/ that did, a cycle that hands
+// the requirer an incomplete exports snapshot if the load order ever flips.
+// (Spelled without the call syntax on purpose: test-packaging.mjs's
+// require-graph regex reads comments too, same reason http-server.cjs spells
+// its own version of this rule that way.) The candidate list lives in the
+// capability table now, so the back-edge is gone and the Linux dirs
+// (/usr/bin, /snap/bin, ~/.local/bin, ...) come along for free.
+const { host } = require('./platform.cjs')
 const { verifyManagedBin, verifySignedByPinnedTeam } = require('./bootstrap.cjs')
 const { OLLAMA_BASE_URL } = require('../provider-env.cjs')
 
@@ -102,7 +110,7 @@ async function listenerIsOllama(port) {
     // their own Ollama was an unrecognized service. Detection-only on Windows
     // for v1 (the locked scoping call): match the executable by path and say
     // out loud that this is weaker than the mac check.
-    if (process.platform === 'win32') {
+    if (host().isWin) {
       if (!/[\\/]ollama(\.exe)?$/i.test(exe)) {
         return { ok: false, why: `pid ${pid} (${exe}): does not look like ollama.exe` }
       }
@@ -157,7 +165,7 @@ async function ensureOllamaDaemon({ port = OLLAMA_PORT } = {}) {
     return false
   }
 
-  const bin = resolveBin('ollama')
+  const bin = host().resolveBin('ollama')
   if (!bin) {
     console.error('[scheherazade/ollama-daemon] ollama binary not found at any fixed location -- bootstrap step missing?')
     return false

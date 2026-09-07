@@ -228,5 +228,21 @@ console.log('9. the table is frozen and the platform list is complete')
     'PLATFORMS names all three, so a future row cannot forget one')
 }
 
+console.log('10. adoption: the spawn seam has exactly one owner, and no require cycle')
+{
+  const fs = await import('node:fs')
+  const server = fs.readFileSync(path.join(ROOT, 'onboarding', 'http-server.cjs'), 'utf8')
+  assert(!/^const \{ spawn, execFile \} = require\('node:child_process'\)/m.test(server),
+    'http-server no longer pulls spawn/execFile in for itself')
+  assert(!/[^.\w]spawn\(binPath/.test(server) && !/[^.\w]execFile\(binPath/.test(server),
+    'no bare spawn/execFile against a resolved binary survives in http-server')
+  assert(/HOST\.spawnBin\(/.test(server) && /HOST\.execFileBin\(/.test(server),
+    'the login, MCP and installer call sites go through the table')
+  const daemon = fs.readFileSync(path.join(ROOT, 'onboarding', 'ollama-daemon.cjs'), 'utf8')
+  assert(!/require\('\.\/http-server\.cjs'\)/.test(daemon),
+    'ollama-daemon.cjs no longer requires the server back (the one cycle in onboarding/)')
+  assert(/require\('\.\/platform\.cjs'\)/.test(daemon), '...it asks the capability table instead')
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

@@ -53,7 +53,12 @@ const OLLAMA_CLOUD_TIMEOUT_MS = 15_000
 // any FUTURE external-binary spawn (Codex security review, 2026-07-07):
 // resolve via resolveBin() below and use a FIXED argv -- the LOGIN_SPECS
 // table is the single existing site.
-const { spawn, execFile } = require('node:child_process')
+// design-0023 P4: this file no longer spawns anything directly. Every
+// external-binary call goes through HOST.spawnBin / HOST.execFileBin
+// (onboarding/platform.cjs), which owns the .cmd-needs-a-shell rule, the
+// detached/shell incompatibility on Windows, windowsHide, and the mandatory
+// 'error' listener -- five hand-copies of the first, three of the last, and
+// two call sites (the MCP pair) that had neither.
 
 // Kill a detached child AND its descendants. Negative-pid process-group signals
 // do not exist on Windows, so every group-kill below threw straight into its
@@ -2220,38 +2225,19 @@ const loginStarting = { chatgpt: false, ollama: false }
 //      env-controlled.
 // A dev box with the CLI in some custom prefix can symlink it into
 // DATA_HOME/bin; consumer installs get it there via bootstrap.
+// design-0023 P4: the candidate LIST moved to onboarding/platform.cjs so
+// there is one per-platform answer instead of a mac list, a win list, and no
+// Linux list at all. The posture above is unchanged and is restated in that
+// file's header -- fixed absolute locations, no PATH walk (platform.cjs's
+// resolveBin takes an explicit `allowPath` that nothing here passes).
+//
+// What the move FIXED: the non-win arm was `[DATA_HOME/bin, /opt/homebrew/bin,
+// /usr/local/bin]`, so on Linux `codex login` reported cli_missing on every
+// apt (/usr/bin), npm (~/.npm-global/bin), snap (/snap/bin) and
+// installer-script (~/.local/bin) install -- i.e. on essentially every Linux
+// box, while telling the user their CLI was not installed.
 function resolveBin(name) {
-  // Same FIXED-locations-only posture on both platforms (no PATH walk --
-  // the Codex-review reasoning above is platform-independent). Win list
-  // (win-port Phase 2, UNVERIFIED on the Windows box): DATA_HOME/bin is the
-  // app-managed bootstrap dir on both platforms; the Ollama entry is its
-  // installer's default user-scope location (harmlessly absent for other
-  // names, same shape as probing /opt/homebrew/bin/<name> on mac).
-  const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
-  const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')
-  const fixed = process.platform === 'win32'
-    ? [
-        path.join(DATA_HOME, 'bin', `${name}.exe`),
-        // Codex standalone installer (OpenAI's own MSI/setup, verified on the Windows box)
-        path.join(localAppData, 'Programs', 'OpenAI', 'Codex', 'bin', `${name}.exe`),
-        // npm global install (.cmd shim — needs shell:true in spawn, see below)
-        path.join(appData, 'npm', `${name}.cmd`),
-        path.join(localAppData, 'Programs', 'Ollama', `${name}.exe`),
-      ]
-    : [
-        path.join(DATA_HOME, 'bin', name),
-        `/opt/homebrew/bin/${name}`,
-        `/usr/local/bin/${name}`,
-      ]
-  for (const candidate of fixed) {
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK)
-      return candidate
-    } catch {
-      // not here, keep looking
-    }
-  }
-  return null
+  return HOST.resolveBin(name)
 }
 
 function clearLoginChild(provider) {
@@ -2272,10 +2258,11 @@ function probeAlreadyLoggedIn(provider, binPath) {
     return Promise.resolve(fs.existsSync(spec.artifact()))
   }
   return new Promise((resolve) => {
-    // .cmd shims (npm global bin on Windows) need shell:true for execFile too
-    const opts = { timeout: LOGIN_PROBE_TIMEOUT_MS }
-    if (binPath.endsWith('.cmd')) opts.shell = true
-    execFile(binPath, spec.probe.argv, opts, (err) => resolve(!err))
+    // .cmd/.bat shims (npm global bin on Windows) need shell:true for
+    // execFile too -- HOST.execFileBin is the one owner of that rule now
+    // (design-0023 P4); this used to be one of five hand-copies, two of
+    // which (the MCP pair below) did not have it at all.
+    HOST.execFileBin(binPath, spec.probe.argv, { timeout: LOGIN_PROBE_TIMEOUT_MS }, (err) => resolve(!err))
   })
 }
 
@@ -2322,12 +2309,22 @@ async function startProviderLoginLocked(provider, { force }) {
   setLoginStatus(provider, 'running', null, `${spec.bin} ${spec.argv.join(' ')} started -- complete the flow in your browser`)
   log(`login shell-out: spawning ${binPath} ${spec.argv.join(' ')} (provider=${provider}, timeout=${LOGIN_TIMEOUT_MS}ms)`)
   // .cmd shims (npm global bin on Windows) need shell:true -- Node's spawn
-  // cannot exec a .cmd directly without it. Exe and unix binaries don't.
-  const needsShell = binPath.endsWith('.cmd')
-  const child = spawn(binPath, spec.argv, {
-    detached: !needsShell, // own pgroup -> group-SIGTERM reaps browser-opener grandchildren too (detached is incompatible with shell:true on Windows)
-    shell: needsShell,
+  // cannot exec a .cmd directly without it -- and detached is incompatible
+  // with shell:true there, so the own-pgroup request is dropped exactly on
+  // that path. Both rules live in HOST.spawnBin now (design-0023 P4), which
+  // also guarantees the 'error' listener below is never the only thing
+  // standing between a spawn failure and main.cjs's uncaughtException.
+  const child = HOST.spawnBin(binPath, spec.argv, {
+    detached: true, // own pgroup -> group-SIGTERM reaps browser-opener grandchildren too
     stdio: ['ignore', 'pipe', 'pipe'],
+    onError: (err) => {
+      // spawn-level failure (ENOENT raced away, EACCES, ...) -- close may
+      // never fire with a meaningful code.
+      if (getLoginStatus(provider).state === 'running') {
+        setLoginStatus(provider, 'failed', 'unknown', `spawn failed: ${err.message}`)
+      }
+      clearLoginChild(provider)
+    },
   })
   loginChildren[provider] = child
 
@@ -2341,15 +2338,6 @@ async function startProviderLoginLocked(provider, { force }) {
     stderrTail = (stderrTail + chunk.toString()).slice(-400)
   })
   child.stdout.resume() // drain so the child never blocks on a full pipe
-
-  child.on('error', (err) => {
-    // spawn-level failure (ENOENT raced away, EACCES, ...) -- close may
-    // never fire with a meaningful code.
-    if (getLoginStatus(provider).state === 'running') {
-      setLoginStatus(provider, 'failed', 'unknown', `spawn failed: ${err.message}`)
-    }
-    clearLoginChild(provider)
-  })
 
   loginTimers[provider] = setTimeout(() => {
     if (getLoginStatus(provider).state !== 'running') return
@@ -2501,7 +2489,19 @@ function startClaudeCliInstall({ resolveClaudeBin }) {
   setClaudeInstallStatus('running')
   let child
   try {
-    child = spawn('/bin/bash', CLAUDE_INSTALL_ARGV, { detached: true, stdio: ['ignore', 'ignore', 'pipe'] })
+    // /bin/bash is an absolute path, so this is not a resolution question --
+    // it goes through HOST.spawnBin for the 'error'-listener guarantee and
+    // the one detached rule. On a bash-less Linux (Alpine, some Nix profiles)
+    // it still degrades to failed/spawn_failed, never a crash.
+    child = HOST.spawnBin('/bin/bash', CLAUDE_INSTALL_ARGV, {
+      detached: true,
+      stdio: ['ignore', 'ignore', 'pipe'],
+      onError: (err) => {
+        if (claudeInstallTimer) { clearTimeout(claudeInstallTimer); claudeInstallTimer = null }
+        claudeInstallChild = null
+        setClaudeInstallStatus('failed', 'spawn_failed', err.message)
+      },
+    })
   } catch (err) {
     setClaudeInstallStatus('failed', 'spawn_failed', err.message)
     return
@@ -2516,11 +2516,6 @@ function startClaudeCliInstall({ resolveClaudeBin }) {
     try { killTree(claudeInstallChild.pid, 'SIGTERM') } catch { /* already gone */ }
     setClaudeInstallStatus('failed', 'timeout', '설치가 시간 내에 끝나지 않았습니다. 네트워크를 확인하고 다시 시도해주세요.')
   }, CLAUDE_INSTALL_TIMEOUT_MS)
-  child.on('error', (err) => {
-    if (claudeInstallTimer) { clearTimeout(claudeInstallTimer); claudeInstallTimer = null }
-    claudeInstallChild = null
-    setClaudeInstallStatus('failed', 'spawn_failed', err.message)
-  })
   child.on('exit', (code) => {
     if (claudeInstallTimer) { clearTimeout(claudeInstallTimer); claudeInstallTimer = null }
     claudeInstallChild = null
@@ -2547,7 +2542,12 @@ function listMcpConnectors(binPath) {
   return new Promise((resolve) => {
     const childEnv = { ...process.env }
     delete childEnv.ANTHROPIC_API_KEY
-    execFile(binPath, ['mcp', 'list'], { timeout: 15_000, env: childEnv }, (err, stdout) => {
+    // HOST.execFileBin, not bare execFile (design-0023 P4): this call site
+    // never had the .cmd branch the login path has, so an npm-shim `claude`
+    // was an EINVAL on current Node rather than a connector list. Masked
+    // today only because main.cjs's resolveClaudeBin refuses to return a
+    // shim -- a mask, not a fix.
+    HOST.execFileBin(binPath, ['mcp', 'list'], { timeout: 15_000, env: childEnv }, (err, stdout) => {
       // `claude mcp list` exits non-zero if any server is unhealthy, but its
       // stdout still carries the rows we parse -- so we parse stdout
       // regardless of exit code, and only treat a truly empty stdout as a
@@ -2572,10 +2572,14 @@ function startMcpConnectorLogin(name, binPath) {
     // connectors are suppressed (verified 07-14).
     const childEnv = { ...process.env }
     delete childEnv.ANTHROPIC_API_KEY
-    const child = spawn(binPath, MCP_CONNECTOR_SPEC.argv(name), {
+    const child = HOST.spawnBin(binPath, MCP_CONNECTOR_SPEC.argv(name), {
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: childEnv,
+      onError: (err) => {
+        if (getMcpStatus(name).state === 'running') setMcpStatus(name, 'failed', 'unknown', `spawn failed: ${err.message}`)
+        clearMcpLoginChild(name)
+      },
     })
     mcpLoginChildren[name] = child
 
@@ -2606,10 +2610,6 @@ function startMcpConnectorLogin(name, binPath) {
       }
     }, LOGIN_TIMEOUT_MS)
 
-    child.on('error', (err) => {
-      if (getMcpStatus(name).state === 'running') setMcpStatus(name, 'failed', 'unknown', `spawn failed: ${err.message}`)
-      clearMcpLoginChild(name)
-    })
     child.on('close', (code) => {
       const st = getMcpStatus(name)
       // url_ready is terminal-good: the deliverable (URL) was captured; the
