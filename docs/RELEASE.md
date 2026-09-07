@@ -63,6 +63,7 @@ Nothing is published without `--publish`.
 | `--only mac\|win\|linux` | repeatable; default all three |
 | `--dry-run` | print every build / ssh / scp / gh command, run nothing |
 | `--allow-dirty` | rehearsal: branch / clean-tree / tag checks become warnings. Refuses `--publish`, and refuses to touch the shared box |
+| `--rehearse-remote` | with `--allow-dirty` only: run the win/linux legs **for real** on the box, into rehearsal locations |
 | `--verify-only` | build nothing; open what `release/` already holds and check it. This is how a leg someone else ran gets checked here |
 | `--publish` | actually create the release on `Mino-is-me/scheherazade-releases` |
 | `--clobber` | the release already exists: `gh release upload --clobber` instead of refusing |
@@ -78,6 +79,36 @@ builds' own output — is tee'd to `release/release-all-<tag>.log`.
 node tools/release-all.mjs --dry-run --tag v<version>   # every command, nothing run
 node tools/release-all.mjs --only mac --allow-dirty     # a real mac build off a dirty tree
 ```
+
+`--allow-dirty` alone never touches the shared Windows box: the win and linux
+legs are dropped from the run and it says so. That is the right default — a
+half-finished branch should not be able to leave a build directory on a machine
+someone else is using.
+
+To rehearse those two legs against the real boxes before a release is cut, ask
+for it explicitly:
+
+```sh
+node tools/release-all.mjs --allow-dirty --rehearse-remote --only win --only linux
+```
+
+`--rehearse-remote` is valid **only** with `--allow-dirty`, and it prints a
+one-line banner saying so. The legs then run for real — same generated scripts,
+same `npm ci`, same `dist:win` / `dist:linux` — but into rehearsal locations
+derived from one slug, so nothing can collide with or overwrite a real run:
+
+| | release run | rehearsal |
+|---|---|---|
+| Windows build dir | `C:\Users\magi\sch-build\<tag>\` | `…\rehearsal-<tag>\` |
+| WSL branch | `<tag>` | `rehearsal-<tag>` |
+| bundle / script on the box | `schz-<tag>.*` | `schz-rehearsal-<tag>.*` |
+
+Artifacts still land in `release/` and get the **same** verification rows, so a
+rehearsal answers the only question worth asking beforehand: do the two remote
+legs actually complete on those boxes, and is what comes back a real x86-64
+installer and a real x86-64 AppImage. `--publish` stays refused under
+`--allow-dirty`, rehearsal or not — these artifacts are not releasable.
+Cleanup removes the rehearsal directory unless you pass `--keep-remote`.
 
 ---
 

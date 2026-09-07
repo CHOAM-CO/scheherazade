@@ -62,6 +62,7 @@
 //   node tools/release-all.mjs --tag v0.3.0                 # build all 3, verify, print the gh command
 //   node tools/release-all.mjs --only mac --allow-dirty     # rehearse the mac leg on a working tree
 //   node tools/release-all.mjs --dry-run --tag v0.3.0       # print every command, run nothing
+//   node tools/release-all.mjs --allow-dirty --rehearse-remote --only win --only linux   # real boxes, rehearsal dirs
 //   node tools/release-all.mjs --tag v0.3.0 --publish --notes docs/release-notes-v0.3.0.md
 //   node tools/release-all.mjs --tag v0.3.0 --publish --clobber --notes <file>   # release already exists
 
@@ -92,6 +93,15 @@ const WSL_TREE = '/root/schz'
 // scp needs forward slashes; cmd.exe needs backslashes. Both, spelled once.
 const winScpPath = (winPath) => winPath.replace(/\\/g, '/')
 
+// REHEARSAL, set by --rehearse-remote. Every name that lands on the shared box
+// -- the build directory, the bundle, the WSL script, the branch it checks out
+// -- is derived from this ONE slug, so a rehearsal cannot collide with, or
+// overwrite, a real run's files. Prefix and not suffix on purpose: everything
+// belonging to a rehearsal sorts together on the box, and `rmdir` cleanup can
+// never be aimed at a release directory by a typo in a tag.
+let REHEARSE = false
+const remoteSlug = (tag) => (REHEARSE ? `rehearsal-${tag}` : tag)
+
 // npm ci on the Windows box goes silent for minutes at a stretch and used to
 // drop the connection with exit 255. Keepalives, generously.
 const SSH_OPTS = ['-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=240']
@@ -114,6 +124,13 @@ function usage() {
                     OFF by default; without it the exact gh command is printed.
   --clobber         if the release already exists, upload assets over it
                     (gh release upload --clobber) instead of refusing.
+  --rehearse-remote with --allow-dirty ONLY: actually run the win and linux
+                    legs on the shared box, but into rehearsal locations --
+                    C:\\Users\\magi\\sch-build\\rehearsal-<tag>\\ and a WSL branch
+                    named rehearsal-<tag> instead of the release ones.
+                    Artifacts still come back to release/ and get the same
+                    verification rows. Without it, --allow-dirty never touches
+                    the shared box at all.
   --verify-only     build nothing; open whatever is already in release/ and
                     check it. This is how a leg someone else ran on the boxes
                     gets checked here, and it is the only way the win/linux
@@ -124,7 +141,7 @@ function usage() {
 }
 
 function parseArgs(argv) {
-  const o = { tag: null, only: [], dryRun: false, allowDirty: false, publish: false, clobber: false, notes: null, keepRemote: false, verifyOnly: false, help: false }
+  const o = { tag: null, only: [], dryRun: false, allowDirty: false, publish: false, clobber: false, notes: null, keepRemote: false, verifyOnly: false, rehearseRemote: false, help: false }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     const inline = (flag) => (a.startsWith(`${flag}=`) ? a.slice(flag.length + 1) : null)
@@ -136,6 +153,7 @@ function parseArgs(argv) {
     else if (a === '--clobber') o.clobber = true
     else if (a === '--keep-remote') o.keepRemote = true
     else if (a === '--verify-only') o.verifyOnly = true
+    else if (a === '--rehearse-remote') o.rehearseRemote = true
     else if (a === '--tag' || a.startsWith('--tag=')) o.tag = String(take(inline('--tag')) || '')
     else if (a === '--notes' || a.startsWith('--notes=')) o.notes = String(take(inline('--notes')) || '')
     else if (a === '--only' || a.startsWith('--only=')) {
@@ -337,7 +355,7 @@ async function legMac() {
 // ── lane: win (magi-win, over ssh) ──────────────────────────────────────────
 
 function winCmdScript(tag, version, names) {
-  const dir = `${WIN_BUILD_ROOT}\\${tag}`
+  const dir = `${WIN_BUILD_ROOT}\\${remoteSlug(tag)}`
   // Every `npm` is `call npm`. cmd.exe TRANSFERS control to a batch file
   // rather than calling it, and npm on Windows is npm.cmd -- so a bare
   // `npm ci` here would end this script and every line below it would
@@ -365,7 +383,7 @@ function winCmdScript(tag, version, names) {
 
 async function legWin(tag, version, names, tmpDir) {
   header(`win lane -- ${WIN_HOST} (win32/x64), never cross-built`)
-  const remoteDir = `${WIN_BUILD_ROOT}\\${tag}`
+  const remoteDir = `${WIN_BUILD_ROOT}\\${remoteSlug(tag)}`
   const remoteDirScp = winScpPath(remoteDir)
   const tarball = path.join(tmpDir, 'src.tar.gz')
   const cmdFile = path.join(tmpDir, 'build.cmd')
@@ -408,8 +426,8 @@ function wslShScript(tag, bundleName, names) {
     '# npm install leaves package-lock.json dirty here, and a dirty lockfile',
     '# blocks the checkout below with a message about local changes.',
     'git checkout -- package-lock.json 2>/dev/null || true',
-    `git fetch --force "$BUNDLE" 'HEAD:refs/heads/rel-${tag}'`,
-    `git checkout --force rel-${tag}`,
+    `git fetch --force "$BUNDLE" 'HEAD:refs/heads/${remoteSlug(tag)}'`,
+    `git checkout --force ${remoteSlug(tag)}`,
     'git --no-pager log --oneline -1',
     'npm ci',
     'npm run dist:linux',
@@ -426,8 +444,8 @@ function wslShScript(tag, bundleName, names) {
 
 async function legLinux(tag, version, names, tmpDir) {
   header(`linux lane -- WSL2 ${WSL_DISTRO} on ${WIN_HOST} (linux/x64), ${WSL_TREE}`)
-  const bundleName = `schz-${tag}.bundle`
-  const shName = `schz-build-${tag}.sh`
+  const bundleName = `schz-${remoteSlug(tag)}.bundle`
+  const shName = `schz-build-${remoteSlug(tag)}.sh`
   const bundle = path.join(tmpDir, bundleName)
   const sh = path.join(tmpDir, shName)
 
@@ -579,6 +597,7 @@ async function main() {
   const opts = parseArgs(process.argv.slice(2))
   if (opts.help) { usage(); return 0 }
   DRY = opts.dryRun
+  REHEARSE = opts.rehearseRemote
 
   const tag = opts.tag || `v${pkg.version}`
   const lanes = opts.only.length ? [...new Set(opts.only)] : ['mac', 'win', 'linux']
@@ -593,6 +612,16 @@ async function main() {
   log(`node ${process.versions.node} on ${process.platform}/${process.arch}, ${new Date().toISOString()}`)
   if (logStream) log(`log: ${path.relative(ROOT, logStream)}`)
 
+  // Explicit, and only ever alongside --allow-dirty. Letting a plain
+  // --allow-dirty reach the shared box would make the safe-by-default flag
+  // unsafe by default, which is the whole reason its guard exists.
+  if (opts.rehearseRemote && !opts.allowDirty) {
+    console.error('release-all: --rehearse-remote is only valid with --allow-dirty. It exists to rehearse the shared-box legs off an untagged tree; a real release run builds into the release locations and needs no rehearsal.')
+    return 2
+  }
+  if (opts.rehearseRemote) {
+    log(`  ** REHEARSAL: win/linux run FOR REAL on ${WIN_HOST}, into ${WIN_BUILD_ROOT}\\${remoteSlug(tag)} and WSL branch ${remoteSlug(tag)} -- not the release locations; artifacts are NOT releasable. **`)
+  }
   if (opts.publish && opts.allowDirty) {
     console.error('release-all: --publish and --allow-dirty are mutually exclusive. A rehearsal build is not releasable.')
     return 2
@@ -611,9 +640,10 @@ async function main() {
 
   // The remote legs refuse to run on a host that is not this Mac's own; they
   // reach a SHARED box, so a rehearsal must never touch it.
-  if (opts.allowDirty && (lanes.includes('win') || lanes.includes('linux')) && !DRY && !opts.verifyOnly) {
+  if (opts.allowDirty && !opts.rehearseRemote && (lanes.includes('win') || lanes.includes('linux')) && !DRY && !opts.verifyOnly) {
     log('\nrelease-all: --allow-dirty is a local rehearsal. The win/linux legs touch a shared box,')
-    log('             so they are skipped unless you also pass --dry-run to see their commands.')
+    log('             so they are skipped unless you pass --dry-run to see their commands, or')
+    log('             --rehearse-remote to run them for real into rehearsal locations.')
     lanes.splice(0, lanes.length, ...lanes.filter((l) => l === 'mac'))
     if (!lanes.length) { log('             nothing left to do.'); return 0 }
   }
@@ -643,7 +673,7 @@ async function main() {
 
   if (!opts.keepRemote && !DRY && !opts.verifyOnly && (lanes.includes('win') || lanes.includes('linux'))) {
     header('cleanup -- remote build directory')
-    await run('ssh', [...SSH_OPTS, WIN_HOST, `if exist "${WIN_BUILD_ROOT}\\${tag}" rmdir /s /q "${WIN_BUILD_ROOT}\\${tag}"`])
+    await run('ssh', [...SSH_OPTS, WIN_HOST, `if exist "${WIN_BUILD_ROOT}\\${remoteSlug(tag)}" rmdir /s /q "${WIN_BUILD_ROOT}\\${remoteSlug(tag)}"`])
   }
 
   try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* tmp */ }
