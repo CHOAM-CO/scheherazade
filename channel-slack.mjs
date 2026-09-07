@@ -30,7 +30,7 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import {
   installStdoutHygiene, resolveDataHome, localISO, localNow,
-  sweepStaleAtomicTmp,
+  sweepStaleAtomicTmp, installParentDeathExit,
   createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer, createMuteStrikeAnnouncer,
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
   createInboundNotifier, createOutboundDedup,
@@ -875,13 +875,26 @@ async function boot() {
   log(`MCP server up (${AGENT_NAME})`)
 
   // Always-on in-app chat surface, fail-soft (see channel.mjs's twin block).
+  let localSurface = null
   try {
-    const surface = await startLocalChatSurface({ notify: (n) => { lastInboundSurface = 'in-app'; return notifyInbound(n.params) }, log })
-    process.stdin.on('end', surface.stop)
-    process.stdin.on('close', surface.stop)
+    localSurface = await startLocalChatSurface({ notify: (n) => { lastInboundSurface = 'in-app'; return notifyInbound(n.params) }, log })
   } catch (err) {
     log(`in-app chat surface failed to start (chat page off this session): ${err.message}`)
   }
+
+  // Parent-death exit (design-0023 P3 #6). This used to be
+  // `stdin.on('end', surface.stop)` and nothing else: the chat surface closed
+  // and the process kept running with the Socket Mode websocket wide open,
+  // holding the app token -- the exact orphan channel.mjs's 2026-08-18 fix was
+  // written for, never ported here. Disconnect the socket, then exit.
+  installParentDeathExit({
+    name: 'Slack channel MCP server',
+    log,
+    cleanup: async () => {
+      try { localSurface?.stop() } catch (err) { log(`surface stop failed during shutdown: ${err.message}`) }
+      try { await socketModeClient.disconnect() } catch (err) { log(`socket mode disconnect failed during shutdown: ${err.message}`) }
+    },
+  })
 
   // Bot token checked first (auth.test is a plain REST call, fails fast on a
   // revoked/invalid xoxb) -- app token checked second via the actual Socket

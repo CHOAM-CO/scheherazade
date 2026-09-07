@@ -29,7 +29,7 @@ import https from 'node:https'
 import { fileURLToPath } from 'node:url'
 import {
   installStdoutHygiene, resolveDataHome, localISO, localNow,
-  sweepStaleAtomicTmp,
+  sweepStaleAtomicTmp, installParentDeathExit,
   createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer, createMuteStrikeAnnouncer,
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
   createInboundNotifier, createOutboundDedup,
@@ -733,13 +733,23 @@ async function boot() {
   log(`MCP server up (${AGENT_NAME})`)
 
   // Always-on in-app chat surface, fail-soft (see channel.mjs's twin block).
+  let localSurface = null
   try {
-    const surface = await startLocalChatSurface({ notify: (n) => { lastInboundSurface = 'in-app'; return notifyInbound(n.params) }, log })
-    process.stdin.on('end', surface.stop)
-    process.stdin.on('close', surface.stop)
+    localSurface = await startLocalChatSurface({ notify: (n) => { lastInboundSurface = 'in-app'; return notifyInbound(n.params) }, log })
   } catch (err) {
     log(`in-app chat surface failed to start (chat page off this session): ${err.message}`)
   }
+
+  // Parent-death exit (design-0023 P3 #6). Same half-copy as Slack had: the
+  // surface stopped but the 50s getUpdates long poll kept the loop alive
+  // forever, so a dead parent left this process holding the bot token. There
+  // is no client handle to close -- the poll is an in-flight fetch -- so the
+  // cleanup is the surface and the exit itself does the rest.
+  installParentDeathExit({
+    name: 'Telegram channel MCP server',
+    log,
+    cleanup: () => { try { localSurface?.stop() } catch (err) { log(`surface stop failed during shutdown: ${err.message}`) } },
+  })
 
   const tokenOk = await verifyTokenOrFail()
   if (!tokenOk) {

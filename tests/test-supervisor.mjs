@@ -247,6 +247,20 @@ console.log('\n-- main.cjs seam: one launcher, one stopper, one signature')
     pkg.build.asarUnpack.includes('supervisor.mjs'))
   ok('run.sh is out of build.files and asarUnpack (the payload followed the deletion)',
     !pkg.build.files.includes('run.sh') && !pkg.build.asarUnpack.includes('run.sh'))
+  // design-0023 P3 #6: closing the window used to app.quit() on non-darwin,
+  // and quit tears the agent down -- so the SAME gesture stopped the agent on
+  // Windows/Linux and did nothing to it on mac. The agent's lifetime must not
+  // depend on the OS. Paired pin: with no quit there, a windowless app has to
+  // stay reachable, which on win/linux is the second-instance path (no dock).
+  const wacStart = mainSrc.indexOf("app.on('window-all-closed'")
+  const wacBody = mainSrc.slice(wacStart, mainSrc.indexOf('\n})', wacStart))
+    .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n')
+  ok('window-all-closed quits on NO platform (agent lifetime is OS-independent)',
+    !/app\.quit\(\)/.test(wacBody), wacBody.slice(0, 200))
+  ok('no platform fork left in that handler', !/platform !== 'darwin'/.test(wacBody))
+  ok('a windowless app can still be reopened (dock on mac, relaunch on win/linux)',
+    mainSrc.includes("app.on('activate', reopenMainWindow)") &&
+    /second-instance[\s\S]{0,900}reopenMainWindow\(\)/.test(mainSrc))
 }
 
 // ── 7. stop semantics, one contract, two mechanisms (design-0023 P3 #2) ────

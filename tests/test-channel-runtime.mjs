@@ -85,6 +85,84 @@ for (const b of BACKENDS) {
   check(`${b.file} sweeps stale atomic tmps at boot`, src.includes('sweepStaleAtomicTmp(DATA_HOME, log)'))
 }
 
+// ── 2a. parent-death exit: ONE installer, four servers ─────────────────────
+// The orphan class this closes: an MCP stdio server whose parent (the engine)
+// died, still holding a Discord/Slack token or a SQLite handle, because the
+// MCP transport does not exit on stdin EOF and a socket keeps the loop alive.
+// channel.mjs and memory/server.mjs each carried a full inline copy;
+// channel-slack.mjs and channel-telegram.mjs carried a HALF one (surface.stop
+// and nothing else), so two of the four servers never actually exited.
+console.log('\nparent-death exit: fires once, cleans up, exits (design-0023 P3 #6)')
+{
+  const { installParentDeathExit } = await import(pathToFileURL(RUNTIME_PATH).href)
+  // A stand-in for process.stdin: the real one cannot be made to emit 'end'
+  // twice on demand, and this test must be able to.
+  const makeStdin = () => {
+    const handlers = { end: [], close: [] }
+    return {
+      on(ev, fn) { handlers[ev].push(fn) },
+      off(ev, fn) { handlers[ev] = handlers[ev].filter((f) => f !== fn) },
+      emit(ev) { for (const f of [...handlers[ev]]) f() },
+      count(ev) { return handlers[ev].length },
+    }
+  }
+
+  {
+    const stdin = makeStdin()
+    const exits = []
+    const logs = []
+    let cleaned = 0
+    installParentDeathExit({ name: 'test server', stdin, log: (m) => logs.push(m), exit: (c) => exits.push(c), cleanup: () => { cleaned++ } })
+    check('listens on BOTH end and close (either can be the one that fires)', stdin.count('end') === 1 && stdin.count('close') === 1)
+    stdin.emit('end')
+    await new Promise((r) => setImmediate(r))
+    check('cleanup ran exactly once', cleaned === 1, String(cleaned))
+    check('exited 0', exits.join(',') === '0', exits.join(','))
+    check('said why (a silent exit is unexplainable in a log)', logs.some((m) => m.includes('parent gone')), logs.join(' | '))
+  }
+  {
+    // Re-entrancy: 'end' and 'close' both fire in the real world. Cleanup
+    // twice would double-close a DB handle / double-destroy a client.
+    const stdin = makeStdin()
+    const exits = []
+    let cleaned = 0
+    installParentDeathExit({ stdin, log: () => {}, exit: (c) => exits.push(c), cleanup: () => { cleaned++ } })
+    stdin.emit('end')
+    stdin.emit('close')
+    stdin.emit('end')
+    await new Promise((r) => setImmediate(r))
+    check('a second EOF event is a no-op (guarded)', cleaned === 1 && exits.length === 1, `cleaned=${cleaned} exits=${exits.length}`)
+  }
+  {
+    // A cleanup that NEVER settles must not hold the exit hostage -- that was
+    // the whole reason for the timeout in the original inline copies.
+    const stdin = makeStdin()
+    const exits = []
+    installParentDeathExit({ stdin, log: () => {}, exit: (c) => exits.push(c), timeoutMs: 60, cleanup: () => new Promise(() => {}) })
+    stdin.emit('end')
+    await new Promise((r) => setTimeout(r, 200))
+    check('a hung cleanup still exits, via the safety timer', exits.join(',') === '0', exits.join(','))
+  }
+  {
+    // A THROWING cleanup is not a reason to stay alive either.
+    const stdin = makeStdin()
+    const exits = []
+    const logs = []
+    installParentDeathExit({ stdin, log: (m) => logs.push(m), exit: (c) => exits.push(c), cleanup: () => { throw new Error('destroy blew up') } })
+    stdin.emit('end')
+    await new Promise((r) => setImmediate(r))
+    check('a throwing cleanup still exits, and says what threw',
+      exits.join(',') === '0' && logs.some((m) => m.includes('destroy blew up')), logs.join(' | '))
+  }
+
+  // All FOUR stdio servers, including the two that live in subdirectories.
+  for (const f of ['channel.mjs', 'channel-slack.mjs', 'channel-telegram.mjs', 'memory/server.mjs', 'calendar/server.mjs']) {
+    const src = fs.readFileSync(path.join(ROOT, f), 'utf8')
+    check(`${f} installs the shared parent-death exit`, src.includes('installParentDeathExit({'))
+    check(`${f} carries no inline copy of it`, !src.includes('const onParentGone ='))
+  }
+}
+
 // ── 2b. stale atomic-tmp boot sweep (0.1.17) ────────────────────────────────
 // atomicWriteJson's tmp survives a kill between writeFile and rename; the
 // sweep removes ONLY files matching `<name>.<pid>.<ts>.tmp` older than 1h.

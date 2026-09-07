@@ -167,6 +167,10 @@ if (!gotSingleInstanceLock) {
   // double-spawn risk this fix exists to close.
   return
 }
+// Assigned once the app is ready (see its definition next to app.on('activate')
+// far below): re-opens the window when the app is resident but windowless.
+// Declared up here because 'second-instance' can fire before that point.
+let reopenMainWindow = null
 app.on('second-instance', () => {
   // A second launch attempt while this instance is running -- focus our
   // existing window instead of doing nothing (or, worse, without the lock
@@ -175,7 +179,15 @@ app.on('second-instance', () => {
   if (win) {
     if (win.isMinimized()) win.restore()
     win.focus()
+    return
   }
+  // Windowless but alive. Since design-0023 P3 that is a NORMAL state on
+  // win/linux too (closing the window leaves the agent supervising, as it
+  // always has on mac), and re-launching the app is how a Windows or Linux
+  // user asks for their window back -- there is no dock to click. Without
+  // this the second launch would silently do nothing and the app would look
+  // hung with no way in.
+  if (reopenMainWindow) reopenMainWindow()
 })
 
 // ── stdout/stderr hygiene ───────────────────────────────────────────────
@@ -2094,19 +2106,22 @@ app.whenReady().then(async () => {
     app, Notification: require('electron').Notification, BrowserWindow, DATA_HOME, log,
   })
 
-  app.on('activate', () => {
-    // macOS convention: clicking the dock icon with no windows open
-    // re-shows one. Not exercised by this headless spike, kept for
-    // correctness since electron-builder targets mac.
+  // Re-open the window when the app is resident but windowless. TWO callers,
+  // one per platform convention: mac's dock click ('activate'), and win/linux's
+  // "launch it again" ('second-instance', wired at the top of this file) --
+  // which is the ONLY way back in on those platforms now that closing the last
+  // window no longer quits (see window-all-closed).
+  //
+  // REUSE the running server. This used to call startOnboardingServer() again
+  // on every dock click: nothing ever closes the previous one, so each click
+  // leaked a bound, fully-authenticated listener on a new ephemeral port,
+  // re-ran the whole boot prelude (re-seeding config, rewriting .mcp.json,
+  // re-rendering the harness), and rotated the askpass token out from under
+  // the pages already open. It also re-entered the boot-seed failure path with
+  // fatal() as its catch, so a config that went bad after boot killed the app
+  // on a dock click.
+  reopenMainWindow = () => {
     if (BrowserWindow.getAllWindows().length !== 0) return
-    // REUSE the running server. This used to call startOnboardingServer()
-    // again on every dock click: nothing ever closes the previous one, so each
-    // click leaked a bound, fully-authenticated listener on a new ephemeral
-    // port, re-ran the whole boot prelude (re-seeding config, rewriting
-    // .mcp.json, re-rendering the harness), and rotated the askpass token out
-    // from under the pages already open. It also re-entered the boot-seed
-    // failure path with fatal() as its catch, so a config that went bad after
-    // boot killed the app on a dock click.
     if (onboardingServerUrl) {
       // Through /boot again: the Electron session usually still holds the
       // cookie, but a fresh session partition (or cleared storage) must not
@@ -2119,19 +2134,28 @@ app.whenReady().then(async () => {
         onboardingServerUrl = url
         createMainWindow(new URL(bootPathFor('/'), url).href)
       })
-      .catch((err) => fatal('activate: failed to reopen window', err))
-  })
+      .catch((err) => fatal('reopen: failed to reopen window', err))
+  }
+
+  app.on('activate', reopenMainWindow)
 })
 
 app.on('window-all-closed', () => {
-  // macOS convention: apps stay resident after last window closes. Once
-  // this app is actually supervising the claude CLI + proxy as background
-  // daemons (P1), window-all-closed should NOT quit those daemons --
-  // that's a menu-bar-app pattern, not implemented in this spike (see
-  // task note: "dock/menu-bar presence is a plus, not required").
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
+  // Deliberately EMPTY on every platform (design-0023 P3 #6). This used to
+  // app.quit() on non-darwin, which ran before-quit and tore the agent down:
+  // closing the window STOPPED THE AGENT on Windows and Linux but not on mac
+  // -- the same gesture with two different meanings, and the one platform
+  // where an agent is most likely to be left running overnight was the one
+  // that killed it. The app supervises a background agent; the window is a
+  // control panel for it, not its life support.
+  //
+  // Getting back in: mac clicks the dock ('activate'); win/linux launch the
+  // app again ('second-instance' -> reopenMainWindow). Quitting for real is
+  // Cmd/Ctrl-Q or File > Quit from the default menu, which goes through the
+  // graceful-shutdown path below and stops the agent on purpose.
+  //
+  // Still owed (windows-port-scoping.md:261): a tray icon, so a windowless
+  // resident app is VISIBLE as one on win/linux. Not P3's scope.
 })
 
 // Graceful shutdown (v0.0.4, the owner 2026-07-13 19:33 directive): quit no

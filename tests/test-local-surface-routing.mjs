@@ -88,7 +88,16 @@ for (const f of ['channel.mjs', 'channel-slack.mjs', 'channel-telegram.mjs']) {
   assert(parseIdx === -1 || (dispatchIdx !== -1 && dispatchIdx < parseIdx), `${f} routes BEFORE schema parses (local shapes would fail platform zod)`)
   assert(/name: 'react'/.test(t), `${f} exposes the react tool`)
   assert(/startLocalChatSurface\(\{ notify:/.test(t), `${f} boots the local surface`)
-  assert(/surface\.stop/.test(t), `${f} unlinks the port file on stdin EOF`)
+  // Parent-death exit: the port file must be dropped when the parent dies, so
+  // the chat proxy never probes a corpse. This used to be a bare
+  // `stdin.on('end', surface.stop)` per backend -- and on Slack/Telegram that
+  // was ALL it did, leaving the process alive holding the bot token. One
+  // shared installer now (channel-runtime), with the surface stop inside its
+  // cleanup (design-0023 P3 #6).
+  assert(/installParentDeathExit\(\{/.test(t), `${f} installs the shared parent-death exit`)
+  assert(/localSurface\?\.stop\(\)/.test(t), `${f} stops the local surface in that cleanup (drops the port file)`)
+  const code = t.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n')
+  assert(!/stdin\.on\('end'/.test(code), `${f} has no hand-rolled stdin EOF handler left`)
 }
 
 console.log(`\n${passed} passed, ${failed} failed`)

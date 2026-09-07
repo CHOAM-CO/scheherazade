@@ -53,6 +53,59 @@ export function resolveDataHome(agentName) {
   return resolveHome({ agentName })
 }
 
+// ── parent-death exit ──────────────────────────────────────────────────────
+// An MCP stdio server's stdin is its lifeline to the parent (the engine):
+// when the parent dies, stdin emits 'end'/'close'. The MCP transport reads
+// stdin but does NOT exit on its end, and anything long-lived the server holds
+// (a Discord gateway socket, a Slack Socket Mode connection, a Telegram long
+// poll, a SQLite handle) keeps the event loop alive forever -- so a dead
+// parent leaves the process ORPHANED. On Windows there are no POSIX process
+// groups, so the app's tree-kill cannot reach a grandchild either: every
+// mid-session recycle and every quit stranded a live channel server still
+// holding the bot token.
+//
+// design-0023 P3 #6: this used to exist as two full inline copies
+// (channel.mjs, memory/server.mjs) and two HALF copies -- channel-slack.mjs
+// and channel-telegram.mjs only did `process.stdin.on('end', surface.stop)`,
+// which stops the in-app chat surface and then keeps running with the socket
+// wide open. That is the exact orphan the Windows fix was written for, and
+// two of the four servers never got it. One implementation now, so the
+// asymmetry cannot come back.
+//
+// Contract: fire once, log, run `cleanup` (sync or async), exit 0 -- with an
+// unref'd safety timer so a hung teardown still exits. Only the stdin-EOF
+// path exits; normal (parent-alive) operation is untouched.
+export function installParentDeathExit({
+  name = 'MCP server',
+  cleanup = () => {},
+  log = console.log,
+  timeoutMs = 2500,
+  stdin = process.stdin,
+  exit = (code) => process.exit(code),
+} = {}) {
+  let shuttingDown = false
+  const onParentGone = () => {
+    if (shuttingDown) return
+    shuttingDown = true
+    log(`stdin closed (parent gone) -- shutting down ${name}`)
+    // Safety net: a hung disconnect must not hold the exit hostage. .unref()
+    // so the timer itself never keeps the process alive.
+    const t = setTimeout(() => {
+      log('graceful shutdown timed out -- forcing exit')
+      exit(0)
+    }, timeoutMs)
+    if (typeof t.unref === 'function') t.unref()
+    ;(async () => {
+      try { await cleanup() } catch (err) { log(`cleanup failed during shutdown: ${err.message}`) }
+      clearTimeout(t)
+      exit(0)
+    })()
+  }
+  stdin.on('end', onParentGone)
+  stdin.on('close', onParentGone)
+  return { onParentGone, uninstall: () => { stdin.off('end', onParentGone); stdin.off('close', onParentGone) } }
+}
+
 // ── atomic JSON write (temp file + rename) ─────────────────────────────────
 // Shared with the supervisor's failure-marker convention: pollers read these files
 // on a timer, and a plain writeFile leaves a window where a poll tick lands

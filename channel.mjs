@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import {
   installStdoutHygiene, resolveDataHome, atomicWriteJson, localISO, localNow,
-  sweepStaleAtomicTmp,
+  sweepStaleAtomicTmp, installParentDeathExit,
   readAgentConfig, createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer, createMuteStrikeAnnouncer,
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
   startScheduleTicker, scheduleInjectContent,
@@ -513,7 +513,8 @@ discord.once(Events.ClientReady, (c) => {
 // ── graceful shutdown (v0.0.4, the owner 2026-07-13 19:33 directive) ─────────────
 // App quit should not kill the agent mid-thought: main.cjs writes
 // DATA_HOME/.shutdown-request, THIS watcher injects a [SYSTEM] turn telling
-// the agent to flush checkpoint/session notes and touch .shutdown-ack, and
+// the agent to flush checkpoint/session notes and WRITE .shutdown-ack (with
+// a file tool, not shell `touch` -- Windows has no such command), and
 // main.cjs proceeds on ack or on its 75s hard timeout (a hung agent must
 // never hold quit hostage -- the timeout lives on main.cjs's side so a dead
 // MCP server can't block it either). File-based seam on purpose: channel.mjs
@@ -557,7 +558,8 @@ function startShutdownRequestWatcher() {
             '(3) journal_write로 오늘 일지를 남겨 -- 보고서 말고 네 하루를 1인칭으로. ' +
             '뭘 했는지가 아니라 뭘 틀렸고 어떤 기분이었는지가 남을 가치가 있는 쪽이다. ' +
             '내일 부팅하는 너는 아무것도 기억 못 한 채로 이걸 읽는다 (append-only라 못 고친다, 그러니 정직하게), ' +
-            `(4) 끝나면 Bash로 \`touch "${SHUTDOWN_ACK_PATH}"\` 실행. ` +
+            `(4) 끝나면 파일 쓰기 도구로 빈 파일 하나 만들어: ${SHUTDOWN_ACK_PATH} ` +
+            '(셸 `touch`는 Windows에 없다 -- 도구로 써라). ' +
             '디스코드에 답장하지 마, 파일 작업만 하고 끝내. 최대 60초 안에 마무리해라, 그 뒤엔 앱이 그냥 종료된다.',
           meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() },
         })
@@ -884,36 +886,20 @@ async function boot() {
   }
 
   // ── parent-death exit (Windows orphan fix, 2026-08-18) ─────────────────────
-  // An MCP stdio server's stdin is its lifeline to the parent (claude): when
-  // the parent dies, stdin emits 'end'/'close'. The MCP transport reads stdin
-  // but does NOT exit on its end, and the Discord gateway socket keeps the
-  // event loop alive forever -- so the OLD handler (surface.stop only) left this
-  // process ORPHANED on parent death. On Windows there are no POSIX process
-  // groups, so the app's tree-kill cannot reach a grandchild either: every
-  // mid-session recycle and every quit would strand a live channel server still
-  // holding the Discord token. Stop cleanly (drop the port file, log out of
-  // Discord) then force-exit, with a safety timeout so a hung gateway teardown
-  // still exits. Only this stdin-EOF path exits; normal (parent-alive) operation
-  // is untouched.
-  let shuttingDown = false
-  const onParentGone = () => {
-    if (shuttingDown) return
-    shuttingDown = true
-    log('stdin closed (parent gone) -- shutting down channel MCP server')
-    // Safety net: a hung Discord disconnect must not hold the exit hostage.
-    // .unref() so the timer itself never keeps the process alive.
-    setTimeout(() => {
-      log('graceful shutdown timed out -- forcing exit')
-      process.exit(0)
-    }, 2500).unref()
-    ;(async () => {
+  // Was a full inline copy here and a HALF copy (surface.stop only) in the
+  // Slack/Telegram backends; one implementation now lives in channel-runtime
+  // (design-0023 P3 #6), which is also where the rationale is written down.
+  // Cleanup order matters: drop the port file first so the chat proxy stops
+  // probing a corpse, then hand the Discord token back.
+  installParentDeathExit({
+    name: 'channel MCP server',
+    log,
+    timeoutMs: 2500,
+    cleanup: async () => {
       try { localSurface?.stop() } catch (err) { log(`surface stop failed during shutdown: ${err.message}`) }
-      try { await discord.destroy() } catch (err) { log(`discord destroy failed during shutdown: ${err.message}`) }
-      process.exit(0)
-    })()
-  }
-  process.stdin.on('end', onParentGone)
-  process.stdin.on('close', onParentGone)
+      await discord.destroy()
+    },
+  })
 
   try {
     await discord.login(DISCORD_TOKEN)

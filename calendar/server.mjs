@@ -16,6 +16,7 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprot
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
+import { installParentDeathExit } from '../channel-runtime.mjs'
 
 const require = createRequire(import.meta.url)
 const { readEvents } = require('./read.cjs')
@@ -112,6 +113,12 @@ async function main() {
 
   await server.connect(new StdioServerTransport())
   log('MCP server up')
+
+  // Parent-death exit (design-0023 P3 #6). This server had none: it holds no
+  // socket, so on POSIX it usually falls out on its own when stdin ends -- but
+  // "usually" is not a contract, and on Windows the app's tree-kill cannot
+  // reach a grandchild at all. All four MCP servers exit the same way now.
+  installParentDeathExit({ name: 'calendar MCP server', log })
 }
 
 // fileURLToPath, NOT new URL().pathname — win32 pathname is '/C:/...' and the
