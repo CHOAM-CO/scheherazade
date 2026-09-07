@@ -611,6 +611,81 @@ function createHarnessRender(ctx) {
     }
   }
 
+  // design-0023 P4: the seeder ASKS THE CAPABILITY TABLE before it writes.
+  // Every template skill used to land on every host, so a Windows agent was
+  // handed `calendar` / `mail-briefing` / `reminders` (osascript + Mac apps)
+  // and `file-organizer` (unix find/mv) -- and a seeded skill is not inert
+  // decoration: Claude Code loads each SKILL.md's description into the
+  // model's own inventory, so the agent was being TOLD it could read that
+  // person's calendar. It picks the skill, runs osascript, and fails in
+  // front of them. A skill with no row in SKILL_REQUIREMENTS is portable and
+  // still seeds everywhere; the table is the only gate.
+  //
+  // THE UPGRADE CASE, which is the one with a real choice in it: an install
+  // that already has `calendar` on disk because an older build seeded it
+  // everywhere. Skipping the seed only stops NEW writes, so the stale
+  // osascript skill would sit there forever on exactly the machines this
+  // change exists for -- the fix would ship and change nothing. So an
+  // unsupported skill is RETIRED, and the hash manifest decides whether it
+  // may be: a file whose hash is in the manifest is provably a shipped
+  // version the user never touched, and deleting our own artifact is not a
+  // loss. Anything else -- an edit, or legacy mode with no manifest to
+  // prove pristineness -- is the user's writing, and it stays, whole-skill,
+  // exactly as refreshSkillFromFiles withholds a refresh.
+  //
+  // The alternative (leave every unsupported skill on disk and merely stop
+  // seeding new ones) is worse because it is invisible: the agent keeps the
+  // inventory line, keeps offering the calendar, and the only symptom is a
+  // failed osascript in a transcript nobody reads. Blanket deletion is
+  // worse still -- it would take a file the person edited, which is the one
+  // thing the manifest gate was built to make impossible. Retire-if-
+  // pristine is the only option that can be wrong in neither direction.
+  function seedOrRetireSkill(name, files, manifest, provenance) {
+    if (HOST.skillAllowed(name)) {
+      refreshSkillFromFiles(name, files, manifest, provenance)
+      return
+    }
+    const targetDir = path.join(SKILLS_DIR, name)
+    if (!fs.existsSync(targetDir)) return // never seeded here -- nothing to say
+    const doomed = []
+    for (const { rel } of files) {
+      const dst = path.join(targetDir, rel)
+      let buf
+      try { buf = fs.readFileSync(dst) } catch { continue } // not installed
+      const known = manifest && manifest[`${name}/${rel}`]
+      if (Array.isArray(known) && known.includes(normalizedSkillHash(buf))) {
+        doomed.push(dst)
+      } else {
+        // Two different facts, one outcome, and the log must not conflate
+        // them: either the file's hash is unknown (the person edited it) or
+        // there is no manifest at all to compare against (a legacy install).
+        // Both mean "we cannot prove this is our own artifact", which is the
+        // bar for deleting it -- but saying "locally modified" about a
+        // pristine file on a legacy install would send a reader hunting for
+        // an edit that never happened.
+        const why = Array.isArray(known) ? 'locally modified' : 'unprovable (no manifest entry)'
+        log(`skill ${name} cannot run on ${HOST.id} but ${rel} is ${why}; left on disk untouched`)
+        return
+      }
+    }
+    if (doomed.length === 0) return
+    try {
+      for (const dst of doomed) fs.rmSync(dst, { force: true })
+      // rmdir, never a recursive remove, deepest first: the directory goes
+      // away only if nothing else is in it, so a file the user ADDED beside
+      // the skill keeps both itself and the folder it lives in (same rule
+      // refreshSkillFromFiles follows when it writes shipped files one by
+      // one instead of replacing the tree).
+      const dirs = [...new Set(doomed.map((d) => path.dirname(d)))].sort((a, b) => b.length - a.length)
+      for (const dir of [...dirs, targetDir]) {
+        try { fs.rmdirSync(dir) } catch { /* user content still inside */ }
+      }
+      log(`skill ${name} retired: ${HOST.id} has no ${HOST.SKILL_REQUIREMENTS[name]} (${doomed.length} pristine file(s) removed)`)
+    } catch (err) {
+      console.error(`[scheherazade/onboarding] retiring skill ${name} failed (continuing): ${err.message}`)
+    }
+  }
+
   function seedSkillDefinitions() {
     if (!fs.existsSync(TEMPLATE_SKILLS_DIR)) return
     let entries
@@ -629,7 +704,7 @@ function createHarnessRender(ctx) {
       // Seeded surface stays SKILL.md-only for template skills (sidecar
       // template files like slack-app-manifest.yaml are onboarding-side
       // material, not agent-side skill content).
-      refreshSkillFromFiles(name, [{ src: source, rel: 'SKILL.md' }], manifest)
+      seedOrRetireSkill(name, [{ src: source, rel: 'SKILL.md' }], manifest)
     }
   }
 
@@ -837,7 +912,8 @@ function createHarnessRender(ctx) {
         .replaceAll('{TONE_GUIDANCE}', TONE_GUIDANCE[tone] || TONE_GUIDANCE.casual)
         .replaceAll('{PRIMARY_TASK}', primaryTask || '일상 대화와 기록')
         .replaceAll('{PREDECESSOR_NOTE}', predecessorNote)
-        .replaceAll('{UPDATE_BRIEF}', updateBrief.block),
+        .replaceAll('{UPDATE_BRIEF}', updateBrief.block)
+        .replaceAll('{PLATFORM_SECTION}', platformSection()),
     })
 
     // Every source read and rendered. Only now does anything touch the harness.
@@ -852,6 +928,106 @@ function createHarnessRender(ctx) {
     // burn the one-shot briefing (the block would be lost without ever
     // reaching a system prompt).
     updateBrief.commit()
+  }
+
+  // {PLATFORM_SECTION} (design-0023 P4). The prompt used to carry one
+  // section called "Controlling the Mac" -- osascript, Apple Events, the
+  // -600 error code -- and it was rendered on every host, so a Windows
+  // agent was told to drive Calendar.app through an interpreter that does
+  // not exist there, and a Linux agent got the same paragraph plus a `sudo`
+  // line whose vault it could reach and an Apple-app line it could not.
+  //
+  // THREE BODIES, NOT ONE BODY WITH CAVEATS. A single section hedged with
+  // "on Windows, instead..." costs every platform the tokens of the other
+  // two and reads as optional advice; the model then picks the branch that
+  // sounds most familiar, which is the mac one, because that is what most
+  // of its training saw. Each host gets prose written for it and nothing
+  // about the others -- the agent should not be able to tell there was a
+  // choice.
+  //
+  // The SKILL LIST is derived from the same table seedSkillDefinitions
+  // filters on, never hand-written here: the prompt then cannot name a
+  // skill that was not seeded, in either direction, no matter which way a
+  // capability row is later flipped. Only the gated skills are listed
+  // (SKILL_REQUIREMENTS is exactly the not-portable set); the portable ones
+  // are discovered the normal way, by their own description.
+  function platformSection() {
+    const gated = Object.keys(HOST.SKILL_REQUIREMENTS)
+    const here = gated.filter((n) => HOST.skillAllowed(n)).sort()
+    const missing = gated.filter((n) => !HOST.skillAllowed(n)).sort()
+    const names = (list) => (list.length ? list.join(', ') : 'none')
+    // The rest of this template is hand-wrapped near 70 columns and the
+    // skill lists are computed, so the paragraphs are written as one string
+    // each and wrapped here -- otherwise a platform with one more skill on
+    // it silently renders a 120-column line in the middle of the document.
+    const body = (paras) => paras.map((text) => {
+      const out = []
+      let line = ''
+      for (const word of text.split(/\s+/).filter(Boolean)) {
+        if (line && line.length + 1 + word.length > 70) { out.push(line); line = word }
+        else line = line ? `${line} ${word}` : word
+      }
+      if (line) out.push(line)
+      return out.join('\n')
+    }).join('\n\n')
+
+    if (HOST.isWin) {
+      return body([
+        `## Controlling ${HOST.machineWord}`,
+        `Your shell here is ${HOST.shellName}: \`Get-ChildItem\`, \`Move-Item\`, \`Copy-Item\`.`
+          + ' The unix one-liners you may reach for (`find ... -exec`, `mv`) are not on'
+          + ' this machine, and neither is `osascript` — a bash reflex here is a failed'
+          + ' command, not a portable habit.',
+        `Machine skills installed here: ${names(here)}. Deliberately NOT installed,`
+          + ` because this PC cannot run them: ${names(missing)}. If your person asks for`
+          + ' their calendar, mail or reminders, say this app has no way to reach them'
+          + ' here — never improvise an automation to cover the gap.',
+        'Admin work: Windows elevates through UAC, and this app carries no elevation'
+          + ' path at all — there is no `sudo` here, and no password vault to reach. An'
+          + ' administrator command is one you hand to your person to run.',
+        `Keys your person saved through this app are sealed with ${HOST.credStoreName}`
+          + ' and handed to whatever needs them. You never read that store yourself.',
+      ])
+    }
+    if (HOST.isLinux) {
+      return body([
+        `## Controlling ${HOST.machineWord}`,
+        `You have a real POSIX shell here (${HOST.shellName}) — find, mv, sed, and this`
+          + " distro's package manager. That is the whole interface: there is no"
+          + ' app-automation layer on this desktop'
+          // windowCapture is a PROBE on Linux (wmctrl/xdotool + import), not a
+          // constant, so this clause has to ask rather than assert -- an agent
+          // told it cannot photograph a window on a box where the wrapper is
+          // right there on its PATH would decline work it can actually do.
+          + (HOST.windowCapture ? '' : ' and no way to photograph a window')
+          + ', so a request that needs one is a plain "this build cannot do that'
+          + ' here", never an improvised script.',
+        `Machine skills installed here: ${names(here)}. Deliberately NOT installed,`
+          + ` because this machine cannot run them: ${names(missing)}.`,
+        "Admin work: `sudo -A <cmd>` — the only path to the app's password vault (app"
+          + ' running + sudo toggle ON). Plain `sudo` and `sudo -n` cannot reach it.',
+        `Keys your person saved through this app go to ${HOST.credStoreName}. With no`
+          + ' keyring running the app refuses to store them at all rather than write'
+          + ' plaintext — so "the key did not save" can be a desktop-session problem,'
+          + ' not something they did wrong.',
+      ])
+    }
+    return body([
+      `## Controlling ${HOST.machineWord}`,
+      `You have a real POSIX shell here (${HOST.shellName}) — find, mv, sed — plus`
+        + ' `osascript`, which is how this machine is actually driven.',
+      'For calendar/mail/reminders/music, drive the app via `osascript` before any'
+        + ' TCC-gated direct API: permissions are per-process, and an Apple Event uses'
+        + " the app's own grant. `-600` means the app isn't running — open it, retry"
+        + ' once. "not_determined" is a fact about that lane, not proof the data is'
+        + ' unreachable.',
+      `Machine skills installed here: ${names(here)}.`
+        + (missing.length ? ` Deliberately NOT installed, because this Mac cannot run them: ${names(missing)}.` : ''),
+      "Admin work: `sudo -A <cmd>` — the only path to the app's password vault (app"
+        + ' running + sudo toggle ON). Plain `sudo` and `sudo -n` cannot reach it.',
+      `Keys your person saved through this app are sealed in the ${HOST.credStoreName}`
+        + ' and handed to whatever needs them. You never read that store yourself.',
+    ])
   }
 
   // Post-update briefing (Phase B of the 2026-08-15 design; red-teamed to
@@ -1123,7 +1299,7 @@ function createHarnessRender(ctx) {
           console.error(`[scheherazade/onboarding] listing chromux skill ${name} failed (continuing): ${err.message}`)
           continue
         }
-        refreshSkillFromFiles(name, files, manifest, 'from vendored chromux')
+        seedOrRetireSkill(name, files, manifest, 'from vendored chromux')
       }
       return true
     } catch (err) {
@@ -1154,8 +1330,28 @@ function createHarnessRender(ctx) {
       fs.cpSync(src, tmp, { recursive: true })
       fs.rmSync(dst, { recursive: true, force: true })
       fs.renameSync(tmp, dst)
+      // design-0023 P4: the TREE copies everywhere (it is the first-party
+      // helper directory, and a portable helper added to it later must not
+      // be gated on this one row), but the WRAPPER is the availability
+      // signal -- the same "presence reads as capability" rule the launcher
+      // writer above exists for. windowCapture is an OS built-in on mac
+      // (osascript + screencapture) and Windows (PrintWindow) and a PROBE on
+      // Linux, where the capture tools are ordinary packages that may simply
+      // not be installed; a `windowshot` sitting on the agent's PATH there is
+      // a promise the tool cannot keep. It is the same row that decides
+      // whether the windowshot SKILL is seeded, so the two cannot disagree.
+      // Both wrapper shapes are removed when the row is off, not merely left
+      // unwritten: an install that got one from an earlier build (which wrote
+      // both, on every platform) would otherwise keep it forever, and the
+      // whole point of gating is the upgrade, not the fresh install.
       const entry = path.join(dst, 'windowshot.cjs')
-      writeLauncher(path.join(DATA_HOME, 'bin'), 'windowshot', entry, ['--data-home', DATA_HOME])
+      if (HOST.windowCapture) {
+        writeLauncher(path.join(DATA_HOME, 'bin'), 'windowshot', entry, ['--data-home', DATA_HOME])
+      } else {
+        for (const stale of ['windowshot', 'windowshot.cmd']) {
+          fs.rmSync(path.join(DATA_HOME, 'bin', stale), { force: true })
+        }
+      }
       return true
     } catch (err) {
       console.error('[scheherazade/onboarding] agent-tools sync failed (windowshot skill may miss its CLI):', err.message)

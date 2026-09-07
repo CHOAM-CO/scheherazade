@@ -7,6 +7,13 @@
 //   2. onboarding/harness-render.cjs renders procedures/memory-consolidation.md
 //      into DATA_HOME the same way it renders the other 3 trigger-load
 //      procedures (journal-compression.md / persona-reflux.md / madoromi.md).
+//   3. design-0023 P4: the agent system prompt's {PLATFORM_SECTION} -- the one
+//      part of that document that is a fact about the HOST rather than about
+//      the agent. It used to be a section called "Controlling the Mac",
+//      rendered verbatim on every platform, so a Windows agent was told to
+//      drive Calendar.app with osascript. Three bodies now, and this drives
+//      all three FROM THIS MAC by injecting the capability table, because the
+//      darwin branch was never the broken one.
 //
 // Same runPorted/tmp shape as tests/test-hooks-port.mjs (which already
 // owns the rest of session-start.mjs's contract) -- this file only adds the
@@ -145,6 +152,142 @@ console.log('-- procedures/memory-consolidation.md is harness-rendered like its 
   ok('rendered file points at the real journal-compress.mjs path', renderedMemCon.includes(`${ROOT}/scripts/journal-compress.mjs`))
 
   fs.rmSync(mem, { recursive: true, force: true })
+}
+
+// ── 4. {PLATFORM_SECTION}: three bodies, and the prompt cannot lie about ──
+//      which skills exist on the machine it is running on.
+console.log('-- agent system prompt: {PLATFORM_SECTION} across darwin / win32 / linux')
+{
+  const templatePath = path.join(ROOT, 'onboarding', 'templates', 'agent-system-prompt.md')
+  const template = fs.readFileSync(templatePath, 'utf8')
+  ok('the template carries the {PLATFORM_SECTION} placeholder', template.includes('{PLATFORM_SECTION}'))
+  ok('the hardcoded mac section is gone from the template', !template.includes('Controlling the Mac'),
+    'a mac-only section rendered on every host is the bug this placeholder exists for')
+  ok('the mac-only elevation mechanism is out of the platform-neutral Hard lines',
+    !/^- Admin tasks: `sudo -A/m.test(template),
+    'Windows has no sudo and no vault; the mechanism belongs in the per-platform body')
+
+  const { createHarnessRender } = require(path.join(ROOT, 'onboarding', 'harness-render.cjs'))
+  const platformMod = require(path.join(ROOT, 'onboarding', 'platform.cjs'))
+  const GATED = Object.keys(platformMod.SKILL_REQUIREMENTS).sort()
+  const mkHost = (platform, arch) => platformMod.capabilities({
+    platform, arch, env: {},
+    home: platform === 'win32' ? 'C:\\Users\\t' : '/home/t',
+    dataHome: platform === 'win32' ? 'C:\\Users\\t\\Documents\\Scheherazade' : '/home/t/Documents/Scheherazade',
+    existsSync: () => false,
+    accessSync: () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) },
+    hasTmux: () => false,
+  })
+
+  // Spelled out per platform, in the words the agent will actually read. The
+  // absences matter as much as the presences: a Windows body that still says
+  // "drive the app via osascript" is the original defect, and a mac body that
+  // has grown a PowerShell caveat is the "one body with footnotes" this
+  // deliberately is not.
+  const EXPECT = {
+    darwin: {
+      title: '## Controlling this Mac',
+      must: ['osascript', 'Apple Event', 'macOS Keychain', 'sudo -A <cmd>'],
+      never: ['PowerShell', 'DPAPI', 'gnome-keyring', 'UAC'],
+    },
+    win32: {
+      title: '## Controlling this PC',
+      must: ['PowerShell', 'Get-ChildItem', 'Windows DPAPI', 'UAC'],
+      never: ['drive the app via', 'Apple Event', 'macOS Keychain', 'gnome-keyring', 'sudo -A'],
+    },
+    linux: {
+      title: '## Controlling this computer',
+      must: ['POSIX shell', 'gnome-keyring', 'sudo -A <cmd>'],
+      never: ['osascript', 'Apple Event', 'PowerShell', 'DPAPI', 'Keychain'],
+    },
+  }
+
+  for (const [platform, arch] of [['darwin', 'arm64'], ['win32', 'x64'], ['linux', 'x64']]) {
+    const mem = tmp()
+    const configDir = path.join(mem, 'config')
+    fs.mkdirSync(configDir, { recursive: true })
+    const harness = createHarnessRender({
+      log: () => {},
+      toUnpackedPath: (p) => p,
+      readAgentConfig: () => ({}),
+      ensureConfigDir: () => {},
+      REPO_ROOT: ROOT,
+      AGENT_NAME: 'TestAgent',
+      DATA_HOME: mem,
+      CONFIG_DIR: configDir,
+      AGENT_CONFIG_PATH: path.join(configDir, '.agent-config'),
+      ENV_PATH: path.join(configDir, '.env'),
+      MCP_JSON_PATH: path.join(configDir, '.mcp.json'),
+      HOST: mkHost(platform, arch),
+    })
+    harness.renderAgentSubstrate({ displayName: 'TestAgent', tone: 'casual', primaryTask: '' })
+    const prompt = fs.readFileSync(path.join(mem, 'system_prompt.md'), 'utf8')
+    const spec = EXPECT[platform]
+
+    ok(`${platform}: no raw placeholder survives the render`, !/\{[A-Z_]+\}/.test(prompt),
+      (prompt.match(/\{[A-Z_]+\}/g) || []).join(' '))
+    // Searched against the whitespace-flattened prompt: the document is
+    // wrapped near 70 columns, so "macOS Keychain" legitimately straddles a
+    // line break (same normalization test-identity-firewall.mjs uses on this
+    // same file).
+    const flatPrompt = prompt.replace(/\s+/g, ' ')
+    ok(`${platform}: the section is titled "${spec.title}"`, prompt.includes(spec.title))
+    for (const needle of spec.must) {
+      ok(`${platform}: the prompt names ${JSON.stringify(needle)}`, flatPrompt.includes(needle))
+    }
+    for (const needle of spec.never) {
+      ok(`${platform}: the prompt never says ${JSON.stringify(needle)}`, !flatPrompt.includes(needle),
+        'another platform\'s body leaked in')
+    }
+
+    // The anti-drift property, and the reason the list is computed rather
+    // than written: seed with the SAME capability table and the prompt's two
+    // lists must match the disk exactly. A prompt that names a skill nobody
+    // seeded is the same class of lie as the osascript section itself.
+    harness.seedSkillDefinitions()
+    const onDisk = GATED.filter((n) => fs.existsSync(path.join(configDir, '.claude', 'skills', n, 'SKILL.md')))
+    const para = prompt.split('\n\n').find((b) => b.startsWith('Machine skills installed here:')) || ''
+    const flat = para.replace(/\s+/g, ' ')
+    const grab = (re) => { const m = flat.match(re); return m ? m[1].split(', ').filter(Boolean).sort() : [] }
+    const listed = grab(/Machine skills installed here: ([^.]*)\./)
+    const disowned = grab(/cannot run them: ([^.]*)\./)
+    ok(`${platform}: the prompt lists exactly the gated skills that were seeded`,
+      listed.join(',') === onDisk.join(','), `prompt=[${listed}] disk=[${onDisk}]`)
+    ok(`${platform}: and names the ones that were withheld, so the agent cannot promise them`,
+      disowned.join(',') === GATED.filter((n) => !onDisk.includes(n)).join(','),
+      `prompt=[${disowned}] withheld=[${GATED.filter((n) => !onDisk.includes(n))}]`)
+
+    fs.rmSync(mem, { recursive: true, force: true })
+  }
+  // Linux's windowCapture is a host probe (wmctrl/xdotool + import), so the
+  // body must ASK it, not assert its absence: on a box with those packages
+  // the skill is seeded, and a prompt still saying the machine cannot
+  // photograph a window would talk the agent out of work it can do.
+  {
+    const mem = tmp()
+    const configDir = path.join(mem, 'config')
+    fs.mkdirSync(configDir, { recursive: true })
+    const harness = createHarnessRender({
+      log: () => {}, toUnpackedPath: (p) => p, readAgentConfig: () => ({}), ensureConfigDir: () => {},
+      REPO_ROOT: ROOT, AGENT_NAME: 'TestAgent', DATA_HOME: mem, CONFIG_DIR: configDir,
+      AGENT_CONFIG_PATH: path.join(configDir, '.agent-config'),
+      ENV_PATH: path.join(configDir, '.env'),
+      MCP_JSON_PATH: path.join(configDir, '.mcp.json'),
+      HOST: platformMod.capabilities({
+        platform: 'linux', arch: 'x64', env: {}, home: '/home/t', dataHome: '/home/t/d',
+        existsSync: () => true, accessSync: () => {}, hasTmux: () => false,
+      }),
+    })
+    harness.renderAgentSubstrate({ displayName: 'TestAgent', tone: 'casual', primaryTask: '' })
+    harness.seedSkillDefinitions()
+    const flat = fs.readFileSync(path.join(mem, 'system_prompt.md'), 'utf8').replace(/\s+/g, ' ')
+    ok('linux with capture tools: the prompt drops the "cannot photograph a window" clause',
+      !flat.includes('no way to photograph a window'))
+    ok('linux with capture tools: windowshot is listed as installed, and it is on disk',
+      /Machine skills installed here: [^.]*windowshot/.test(flat)
+        && fs.existsSync(path.join(configDir, '.claude', 'skills', 'windowshot', 'SKILL.md')))
+    fs.rmSync(mem, { recursive: true, force: true })
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
