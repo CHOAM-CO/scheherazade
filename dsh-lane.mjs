@@ -109,7 +109,54 @@ if (!MEM) { errLog('MEM is required'); process.exit(2) }
 
 const endpointFile = () => path.join(MEM, '.ingest-endpoint.json')
 const pendingFile = () => path.join(MEM, '.pending-inbound.json')
+const heartbeatFile = () => path.join(MEM, '.lane-heartbeat.json')
 const dshHome = () => path.join(MEM, '.dsh-lane-home')
+
+// ── watchdog seam (design-0023 P3 #7) ──────────────────────────────────────
+// The supervisor's stall watchdog reads the CLAUDE CLI's transcript jsonl.
+// This lane does not write one -- it talks to dsh over a mux event stream --
+// so on the DEFAULT lane the watchdog has been watching an empty directory
+// since 0.2.2: `no this-era transcript yet ... stall lane idle until one
+// appears`, once, and then silence forever. A stall detector that is silently
+// inert on the default path is worse than none, because the log says it is on.
+//
+// This file is the evidence the supervisor can actually read. It stays on the
+// SUPERVISOR side to judge and kill, deliberately: the restart ladder, the
+// bounce budget (3 kills / 6h, shared across respawns) and the pidfile all
+// live there, and a lane cannot enforce a budget across its own restarts or
+// restart itself once it is the thing that is wedged.
+//   bornTs        -- era guard. A heartbeat from a previous incarnation must
+//                    never bounce a fresh child (same rule as the transcript
+//                    lane's birthtime filter).
+//   ts            -- last beat. Stale = this lane could not run a 15s timer.
+//   lastEventTs   -- last mux event from the engine.
+//   pendingSince  -- oldest un-answered inbound, or null when idle. An idle
+//                    agent is NOT a stalled one; without this the watchdog
+//                    would bounce an agent whose only sin was that nobody
+//                    talked to it.
+const LANE_BORN_TS = Date.now()
+const HEARTBEAT_MS = 15_000
+let lastEventTs = LANE_BORN_TS
+function writeHeartbeat () {
+  let pendingSince = null
+  try {
+    const pending = readPending()
+    for (const p of pending) {
+      const ts = Number(p && p.ts) || 0
+      if (ts && (pendingSince === null || ts < pendingSince)) pendingSince = ts
+    }
+  } catch { /* unreadable pending file: report liveness anyway */ }
+  // Clamp to this lane's birth. Boot REDELIVERS the previous incarnation's
+  // unfinished rows, whose ts is from before this process existed -- unclamped
+  // they read as "unanswered for hours" and the watchdog would bounce a lane
+  // that has been alive for one second.
+  if (pendingSince !== null && pendingSince < LANE_BORN_TS) pendingSince = LANE_BORN_TS
+  try {
+    writeJsonAtomic(heartbeatFile(), {
+      lane: 'dsh', pid: process.pid, bornTs: LANE_BORN_TS, ts: Date.now(), lastEventTs, pendingSince,
+    })
+  } catch { /* fail-open: an unwritable heartbeat is not worth dying over */ }
+}
 
 function writeJsonAtomic (file, obj, mode) {
   const tmp = `${file}.tmp.${process.pid}.${Date.now().toString(36)}`
@@ -813,6 +860,9 @@ async function main () {
   // Turn-close accounting: clear pending entries older than the turn end.
   const mux = client.openMux({
     onEvent (sid, event) {
+      // Liveness BEFORE the session filter: an event for any session still
+      // proves the engine is talking and this lane is reading it.
+      lastEventTs = Date.now()
       if (sid !== sessionId || !event) return
       // Settlement notice (any event type that carries the injected user
       // message): retire the child from the roster by its own id.
@@ -1171,12 +1221,20 @@ async function main () {
     }
   })
 
+  // First beat now, so the supervisor sees this era's marker immediately
+  // rather than 15s into a boot it might already be judging.
+  writeHeartbeat()
+  const heartbeatTimer = setInterval(writeHeartbeat, HEARTBEAT_MS)
+  heartbeatTimer.unref()
+
   let shuttingDown = false
   const shutdown = () => {
     if (shuttingDown) return
     shuttingDown = true
+    clearInterval(heartbeatTimer)
     try { if (child && !child.killed) child.kill('SIGTERM') } catch {}
     try { fs.unlinkSync(endpointFile()) } catch {}
+    try { fs.unlinkSync(heartbeatFile()) } catch {}
     process.exit(0)
   }
   process.on('SIGTERM', shutdown)

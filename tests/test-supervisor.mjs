@@ -29,6 +29,7 @@ import {
   readTranscriptTail,
   stallVerdict,
   createStallLane,
+  createLaneHeartbeatLane,
   createBounceBudget,
   runLoop,
 } from '../supervisor.mjs'
@@ -986,6 +987,98 @@ console.log('\n-- stall lane: era guard + poll closure')
   }
 
   fs.rmSync(dir, { recursive: true, force: true })
+}
+
+// ── dsh heartbeat lane (design-0023 P3 #7) ─────────────────────────────────
+// The bug being closed: the stall watchdog read the Claude CLI's transcript
+// jsonl, which the DEFAULT (dsh) lane never writes -- so it logged "no
+// this-era transcript yet" once and was inert forever on the path almost every
+// install runs, while the boot log still claimed stall protection was on.
+// Attacks: (a) an idle agent is never bounced, (b) a previous child's
+// heartbeat never bounces this one, (c) unreadable/garbage input is quiet, not
+// fatal, (d) both real verdicts actually fire.
+console.log('\n-- lane heartbeat watchdog: the dsh lane\'s evidence, judged here')
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'suptest-hb-'))
+  const file = path.join(dir, '.lane-heartbeat.json')
+  const T0 = 1_000_000_000_000
+  const STALL = 900_000 // 15min, the STALL_TIMEOUT default
+  const write = (o) => fs.writeFileSync(file, JSON.stringify(o))
+  const lane = (nowMs, { spawnedAt = T0 } = {}) => {
+    const logs = []
+    const poll = createLaneHeartbeatLane({ heartbeatFile: file, stallMs: STALL, spawnedAt, now: () => nowMs, log: (m) => logs.push(m) })
+    return { poll, logs }
+  }
+
+  {
+    fs.rmSync(file, { force: true })
+    const { poll, logs } = lane(T0 + 60_000)
+    ok('no heartbeat file yet -> no verdict', poll() === null)
+    ok('...and it says so ONCE (a quiet detector is how the 429min stall lived)',
+      logs.length === 1 && logs[0].includes('no lane heartbeat'), logs.join(' | '))
+    poll(); poll()
+    ok('...not once per minute forever', logs.length === 1, String(logs.length))
+  }
+  {
+    write('not an object')
+    ok('garbage json -> quiet, never a bounce', lane(T0 + 60_000).poll() === null)
+    fs.writeFileSync(file, '{ broken')
+    ok('unparseable file -> quiet, never a bounce', lane(T0 + 60_000).poll() === null)
+  }
+  {
+    // Era guard: the previous child left a heartbeat that looks stalled.
+    write({ bornTs: T0 - 3_600_000, ts: T0 - 3_600_000, lastEventTs: T0 - 3_600_000, pendingSince: T0 - 3_600_000 })
+    ok('a PREVIOUS-era heartbeat never bounces a fresh child', lane(T0 + 60_000, { spawnedAt: T0 }).poll() === null)
+  }
+  {
+    // Idle: beating fine, nobody has said anything for hours. Not a stall.
+    const nowMs = T0 + 6 * 3600_000
+    write({ bornTs: T0, ts: nowMs - 5_000, lastEventTs: T0 + 60_000, pendingSince: null })
+    ok('an IDLE agent (fresh beat, nothing pending) is never bounced -- no one talked to it', lane(nowMs).poll() === null)
+  }
+  {
+    // Wedged: the lane could not run its own 15s timer for a whole window.
+    const nowMs = T0 + 3600_000
+    write({ bornTs: T0, ts: nowMs - (STALL + 60_000), lastEventTs: nowMs - (STALL + 60_000), pendingSince: null })
+    const v = lane(nowMs).poll()
+    ok('a stale BEAT is a verdict even with nothing pending (wedged, not idle)', typeof v === 'string' && v.includes('heartbeat stale'), String(v))
+  }
+  {
+    // Accepted, never answered -- past the same 2x window the transcript lane uses.
+    const nowMs = T0 + 3600_000
+    write({ bornTs: T0, ts: nowMs - 5_000, lastEventTs: nowMs - 5_000, pendingSince: nowMs - (2 * STALL + 60_000) })
+    const v = lane(nowMs).poll()
+    ok('an inbound pending past 2x the window is a verdict', typeof v === 'string' && v.includes('pending'), String(v))
+    write({ bornTs: T0, ts: nowMs - 5_000, lastEventTs: nowMs - 5_000, pendingSince: nowMs - (STALL + 60_000) })
+    ok('...but between 1x and 2x it is still a long turn, not a stall (same margin as the transcript lane)',
+      lane(nowMs).poll() === null)
+  }
+  fs.rmSync(dir, { recursive: true, force: true })
+}
+
+// ── 7d. the seams that make that watchdog reachable ────────────────────────
+console.log('\n-- watchdog + CLI gate: the default lane is a first-class lane')
+{
+  const supSrc = fs.readFileSync(path.join(ROOT, 'supervisor.mjs'), 'utf8')
+  ok('the watchdog picks its evidence by the lane that is RUNNING',
+    /cfg\.laneKind === 'dsh'\s*\n\s*\? createLaneHeartbeatLane\(/.test(supSrc))
+  ok('the CLI lane keeps its transcript watchdog', supSrc.includes(': createStallLane({'))
+  // The claude gate: a FATAL for a binary the default lane never execs meant
+  // the whole product refused to boot on any machine without the CLI --
+  // i.e. every stock Windows box.
+  ok('the claude-on-PATH FATAL is gated to LANE_KIND=headless',
+    supSrc.includes("if (cfg.laneKind === 'headless' && !resolveOnPath(cfg.claudeBin))"))
+  ok('...and says which lane needs it', /required by LANE_KIND=headless/.test(supSrc))
+
+  const dshSrc = fs.readFileSync(path.join(ROOT, 'dsh-lane.mjs'), 'utf8')
+  ok('the dsh lane beats into $MEM/.lane-heartbeat.json',
+    dshSrc.includes("path.join(MEM, '.lane-heartbeat.json')") && dshSrc.includes('setInterval(writeHeartbeat'))
+  ok("the beat is unref'd and stamps liveness on EVERY mux event",
+    dshSrc.includes('heartbeatTimer.unref()') && dshSrc.includes('lastEventTs = Date.now()'))
+  // Boot redelivers the previous incarnation's unfinished rows; unclamped
+  // their ts reads as "unanswered for hours" and a one-second-old lane bounces.
+  ok("pendingSince is clamped to this lane's birth (redelivery trap)",
+    dshSrc.includes('if (pendingSince !== null && pendingSince < LANE_BORN_TS) pendingSince = LANE_BORN_TS'))
 }
 
 // ── bounce budget (review S2): outage flap guard ────────────────────────────

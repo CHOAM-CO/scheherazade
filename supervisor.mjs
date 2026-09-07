@@ -544,6 +544,64 @@ export function createStallLane({
   }
 }
 
+// ── dsh watchdog lane: the LANE's own heartbeat (design-0023 P3 #7) ────────
+// createStallLane above reads the Claude CLI's transcript jsonl. The dsh lane
+// writes no such file -- it talks to the engine over a mux event stream -- so
+// on the DEFAULT lane that watchdog has been watching an empty directory since
+// 0.2.2, logging `no this-era transcript yet` exactly once and then nothing.
+// Silently inert, on the path almost every install actually runs.
+//
+// dsh-lane.mjs now beats into $MEM/.lane-heartbeat.json every 15s
+// ({bornTs, ts, lastEventTs, pendingSince}); this reads it. The JUDGEMENT and
+// the kill stay here on purpose: the restart ladder, the shared bounce budget
+// and the pidfile all live in this process, and a lane cannot enforce a budget
+// across its own restarts -- nor restart itself once it is the wedged thing.
+//
+// Two verdicts, both fail-QUIET (a missing or unparseable file is never a
+// bounce -- a watchdog that kills on its own read error is a crash loop):
+//   (1) the beat itself went stale -- the lane could not run a 15s timer for
+//       a whole stall window, so it is wedged, not merely idle;
+//   (2) an inbound has been pending past the same 2x user window the
+//       transcript lane uses -- accepted, never answered.
+// There is no thrash lane here: `autocompact thrash` is a Claude-Code
+// synthetic-error shape with no dsh equivalent to count.
+export function createLaneHeartbeatLane({
+  heartbeatFile, stallMs, spawnedAt,
+  now = () => Date.now(), log = () => {},
+  userStallMs = stallMs * 2,
+}) {
+  let noBeatLogged = false
+  const quiet = (msg) => {
+    if (noBeatLogged) return null
+    noBeatLogged = true
+    log(`watchdog: ${msg} -- heartbeat lane idle until one appears`)
+    return null
+  }
+  return function poll() {
+    let hb
+    try { hb = JSON.parse(fs.readFileSync(heartbeatFile, 'utf8')) } catch { return quiet(`no lane heartbeat at ${heartbeatFile}`) }
+    if (!hb || typeof hb !== 'object') return quiet(`lane heartbeat at ${heartbeatFile} is not an object`)
+    const born = Number(hb.bornTs) || 0
+    // Era guard, the same rule newestTranscript applies to birthtimes: a
+    // heartbeat left by the PREVIOUS child must never bounce this one.
+    if (born < spawnedAt) return quiet(`lane heartbeat predates this child (born ${born} < spawned ${spawnedAt})`)
+    noBeatLogged = false
+    const beat = Number(hb.ts) || 0
+    const beatAge = now() - beat
+    if (beat && beatAge > stallMs) {
+      return `lane heartbeat stale ${Math.round(beatAge / 60000)}min: the lane stopped beating (wedged event loop, not idle)`
+    }
+    const pendingSince = Number(hb.pendingSince) || 0
+    if (pendingSince) {
+      const pendingAge = now() - pendingSince
+      if (pendingAge > userStallMs) {
+        return `inbound pending ${Math.round(pendingAge / 60000)}min with no turn end (accepted, never answered)`
+      }
+    }
+    return null
+  }
+}
+
 // Bounce budget (review S2): during a provider outage the retry ladder can
 // legitimately eat the stall window, and an unlimited watchdog would then
 // burn a full session context every cycle -- one hour of outage = 4
@@ -684,11 +742,21 @@ function spawnHeadlessChild(cfg, { now = () => Date.now(), log, watchdogBounces 
         return v && typeof v.sessionId === 'string' && v.sessionId ? v.sessionId : null
       } catch { return null }
     }
-    const poll = createStallLane({
-      transcriptDir: transcriptDirFor(cfg.mem),
-      stallMs: cfg.stallTimeoutSec * 1000,
-      spawnedAt, now, log, readSessionId,
-    })
+    // ONE watchdog, two evidence sources, chosen by the lane that is actually
+    // running: the CLI lane leaves a transcript jsonl, the dsh lane beats into
+    // a heartbeat file. Before P3 only the transcript lane existed, so the
+    // DEFAULT lane had no stall protection at all while the log claimed it did.
+    const poll = cfg.laneKind === 'dsh'
+      ? createLaneHeartbeatLane({
+        heartbeatFile: path.join(cfg.mem, '.lane-heartbeat.json'),
+        stallMs: cfg.stallTimeoutSec * 1000,
+        spawnedAt, now, log,
+      })
+      : createStallLane({
+        transcriptDir: transcriptDirFor(cfg.mem),
+        stallMs: cfg.stallTimeoutSec * 1000,
+        spawnedAt, now, log, readSessionId,
+      })
     stallTimer = setInterval(() => {
       const reason = poll()
       if (reason) bounce(reason)
@@ -882,8 +950,15 @@ export async function runLoop(cfg, deps = {}) {
 // ── start / stop modes (run.sh start_agent/stop_agent) ──────────────────────
 function startAgent(cfg) {
   const log = console.log
-  if (!resolveOnPath(cfg.claudeBin)) {
-    console.error(`FATAL: '${cfg.claudeBin}' not found on PATH`)
+  // The Claude CLI is a requirement of the HEADLESS lane only. dsh-lane.mjs
+  // has execed no `claude` since 0.2.2 (it drives the bundled dsh engine and
+  // ignores CLAUDE_BIN entirely), yet this gate refused to start the DEFAULT
+  // lane on any machine without a claude binary on PATH -- a hard FATAL for a
+  // dependency that lane does not have. On Windows, where nothing installs the
+  // CLI by default, that is the whole product refusing to boot over a tool it
+  // never runs. Gate the lane that actually needs it, and only that one.
+  if (cfg.laneKind === 'headless' && !resolveOnPath(cfg.claudeBin)) {
+    console.error(`FATAL: '${cfg.claudeBin}' not found on PATH (required by LANE_KIND=headless; the default dsh lane does not need it)`)
     process.exit(1)
   }
   const existingPid = readPid(cfg.pidfile)
