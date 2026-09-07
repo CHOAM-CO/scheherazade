@@ -69,15 +69,25 @@ const SKILL_REQUIREMENTS = Object.freeze({
 // snap installs, which is every ordinary Linux install (read-C §2 G1).
 // proc.resolveOnPath stays available for callers that genuinely want PATH
 // (spawnBin takes `allowPath` and no onboarding call site passes it).
+// Paths are built with the TARGET platform's separator, not the running host's.
+// In production those are always the same thing -- `platform` is process.platform
+// -- but every P4 test crosses them through the injected-platform seam, and bare
+// `path.join` silently answered in the RUNNER's dialect: asking a Windows box
+// about a Linux install produced '\usr\bin\codex'. Three separate tests had
+// worked around that with string normalization, which is the tell that it
+// belonged here instead. Production behaviour is unchanged by construction.
+const pathFor = (platform) => (platform === 'win32' ? path.win32 : path.posix)
+
 function binDirsFor({ platform, env, home, dataHome }) {
-  const localAppData = env.LOCALAPPDATA || path.join(home, 'AppData', 'Local')
-  const appData = env.APPDATA || path.join(home, 'AppData', 'Roaming')
+  const P = pathFor(platform)
+  const localAppData = env.LOCALAPPDATA || P.join(home, 'AppData', 'Local')
+  const appData = env.APPDATA || P.join(home, 'AppData', 'Roaming')
   if (platform === 'win32') {
     return [
-      path.join(dataHome, 'bin'), // app-managed bootstrap dir
-      path.join(localAppData, 'Programs', 'OpenAI', 'Codex', 'bin'), // OpenAI's own installer
-      path.join(appData, 'npm'), // npm global (.cmd shims -- see spawnBin)
-      path.join(localAppData, 'Programs', 'Ollama'),
+      P.join(dataHome, 'bin'), // app-managed bootstrap dir
+      P.join(localAppData, 'Programs', 'OpenAI', 'Codex', 'bin'), // OpenAI's own installer
+      P.join(appData, 'npm'), // npm global (.cmd shims -- see spawnBin)
+      P.join(localAppData, 'Programs', 'Ollama'),
     ]
   }
   if (platform === 'linux') {
@@ -87,23 +97,23 @@ function binDirsFor({ platform, env, home, dataHome }) {
     // prefix would mean spawning npm on a status poll -- no.
     const npmPrefix = env.npm_config_prefix || env.NPM_CONFIG_PREFIX || null
     return [
-      path.join(dataHome, 'bin'),
-      path.join(home, '.local', 'bin'), // claude.ai/install.sh, pipx, pip --user
+      P.join(dataHome, 'bin'),
+      P.join(home, '.local', 'bin'), // claude.ai/install.sh, pipx, pip --user
       '/usr/local/bin',
       '/usr/bin',
-      ...(npmPrefix ? [path.join(npmPrefix, 'bin')] : []),
-      path.join(home, '.npm-global', 'bin'),
-      path.join(home, '.npm-packages', 'bin'),
+      ...(npmPrefix ? [P.join(npmPrefix, 'bin')] : []),
+      P.join(home, '.npm-global', 'bin'),
+      P.join(home, '.npm-packages', 'bin'),
       '/snap/bin',
-      path.join(home, '.cargo', 'bin'),
+      P.join(home, '.cargo', 'bin'),
     ]
   }
   // darwin
   return [
-    path.join(dataHome, 'bin'),
+    P.join(dataHome, 'bin'),
     '/opt/homebrew/bin', // brew, Apple Silicon
     '/usr/local/bin', // brew, Intel + historical
-    path.join(home, '.local', 'bin'), // claude.ai/install.sh's own default
+    P.join(home, '.local', 'bin'), // claude.ai/install.sh's own default
   ]
 }
 
@@ -150,7 +160,8 @@ function capabilities({
   function binCandidates(name) {
     const names = binNamesFor(name, { platform, env })
     const out = []
-    for (const dir of binDirs) for (const n of names) out.push(path.join(dir, n))
+    const P = pathFor(platform)
+    for (const dir of binDirs) for (const n of names) out.push(P.join(dir, n))
     return out
   }
 

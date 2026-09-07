@@ -122,12 +122,10 @@ console.log('4. binCandidates: the Linux dirs that were missing are on the list'
 {
   const l = mk('linux', 'x64', { env: { npm_config_prefix: '/opt/npm' } })
   const cands = l.binCandidates('codex')
-  // binDirsFor builds with the HOST's path.join, not the TARGET platform's, so
-  // asking a Mac about linux gives forward slashes and asking Windows about
-  // linux gives backslashes. Only tests ever cross platforms (production always
-  // asks about its own), so normalize here rather than reshaping the resolver
-  // this close to a release -- but the seam is real and worth revisiting.
-  const dirs = cands.map((c) => path.posix.dirname(String(c).replaceAll('\\', '/')))
+  // No normalization: binDirsFor builds in the TARGET platform's dialect now,
+  // so a linux question answers in posix from any runner. If this ever needs a
+  // replaceAll again, the resolver regressed -- fix it there, not here.
+  const dirs = cands.map((c) => path.posix.dirname(c))
   for (const want of ['/usr/bin', '/usr/local/bin', '/home/t/.local/bin', '/snap/bin', '/opt/npm/bin', '/home/t/Documents/Scheherazade/bin']) {
     assert(dirs.includes(want), `linux candidates include ${want} (a fresh apt/npm/snap install lands in one of these)`)
   }
