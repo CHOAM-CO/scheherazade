@@ -340,7 +340,7 @@ assert(PROVIDERS_REQUIRING_STORED_CREDENTIAL.includes('ollama'), 'PROVIDERS_REQU
   const cases = [
     ['claude', { readProviderKey: fakeReadProviderKey({ claude: 'k' }) }, {}],
     ['claude-subscription', { readProviderKey: fakeReadProviderKey({ 'claude-subscription': 't' }) }, {}],
-    ['claude-cli', { readProviderKey: () => null }, {}],
+    ['claude-cli', { readProviderKey: () => null, readClaudeCliToken: () => ({ token: 'sk-ant-oat01-cli-fake' }) }, {}],
     ['chatgpt', { readProviderKey: () => null }, {}],
     ['ollama', { readProviderKey: fakeReadProviderKey({ ollama: 'ol-key' }) }, { MODEL: 'm' }],
     ['custom', { readProviderKey: () => null }, { CUSTOM_BASE_URL: 'http://127.0.0.1:1', MODEL: 'm' }],

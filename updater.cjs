@@ -167,10 +167,13 @@ function initMacNotifier({ app, dialog, shell, log }) {
 // updating is strictly less important than everything else the app does.
 function initAutoUpdate({ app, dialog, shell, log }) {
   const mode = pickUpdateMode({ platform: process.platform, isPackaged: app.isPackaged })
+  // Logged BEFORE the branch: the mode is already decided, and a throw inside
+  // init (electron-updater missing on a win32 box) must not eat the one line
+  // that says which lane we picked.
+  log(`updater: mode=${mode}`)
   try {
     if (mode === 'auto') initWindowsUpdater({ dialog, log })
     else if (mode === 'notify') initMacNotifier({ app, dialog, shell, log })
-    log(`updater: mode=${mode}`)
   } catch (err) {
     log('updater: init failed (non-fatal):', (err && err.message) || String(err))
   }

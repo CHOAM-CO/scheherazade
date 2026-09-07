@@ -140,7 +140,9 @@ console.log('-- procedures/memory-consolidation.md is harness-rendered like its 
     .replaceAll('{AGENT_NAME}', 'TestAgent')
     .replaceAll('{MEMORY_DIR}', mem)
   ok('rendered content matches source with placeholders resolved', renderedMemCon === expected)
-  ok('rendered file points at the real journal-compress.mjs path', renderedMemCon.includes(path.join(ROOT, 'scripts', 'journal-compress.mjs')))
+  // The template writes `{AGENT_DIR}/scripts/...` with literal slashes, so the
+  // rendered path is ROOT + forward slashes even where path.join backslashes.
+  ok('rendered file points at the real journal-compress.mjs path', renderedMemCon.includes(`${ROOT}/scripts/journal-compress.mjs`))
 
   fs.rmSync(mem, { recursive: true, force: true })
 }

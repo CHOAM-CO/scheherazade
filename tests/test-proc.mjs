@@ -58,11 +58,14 @@ console.log('\n-- resolveOnPath: fake PATH + PATHEXT (win32 lane exercised from 
   ok('empty PATH entries are skipped, not joined into ./bin',
     win('claude', { PATH: ';C:\\tools;', PATHEXT: '.EXE' }) === path.join('C:\\tools', 'claude.exe'))
 
-  const posixFiles = new Set(['/opt/bin/claude'])
+  // path.join is the HOST's, so build the fixture with it (as winFiles does)
+  // -- a literal '/opt/bin/claude' never matches on a Windows runner.
+  const POSIX_CLAUDE = path.join('/opt/bin', 'claude')
+  const posixFiles = new Set([POSIX_CLAUDE])
   const posix = (bin, env = { PATH: '/nope:/opt/bin' }) => resolveOnPath(bin, {
     env, platform: 'linux', delimiter: ':', existsSync: (f) => posixFiles.has(f),
   })
-  ok('posix resolves a bare name with no extension games', posix('claude') === '/opt/bin/claude')
+  ok('posix resolves a bare name with no extension games', posix('claude') === POSIX_CLAUDE, String(posix('claude')))
   ok('posix miss -> null', posix('ollama') === null)
   ok('an explicit path is checked as given, never PATH-walked',
     resolveOnPath('/opt/bin/claude', { platform: 'linux', existsSync: (f) => posixFiles.has(f) }) === '/opt/bin/claude' &&
