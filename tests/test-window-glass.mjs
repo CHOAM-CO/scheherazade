@@ -92,6 +92,26 @@ assert(glassOptions('linux', '6.1.0', 'none').backgroundColor === FLAT_FALLBACK,
 assert(!('backgroundMaterial' in glassOptions('linux', '10.0.26100')),
   'a Windows-SHAPED release string on linux still gets no acrylic (the platform decides, not the version)')
 
+// design-0023 P4: the same fact is now NAMED, in onboarding/platform.cjs, and
+// two modules answer it -- window-glass.cjs at window CONSTRUCTION and the
+// capability table at every LIVE apply and in the appearance UI. If they ever
+// disagree, one of them is lying to the user: the window would be built flat
+// while the page offers a working-looking blur control (which is exactly what
+// shipped before the flag existed). Asserted across all three platforms so a
+// future material lands in both places or in neither.
+{
+  const { capabilities } = require(path.join(root, 'onboarding', 'platform.cjs'))
+  const mk = (platform) => capabilities({ platform, arch: 'x64', env: {}, home: '/h', dataHome: '/h/d', existsSync: () => false, hasTmux: () => false })
+  for (const [platform, release] of [['darwin', '23.0.0'], ['win32', '10.0.26100'], ['linux', '6.8.0-45-generic']]) {
+    const o = glassOptions(platform, release)
+    const constructsWithEffect = 'vibrancy' in o || 'backgroundMaterial' in o
+    assert(constructsWithEffect === mk(platform).supportsBlur,
+      `${platform}: window-glass constructs ${constructsWithEffect ? 'with' : 'without'} an effect and the capability table says supportsBlur=${mk(platform).supportsBlur} -- they agree`)
+  }
+  assert(mk('linux').windowMaterial === 'none',
+    "linux names its material 'none' rather than leaving it undefined -- the appearance route branches on this string")
+}
+
 console.log('\n3. main.cjs uses glassOptions and does not reintroduce the 0.59 shape')
 const main = readFileSync(path.join(root, 'main.cjs'), 'utf8')
 assert(/require\(path\.join\(__dirname, 'window-glass\.cjs'\)\)/.test(main), 'main.cjs requires window-glass.cjs')

@@ -153,14 +153,40 @@
     })
   }
 
+  // design-0023 P4: a platform with no window-material API (Linux -- Electron
+  // exposes nothing for GNOME/KDE blur) used to render three working-looking
+  // blur buttons whose value was saved and then never applied, with the note
+  // beside them explaining a Windows quirk. Disable the control and say why.
+  // The saved VALUE is left alone -- a user who moves their config to a Mac
+  // gets their choice back; what changes is that the page stops implying the
+  // control does something here.
+  function applyBlurSupport(supported) {
+    if (supported !== false) return
+    const box = $('ap-blur-options')
+    if (box) {
+      box.classList.add('disabled')
+      for (const b of box.querySelectorAll('button')) {
+        b.disabled = true
+        b.classList.remove('active')
+      }
+    }
+    const note = $('ap-glass-note')
+    if (note && C.blurUnsupported) note.textContent = `${C.glassNote} ${C.blurUnsupported}`
+  }
+
   async function init() {
     renderStatic()
+    let supportsBlur = window.HOST_CAPS ? window.HOST_CAPS.supportsBlur : undefined
     try {
       const data = await window.api('/api/appearance')
       current = M.normalize(data.values)
+      // The route is the authority (it knows the running window); the meta
+      // capability is the pre-fetch answer for first paint. Same value.
+      if (typeof data.supportsBlur === 'boolean') supportsBlur = data.supportsBlur
     } catch {
       // defaults already in place; page still works as a live preview
     }
+    applyBlurSupport(supportsBlur)
     $('ap-glass-range').value = current.glass
     $('ap-fontsize-range').value = current.fontSize
     applyLive()

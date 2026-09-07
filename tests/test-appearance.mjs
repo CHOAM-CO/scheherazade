@@ -123,9 +123,35 @@ assert(routes.includes('win.setVibrancy(null)') && routes.includes('win.setVibra
   'PUT live-applies blur via the null-then-material dance (direct setMaterial: swaps do not reliably repaint — native_window_mac.mm)')
 assert(routes.includes("win.setBackgroundMaterial(values.blur === 'off' ? 'none' : 'acrylic')"),
   'PUT live-applies blur on Windows too (acrylic on/off — no strength axis there)')
+// design-0023 P4: those two literals now live in ONE helper instead of two
+// inline `if (process.platform === ...)` blocks that had no third arm -- so on
+// Linux the value was written to disk, never applied, and nothing said so.
+assert(/function applyWindowMaterial\(values\)/.test(routes), 'the live apply has one owner, applyWindowMaterial()')
+assert(routes.includes('applyWindowMaterial(values)'), '...and the PUT handler calls it')
+assert(/HOST\.windowMaterial === 'vibrancy'/.test(routes) && /HOST\.windowMaterial === 'acrylic'/.test(routes),
+  'the branch is the capability table, not a process.platform test')
+assert(!/process\.platform === 'darwin'/.test(routes) && !/process\.platform === 'win32'/.test(routes),
+  'no binary platform test survives in this route file')
+assert(routes.includes('supportsBlur: HOST.supportsBlur'),
+  'GET /api/appearance carries supportsBlur so the page can disable a control the platform cannot honour')
 const page2 = readFileSync(path.join(root, 'onboarding', 'public', 'js', 'appearance.js'), 'utf8')
 assert(page2.includes('BLUR_LEVELS') && page2.includes("update({ blur: key })"), 'blur 3-step control renders from the model catalog')
 assert(!page2.includes('MAC_MATERIALS'), 'the raw 7-material switcher is gone from the UI (v3)')
+assert(/function applyBlurSupport\(supported\)/.test(page2) && /b\.disabled = true/.test(page2),
+  'the page disables the blur buttons when the server says the platform has no material API')
+assert(/if \(supported !== false\) return/.test(page2),
+  'only an explicit false disables -- an old server that does not send the flag leaves the control alone')
+assert(page2.includes('C.blurUnsupported'), '...and says why, rather than silently going grey')
+{
+  // The three platforms, from the capability table itself: this is the value
+  // the route serves and the page reads.
+  const caps = require(path.join(root, 'onboarding', 'platform.cjs'))
+  const mk = (platform) => caps.capabilities({ platform, arch: 'x64', env: {}, home: '/h', dataHome: '/h/d', existsSync: () => false, hasTmux: () => false })
+  assert(mk('darwin').supportsBlur === true && mk('win32').supportsBlur === true && mk('linux').supportsBlur === false,
+    'supportsBlur: mac (vibrancy) yes, win (acrylic) yes, linux no -- Electron exposes no GNOME/KDE material API')
+  const css = readFileSync(path.join(root, 'onboarding', 'public', 'css', 'app.css'), 'utf8')
+  assert(/\.ap-options\.disabled/.test(css), 'the disabled state has a style (dimmed and inert, still readable)')
+}
 
 console.log('\n4. page + nav + copy wiring')
 const page = readFileSync(path.join(root, 'onboarding', 'public', 'appearance.html'), 'utf8')

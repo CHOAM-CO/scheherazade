@@ -1428,6 +1428,11 @@ button.nav-ctl.is-busy::after {
   accent-color: var(--accent);
 }
 .ap-options { display: flex; gap: var(--s2); flex-wrap: wrap; }
+/* A control the platform cannot honour (design-0023 P4: window blur on Linux,
+   where Electron exposes no material API at all). Same visual language as
+   .tab.disabled -- dimmed and inert, still readable, so the row explains
+   itself instead of disappearing. */
+.ap-options.disabled { opacity: 0.45; pointer-events: none; }
 .ap-option { padding: 0.3rem 0.7rem; }
 .ap-option.active {
   color: var(--fg);

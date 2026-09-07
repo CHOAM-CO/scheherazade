@@ -27,6 +27,54 @@ function createRoutes(staticCtx) {
     readAppearance, writeAppearance, AppearanceModel,
     path, DATA_HOME, HOST,
   } = staticCtx
+
+  // ── live window material (design-0023 P4) ───────────────────────────────
+  // ONE owner of "apply the saved blur to the running window", replacing two
+  // inline `if (process.platform === ...)` blocks inside the PUT handler with
+  // no third arm -- so on Linux the setting was written to disk, never
+  // applied, and nothing told the user (read-C G1). The API literals are kept
+  // EXACTLY as they were (tests/test-appearance.mjs pins them by text, and
+  // the mac double-hop below is a real Electron workaround, not style).
+  //
+  //   vibrancy (mac)  -- setVibrancy is runtime-mutable (visualEffectState is
+  //     not, electron#25513). Electron reuses the existing vibrant view and
+  //     only calls setMaterial: on a direct swap, which does not reliably
+  //     force a repaint (native_window_mac.mm; docs: "animating between
+  //     different types of vibrancy is not supported") -- so go through null
+  //     first, then set the target on the next tick: the remove-and-reattach
+  //     path lays out the view every time. values.macMaterial: null = blur
+  //     off (vibrancy stays removed).
+  //   acrylic (win)   -- no strength axis; blur is on/off only (soft and
+  //     strong both mean acrylic). setBackgroundMaterial is runtime-callable
+  //     on Win11 22H2+; 'none' drops to the solid look.
+  //   none (linux)    -- there is no Electron API for GNOME/KDE blur. The
+  //     honest action is to do nothing HERE and to disable the control, which
+  //     is what supportsBlur on the GET does.
+  //
+  // Fail-soft outside a real Electron main process (dev-serve-ui).
+  function applyWindowMaterial(values) {
+    if (HOST.windowMaterial === 'vibrancy') {
+      try {
+        const win = getElectron().BrowserWindow.getAllWindows()[0]
+        if (win) {
+          win.setVibrancy(null)
+          if (values.macMaterial) setTimeout(() => { try { win.setVibrancy(values.macMaterial) } catch { /* window died mid-tick */ } }, 0)
+        }
+      } catch { /* not running under Electron -- config-only save */ }
+      return
+    }
+    if (HOST.windowMaterial === 'acrylic') {
+      try {
+        const win = getElectron().BrowserWindow.getAllWindows()[0]
+        if (win && typeof win.setBackgroundMaterial === 'function') {
+          win.setBackgroundMaterial(values.blur === 'off' ? 'none' : 'acrylic')
+        }
+      } catch { /* not running under Electron -- config-only save */ }
+    }
+    // windowMaterial 'none': nothing to call. The value is still SAVED (a
+    // user who moves the AppImage to a Mac gets their setting back) -- it is
+    // just not claimed to have an effect here.
+  }
   return [
     {
       // Claude CLI install-assist status (2026-08-04, the owner "2로 가자").
@@ -246,6 +294,10 @@ function createRoutes(staticCtx) {
       method: 'GET',
       match: (pathname) => pathname === '/api/appearance',
       handler: async (req, res) => {
+        // supportsBlur (design-0023 P4): on Linux there is no Electron API
+        // for GNOME/KDE window blur at all, so the setting used to be saved
+        // and inert with nothing in the UI saying so. The page disables the
+        // row off the back of this flag instead of pretending.
         sendJson(res, 200, {
           values: readAppearance(),
           defaults: AppearanceModel.DEFAULTS,
@@ -254,6 +306,8 @@ function createRoutes(staticCtx) {
           bgs: AppearanceModel.PRESET_BGS,
           fgs: AppearanceModel.PRESET_FGS,
           blurLevels: AppearanceModel.BLUR_LEVELS,
+          supportsBlur: HOST.supportsBlur,
+          windowMaterial: HOST.windowMaterial,
         })
         return
       },
@@ -264,36 +318,7 @@ function createRoutes(staticCtx) {
       handler: async (req, res) => {
         const body = await readJsonBody(req)
         const values = writeAppearance(body)
-        // Apply the blur level LIVE. Fail-soft outside a real Electron main
-        // process (dev-serve-ui) or on unsupported platforms.
-        // macOS: setVibrancy is runtime-mutable (visualEffectState is not,
-        // electron#25513). Electron reuses the existing vibrant view and
-        // only calls setMaterial: on a direct swap, which does not reliably
-        // force a repaint (native_window_mac.mm; docs: "animating between
-        // different types of vibrancy is not supported") — so go through
-        // null first, then set the target on the next tick: the
-        // remove-and-reattach path lays out the view every time.
-        // values.macMaterial: null = blur off (vibrancy stays removed).
-        if (process.platform === 'darwin') {
-          try {
-            const win = getElectron().BrowserWindow.getAllWindows()[0]
-            if (win) {
-              win.setVibrancy(null)
-              if (values.macMaterial) setTimeout(() => { try { win.setVibrancy(values.macMaterial) } catch { /* window died mid-tick */ } }, 0)
-            }
-          } catch { /* not running under Electron -- config-only save */ }
-        }
-        // Windows: acrylic has no strength axis — blur is on/off only
-        // (soft and strong both mean acrylic). setBackgroundMaterial is
-        // runtime-callable on Win11 22H2+; 'none' drops to the solid look.
-        if (process.platform === 'win32') {
-          try {
-            const win = getElectron().BrowserWindow.getAllWindows()[0]
-            if (win && typeof win.setBackgroundMaterial === 'function') {
-              win.setBackgroundMaterial(values.blur === 'off' ? 'none' : 'acrylic')
-            }
-          } catch { /* not running under Electron -- config-only save */ }
-        }
+        applyWindowMaterial(values)
         sendJson(res, 200, { ok: true, values })
         return
       },
