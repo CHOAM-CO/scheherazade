@@ -158,6 +158,28 @@ if (IS_WIN) {
   }
 
   {
+    // The WIN32 BRANCH, exercised from mac through the injectable platform.
+    // On Windows there is no deliverable signal (process.kill is
+    // TerminateProcess), so gracefulStop must NOT signal at all -- it writes
+    // the stopflag, waits out the SAME grace window while the lane's own poll
+    // runs its shutdown(), and only then force-kills. The fixture here dies to
+    // a default SIGTERM, so "still alive when the window expires" is proof
+    // that no TERM was sent; forced:true is proof the window ended in a kill
+    // rather than a hang. (The kill itself is POSIX here -- killTree reads the
+    // REAL platform -- so this covers the ORDER, not taskkill. taskkill on a
+    // live CLI+MCP tree remains owed from the Windows box; see the report.)
+    const c = await spawnChild('setTimeout(() => {}, 60000)')
+    const t0 = Date.now()
+    const res = await gracefulStop(c.pid, { stopflag, graceMs: 1200, pollMs: 50, platform: 'win32' })
+    ok('win32 lane waits the FULL grace window instead of killing on contact',
+      Date.now() - t0 >= 1150, `${Date.now() - t0}ms`)
+    ok('win32 lane sent no signal (a TERM-honouring child survived the window)', res.forced === true, JSON.stringify(res))
+    ok('win32 lane still wrote the stopflag -- the only stop channel that OS has', fs.existsSync(stopflag))
+    ok('and the process is gone after it', await waitUntil(() => !isPidAlive(c.pid), 3000))
+    fs.rmSync(stopflag, { force: true })
+  }
+
+  {
     // killTree reaches a GRANDCHILD through the process group -- the property
     // main.cjs's quit path and the supervisor's stop both rely on.
     const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'proc-tree-'))

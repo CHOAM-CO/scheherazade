@@ -249,6 +249,90 @@ console.log('\n-- main.cjs seam: one launcher, one stopper, one signature')
     !pkg.build.files.includes('run.sh') && !pkg.build.asarUnpack.includes('run.sh'))
 }
 
+// ── 7. stop semantics, one contract, two mechanisms (design-0023 P3 #2) ────
+// Before P3 `stop` was two different products: POSIX asked the SUPERVISOR
+// alone (a bare process.kill(pid), so a lane that outlived the handler's 10s
+// grace was nobody's problem), while Windows skipped asking entirely and went
+// straight to taskkill /T /F -- neither lane's shutdown() ever ran there, so
+// the engine died mid-write and left .ingest-endpoint.json for the next boot
+// to trip over. These pin the shape that fixed it; the end-to-end proof is 9c.
+console.log('\n-- stop: STOPFLAG + grace window + force, through proc.gracefulStop')
+{
+  const supSrc = fs.readFileSync(path.join(ROOT, 'supervisor.mjs'), 'utf8')
+  const stopBody = supSrc.slice(supSrc.indexOf('async function stopAgent'), supSrc.indexOf('// ── entrypoint'))
+  ok('stop delegates to proc.gracefulStop (one implementation, both platforms)',
+    /await gracefulStop\(pid, \{/.test(stopBody))
+  ok('the grace window is 15s (run.sh 15x1s parity)', stopBody.includes('graceMs: 15_000'))
+  ok('the STOPFLAG is handed to it -- the belt for a lost signal AND the only win32 channel',
+    stopBody.includes('stopflag: cfg.stopflag'))
+  ok('the force kill is identity-gated (15s is long enough for a pid to be recycled)',
+    stopBody.includes("verify: (p) => classifyPidfileOwner(p) !== 'stale'"))
+  ok('no bare single-pid SIGTERM survives in the stop path (it left the lane alive)',
+    !/process\.kill\(pid/.test(stopBody))
+  ok('no win32 immediate hard kill survives (the old IS_WIN early return)',
+    !/IS_WIN[\s\S]{0,200}killTree/.test(stopBody))
+  ok('an UNCONFIRMED pid keeps its pidfile (deleting it orphans a live supervisor)',
+    /if \(res\.stopped\) \{\s*\n\s*try \{ fs\.rmSync\(cfg\.pidfile/.test(stopBody))
+  ok('the stopflag is always cleaned up, stopped or not (a leftover flag blocks the next start)',
+    stopBody.trimEnd().endsWith('try { fs.rmSync(cfg.stopflag, { force: true }) } catch {}\n}'))
+
+  // The lane half. On Windows node's process.kill IS TerminateProcess -- no
+  // handler runs -- so a grace window means nothing unless the lane watches
+  // the file. Both lanes, because LANE_KIND picks between them at runtime.
+  for (const lane of ['dsh-lane.mjs', 'headless-lane.mjs']) {
+    const src = fs.readFileSync(path.join(ROOT, lane), 'utf8')
+    ok(`${lane} polls the STOPFLAG and runs its own shutdown (the only win32 stop channel)`,
+      src.includes("path.join(MEM, '.stop_requested')") && /stopWatch = setInterval/.test(src) &&
+      /clearInterval\(stopWatch\)\s*\n\s*shutdown\(/.test(src))
+    ok(`${lane}'s stop watcher is unref'd (a stop poll must not hold the lane open)`,
+      src.includes('stopWatch.unref()'))
+  }
+  const dshSrc = fs.readFileSync(path.join(ROOT, 'dsh-lane.mjs'), 'utf8')
+  ok('dsh-lane shutdown is re-entrant-safe (SIGTERM + stopflag can both land)',
+    dshSrc.includes('let shuttingDown = false') && dshSrc.includes('if (shuttingDown) return'))
+}
+
+// ── 7b. failfile parity: ONE shape, three writers, one reader ──────────────
+// run.sh's write_failure printed this JSON inline; main.cjs polls it and puts
+// `reason` in front of the user. A drifted key is a silent "connecting..."
+// forever, which is exactly how the pre-0.0.15 cadence regression presented.
+console.log('\n-- .agent-failed.json: the shape main.cjs reads is the shape everyone writes')
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'suptest-fail-'))
+  const failfile = path.join(dir, '.agent-failed.json')
+  writeFailureMarker(failfile, 'boom', { now: () => Date.UTC(2026, 6, 14, 1, 2, 3) })
+  const m = JSON.parse(fs.readFileSync(failfile, 'utf8'))
+  ok('exactly the four run.sh keys, no more', Object.keys(m).sort().join(',') === 'code,reason,since,status', Object.keys(m).join(','))
+  ok("code is 'crash_loop' (main.cjs branches on this literal)", m.code === 'crash_loop')
+  ok('since is UTC Z, not a local stamp (main.cjs renders it)', /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(m.since), m.since)
+  const mainSrc = fs.readFileSync(path.join(ROOT, 'main.cjs'), 'utf8')
+  ok('main.cjs reads THIS filename', mainSrc.includes(".agent-failed.json'"))
+  ok('the other writer (channel.mjs) uses the same filename + a code of its own',
+    fs.readFileSync(path.join(ROOT, 'channel.mjs'), 'utf8').includes("'discord_token_bad'"))
+  fs.rmSync(dir, { recursive: true, force: true })
+}
+
+// ── 7c. no bash anywhere in the runtime ────────────────────────────────────
+// The deletion is only real if nothing shipped can still reach for a shell
+// launcher. attach-bootstrap.sh is deliberately excluded: it is a template the
+// USER runs in their own terminal to bootstrap the tmux server (design-0016),
+// never spawned by the app.
+console.log('\n-- no bash lane left in anything the app spawns')
+{
+  const runtime = ['main.cjs', 'supervisor.mjs', 'dsh-lane.mjs', 'headless-lane.mjs', 'channel.mjs', 'attach-topology.cjs', 'proc.cjs']
+  for (const f of runtime) {
+    const src = fs.readFileSync(path.join(ROOT, f), 'utf8')
+    ok(`${f}: no bash/sh launcher spawn`,
+      !src.includes("'/bin/bash'") && !src.includes("'/bin/sh'") && !/spawn\w*\(\s*['"]bash['"]/.test(src))
+    // Comments still carry run.sh line receipts on purpose (they are the
+    // provenance of the semantics). What must not survive is a CODE path.
+    const code = src.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n')
+    ok(`${f}: run.sh appears in receipts only, never in code`,
+      !/run\.sh/.test(code) || /LEGACY_BASH_SIGNATURE = 'run\.sh __loop'/.test(code),
+      (code.match(/.*run\.sh.*/) || [''])[0].trim().slice(0, 120))
+  }
+}
+
 // ── 8. runLoop ladder attacks: REAL loop, fake child + fake clock ───────────
 console.log('\n-- runLoop: fake child (scripted exits) + fake clock (ladder only)')
 
@@ -472,16 +556,105 @@ if (process.platform === 'win32') {
     try {
       await waitFor(() => fs.existsSync(childPidFile), 10_000, 'fake child to start (round 2)')
       const childPid = parseInt(fs.readFileSync(childPidFile, 'utf8').trim(), 10)
-      fs.writeFileSync(path.join(mem, '.stop_requested'), '') // end loop after the timeout kill
+      // The stopflag is planted only AFTER the timeout kill lands. It used to
+      // go in right here, as a convenience to end the loop -- but since P3 the
+      // LANE polls .stop_requested too (the only stop channel Windows has), so
+      // an early flag shut the lane down at ~0.5s and the 2s session timeout
+      // never fired. The convenience was silently deleting the thing under
+      // test; this ordering keeps both receipts.
       await waitFor(() => !pidAlive(childPid), 15_000, 'session timeout to kill the child')
       ok('session timeout killed the stuck child', !pidAlive(childPid))
-      await Promise.race([supExited, new Promise((_, rej) => setTimeout(() => rej(new Error('loop did not honor stopflag after timeout kill')), 15_000))])
-      ok('loop honored the stopflag at the post-exit check', out.includes('stop requested, exiting'), out.slice(-300))
       ok('session timeout was logged', out.includes('session timeout'), out.slice(-300))
+      fs.writeFileSync(path.join(mem, '.stop_requested'), '') // now end the loop
+      // Caught either at the post-exit check or at the top of the next
+      // iteration after the 5s backoff -- hence the wider race than 9a's.
+      await Promise.race([supExited, new Promise((_, rej) => setTimeout(() => rej(new Error('loop did not honor stopflag after timeout kill')), 25_000))])
+      ok('loop honored the stopflag', out.includes('stop requested, exiting'), out.slice(-300))
     } catch (err) {
       ok('session-timeout integration test', false, err.message)
       try { sup.kill('SIGKILL') } catch {}
     }
+  }
+
+  // 9c. THE stop verb, end to end: a real detached `__loop` (group leader,
+  // exactly as main.cjs spawns it) with a real child, stopped by a real
+  // `supervisor.mjs stop` process. What no mock can prove: that the group
+  // signal reaches the LANE and its child, that 15s is enough for the
+  // shutdown, and that stop leaves neither an orphan nor a pidfile behind.
+  {
+    const stopDir = fs.mkdtempSync(path.join(os.tmpdir(), 'suptest-stop-'))
+    const stopMem = path.join(stopDir, 'mem')
+    fs.mkdirSync(stopMem, { recursive: true })
+    const stopChildPid = path.join(stopDir, 'child.pid')
+    const stopBin = path.join(stopDir, 'fake-claude.sh')
+    fs.writeFileSync(stopBin, `#!/bin/sh\necho $$ > "${stopChildPid}"\necho SUPTEST_CHILD_UP\nexec sleep 1000\n`)
+    fs.chmodSync(stopBin, 0o755)
+    const stopCfgFile = path.join(stopDir, '.agent-config')
+    fs.writeFileSync(stopCfgFile, `AGENT_NAME=suptest-stop-${process.pid}\nCLAUDE_BIN=${stopBin}\nAGENT_DATA_HOME=${stopMem}\nMODEL=fake-model\nLANE_KIND=headless\n`)
+    const pidfile = path.join(stopMem, '.agent.pid')
+    const stopflag = path.join(stopMem, '.stop_requested')
+    // detached: the loop must LEAD its own group, or gracefulStop's
+    // process.kill(-pid) would signal this test runner's group instead. This
+    // is the same `detached: true` main.cjs and `supervisor start` use.
+    const sup = trackSup(spawn(process.execPath, [path.join(ROOT, 'supervisor.mjs'), '__loop'],
+      { env: { ...process.env, AGENT_CONFIG_FILE: stopCfgFile }, stdio: ['ignore', 'pipe', 'pipe'], detached: true }))
+    const supExited = new Promise((r) => sup.on('exit', r))
+    try {
+      await waitFor(() => fs.existsSync(stopChildPid), 10_000, 'fake child under the stop-test loop')
+      const childPid = parseInt(fs.readFileSync(stopChildPid, 'utf8').trim(), 10)
+      // What `supervisor start` writes; the stop verb reads it back.
+      fs.writeFileSync(pidfile, `${sup.pid}\n`)
+      const t0 = Date.now()
+      const stopper = spawn(process.execPath, [path.join(ROOT, 'supervisor.mjs'), 'stop'],
+        { env: { ...process.env, AGENT_CONFIG_FILE: stopCfgFile }, stdio: ['ignore', 'pipe', 'pipe'] })
+      let sout = ''
+      stopper.stdout.on('data', (d) => { sout += d })
+      stopper.stderr.on('data', (d) => { sout += d })
+      const stopCode = await Promise.race([
+        new Promise((r) => stopper.on('exit', r)),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('stop verb hung past 25s')), 25_000)),
+      ])
+      const elapsed = Date.now() - t0
+      ok('stop exited 0', stopCode === 0, String(stopCode))
+      ok('stop identified the supervisor and reported success', /stopping .*\(pid \d+\)/.test(sout) && sout.includes('stopped'), sout.slice(-300))
+      ok('the stop was GRACEFUL -- no force kill, no unconfirmed-pid bailout',
+        !sout.includes('forcing') && !sout.includes('did NOT confirm'), sout.slice(-300))
+      ok('and it did not burn the whole grace window (the lane exited on the signal)', elapsed < 15_000, `${elapsed}ms`)
+      await Promise.race([supExited, new Promise((_, rej) => setTimeout(() => rej(new Error('supervisor survived its own stop')), 10_000))])
+      ok('the supervisor is dead', !pidAlive(sup.pid))
+      await waitFor(() => !pidAlive(childPid), 10_000, 'lane child to die with the group')
+      ok('the group signal reached the LANE CHILD too (no orphan sleep)', !pidAlive(childPid))
+      ok('pidfile removed (a live one blocks the next start as "already running")', !fs.existsSync(pidfile))
+      ok('stopflag removed (a leftover one makes the next loop exit instantly)', !fs.existsSync(stopflag))
+    } catch (err) {
+      ok('stop-verb integration test', false, err.message)
+      try { process.kill(-sup.pid, 'SIGKILL') } catch {}
+      try { sup.kill('SIGKILL') } catch {}
+    }
+    fs.rmSync(stopDir, { recursive: true, force: true })
+  }
+
+  // 9d. Identity guard on the stop path: a pidfile pointing at a LIVE but
+  // unrelated process (pid recycled between write and stop) must be cleaned
+  // up, never signalled. Attack: point it at this test runner.
+  {
+    const gDir = fs.mkdtempSync(path.join(os.tmpdir(), 'suptest-stopid-'))
+    const gMem = path.join(gDir, 'mem')
+    fs.mkdirSync(gMem, { recursive: true })
+    const gCfg = path.join(gDir, '.agent-config')
+    fs.writeFileSync(gCfg, `AGENT_NAME=suptest-id-${process.pid}\nAGENT_DATA_HOME=${gMem}\nMODEL=fake-model\nLANE_KIND=headless\n`)
+    const gPidfile = path.join(gMem, '.agent.pid')
+    fs.writeFileSync(gPidfile, `${process.pid}\n`) // us: alive, definitely not a supervisor
+    const stopper = spawn(process.execPath, [path.join(ROOT, 'supervisor.mjs'), 'stop'],
+      { env: { ...process.env, AGENT_CONFIG_FILE: gCfg }, stdio: ['ignore', 'pipe', 'pipe'] })
+    let gout = ''
+    stopper.stdout.on('data', (d) => { gout += d })
+    const gCode = await new Promise((r) => stopper.on('exit', r))
+    ok('a recycled/unrelated live pid is called stale and cleaned, not signalled',
+      gCode === 0 && gout.includes('stale/unverified pidfile') && !gout.includes('stopping'), gout.slice(-200))
+    ok('...and this very process (the "recycled" pid) is untouched', true)
+    ok('the bogus pidfile was removed', !fs.existsSync(gPidfile))
+    fs.rmSync(gDir, { recursive: true, force: true })
   }
 
   fs.rmSync(itDir, { recursive: true, force: true })

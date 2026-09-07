@@ -921,6 +921,18 @@ async function main() {
   }
   process.on('SIGTERM', () => shutdown('SIGTERM'))
   process.on('SIGINT', () => shutdown('SIGINT'))
+  // Same portable stop channel as dsh-lane (design-0023 P3 #2): on Windows no
+  // signal is deliverable, so the supervisor's stop writes $MEM/.stop_requested
+  // and waits -- without this poll that grace window bought nothing and the
+  // CLI died to taskkill /T /F mid-turn. unref'd; harmless on POSIX (a belt
+  // for a lost signal).
+  const stopflag = path.join(MEM, '.stop_requested')
+  const stopWatch = setInterval(() => {
+    if (!fs.existsSync(stopflag)) return
+    clearInterval(stopWatch)
+    shutdown('stop request (.stop_requested)')
+  }, 500)
+  stopWatch.unref()
 
   child.on('exit', (code, signal) => {
     childExited = true

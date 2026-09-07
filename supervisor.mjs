@@ -35,7 +35,7 @@ import { createRequire } from 'node:module'
 // taskkill /T tree kill and the PATHEXT resolver all used to live HERE as the
 // best of four hand-copies. They now live in proc.cjs and every caller
 // (main.cjs, the onboarding server, ollama-daemon) shares them.
-import { isPidAlive, readCommandLine as procReadCommandLine, killTree, sweepByPattern, resolveOnPath } from './proc.cjs'
+import { isPidAlive, readCommandLine as procReadCommandLine, killTree, sweepByPattern, gracefulStop, resolveOnPath } from './proc.cjs'
 import { resolveDataHome } from './data-home.cjs'
 import { localDate, localStamp, agentTimeZone } from './local-date.cjs'
 
@@ -945,42 +945,29 @@ async function stopAgent(cfg) {
   }
 
   log(`stopping ${cfg.agentName} (pid ${pid})...`)
-  // STOPFLAG stays as the belt (a lost signal still ends the loop at its
-  // next iteration); the signal is the actual stop. Unlike bash -- where
-  // TERM was deferred until the foreground child died, so stop had to pkill
-  // the LEAF -- the node supervisor's handler reaps its child itself
-  // (verdict 7), so there is no stop-path pattern sweep here (verdict 1).
-  fs.writeFileSync(cfg.stopflag, '')
-  if (IS_WIN) {
-    // Windows has no graceful cross-process signal: node's process.kill()
-    // is TerminateProcess (handler never runs, child would orphan). Kill
-    // the whole tree instead. UNVERIFIED on the Windows box (design doc flag).
-    try { killTree(pid) } catch {}
+  // proc.gracefulStop owns the mechanics and documents both platforms: POSIX
+  // gets STOPFLAG + a SIGTERM to the process GROUP (so the LANE's own handler
+  // runs and reaps the engine, not just this supervisor) and up to 15s before
+  // SIGKILL; win32 gets STOPFLAG + the SAME grace window -- the flag is the
+  // only stop channel there, both lanes poll it -- and only then taskkill /T
+  // /F. Before P3 Windows hard-killed the tree the instant stop was pressed,
+  // so no lane shutdown ran there at all. `verify` is the pid-recycling guard:
+  // 15s is long enough for the pid to die and be reissued, so re-confirm
+  // identity before the hard kill (run.sh:462-474 did the same, fail SAFE).
+  const res = await gracefulStop(pid, {
+    stopflag: cfg.stopflag,
+    graceMs: 15_000,
+    verify: (p) => classifyPidfileOwner(p) !== 'stale',
+    log,
+  })
+  if (res.stopped) log('stopped')
+  else log(`stop did NOT confirm the supervisor's death (pid ${pid}) -- leaving its pidfile in place rather than orphaning it silently`)
+  // Cleanup mirrors the loop's own exitOnStop(): both files go, so a later
+  // start is not blocked by a stale flag. Only when the stop actually landed
+  // -- an unconfirmed pid keeps its pidfile so the app can still find it.
+  if (res.stopped) {
     try { fs.rmSync(cfg.pidfile, { force: true }) } catch {}
-    try { fs.rmSync(cfg.stopflag, { force: true }) } catch {}
-    log('stopped')
-    return
   }
-  try { process.kill(pid, 'SIGTERM') } catch {}
-
-  for (let i = 0; i < 15; i++) {
-    if (!isPidAlive(pid)) {
-      log('stopped')
-      try { fs.rmSync(cfg.stopflag, { force: true }) } catch {}
-      return
-    }
-    await new Promise((r) => setTimeout(r, 1000))
-  }
-
-  // Re-verify identity before force-kill: up to 15s elapsed, enough for the
-  // pid to have died and been recycled (run.sh:462-474, fail SAFE).
-  if (classifyPidfileOwner(pid) !== 'stale') {
-    log('did not stop in time, forcing')
-    try { process.kill(pid, 'SIGKILL') } catch {}
-  } else {
-    log(`pid ${pid} no longer identifies as ${cfg.agentName} supervisor (exited and recycled?) -- skipping force-kill of an unconfirmed pid`)
-  }
-  try { fs.rmSync(cfg.pidfile, { force: true }) } catch {}
   try { fs.rmSync(cfg.stopflag, { force: true }) } catch {}
 }
 

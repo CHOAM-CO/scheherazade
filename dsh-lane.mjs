@@ -1171,13 +1171,33 @@ async function main () {
     }
   })
 
+  let shuttingDown = false
   const shutdown = () => {
+    if (shuttingDown) return
+    shuttingDown = true
     try { if (child && !child.killed) child.kill('SIGTERM') } catch {}
     try { fs.unlinkSync(endpointFile()) } catch {}
     process.exit(0)
   }
   process.on('SIGTERM', shutdown)
   process.on('SIGINT', shutdown)
+  // The STOPFLAG is the ONLY portable stop channel (design-0023 P3 #2).
+  // Windows has no deliverable SIGTERM -- node's process.kill there is
+  // TerminateProcess, so neither handler above ever runs and this lane used to
+  // be hard-killed with the engine mid-write and .ingest-endpoint.json left
+  // behind for the next boot to trip over. The supervisor's stop writes
+  // $MEM/.stop_requested first and then waits out a grace window, so polling
+  // it here is what makes that window mean anything. Cheap (one existsSync per
+  // 500ms), unref'd so it never holds the loop open, and correct on POSIX too
+  // -- there it is a belt for a signal that got lost.
+  const stopflag = path.join(MEM, '.stop_requested')
+  const stopWatch = setInterval(() => {
+    if (!fs.existsSync(stopflag)) return
+    log('stop requested (.stop_requested) -- shutting down')
+    clearInterval(stopWatch)
+    shutdown()
+  }, 500)
+  stopWatch.unref()
 }
 
 main().catch((e) => { errLog(`boot failed: ${e.message}`); try { if (child) child.kill('SIGTERM') } catch {}; process.exit(1) })
