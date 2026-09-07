@@ -138,6 +138,17 @@ if (!tmuxBin) {
   } finally {
     spawnSync(tmuxBin, ['-L', sock, 'kill-server'])
     fs.rmSync(mem, { recursive: true, force: true })
+    // kill-server does not always unlink the socket FILE (observed on macOS
+    // 2026-09-07: three test-attach-<pid> files left in /private/tmp/tmux-501
+    // from past runs). Harmless, but it is residue this test dropped outside
+    // its own tmp dir, on every run, forever. Remove ours -- and only ours:
+    // the name carries this process's pid, so the guard below can never reach
+    // the user's own socket or another run's.
+    if (sock.includes(String(process.pid))) {
+      for (const dir of [`/tmp/tmux-${os.userInfo().uid}`, `/private/tmp/tmux-${os.userInfo().uid}`]) {
+        try { fs.rmSync(path.join(dir, sock), { force: true }) } catch { /* not there */ }
+      }
+    }
   }
 }
 
