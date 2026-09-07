@@ -196,43 +196,109 @@ for (const m of [...rootModules].sort()) {
 // this line still holds (same principle as the autonomy/calendar anchors above).
 ok('attach-topology.cjs is caught by the root-module scan', rootModules.has('attach-topology.cjs'))
 
-// ── the required graph vs the ACTUAL shipped asar (mounted DMG, not staging) ──
+// ── lane dispatch: mac / win / linux ────────────────────────────────────────
+// The build runs ON its target platform -- every dist* lane is hard-gated by
+// scripts/assert-platform.mjs -- so process.platform picks the lane. Linux was
+// the missing third until 0.3 P2: a run on Linux took the MAC branch, looked
+// for a dmg that cannot exist there, and failed for a reason that says nothing
+// about the AppImage it was supposed to verify. That silence is half of how a
+// mac-built, aarch64, darwin-natives "x86_64" AppImage shipped as v0.2.20.
+const LANE = process.platform === 'win32' ? 'win' : process.platform === 'linux' ? 'linux' : 'mac'
+const WIN_LANE = LANE === 'win'
+const PRODUCT = (pkg.build && pkg.build.productName) || 'Scheherazade'
+
+// Artifact names, arches and staging directories are DERIVED from the same
+// build config electron-builder reads. build.linux.artifactName hardcodes
+// `x86_64` on purpose (assert-platform.mjs is what makes that literal honest,
+// and published asset names stay stable across 0.2.19/0.2.20/0.3.0) -- a
+// second hand-typed copy of that string in this file is a second thing that
+// can drift from what actually gets built.
+function configuredArch(lane) {
+  for (const t of ((pkg.build[lane] || {}).target) || []) {
+    const arches = (t && t.arch) || []
+    if (arches.length) return arches[0]
+  }
+  return process.arch
+}
+function renderArtifactName(tmpl, arch) {
+  const rendered = String(tmpl)
+    .replace(/\$\{version\}/g, pkg.version)
+    .replace(/\$\{productName\}/g, PRODUCT)
+    .replace(/\$\{name\}/g, pkg.name)
+    .replace(/\$\{arch\}/g, arch)
+  // An unresolved token silently produces a filename nothing matches, and
+  // "the artifact does not exist" is the one failure this file must never
+  // report for the wrong reason.
+  if (/\$\{/.test(rendered)) throw new Error(`unresolved token in ${LANE}.artifactName ${JSON.stringify(tmpl)} -> ${rendered}`)
+  return rendered
+}
+
+const LANE_ARCH = configuredArch(LANE)
+// electron-builder's staging-directory convention: x64 is the unsuffixed
+// default, every other arch is suffixed.
+const STAGE_DIR = {
+  mac: LANE_ARCH === 'x64' ? 'mac' : `mac-${LANE_ARCH}`,
+  win: LANE_ARCH === 'x64' ? 'win-unpacked' : `win-${LANE_ARCH}-unpacked`,
+  linux: LANE_ARCH === 'x64' ? 'linux-unpacked' : `linux-${LANE_ARCH}-unpacked`,
+}[LANE]
+// Where app.asar, app.asar.unpacked and the extraResources sit inside it.
+const STAGED_RESOURCES = LANE === 'mac'
+  ? path.join(ROOT, 'release', STAGE_DIR, `${PRODUCT}.app`, 'Contents', 'Resources')
+  : path.join(ROOT, 'release', STAGE_DIR, 'resources')
+const ARTIFACT_NAME = LANE === 'mac'
+  // mac declares no artifactName; electron-builder's dmg default carries the
+  // arch for anything but x64, which is what release/ actually holds.
+  ? `${PRODUCT}-${pkg.version}-${LANE_ARCH}.dmg`
+  : renderArtifactName((pkg.build[LANE] || {}).artifactName, LANE_ARCH)
+const ARTIFACT_PATH = path.join(ROOT, 'release', ARTIFACT_NAME)
+const ARTIFACT_NOUN = { mac: 'dmg', win: 'installer', linux: 'AppImage' }[LANE]
+const DIST_SCRIPT = { mac: 'npm run dist', win: 'npm run dist:win', linux: 'npm run dist:linux' }[LANE]
+
+// ── the required graph vs the ACTUAL shipped asar ───────────────────────────
 // Skia's sharpening (2026-07-23): re-checking source existence + build.files
 // coverage reproduces the staging illusion -- v0.0.23 was test-green yet its
 // app.asar was missing attach-topology.cjs. Existence-in-tree and pattern-
-// coverage are what the app WILL ship in theory; they are not what the DMG DID
-// ship. So mount the real DMG, list its app.asar, and prove every graph node is
-// a real member. Runs in postdist (the DMG exists); predist skips LOUDLY.
-function findDmg() {
+// coverage are what the app WILL ship in theory; they are not what the artifact
+// DID ship. So open the real thing, list its app.asar, and prove every graph
+// node is a real member. Runs in postdist (the artifact exists); predist skips
+// LOUDLY.
+//
+// mac opens the DMG itself (hdiutil), because it can. win and linux read the
+// staging tree electron-builder wrote in the SAME run that packed the
+// installer/AppImage -- same bytes, one hop before compression -- because
+// neither an NSIS installer nor an AppImage can be opened without a tool
+// nobody installs (7z / a loop mount). The mac exact-filename trick does not
+// defend that path, so the version illusion is killed harder there: read
+// package.json OUT OF the staged asar and demand an exact match, so a stale
+// win-unpacked/linux-unpacked from last week fails loudly instead of
+// verifying green.
+function mountedAsarEntries() {
   // EXACT version only. A different-version dmg (e.g. an old 0.0.24 left in
   // release/) is NOT proof of THIS build's asar; verifying it would be a version
-  // illusion (Skia catch). Absent the exact dmg -> null -> postdist FAILs.
-  // productName-derived (0.2 track: productName 'Scheherazade 0.2' makes the
-  // artifact 'Scheherazade 0.2-<version>-arm64.dmg' -- the hardcoded name
-  // missed a dmg that HAD built, 2026-08-19).
-  const artifactBase = (pkg.build && pkg.build.productName) || 'Scheherazade'
-  const exact = path.join(ROOT, 'release', `${artifactBase}-${pkg.version}-arm64.dmg`)
-  return fs.existsSync(exact) ? exact : null
-}
-
-function mountedAsarEntries() {
-  const dmg = findDmg()
-  if (!dmg) return { status: 'no-dmg' } // predist: no artifact yet -- a legitimate skip
+  // illusion (Skia catch). Absent the exact dmg -> no-artifact -> postdist FAILs.
+  if (!fs.existsSync(ARTIFACT_PATH)) return { status: 'no-artifact' }
   const mnt = fs.mkdtempSync(path.join(os.tmpdir(), 'sch-dmg-closure-'))
   let attached = false
   try {
-    execFileSync('hdiutil', ['attach', '-nobrowse', '-readonly', '-mountpoint', mnt, dmg], { stdio: 'pipe' })
+    execFileSync('hdiutil', ['attach', '-nobrowse', '-readonly', '-mountpoint', mnt, ARTIFACT_PATH], { stdio: 'pipe' })
     attached = true
-    const asarPath = path.join(mnt, `${(pkg.build && pkg.build.productName) || 'Scheherazade'}.app`, 'Contents', 'Resources', 'app.asar')
+    const resources = path.join(mnt, `${PRODUCT}.app`, 'Contents', 'Resources')
+    const asarPath = path.join(resources, 'app.asar')
     if (!fs.existsSync(asarPath)) return { status: 'error', reason: 'app.asar absent inside the mounted dmg' }
     // listPackage yields '/onboarding/login-status.cjs' (leading slash, dirs
     // included); normalize to the ROOT-relative shape the closure produces.
     const entries = require('@electron/asar').listPackage(asarPath)
     // extraResources ride NEXT TO app.asar, so asar listing never sees them --
     // check the vendored chromux (v0.1.10 web-search path) directly.
-    const chromuxShipped = fs.existsSync(path.join(mnt, `${(pkg.build && pkg.build.productName) || 'Scheherazade'}.app`, 'Contents', 'Resources', 'chromux', 'chromux.mjs'))
-    const agentToolsShipped = fs.existsSync(path.join(mnt, `${(pkg.build && pkg.build.productName) || 'Scheherazade'}.app`, 'Contents', 'Resources', 'agent-tools', 'windowshot.cjs'))
-    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^\/+/, ''))), chromuxShipped, agentToolsShipped }
+    const chromuxShipped = fs.existsSync(path.join(resources, 'chromux', 'chromux.mjs'))
+    const agentToolsShipped = fs.existsSync(path.join(resources, 'agent-tools', 'windowshot.cjs'))
+    // The natives live OUTSIDE the asar, in app.asar.unpacked. The DMG's copy
+    // is what a user actually gets, so that is the tree the natives gate
+    // reads -- but it disappears with the unmount, so hand back the answer
+    // rather than the path.
+    const nativesDir = path.join(resources, 'app.asar.unpacked', 'node_modules')
+    const natives = fs.existsSync(nativesDir) ? installedPackageNames(nativesDir) : null
+    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^\/+/, ''))), chromuxShipped, agentToolsShipped, natives }
   } catch (e) {
     // A DMG that EXISTS but will not mount / list is fail-CLOSED, never a skip.
     // (Skia fail-open catch: the old null-collapse let an hdiutil failure pass
@@ -244,28 +310,19 @@ function mountedAsarEntries() {
   }
 }
 
-// ── win lane closure source (release-lane split, 2026-08-01) ─────────────────
-// The NSIS installer cannot be mounted like a dmg (extraction needs 7z, a tool
-// nobody installs), but electron-builder stages release/win-unpacked/ in the
-// SAME run that packs the installer -- same bytes, one hop before compression.
-// Verify closure there. The mac exact-filename trick does not defend this path
-// (win-unpacked has no version in its name), so the version illusion is killed
-// harder: read package.json OUT OF the staged asar and demand an exact match.
-// A stale win-unpacked from last week fails loudly instead of verifying green.
-function stagedWinAsarEntries() {
-  // EXACT version only, same rule as findDmg: an old installer left in
-  // release/ is not proof of THIS build.
-  const exe = path.join(ROOT, 'release', `Scheherazade-Setup-${pkg.version}.exe`)
-  if (!fs.existsSync(exe)) return { status: 'no-exe' }
-  const asarPath = path.join(ROOT, 'release', 'win-unpacked', 'resources', 'app.asar')
+function stagedAsarEntries() {
+  // EXACT version only, same rule as the dmg: an old installer/AppImage left
+  // in release/ is not proof of THIS build.
+  if (!fs.existsSync(ARTIFACT_PATH)) return { status: 'no-artifact' }
+  const asarPath = path.join(STAGED_RESOURCES, 'app.asar')
   if (!fs.existsSync(asarPath)) {
-    return { status: 'error', reason: 'installer exists but release/win-unpacked/resources/app.asar is absent -- cannot verify what NSIS packed' }
+    return { status: 'error', reason: `the ${ARTIFACT_NOUN} exists but ${path.relative(ROOT, asarPath)} is absent -- cannot verify what it packed` }
   }
   try {
     const asar = require('@electron/asar')
     const staged = JSON.parse(asar.extractFile(asarPath, 'package.json').toString('utf8'))
     if (staged.version !== pkg.version) {
-      return { status: 'error', reason: `staged asar is version ${staged.version}, not ${pkg.version} -- stale win-unpacked, verifying it would be the version illusion (Skia catch)` }
+      return { status: 'error', reason: `staged asar is version ${staged.version}, not ${pkg.version} -- stale ${STAGE_DIR}, verifying it would be the version illusion (Skia catch)` }
     }
     // Normalize to POSIX ids. listPackage hands back native separators, so on
     // Windows every entry read '\onboarding\routes\chat.cjs' while the require
@@ -274,11 +331,13 @@ function stagedWinAsarEntries() {
     // (2026-08-03, first real dist:win). Strip the leading separator in either
     // form, then fold the rest.
     const entries = asar.listPackage(asarPath)
-    // extraResources ride NEXT TO app.asar (win-unpacked/resources/), invisible
-    // to the asar listing -- check the vendored chromux directly.
-    const chromuxShipped = fs.existsSync(path.join(ROOT, 'release', 'win-unpacked', 'resources', 'chromux', 'chromux.mjs'))
-    const agentToolsShipped = fs.existsSync(path.join(ROOT, 'release', 'win-unpacked', 'resources', 'agent-tools', 'windowshot.cjs'))
-    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^[/\\]+/, '').split('\\').join('/'))), chromuxShipped, agentToolsShipped }
+    // extraResources ride NEXT TO app.asar, invisible to the asar listing --
+    // check the vendored chromux and agent-tools directly.
+    const chromuxShipped = fs.existsSync(path.join(STAGED_RESOURCES, 'chromux', 'chromux.mjs'))
+    const agentToolsShipped = fs.existsSync(path.join(STAGED_RESOURCES, 'agent-tools', 'windowshot.cjs'))
+    const nativesDir = path.join(STAGED_RESOURCES, 'app.asar.unpacked', 'node_modules')
+    const natives = fs.existsSync(nativesDir) ? installedPackageNames(nativesDir) : null
+    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^[/\\]+/, '').split('\\').join('/'))), chromuxShipped, agentToolsShipped, natives }
   } catch (e) {
     // fail-CLOSED, same as the dmg lane: an artifact that exists but cannot be
     // listed is an UNVERIFIED artifact, never a skip.
@@ -286,15 +345,12 @@ function stagedWinAsarEntries() {
   }
 }
 
-// Platform dispatch: the build runs ON its target platform (dist:win is hard-
-// gated by scripts/assert-platform.mjs), so process.platform picks the lane.
-const WIN_LANE = process.platform === 'win32'
-console.log(`\n-- the required graph vs the shipped asar (${WIN_LANE ? 'staged win-unpacked' : 'mounted DMG'}; blocker-1 closure gate)`)
+console.log(`\n-- the required graph vs the shipped asar (${LANE} lane: ${LANE === 'mac' ? 'mounted DMG' : `staged ${STAGE_DIR}`}; blocker-1 closure gate)`)
 // predist runs BEFORE the build -- there is no fresh artifact to verify yet, so
 // it legitimately skips. Every OTHER invocation (postdist, manual, CI) must find
 // the exact-version artifact; a missing one is fail-closed, not a skip. (Skia
 // catch: no-dmg postdist skipped green, and a version-fallback verified the
-// wrong dmg.) startsWith: the win lane fires as predist:win / postdist:win.
+// wrong dmg.) startsWith: the lanes fire as predist:win / postdist:linux / ...
 const lifecycle = process.env.npm_lifecycle_event || ''
 // P1 (design-0023): this file is BOTH the predist/postdist ship gate and a
 // member of the `npm test` suite. Those two callers want opposite things from a
@@ -309,30 +365,36 @@ const lifecycle = process.env.npm_lifecycle_event || ''
 // lifecycle, from `npm test -- --live`, or from a bare manual run it is
 // fail-closed exactly as before.
 const RUNNER_WITHOUT_LIVE = process.env.RUN_TESTS === '1' && process.env.RUN_TESTS_LIVE !== '1'
-if (lifecycle.startsWith('predist')) {
-  console.log(`  SKIP  artifact asar closure -- predist (pre-build); postdist verifies the freshly built ${pkg.version} artifact; NOT a pass`)
+const IS_PREDIST = lifecycle.startsWith('predist')
+// The natives gate below needs the same artifact this section opened, and
+// mounting the dmg twice would be both slow and a second chance to leave a
+// volume attached. Whatever the lane learned about app.asar.unpacked/node_modules
+// is stashed here for it.
+let bundleNatives = null
+if (IS_PREDIST) {
+  console.log(`  SKIP  artifact asar closure -- predist (pre-build); postdist verifies the freshly built ${pkg.version} ${ARTIFACT_NOUN}; NOT a pass`)
 } else if (RUNNER_WITHOUT_LIVE) {
-  console.log(`SKIP: artifact asar closure -- needs a freshly built ${pkg.version} ${WIN_LANE ? 'installer' : 'dmg'}; run \`npm test -- --live\` after a build, or \`npm run dist\` (predist/postdist run this file fail-closed); NOT a pass`)
+  console.log(`SKIP: artifact asar closure -- needs a freshly built ${pkg.version} ${ARTIFACT_NOUN}; run \`npm test -- --live\` after a build, or \`${DIST_SCRIPT}\` (predist/postdist run this file fail-closed); NOT a pass`)
 } else {
   const isPost = lifecycle.startsWith('postdist')
-  const asarResult = WIN_LANE ? stagedWinAsarEntries() : mountedAsarEntries()
-  if (asarResult.status === 'no-dmg' || asarResult.status === 'no-exe') {
+  const asarResult = LANE === 'mac' ? mountedAsarEntries() : stagedAsarEntries()
+  if (asarResult.status === 'no-artifact') {
     // NOT predist: a missing exact-version artifact cannot be verified. In
     // postdist it means the build never produced it (or built a different version).
-    const wanted = WIN_LANE ? `Scheherazade-Setup-${pkg.version}.exe` : `${(pkg.build && pkg.build.productName) || 'Scheherazade'}-${pkg.version}-arm64.dmg`
-    ok(`the ${pkg.version} ${WIN_LANE ? 'installer' : 'dmg'} exists to verify (${lifecycle || 'manual run'})`, false,
-      `no release/${wanted} -- ${isPost ? 'the build did not produce it (or built a different version)' : `run npm run dist${WIN_LANE ? ':win' : ''} first`}`)
+    ok(`the ${pkg.version} ${ARTIFACT_NOUN} exists to verify (${lifecycle || 'manual run'})`, false,
+      `no release/${ARTIFACT_NAME} -- ${isPost ? 'the build did not produce it (or built a different version)' : `run ${DIST_SCRIPT} first`}`)
   } else if (asarResult.status === 'error') {
     // fail-CLOSED: the artifact EXISTS but would not mount / list. A green skip
     // here ships an UNVERIFIED artifact -- the v0.0.23 class, and exactly the
     // fail-open Skia's fake-hdiutil vector exposed (hdiutil exit1 -> SKIP ->
     // process exit 0).
-    ok(WIN_LANE ? 'the staged win-unpacked asar matches this build and is listable'
-                : 'the built DMG mounts and its app.asar is listable', false,
-      `${WIN_LANE ? 'asar extract/list' : 'hdiutil/listPackage'} failed on an existing artifact: ${asarResult.reason}`)
+    ok(LANE === 'mac' ? 'the built DMG mounts and its app.asar is listable'
+                      : `the staged ${STAGE_DIR} asar matches this build and is listable`, false,
+      `${LANE === 'mac' ? 'hdiutil/listPackage' : 'asar extract/list'} failed on an existing artifact: ${asarResult.reason}`)
   } else {
+    bundleNatives = asarResult.natives
     const asarEntries = asarResult.entries
-    ok(`the ${WIN_LANE ? 'staged' : 'mounted'} asar listed something (an empty listing always passes)`, asarEntries.size > 0)
+    ok(`the ${LANE === 'mac' ? 'mounted' : 'staged'} asar listed something (an empty listing always passes)`, asarEntries.size > 0)
     ok('vendored chromux ships as an extraResource next to app.asar (web-search path for non-Anthropic backends)',
       asarResult.chromuxShipped === true,
       'build.extraResources should carry vendor/chromux -> chromux; without it syncChromuxPortable() no-ops and the websearch skill points at nothing')
@@ -340,7 +402,7 @@ if (lifecycle.startsWith('predist')) {
       asarResult.agentToolsShipped === true,
       'build.extraResources should carry onboarding/agent-tools -> agent-tools; without it syncAgentTools() no-ops on packaged installs (dev lane still finds the repo copy, so only packaged apps break) and the windowshot skill points at nothing')
     for (const m of [...rootModules].sort()) {
-      ok(`${m} is a real member of the shipped app.asar (${WIN_LANE ? 'staged win-unpacked, version-pinned' : 'mounted DMG, not staging'})`,
+      ok(`${m} is a real member of the shipped app.asar (${LANE === 'mac' ? 'mounted DMG, not staging' : `staged ${STAGE_DIR}, version-pinned`})`,
         asarEntries.has(m),
         'the require graph reaches it but the shipped asar has no such entry -- dead require at open')
     }
@@ -396,6 +458,158 @@ for (const d of [...mustBeReal].sort()) {
     `add "${d}${isDir ? '/**' : ''}" to build.asarUnpack -- plain node cannot read inside app.asar`)
 }
 
+// ── natives: this bundle carries ITS OWN platform's, and nobody else's ──────
+// The v0.2.20 defect class, written down as a test.
+//
+// build.asarUnpack ships "node_modules/**" verbatim and electron-builder does
+// no os/cpu filtering there, so the natives inside an artifact are exactly the
+// natives the BUILD HOST installed -- while the Electron shell around them is
+// downloaded for the TARGET and looks perfectly right. The published v0.2.20
+// "x86_64" AppImage was built on this arm64 Mac and shipped
+// @koromix/koffi-darwin-arm64, @img/sharp-darwin-arm64,
+// @img/sharp-libvips-darwin-arm64, @vscode/ripgrep-darwin-arm64 and
+// node-addon-require-builtin-darwin-arm64, with none of their linux-x64
+// counterparts. An app in that state installs and boots, then dies at the
+// first dsh file search (@vscode/ripgrep require.resolve -> SEARCH_FAILED),
+// the first atomic write on Windows (koffi -> ReplaceFileW), or sandbox
+// confine() on Linux (landlock-run absent, fails closed).
+//
+// scripts/assert-platform.mjs stops the wrong HOST from producing an artifact.
+// This is the other half of the pair: it opens what was produced and says what
+// is actually inside. Both halves are needed -- the assert cannot see a
+// node_modules tree polluted by a forced `npm install --os=... --cpu=...`, and
+// this gate cannot run before something has been built.
+//
+// The variant list is DERIVED from package-lock.json, never hand-typed. Every
+// platform package carries npm's own `os`/`cpu` arrays in the lockfile, which
+// is both the authoritative answer and the one that updates itself when dsh
+// adds a platform next month. A hand-typed list would also get the families
+// wrong in the direction that produces a FALSE FAIL: @img/sharp-libvips-* is
+// published for darwin and linux and NOT for win32, where libvips is bundled
+// inside @img/sharp-win32-x64 -- so "require sharp-libvips-<os>-<arch>" is
+// only a real requirement where the lockfile says such a package exists.
+const REQUIRED_NATIVE_FAMILIES = [
+  ['@koromix/koffi',
+    'dsh-fs-local (ReplaceFileW), dsh-session-persistence-jsonl (MoveFileExW), dsh-sandbox-windows-acl, dsh-host-directory-picker-native'],
+  ['@img/sharp',
+    'dsh-attachment-local imports sharp at module scope (it falls back to @img/sharp-wasm32, which loads everywhere and is slow -- a silent degradation, not a failure, which is exactly why it needs a gate)'],
+  ['@img/sharp-libvips',
+    "sharp's native libvips sidecar (published for darwin + linux; win32 bundles libvips inside @img/sharp-win32-x64)"],
+  ['@vscode/ripgrep',
+    "dsh-tool-fs-search does require.resolve('@vscode/ripgrep-<platform>-<arch>/bin/rg') -- a miss is SEARCH_FAILED at the first grep-class tool call"],
+  ['@deepseek-ai/node-addon-landlock-run',
+    'dsh-sandbox-local linux chain is bwrap -> landlock; with neither, confine() fails closed'],
+]
+
+// npm's own os/cpu matching, including the `!` negation form ("os": ["!win32"]).
+function fieldAllows(list, value) {
+  if (!Array.isArray(list) || list.length === 0) return true
+  const negated = list.filter((x) => String(x).startsWith('!')).map((x) => String(x).slice(1))
+  if (negated.includes(value)) return false
+  const positive = list.filter((x) => !String(x).startsWith('!'))
+  return positive.length ? positive.includes(value) : true
+}
+
+// Every package the lockfile declares as platform-bound, by name. Nested
+// entries key as 'node_modules/a/node_modules/b' -- the package's own os/cpu
+// facts do not depend on where it was hoisted to, so the last segment is the
+// name and the first sighting wins.
+function lockPlatformVariants() {
+  const lock = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'))
+  const variants = new Map()
+  for (const [key, entry] of Object.entries(lock.packages || {})) {
+    if (!key || !entry) continue
+    if (!entry.os && !entry.cpu) continue
+    const at = key.lastIndexOf('node_modules/')
+    if (at < 0) continue
+    const name = key.slice(at + 'node_modules/'.length)
+    if (!variants.has(name)) variants.set(name, { os: entry.os || null, cpu: entry.cpu || null })
+  }
+  return variants
+}
+
+// Walk an npm tree the way npm lays one out: a node_modules holds packages (or
+// @scopes holding packages), and a package may hold its own nested
+// node_modules. Only those two shapes are descended into, so this never walks
+// into 500MB of package source looking for something that cannot be there.
+function installedPackageNames(nodeModulesDir) {
+  const found = new Set()
+  const visit = (dir, depth) => {
+    if (depth > 12) return
+    let entries
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+    for (const e of entries) {
+      if (!e.isDirectory() && !e.isSymbolicLink()) continue
+      if (e.name.startsWith('.')) continue // .bin, .package-lock.json
+      if (e.name.startsWith('@')) {
+        let scoped
+        try { scoped = fs.readdirSync(path.join(dir, e.name), { withFileTypes: true }) } catch { continue }
+        for (const s of scoped) {
+          if (!s.isDirectory() && !s.isSymbolicLink()) continue
+          found.add(`${e.name}/${s.name}`)
+          visit(path.join(dir, e.name, s.name, 'node_modules'), depth + 1)
+        }
+      } else {
+        found.add(e.name)
+        visit(path.join(dir, e.name, 'node_modules'), depth + 1)
+      }
+    }
+  }
+  visit(nodeModulesDir, 0)
+  return found
+}
+
+const TARGET_OS = { mac: 'darwin', win: 'win32', linux: 'linux' }[LANE]
+
+function checkNatives(what, installed) {
+  ok(`${what}: the package scan found something (a scan that finds nothing always passes)`,
+    installed.size > 0, 'no package directories under that node_modules -- the walker or the path is wrong')
+  const variants = lockPlatformVariants()
+  ok('package-lock.json declares platform-bound packages to check against',
+    variants.size > 0, 'no os/cpu-carrying entries in the lockfile -- the derivation is broken and every row below is vacuous')
+
+  // PRESENT: the target's own.
+  for (const [family, why] of REQUIRED_NATIVE_FAMILIES) {
+    const wanted = `${family}-${TARGET_OS}-${LANE_ARCH}`
+    if (!variants.has(wanted)) {
+      console.log(`  n/a  ${wanted} -- package-lock.json publishes no such variant for ${TARGET_OS}-${LANE_ARCH}`)
+      continue
+    }
+    ok(`${what} carries ${wanted}`, installed.has(wanted), why)
+  }
+
+  // ABSENT: everybody else's. Derived as "every platform-bound package in the
+  // lockfile whose declared os/cpu cannot match this target".
+  const foreign = [...variants.entries()]
+    .filter(([, v]) => !(fieldAllows(v.os, TARGET_OS) && fieldAllows(v.cpu, LANE_ARCH)))
+    .map(([name]) => name)
+    .sort()
+  const stowaways = foreign.filter((name) => installed.has(name))
+  ok(`${what} carries NO other platform's native variants (${foreign.length} foreign variants known to the lockfile)`,
+    stowaways.length === 0,
+    `found ${stowaways.join(', ')} -- built on the wrong host, or npm installed with a forced --os/--cpu. ` +
+    'This is the exact state the published 0.2.20 AppImage shipped in.')
+}
+
+console.log(`\n-- natives: does the ${LANE} bundle carry ${TARGET_OS}-${LANE_ARCH} and nothing else? (the 0.2.20 class)`)
+if (IS_PREDIST) {
+  // There is no bundle yet -- but there IS the tree asarUnpack is about to copy
+  // verbatim, which is the only input that decides the answer. Checking it here
+  // means a polluted install tree fails BEFORE a 4-minute build, and predist is
+  // fail-hard like every other row in this file.
+  checkNatives('repo node_modules (what asarUnpack will copy verbatim)', installedPackageNames(path.join(ROOT, 'node_modules')))
+} else if (RUNNER_WITHOUT_LIVE) {
+  console.log(`  SKIP  built-artifact natives gate -- needs a freshly built ${pkg.version} ${ARTIFACT_NOUN}; run \`npm test -- --live\` after a build, or \`${DIST_SCRIPT}\` (predist/postdist run this file fail-closed); NOT a pass`)
+} else if (bundleNatives === null) {
+  // The closure section above already failed loudly for whatever reason it
+  // could not open the artifact; do not double-report it, but do not let the
+  // natives question pass silently either.
+  ok(`the ${LANE} bundle's app.asar.unpacked/node_modules could be read`, false,
+    `${LANE === 'mac' ? 'the mounted DMG has no app.asar.unpacked/node_modules' : `no readable node_modules under ${path.relative(ROOT, path.join(STAGED_RESOURCES, 'app.asar.unpacked'))}`} (or the artifact above would not open) -- the natives in it are UNVERIFIED`)
+} else {
+  checkNatives(`the built ${LANE} bundle`, bundleNatives)
+}
+
 console.log('\n-- node-pty: the one native module (supervisor lane)')
 // node-pty 1.1.0's published tarball ships spawn-helper WITHOUT the exec bit
 // (verified against the registry tarball, 2026-07-14) -- every pty.spawn on
@@ -438,9 +652,9 @@ if (WIN_LANE) {
   // down: a green dist:win proving nothing about the natives it shipped.
   // Different natives, same question (conpty replaces spawn-helper; no exec
   // bit and no unixTerminal patch on this platform).
-  const unpackedPty = path.join(ROOT, 'release', 'win-unpacked', 'resources', 'app.asar.unpacked', 'node_modules', 'node-pty')
+  const unpackedPty = path.join(STAGED_RESOURCES, 'app.asar.unpacked', 'node_modules', 'node-pty')
   if (!fs.existsSync(unpackedPty)) {
-    console.log('  SKIP  built-artifact node-pty checks -- no release/win-unpacked output present (run npm run dist:win first); NOT a pass')
+    console.log(`  SKIP  built-artifact node-pty checks -- no release/${STAGE_DIR} output present (run ${DIST_SCRIPT} first); NOT a pass`)
   } else {
     const prebuild = path.join(unpackedPty, 'prebuilds', 'win32-x64')
     for (const f of ['pty.node', 'conpty.node', 'conpty_console_list.node', 'winpty.dll', 'winpty-agent.exe']) {
@@ -452,10 +666,17 @@ if (WIN_LANE) {
     ok('artifact has NO build/Release shadowing the prebuild', !fs.existsSync(path.join(unpackedPty, 'build', 'Release')),
       'node-pty loads build/Release FIRST; a second lineage there silently wins over the tested prebuild')
   }
+} else if (LANE === 'linux') {
+  // node-pty 1.1.0's published tarball has NO linux prebuild, and the
+  // postinstall above deletes the build/ that node-gyp would have produced --
+  // so there is nothing on Linux for this section to assert about. The dep is
+  // retired in the next commit of this phase (design-0023 P2); until then, say
+  // so rather than running the mac rows against a linux bundle.
+  console.log('  n/a  built-artifact node-pty checks -- node-pty 1.1.0 publishes no linux prebuild (retired in P2)')
 } else {
-  const unpackedPty = path.join(ROOT, 'release', 'mac-arm64', `${(pkg.build && pkg.build.productName) || 'Scheherazade'}.app`, 'Contents', 'Resources', 'app.asar.unpacked', 'node_modules', 'node-pty')
+  const unpackedPty = path.join(STAGED_RESOURCES, 'app.asar.unpacked', 'node_modules', 'node-pty')
   if (!fs.existsSync(unpackedPty)) {
-    console.log('  SKIP  built-artifact node-pty checks -- no release/mac-arm64 build output present (run npm run dist first); NOT a pass')
+    console.log(`  SKIP  built-artifact node-pty checks -- no release/${STAGE_DIR} build output present (run ${DIST_SCRIPT} first); NOT a pass`)
   } else {
     const helper = path.join(unpackedPty, 'prebuilds', 'darwin-arm64', 'spawn-helper')
     const binding = path.join(unpackedPty, 'prebuilds', 'darwin-arm64', 'pty.node')
