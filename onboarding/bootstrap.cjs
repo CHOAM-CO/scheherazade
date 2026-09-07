@@ -1,7 +1,7 @@
 'use strict'
 // onboarding/bootstrap.cjs — fresh-Mac dependency bootstrap (2026-07-07).
 //
-// Product constitution (Mino, 2026-07-07): "유저가 절대 CLI창 만지게 하지
+// Product constitution (the owner, 2026-07-07): "유저가 절대 CLI창 만지게 하지
 // 않는다" -- the app acquires its own dependencies during onboarding.
 // Target machine = a brand-new Mac: no brew, no node, no CLIs. Research
 // receipt (magi-researcher, 2026-07-07): Homebrew is structurally the
@@ -357,7 +357,7 @@ async function startBootstrap(dep) {
   }
 }
 
-// win-port Phase 3 (Mino LOCKED call 2026-07-13 18:35: Windows v1 =
+// win-port Phase 3 (the owner LOCKED call 2026-07-13 18:35: Windows v1 =
 // detection-only deps). Managed download/install stays mac-only -- this
 // whole module is hdiutil/xattr/darwin-arch specific, and the Windows
 // analog (MSI/EXE + Authenticode pinning) was priced out of v1. On win the

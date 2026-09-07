@@ -60,7 +60,7 @@ function createRoutes(staticCtx) {
     // Three routes, and the gates live in the HTTP verbs themselves:
     //   POST   /api/memory/import   -- the scan. Runs ONLY here. There is no boot
     //                                  hook and no timer; the user's click IS the
-    //                                  consent (Mino gate 1).
+    //                                  consent (the owner gate 1).
     //   GET    /api/memory/pointers -- what we hold, with provenance + coverage.
     //   DELETE /api/memory/pointers -- throw it all away. A privacy feature the
     //                                  user cannot undo is not a privacy feature.

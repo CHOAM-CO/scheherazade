@@ -34,7 +34,7 @@
 
 const { app, BrowserWindow, shell, dialog } = require('electron')
 
-// 0.2.9 UNIFICATION (Mino 2026-08-21 "진짜 통합"): the dsh track is the main
+// 0.2.9 UNIFICATION (the owner 2026-08-21 "진짜 통합"): the dsh track is the main
 // line now. userData goes back to the 0.1.x dir ('scheherazade') so the
 // unified app IS the upgrade of a 0.1.x install -- one profile dir, one
 // Safe Storage keychain item ("Scheherazade Safe Storage"). The 0.2-test
@@ -96,7 +96,7 @@ const os = require('node:os')
   // is Chromium OSCrypt -- the blobs in DATA_HOME/.credentials decrypt only
   // with the os_crypt key in userData's 'Local State'. Moving the home
   // without its userData leaves every stored credential undecryptable
-  // (measured on magi-win 2026-08-21: readDiscordToken threw, agent never
+  // (measured on the Windows box 2026-08-21: readDiscordToken threw, agent never
   // spawned). Electron has not touched the new userData dir yet at module
   // load, so the rename is safe here and Chromium opens the folded dir as
   // its own. macOS keys live in the Keychain under the productName, so this
@@ -334,7 +334,7 @@ function createMainWindow(url) {
 
   // Every renderer window.open() (wizard's Discord/Slack/Telegram console
   // links, bot-invite OAuth, connector auth URLs) goes to the USER'S DEFAULT
-  // BROWSER (Mino 07-30). Electron's default without this handler is a bare
+  // BROWSER (the owner 07-30). Electron's default without this handler is a bare
   // chromium child window: no address bar, no user sessions/passwords -- so
   // "log into the Discord developer portal" landed the user in a browser
   // where they are logged into nothing. http/https only: openExternal with
@@ -379,9 +379,9 @@ const NPM_GLOBAL_BIN_DIRS = () => {
         // edit, so PATH alone does not see it until they log out.
         path.join(home, '.local', 'bin'),
         path.join(process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'Programs', 'claude'),
-        // WinGet's shim directory. Measured, not assumed: on magi-win
+        // WinGet's shim directory. Measured, not assumed: on the Windows box
         // (2026-08-04) `Get-Command claude` resolves to
-        // C:\Users\minom\AppData\Local\Microsoft\WinGet\Links\claude.exe and
+        // C:\Users\winuser\AppData\Local\Microsoft\WinGet\Links\claude.exe and
         // nothing else -- that box's only Claude Code is a WinGet install.
         //
         // It is found today ONLY because that dir happens to be on the
@@ -411,7 +411,7 @@ function resolveClaudeBin() {
   // supervisor's pty.spawn can actually exec -- a claude.cmd npm shim would
   // "detect" here and then fail at ConPTY spawn time (CreateProcess does not
   // interpret .cmd), a false-working state worse than a clean not-found.
-  // UNVERIFIED on magi-win (flag class as supervisor.mjs's win lanes).
+  // UNVERIFIED on the Windows box (flag class as supervisor.mjs's win lanes).
   const exeName = isWin ? 'claude.exe' : 'claude'
   const pathDirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean)
   for (const [dirs, source] of [
@@ -645,7 +645,7 @@ function readSupervisorCommandLine(pid) {
   // stale and the next launch double-spawned onto the same Discord token --
   // the Fix-C disaster the lane-agnostic matching above exists to prevent.
   // Same CIM read supervisor.mjs's defaultReadCommandLine() uses, which was
-  // execution-verified on magi-win 2026-08-01 (268/295/405ms).
+  // execution-verified on the Windows box 2026-08-01 (268/295/405ms).
   const reader = process.platform === 'win32'
     ? () => execFileSync('powershell.exe', ['-NoProfile', '-Command',
         `(Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}").CommandLine`], { encoding: 'utf8' })
@@ -797,7 +797,7 @@ function stopFailurePoll() {
 // UI, in addition to the existing console logging.
 // ── codex-as-api proxy, in-process (chatgpt provider, 2026-07-07) ────────
 // The chatgpt provider mode routes the agent at http://localhost:<port>
-// (provider-env.cjs), assuming a codex-as-api proxy is listening. On MAGI's
+// (provider-env.cjs), assuming a codex-as-api proxy is listening. On the reference fleet's
 // machine that proxy is an always-on external daemon; an end-user Mac has
 // none -- so the app runs one ITSELF, in-process, via the codex-as-api npm
 // package's createApp() (pinned dependency; it reads/refreshes
@@ -811,7 +811,7 @@ function stopFailurePoll() {
 //     base URL) may then be reused after a loopback liveness check;
 //     an occupied DEFAULT port blocks the agent spawn, loudly. lsof is
 //     kept for the diagnostic message only, never for the decision.
-//     This keeps the co-located-MAGI case working (dev opts in to the
+//     This keeps the co-located-fleet case working (dev opts in to the
 //     fleet proxy explicitly) without ever signaling that external proxy.
 //   - NO AUTO-RESTART in v1.1: if our in-process server errors, the
 //     agent's calls fail visibly and the next spawnRealAgentChild() pass
@@ -1013,7 +1013,7 @@ async function spawnRealAgentChildLocked() {
     return agentChild
   }
 
-  // Harness gate (nogabi issue #6). The boot refresh re-renders CLAUDE.md,
+  // Harness gate (harness-refresh issue #6). The boot refresh re-renders CLAUDE.md,
   // ONTOLOGY_GUIDE.md and system_prompt.md so a shipped fix reaches installs
   // that already onboarded. When that render fails it used to log a line and
   // let the agent start anyway, which mixes a new runtime with an older
@@ -1224,7 +1224,7 @@ async function spawnRealAgentChildLocked() {
     }
   }
 
-  // ollama provider: NO local gate anymore (2026-08-04, Mino "ollama ->
+  // ollama provider: NO local gate anymore (2026-08-04, the owner "ollama ->
   // API키"). The lane is ollama.com CLOUD via ANTHROPIC_BASE_URL + a stored
   // API key (provider-env.cjs's ollama row) -- there is no local daemon to
   // confirm, and gating the spawn on ensureOllamaDaemon() here would block
@@ -1261,7 +1261,7 @@ async function spawnRealAgentChildLocked() {
       return null
     }
     // SLACK_HOME_CHANNEL_ID is OPTIONAL since DM-default mode (2026-08-04,
-    // Mino "홈채널 방식 말고 DM 기본"): tokens alone are a complete slack
+    // the owner "홈채널 방식 말고 DM 기본"): tokens alone are a complete slack
     // config -- the conversation binds to whoever DMs the bot. An empty
     // homeChannelId just means channel-slack.mjs boots without a home
     // channel (it logs the DM-default line and accepts message.im events).
@@ -1292,7 +1292,7 @@ async function spawnRealAgentChildLocked() {
     // so there is no third-party credential to read and NOTHING to gate the
     // spawn on -- which is the entire point of the backend: a fresh user
     // reaches the agent before configuring any messenger. Before this
-    // branch existed (bug, found 2026-07-30 via Mino's live repro), 'local'
+    // branch existed (bug, found 2026-07-30 via the owner's live repro), 'local'
     // fell through to the discord else below: an install WITH a discord
     // token spawned carrying a stale discord HOME_CHANNEL_ID, and a
     // local-only install (the slice-5 wizard user this backend was built
@@ -1311,7 +1311,7 @@ async function spawnRealAgentChildLocked() {
       token = readDiscordToken()
     } catch (err) {
       // log(), not console.error: this abort was INVISIBLE in the field
-      // (magi-win 2026-08-21, the OSCrypt fold-in case) -- stderr never
+      // (the Windows box 2026-08-21, the OSCrypt fold-in case) -- stderr never
       // reaches app.log, so the boot just looked like "no spawn line".
       log(`readDiscordToken failed, cannot spawn agent: ${(err && err.message) || err}`)
       // 'channel_token_error', deliberately distinct from its two neighbours:
@@ -1364,7 +1364,7 @@ async function spawnRealAgentChildLocked() {
     HOME_CHANNEL_ID: homeChannelId,
     AGENT_NAME: agentName,
     MODEL: model,
-    // Effort selector (Mino 07-13 click-test item 2): only forwarded when
+    // Effort selector (the owner 07-13 click-test item 2): only forwarded when
     // the user picked one -- absent, run.sh's own `${EFFORT_LEVEL:-high}`
     // default applies. The stop-path spawns deliberately don't carry this
     // (run.sh stop never reads it).
@@ -1898,7 +1898,7 @@ function waitForAgentHandleCleared(timeoutMs = 3000, stepMs = 50) {
 // matches the outcome anyway, and for a crash-LOOP the flag is single-shot --
 // the very next crash (flag already null) surfaces as 'failed'.
 //
-// Concurrency (Mino 2026-07-09, YAGNI): these actions are deliberately NOT
+// Concurrency (the owner 2026-07-09, YAGNI): these actions are deliberately NOT
 // serialized server-side. Overlapping control actions (a user mashing stop/
 // start/model) are prevented at the source -- the control-panel UI disables its
 // buttons while an action is in flight. The single-action safety that IS load-
@@ -2107,7 +2107,7 @@ async function proxyHealth() {
 // mutate its agent-child state, so they can't live in http-server.cjs -- it
 // calls back into them.
 // resolveClaudeBin injected for the MCP-connector intercept (IA v0.0.9,
-// 춘식3 design): http-server's own resolveBin is FIXED-locations-only and
+// internal design): http-server's own resolveBin is FIXED-locations-only and
 // cannot find the bundled/native claude, but THIS resolver already locates
 // the exact binary the agent itself spawns (bundled claude-cli in packaged
 // builds, PATH claude in dev). The connector-auth child reads the user's
@@ -2121,7 +2121,7 @@ const agentControls = {
   proxyHealth,
   spawnInfo: () => lastSpawnInfo,
   resolveClaudeBin: () => { const r = resolveClaudeBin(); return r ? r.bin : null },
-  // Install-assist info (2026-08-04, Mino "2로 가자"): the wizard's CLI
+  // Install-assist info (2026-08-04, the owner "2로 가자"): the wizard's CLI
   // preflight renders install command / plan requirement / license link from
   // this -- data only, the install itself runs via startClaudeCliInstall.
   claudeCliInfo: () => ensureClaudeCli(),
@@ -2130,7 +2130,7 @@ const agentControls = {
 // ── boot sequence ────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
   try {
-    // TCC folder-permission trigger (Mino directive, 2026-07-05): actually
+    // TCC folder-permission trigger (the owner directive, 2026-07-05): actually
     // touch Documents/Downloads/Desktop on this very first post-ready tick,
     // BEFORE the onboarding window even opens, so macOS's native TCC prompts
     // for all 3 folders fire at first launch = onboarding entry (not
@@ -2226,7 +2226,7 @@ app.on('window-all-closed', () => {
   }
 })
 
-// Graceful shutdown (v0.0.4, Mino 2026-07-13 19:33 directive): quit no
+// Graceful shutdown (v0.0.4, the owner 2026-07-13 19:33 directive): quit no
 // longer kills the agent mid-thought. First quit attempt writes
 // DATA_HOME/.shutdown-request; channel.mjs's watcher injects a [SYSTEM]
 // turn telling the agent to flush checkpoint/session-notes/memory and touch
@@ -2252,7 +2252,7 @@ try { fs.unlinkSync(SHUTDOWN_REQUEST_PATH) } catch { /* absent = normal boot */ 
 try { fs.unlinkSync(SHUTDOWN_ACK_PATH) } catch { /* absent = normal boot */ }
 
 async function requestAgentShutdownGrace() {
-  // No-acker fast path (0.1.17, magi-win live receipt 2026-08-18): the ack
+  // No-acker fast path (0.1.17, the Windows box live receipt 2026-08-18): the ack
   // comes from a [SYSTEM] turn the CHANNEL process injects after seeing
   // .shutdown-request — so when no channel process is alive (lane dead or
   // mid-respawn at quit time), nothing can ever ack and the full grace

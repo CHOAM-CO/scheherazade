@@ -34,7 +34,7 @@ const SELF_PATH = fileURLToPath(import.meta.url)
 const SCRIPT_DIR = path.dirname(SELF_PATH)
 const IS_WIN = process.platform === 'win32'
 
-// Absolute powershell path (2026-08-13, magi-win log: "orphan sweep failed
+// Absolute powershell path (2026-08-13, the Windows box log: "orphan sweep failed
 // (spawnSync powershell.exe ENOENT)"). The supervisor spawns with a scrubbed
 // PATH (ensureNodeShim rebuilds it for the CLI child, but the supervisor's own
 // execFileSync calls run in the parent env, which on Windows does not
@@ -342,7 +342,7 @@ function isPidAlive(pid) {
 
 function defaultReadCommandLine(pid) {
   if (IS_WIN) {
-    // VERIFIED BY EXECUTION 2026-08-01 (Idea spike on magi-win): CommandLine
+    // VERIFIED BY EXECUTION 2026-08-01 (a spike on the Windows box): CommandLine
     // read from a node-spawned child, 3 runs 268/295/405ms (all <2s),
     // CommandLine present and matching -- receipts in
     // docs/supervisor-design.md (Architecture). Fail-safe posture stands:
@@ -364,7 +364,7 @@ function defaultReadCommandLine(pid) {
 function sweepOrphansDefault(pkillPattern, log) {
   try {
     if (IS_WIN) {
-      // VERIFIED BY EXECUTION 2026-08-18 (Idea repro on magi-win): the sweep
+      // VERIFIED BY EXECUTION 2026-08-18 (a repro on the Windows box): the sweep
       // powershell's OWN command line contains `*<pattern>*`, so the
       // Where-Object matched the sweep process itself and Stop-Process
       // -Force killed it mid-pipeline -- exit 0xFFFFFFFF, empty
@@ -423,7 +423,7 @@ function sweepOrphansDefault(pkillPattern, log) {
 // the exact silent-detector class this teardown was about.
 //
 // Munge rule: EVERY non-alphanumeric becomes '-', not just path.sep --
-// confirmed raw: ~/Documents/MAGI_Memory -> -Users-narr-Documents-MAGI-
+// confirmed raw: ~/Documents/Agent_Memory -> -Users-user-Documents-Agent-
 // Memory, and session_notes -> session-notes inside deeper project dirs.
 // A '_' or '.' in AGENT_DATA_HOME under sep-only munge would re-open the
 // same fail-quiet hole one layer down. Default MEM (~/Documents/<name>) only
@@ -543,7 +543,7 @@ export function stallVerdict(tail, { userStallMs, syntheticStallMs } = {}) {
 
 // The whole transcript-lane poll as ONE testable closure -- extracted from
 // the child spawner so the era-guard arithmetic is unit-attackable instead of
-// verified-by-inspection only (Melchior review focus, 07-15). Returns a
+// verified-by-inspection only (the reviewer review focus, 07-15). Returns a
 // bounce-reason string or null; the caller owns the actual kill.
 // Era guard, two layers: file binding (newestTranscript eraStart, gate G1)
 // keeps prior-generation files out entirely; the tail-timestamp check stays
@@ -699,8 +699,8 @@ function spawnHeadlessChild(cfg, { now = () => Date.now(), log, watchdogBounces 
   // half-disabled surprises for an operator opting out of bounces.
   //
   // Windows: ENABLED as of 2026-08-13. The transcript munge is now verified on
-  // magi-win -- DATA_HOME C:\Users\minom\Documents\Scheherazade produced the
-  // real CLI project dir C--Users-minom-Documents-Scheherazade, exactly what
+  // the Windows box -- DATA_HOME C:\Users\winuser\Documents\Scheherazade produced the
+  // real CLI project dir C--Users-winuser-Documents-Scheherazade, exactly what
   // transcriptDirFor's `[^a-zA-Z0-9] -> '-'` rule yields (pinned in
   // test-supervisor.mjs). The tester runs Windows, and leaving the ONE OS
   // where the silent-dead reports originated with no stall protection was the
@@ -745,8 +745,8 @@ function spawnHeadlessChild(cfg, { now = () => Date.now(), log, watchdogBounces 
   function killHandle(sig) {
     try {
       if (IS_WIN) {
-        // taskkill /T = whole tree. VERIFIED BY EXECUTION 2026-08-01 (Idea
-        // spike on magi-win): synthetic 3-level node tree, grandchild
+        // taskkill /T = whole tree. VERIFIED BY EXECUTION 2026-08-01 (a
+        // spike on the Windows box): synthetic 3-level node tree, grandchild
         // explicitly reported terminated -- receipts in
         // docs/supervisor-design.md (Kill lane). Caveat kept honest: tree
         // was plain node processes; re-run the same driver against the real
@@ -838,11 +838,11 @@ export async function runLoop(cfg, deps = {}) {
     log('stop requested, exiting')
   }
 
-  // Graceful-quit hold (129 loop, Mino live 2026-08-05 02:01): while
+  // Graceful-quit hold (129 loop, the owner live 2026-08-05 02:01): while
   // main.cjs's .shutdown-request marker sits in MEM, the app is inside its
   // quit grace window — respawning a child here just gets it killed at grace
   // expiry, and each respawn re-processes the shutdown turn (the "무한부팅"
-  // Mino watched). Hold instead of spawning until the marker clears; main
+  // the owner watched). Hold instead of spawning until the marker clears; main
   // always unlinks it (ack or timeout) and then stops this supervisor, so
   // the hold cannot outlive the quit. Freshness-capped like channel.mjs's
   // watcher so a crash-leftover marker cannot freeze a fresh boot forever.
@@ -1020,7 +1020,7 @@ async function stopAgent(cfg) {
   if (IS_WIN) {
     // Windows has no graceful cross-process signal: node's process.kill()
     // is TerminateProcess (handler never runs, child would orphan). Kill
-    // the whole tree instead. UNVERIFIED on magi-win (design doc flag).
+    // the whole tree instead. UNVERIFIED on the Windows box (design doc flag).
     try { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { encoding: 'utf8' }) } catch {}
     try { fs.rmSync(cfg.pidfile, { force: true }) } catch {}
     try { fs.rmSync(cfg.stopflag, { force: true }) } catch {}

@@ -1,7 +1,7 @@
 // memory.js — read-only memory pane (+ per-entry delete). Renders the 4
 // category tables via memory_query and the "이번 세션에서 기억한 것" group
 // via memory_events, per
-// ~/Documents/MAGI_Memory/projects/scheherazade_pane_copy_opener_criteria_2026-07-03.md §A.
+// the pane-copy / opener-criteria source note (2026-07-03) §A.
 // Confidence is never fetched into the DOM; source_session is never
 // rendered raw anywhere below -- only derived dates.
 
@@ -15,7 +15,7 @@
   const NAV = window.COPY.nav
 
   function $(id) { return document.getElementById(id) }
-  // Local-time rendering (Mino 07-13 click-test: raw ISO slicing displayed
+  // Local-time rendering (the owner 07-13 click-test: raw ISO slicing displayed
   // UTC dates/times). 'sv-SE' fixes only the FORMAT (YYYY-MM-DD / HH:MM);
   // the timezone always comes from the system.
   function isoDate(iso) { return iso ? new Date(iso).toLocaleDateString('sv-SE') : '' }

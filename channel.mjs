@@ -5,7 +5,7 @@
 //   Discord message (home channel) -> MCP notification -> Claude Code
 //   Claude "reply"/"read_channel_history" tool call -> discord.js -> Discord
 //
-// Trimmed from MAGI's channels/base-channel.mjs (4000-line, multi-agent,
+// Trimmed from the reference fleet's channels/base-channel.mjs (4000-line, multi-agent,
 // voice/B2B/lounge-aware) down to: one agent, one home channel, three tools.
 
 import 'dotenv/config'
@@ -236,7 +236,7 @@ const resolveOutboundChannel = createOutboundResolver({
   guidance: GUIDANCE,
 })
 
-// GPT-loop guard (2026-08-04, Mino field report) -- see createOutboundDedup.
+// GPT-loop guard (2026-08-04, the owner field report) -- see createOutboundDedup.
 const checkOutboundDup = createOutboundDedup({ log })
 
 // ── MCP server ───────────────────────────────────────────────────────────
@@ -510,7 +510,7 @@ discord.once(Events.ClientReady, (c) => {
   muteAnnouncer.start().catch((err) => log(`mute announcer failed to start (feature disabled this session): ${err.message}`))
 })
 
-// ── graceful shutdown (v0.0.4, Mino 2026-07-13 19:33 directive) ─────────────
+// ── graceful shutdown (v0.0.4, the owner 2026-07-13 19:33 directive) ─────────────
 // App quit should not kill the agent mid-thought: main.cjs writes
 // DATA_HOME/.shutdown-request, THIS watcher injects a [SYSTEM] turn telling
 // the agent to flush checkpoint/session notes and touch .shutdown-ack, and
@@ -717,8 +717,8 @@ const muteAnnouncer = createMuteStrikeAnnouncer({
   log,
 })
 
-// ── Session-note cadence (v0.0.16, Mino 07-16 12:25) ────────────────────────
-// The MAGI fleet's periodic session-note reminder never crossed over in the
+// ── Session-note cadence (v0.0.16, the owner 07-16 12:25) ────────────────────────
+// The the reference fleet's periodic session-note reminder never crossed over in the
 // harness port; a session that runs hours without writing its note loses
 // that time for the NEXT session ("기록이 기억이다"). Rule lives in
 // cadence/note-tick.cjs (pure, tested); this is only the IO -- same
@@ -771,7 +771,7 @@ function startNoteCadenceWatcher() {
 
 discord.on(Events.Error, (err) => log('Discord client error:', err.message))
 
-// ── Thinking indicator: MAGI-style 🤔 reaction while the agent composes,
+// ── Thinking indicator: fleet-style 🤔 reaction while the agent composes,
 // removed when the reply lands, plus a one-shot typing indicator for the
 // instant cue. Both are best-effort -- a failed reaction must never block
 // message forwarding. ────────────────────────────────────────────────────

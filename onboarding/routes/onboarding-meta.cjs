@@ -29,7 +29,7 @@ function createRoutes(staticCtx) {
   } = staticCtx
   return [
     {
-      // Claude CLI install-assist status (2026-08-04, Mino "2로 가자").
+      // Claude CLI install-assist status (2026-08-04, the owner "2로 가자").
       // `present` is the live artifact truth (agentControls.resolveClaudeBin,
       // the SAME resolver the agent spawn uses -- never a cached flag), and
       // the install command/plan/license info rides along so the wizard can
@@ -98,7 +98,7 @@ function createRoutes(staticCtx) {
       },
     },
     {
-      // Last turn error (2026-08-04, Mino "클로드도 동작안함" -- a
+      // Last turn error (2026-08-04, the owner "클로드도 동작안함" -- a
       // rate-limited/auth-dead lane produced ZERO user-visible signal).
       // Reads the lane's .last-turn-error.json marker; `fresh` = within 10
       // minutes, which is what the nav banner shows. Older errors stay
@@ -141,13 +141,13 @@ function createRoutes(staticCtx) {
       },
     },
     {
-      // Usage gauges (2026-08-04 evening, Mino: "ollama/Codex/Claude 사용량
+      // Usage gauges (2026-08-04 evening, the owner: "ollama/Codex/Claude 사용량
       // 게이지 ... 이게 킥임"). claude = OAuth usage endpoint (setup-token
       // 403 -> CLI-session fallback); codex = CodexBar's wham/usage source;
       // ollama = undocumented /api/usage probe (shape binds on first
       // real-key receipt). Each fetcher carries its own 60s cache +
       // stale-on-error; see their headers in http-server.cjs.
-      // Dynamic Claude model catalog (2026-08-13, Mino: "모델 리스트 하드코딩
+      // Dynamic Claude model catalog (2026-08-13, the owner: "모델 리스트 하드코딩
       // 말고 ... 다이나믹하게"). Scans the INSTALLED claude CLI binary's own
       // model table (see extractClaudeModelsFromBin in http-server.cjs) --
       // the picker's Claude group follows CLI updates instead of app
@@ -211,7 +211,7 @@ function createRoutes(staticCtx) {
       match: (pathname) => pathname === '/api/usage/claude',
       handler: async (req, res) => {
         // ?force=1 = the Refresh button bypassing the 60s cache (2026-08-05,
-        // Mino: manual refresh must actually parse). Page-enter loads omit it.
+        // the owner: manual refresh must actually parse). Page-enter loads omit it.
         sendJson(res, 200, await fetchClaudeSubscriptionUsage({ force: /[?&]force=1(&|$)/.test(String(req.url || '')) }))
         return
       },
@@ -233,7 +233,7 @@ function createRoutes(staticCtx) {
       },
     },
     {
-      // Appearance tab (2026-08-05, Mino "어피어런스 탭 만들고 ... CSS들
+      // Appearance tab (2026-08-05, the owner "어피어런스 탭 만들고 ... CSS들
       // 게이지로 쭉 나열"). GET returns the saved (normalized) config plus
       // the model's option catalog so the page renders choices from ONE
       // source; PUT saves whatever survives normalize() — invalid fields
@@ -295,7 +295,7 @@ function createRoutes(staticCtx) {
     },
     {
       // Update check (tester request 2026-08-04): notify + download link.
-      // In-place auto-update needs a signed mac app -- deferred (Mino 16:16,
+      // In-place auto-update needs a signed mac app -- deferred (the owner 16:16,
       // then re-scoped 16:21 to "check + one-click download page" v1).
       method: 'GET',
       match: (pathname) => pathname === '/api/update/check',

@@ -3,7 +3,7 @@
 // in electron at import time); tests/test-window-glass.mjs asserts the
 // platform matrix below.
 //
-// History (대공사 2026-08-05, FIXED same day after Mino's "유리질감 렌더
+// History (대공사 2026-08-05, FIXED same day after the owner's "유리질감 렌더
 // 안되고있음"): 0.59 set backgroundColor:'#111214' as a "zero-risk fallback"
 // ALONGSIDE vibrancy/acrylic — but an explicit backgroundColor paints over
 // the platform effect on BOTH platforms (Electron: the window's solid paint
@@ -19,7 +19,7 @@
 //    to a solid system tint under reduced-transparency; no fallback color
 //    needed, and adding one would kill the effect again.
 //  - win32 build >= 22621 (Win11 22H2+, the floor where backgroundMaterial
-//    is implemented; Mino's box is 26100): acrylic, no backgroundColor. The
+//    is implemented; the owner's box is 26100): acrylic, no backgroundColor. The
 //    OS renders it solid when the user disables transparency effects.
 //  - everything else (win10, linux): the 0.59 flat fallback, unchanged.
 
@@ -37,7 +37,7 @@ const FLAT_FALLBACK = '#111214'
 const MAC_EFFECT_STATE = 'active'
 
 // material may come from the user's Appearance config. v3 (2026-08-05
-// 16:12, Mino "Background Tint / Background Blur 두개로 간단하게"): the
+// 16:12, the owner "Background Tint / Background Blur 두개로 간단하게"): the
 // 7-material switcher folded into blur levels — appearance-model.cjs maps
 // off/soft/strong to null/'under-window'/'hud'. 'none' is the explicit
 // blur-off sentinel: construct WITHOUT the platform effect (flat fallback),

@@ -92,7 +92,7 @@ if (!SLACK_APP_TOKEN) {
   )
   process.exit(1)
 }
-// HOME_CHANNEL_ID is OPTIONAL since DM-default mode (2026-08-04, Mino "홈채널
+// HOME_CHANNEL_ID is OPTIONAL since DM-default mode (2026-08-04, the owner "홈채널
 // 방식 말고 DM 기본 방식으로 바꾸자"): with no home channel the conversation
 // binds to whoever DMs the bot (message.im events; lastInboundChannelId +
 // the persisted last-channel store carry the reply target from there). A
@@ -168,7 +168,7 @@ const resolveOutboundChannel = createOutboundResolver({
   guidance: GUIDANCE,
 })
 
-// GPT-loop guard (2026-08-04, Mino field report) -- see createOutboundDedup.
+// GPT-loop guard (2026-08-04, the owner field report) -- see createOutboundDedup.
 const checkOutboundDup = createOutboundDedup({ log })
 
 // ── User display-name resolution (hard constraint #8) ───────────────────────
@@ -601,7 +601,7 @@ async function handleInboundMessage(event, opts = {}) {
   const notify = opts.notify || (notifyInbound)
   const resolveSender = opts.resolveSender || resolveSenderName
 
-  // Bot handling, two layers (Mino 08-24 "에이전트/앱이 태그하면 못봄"):
+  // Bot handling, two layers (the owner 08-24 "에이전트/앱이 태그하면 못봄"):
   // SELF always filters (echo guard), but OTHER bots pass when they
   // explicitly mention this bot. Slack never fires app_mention for
   // bot-authored messages (its own loop guard), so a bot's tag arrives
@@ -614,13 +614,13 @@ async function handleInboundMessage(event, opts = {}) {
   const botMentionsUs = !isSelf && isBotEvent(event) &&
     Boolean(self.userId && String(event.text || '').includes(`<@${self.userId}>`))
   if ((isBotEvent(event) && !botMentionsUs) || isIgnorableSubtype(event)) return { skipped: true, reason: 'bot_or_subtype' }
-  // DM-default (2026-08-04, Mino): DMs to the bot (channel_type 'im',
+  // DM-default (2026-08-04, the owner): DMs to the bot (channel_type 'im',
   // message.im event -- needs im:history + the event subscription in the
   // app manifest) are ALWAYS accepted; a configured home channel is an
   // additional surface on top. The original home-channel-only scoping
   // ("hard constraint #2") applies only to non-DM channels: any other
   // channel/group the bot happens to be in stays ignored -- EXCEPT a
-  // mention (Mino 08-24 "멘션은 무조건 받게"): @-ing the bot is an explicit
+  // mention (the owner 08-24 "멘션은 무조건 받게"): @-ing the bot is an explicit
   // summon, so app_mention events are accepted from ANY channel.
   const isDm = event.channel_type === 'im'
   const isMention = event.type === 'app_mention' || botMentionsUs
@@ -681,7 +681,7 @@ async function handleInboundMessage(event, opts = {}) {
     const marker = markers.join('\n')
     content = text ? `${text}\n${marker}` : marker
   }
-  // messageTs/threadTs (2026-08-11, Mino): expose the raw Slack ts so the
+  // messageTs/threadTs (2026-08-11, the owner): expose the raw Slack ts so the
   // agent can thread replies. threadTs is set only when the inbound message
   // itself lives in a thread -- reply targeting rule: use threadTs when
   // present (stay in the existing thread), else messageTs (start a thread

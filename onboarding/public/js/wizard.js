@@ -11,7 +11,7 @@
   // as a clickable tab. ROUTER_WIRED flipped true server-side 2026-07-04
   // (own-infra-first found no router build was needed, direct env wiring
   // suffices) -- that is a BACKEND capability fact, separate from the
-  // 22:02 Mino-approved UI-scope lock (Claude-only ships v1, chatgpt/ollama
+  // 22:02 the owner-approved UI-scope lock (Claude-only ships v1, chatgpt/ollama
   // = v1.1). Gating tab-enable on routerWired would wrongly ENABLE those
   // two tabs the instant the server flag flips, regardless of UI-scope
   // intent -- this const is the single place that decision lives instead.
@@ -91,7 +91,7 @@
     }
     // Full Disk Access is a macOS (TCC) concept. On Windows the card rendered
     // a button that opens an x-apple.systempreferences: URL -- i.e. nothing --
-    // under a heading about "your Mac". Mino hit this on the first Windows
+    // under a heading about "your Mac". the owner hit this on the first Windows
     // install (2026-08-03). No card at all is the honest state there.
     if (window.IS_MAC) renderFdaCard()
   }
@@ -187,7 +187,7 @@
   }
 
   // ── Step 1: provider connect ─────────────────────────────────────────
-  // The claude tab is setup-token ONLY (2026-08-04, Mino "claude API Key는
+  // The claude tab is setup-token ONLY (2026-08-04, the owner "claude API Key는
   // 없애버리고" -- the collapsible sk-ant BYOK sub-mode is gone; Claude
   // connects by web login / setup-token, matching the 16:33 provider map:
   // ChatGPT/Claude -> 웹로그인, Ollama -> API키). The manual Terminal path
@@ -313,7 +313,7 @@
         })
         .catch(() => buildLoginUI()) // status probe failed: fall through to login UI; its cli_missing path still guards
 
-      // Windows v1 (detection-only deps, Mino locked 07-13): the server has
+      // Windows v1 (detection-only deps, the owner locked 07-13): the server has
       // no managed installer on this platform -- offer the official install
       // page (opened server-side, fixed URL) and a re-detect button that
       // re-probes resolveBin until the CLI shows up.
@@ -512,7 +512,7 @@
       } // end buildLoginUI
     }
 
-    // ollama = API-key paste (2026-08-04 Mino: "ollama -> API키" -- the
+    // ollama = API-key paste (2026-08-04 the owner: "ollama -> API키" -- the
     // `ollama signin` login flow shipped a false "connected" a real external
     // tester paid for; ChatGPT/Claude stay web-login). Reuses the shared key
     // field + the same /api/byok/validate lane as claude BYOK -- the server's
@@ -627,7 +627,7 @@
         return
       }
       if (activeTab === 'ollama') {
-        // ollama left the login-shell-out family 2026-08-04 (Mino: "ollama
+        // ollama left the login-shell-out family 2026-08-04 (the owner: "ollama
         // -> API키") -- its connect method is an ollama.com API-key paste.
         renderOllamaKeyArea()
         return
@@ -873,7 +873,7 @@
         }).catch(() => {})
       }
       // (The sk-ant BYOK fallback sub-mode that used to sit here is gone --
-      // 2026-08-04, Mino "claude API Key는 없애버리고". No UI submits
+      // 2026-08-04, the owner "claude API Key는 없애버리고". No UI submits
       // provider:'claude' anymore.)
     }
 
@@ -909,7 +909,7 @@
       btn.disabled = true
       statusEl.className = 'status-line pending'
       // Status copy branches by sub-mode (Codex front-end finding #3 fix,
-      // Idea sourced primary.validating/.failure 2026-07-04): setup-token
+      // design sourced primary.validating/.failure 2026-07-04): setup-token
       // (claude-subscription) uses token-worded primary.* strings; sk-ant
       // BYOK (claude) keeps the key-worded fallback.* strings. success is
       // shared: fallback.success ("연결됐습니다") is provider-agnostic.
@@ -939,7 +939,7 @@
       }
     }
 
-    // ── Claude CLI preflight (2026-08-04, Mino "2로 가자") ──────────────
+    // ── Claude CLI preflight (2026-08-04, the owner "2로 가자") ──────────────
     // Every provider mode runs on the user's own claude CLI, and a truly
     // clean machine used to discover that only at spawn time, from a status
     // card that didn't even render the install command. This panel says it
@@ -1285,7 +1285,7 @@
       tokenField.classList.remove('hidden')
       $('s4b-token-label').textContent = C.discordTutorial.tokenFieldLabel
 
-      // Invite URL minted from the token (Mino 07-13 click-test: the bare
+      // Invite URL minted from the token (the owner 07-13 click-test: the bare
       // authorize link installs nothing useful). A bot token's first
       // dot-segment is base64url of the bot's user ID, which for bots equals
       // the application (client) ID -- so no separate ID field is needed.
@@ -1381,7 +1381,7 @@
   // never sends a free-form reason string to render -- `result.reason` was
   // renamed to `result.code` (stable enum, drives the copy.js cause table)
   // + `result.detail` (free-form debug prose, console-only, never put in
-  // the DOM -- Melchior 2026-07-03: that's the "English leaks into the
+  // the DOM -- the reviewer 2026-07-03: that's the "English leaks into the
   // user's screen" bug class).
   let s5PollTimer = null
   const S5_POLL_INTERVAL_MS = 2000
@@ -1396,7 +1396,7 @@
   // Renders the step-actions button row. Used by all three states so the
   // connecting -> live transition can reuse the identical single-button
   // layout (grey/disabled -> enabled is the "obvious progress" signal;
-  // Melchior impl call 16:44, Idea confirmed) while failed gets its own
+  // the reviewer impl call 16:44, confirmed) while failed gets its own
   // cause-specific button set.
   function renderStep5Buttons(buttons) {
     const el = $('s5-buttons')

@@ -5,7 +5,7 @@
 // Discord client, a clock, or an agent. channel.mjs is the wiring; this is the
 // judgment.
 //
-// The three hard requirements (Mino, 2026-07-13 19:40) are encoded here as
+// The three hard requirements (the owner, 2026-07-13 19:40) are encoded here as
 // three gates, and they are AND-ed, never OR-ed:
 //   consent   -- AUTONOMY=yes, an explicit, separate yes. Not inherited.
 //   budget    -- a real measured cap. Cannot measure -> cannot run.

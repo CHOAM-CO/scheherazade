@@ -103,7 +103,7 @@ export async function readAgentConfig(dataHome) {
 // process dies between writeFile and rename — a hard kill or OS reboot
 // landing inside any write window. The liveness heartbeat writes every 60s,
 // so that window recurs constantly, and the orphans accumulate forever
-// (magi-win 2026-08-18: three .agent-live.*.tmp from prior unclean
+// (the Windows box 2026-08-18: three .agent-live.*.tmp from prior unclean
 // shutdowns). Swept at backend boot (createMarkerStore — every transport
 // builds one) rather than per-write: one directory scan per boot.
 // Age gate (1h) protects a concurrent process's in-flight write; matching is
@@ -199,7 +199,7 @@ export function createLastChannelStore({ dataHome, log = console.log }) {
 // (Discord channel object / Slack channel id string / Telegram chat object).
 // opts (fetchFn/lastId/homeId) are test seams — production call sites pass
 // only requestedId and get live module state + the real fetch.
-// ── Outbound duplicate suppression (2026-08-04, Mino field report) ─────────
+// ── Outbound duplicate suppression (2026-08-04, the owner field report) ─────────
 // GPT-lane models (gpt-5.6-luna/terra via the codex-as-api proxy) were
 // observed re-sending the IDENTICAL message up to ~10x -- the model ignores
 // or never properly sees the tool result's "sent" receipt and re-calls the
@@ -371,7 +371,7 @@ export function createBootAnnouncer({ dataHome, homeId, lastChannelStore, fetchT
 // "매일 아침 메일 브리핑해줘" -> the agent registers a routine with the
 // `routine` tool -> the channel process fires the prompt back into the agent
 // at the scheduled time, and the result lands in the conversation like any
-// other turn (Mino, 2026-08-04).
+// other turn (the owner, 2026-08-04).
 //
 // DELIBERATELY NOT the autonomy cycle: that lane is unattended night work
 // behind its own consent gate (AUTONOMY=yes). A routine is something the
@@ -733,7 +733,7 @@ export function createInboundNotifier({ dataHome, mcpNotify, log = console.log, 
 }
 
 // ── mute-strike announcer ──────────────────────────────────────────────────
-// The messenger-side half of the mute net (2026-08-13, Mino field case: kimi
+// The messenger-side half of the mute net (2026-08-13, the owner field case: kimi
 // turn ends success turns=5 dur=765s, no reply ever reaches the messenger,
 // "계속 답 못받는중"). stop-reply-guard already convicts the mute and writes
 // the .mute-strikes.json ledger, and the PANEL shows a banner + revert offer

@@ -1,7 +1,7 @@
 'use strict'
 // onboarding/agent-identity.cjs — identity provenance for a renameable agent.
 //
-// Born from the Artaban bug (2026-08-15, Mino field report): DATA_HOME is
+// Born from the identity-bleed bug (2026-08-15, the owner field report): DATA_HOME is
 // deliberately fixed and DISPLAY_NAME is user-renameable, so first-person
 // records (the journal above all) survive renames with no provenance — the
 // live agent read a predecessor's journal and started calling HERSELF by the

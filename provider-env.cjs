@@ -12,17 +12,17 @@
 // directly here), so tests/test-provider-env.mjs can require it standalone
 // and assert against every branch with a fake readProviderKey.
 //
-// Ground truth this mirrors (MAGI's OWN proven-live fleet wiring,
-// ~/Desktop/MAGI/run-agent.sh):
-//   - skia (gpt-5.5 via codex-as-api proxy), line ~194:
+// Ground truth this mirrors (the reference fleet's OWN proven-live wiring,
+// its run-agent.sh):
+//   - the proxy lane (gpt-5.5 via codex-as-api proxy), line ~194:
 //       export ANTHROPIC_BASE_URL=http://localhost:18080
 //     -- no ANTHROPIC_API_KEY set at all in that block.
-//   - skia-ollama (kimi via ollama direct), lines ~202-205:
+//   - the ollama lane (kimi via ollama direct), lines ~202-205:
 //       MODEL=kimi-k2.7-code:cloud
 //       export ANTHROPIC_BASE_URL=http://localhost:11434
 //       export ANTHROPIC_API_KEY=ollama
 //       SKIP_MODEL_GUARD=1
-//   - sirin (Gemini via antigravity-proxy, its OWN later/more-hardened
+//   - the gemini lane (Gemini via antigravity-proxy, its OWN later/more-hardened
 //     entry, lines ~237-241):
 //       export ANTHROPIC_BASE_URL=http://localhost:18090
 //       export ANTHROPIC_API_KEY=sk-proxy-passthrough
@@ -31,23 +31,23 @@
 //     OAuth (accounts.json)... Without this, default account-1 OAuth leaks
 //     to :18090."
 //
-// DELIBERATE DIVERGENCE from skia's literal shape, flagged here and in the
-// task report: skia's own block sets NO ANTHROPIC_API_KEY, but skia runs
+// DELIBERATE DIVERGENCE from the proxy lane's literal shape, flagged here and in the
+// task report: the proxy lane's own block sets NO ANTHROPIC_API_KEY, but the proxy lane runs
 // under an account that already has an interactively-authenticated
 // ~/.claude(.json) OAuth session from a prior manual `claude login` --
-// sirin's later comment above explains that WITHOUT an explicit
+// the gemini lane's later comment above explains that WITHOUT an explicit
 // ANTHROPIC_API_KEY, the CLI falls back to sending that existing OAuth
 // bearer to whatever ANTHROPIC_BASE_URL points at. scheherazade's target
 // user is the OPPOSITE precondition -- a fresh Mac with NO prior `claude
 // login` (that is the entire reason main.cjs's Critical-A BYOK-key-forward
-// fix exists at all) -- so mirroring skia's bare shape here risks either
+// fix exists at all) -- so mirroring the proxy lane's bare shape here risks either
 // (a) hanging at claude's own missing-credential prompt (no OAuth session
 // AND no key), or (b) on a machine that DOES have some stray auth (e.g. a
 // leftover claude-subscription token from a previous provider switch on the
 // same real ~/.claude.json -- this app sets no CLAUDE_CONFIG_DIR override,
 // see http-server.cjs's own ensureClaudeOnboardingDone() comment), silently
 // leaking that unrelated credential to the local codex-as-api proxy exactly
-// as sirin's fix describes. This module instead follows sirin's *more
+// as the gemini lane's fix describes. This module instead follows the gemini lane's *more
 // hardened* pattern for BOTH new local-proxy modes (chatgpt AND ollama):
 // always set an explicit ANTHROPIC_API_KEY, and always explicitly clear
 // (set `undefined`, which Node's child_process correctly treats as "omit
@@ -67,7 +67,7 @@
 
 const CHATGPT_PROXY_DEFAULT_PORT = '18080'
 const OLLAMA_BASE_URL = 'http://localhost:11434'
-// Ollama CLOUD (2026-08-04 Mino: "ollama -> API키" -- the connect method for
+// Ollama CLOUD (2026-08-04 the owner: "ollama -> API키" -- the connect method for
 // ollama is an ollama.com API key, not web-login/`ollama signin`; the signin
 // flow shipped a false "connected" a real external tester paid for the same
 // day). ollama.com speaks the Anthropic Messages API directly -- receipt:
@@ -614,7 +614,7 @@ function readClaudeCliToken() {
 
 const PROVIDER_ROWS = [
   {
-    // BYOK (0.2.2 harness swap, Mino 08-19 "클로드코드 아예 의존성째로
+    // BYOK (0.2.2 harness swap, the owner 08-19 "클로드코드 아예 의존성째로
     // 날려버려"): the key now feeds the dsh lane's anthropic CATALOG route
     // (pi-ai ships the model list + anthropic-messages protocol) instead of
     // the Claude Code CLI. Credential handling unchanged.
@@ -650,7 +650,7 @@ const PROVIDER_ROWS = [
     // CLAUDE_CODE_OAUTH_TOKEN and no ANTHROPIC_BASE_URL, the CLI falls back to
     // its own interactively-authenticated OAuth session (~/.claude/.credentials.json,
     // or the macOS keychain item that supersedes it). This isn't a guess: it is
-    // exactly how the entire MAGI fleet runs today --
+    // exactly how the entire the reference fleet runs today --
     // `ps eww <agent-pid> | grep -cE '^ANTHROPIC_API_KEY=|^ANTHROPIC_BASE_URL=|^CLAUDE_CODE_OAUTH_TOKEN='`
     // returns 0 for a live, working agent (verified 2026-07-13 on pid 71610).
     //
@@ -659,7 +659,7 @@ const PROVIDER_ROWS = [
     // process.env, which main.cjs spreads into the child. If a stale
     // ANTHROPIC_API_KEY survived here, the CLI would prefer it over the OAuth
     // session and this mode would silently become BYOK-on-someone-else's-key
-    // (the exact leak sirin's run-agent.sh comment describes, quoted in this
+    // (the exact leak the gemini lane's run-agent.sh comment describes, quoted in this
     // file's header).
     //
     // This mode ALSO depends on the spawned child NOT getting its own
@@ -675,7 +675,7 @@ const PROVIDER_ROWS = [
     // to assert against a built env, not against a data column no spawn path
     // reads.
     //
-    // COST DISCLOSURE IS MANDATORY IN THE UI (locked with Mino): this spends
+    // COST DISCLOSURE IS MANDATORY IN THE UI (locked with the owner): this spends
     // the user's OWN Claude subscription quota. "We found your login and will
     // use it" must never be presented as if it were free.
     //
@@ -689,7 +689,7 @@ const PROVIDER_ROWS = [
     // PROMISE CHANGE (0.2.2, logged): the pre-swap mode injected NOTHING
     // and let the Claude Code CLI read its own store -- "we store nothing,
     // we copy nothing, we READ nothing". With the CLI gone from the spawn
-    // path, the only way to keep this mode alive (Mino 08-19 "빼지말고
+    // path, the only way to keep this mode alive (the owner 08-19 "빼지말고
     // 되게 해봐") is to read the login's access token ourselves at spawn
     // and hand it to the dsh anthropic route (pi-ai OAuth mode). Still
     // never stored, never copied to disk, read fresh per spawn -- but it
@@ -717,7 +717,7 @@ const PROVIDER_ROWS = [
   {
     // Local codex-as-api proxy. No user secret required -- see this file's
     // header comment for why an explicit placeholder key is still injected
-    // (diverging from skia's bare run-agent.sh shape).
+    // (diverging from the proxy lane's bare run-agent.sh shape).
     id: 'chatgpt',
     credential: 'none',
     pre: (config) => {
@@ -754,7 +754,7 @@ const PROVIDER_ROWS = [
     },
   },
   {
-    // Ollama CLOUD via API key (2026-08-04, Mino "ollama -> API키" -- see
+    // Ollama CLOUD via API key (2026-08-04, the owner "ollama -> API키" -- see
     // OLLAMA_CLOUD_BASE_URL's comment for the receipt and the history; the
     // previous local-daemon/`ollama signin` mode is gone from this lane.
     // A local daemon is still reachable through the 'custom' row with
@@ -883,7 +883,7 @@ const PROVIDER_ROWS = [
     }),
   },
   {
-    // dsh lane (0.2.1 harness swap, Mino 2026-08-19 "클로드코드가 해주던거
+    // dsh lane (0.2.1 harness swap, the owner 2026-08-19 "클로드코드가 해주던거
     // DSV로 갈아낸다"): the supervisor spawns dsh-lane.mjs instead of
     // headless-lane.mjs (LANE_KIND is the switch -- supervisor.mjs
     // resolveConfig reads it from this env). The lane owns a pinned
@@ -904,7 +904,7 @@ const PROVIDER_ROWS = [
     // exact silent-fallback trap the ollama row's comment warns about, in
     // mirror image. Not-served tags fall back to the lane's text default
     // rather than failing loud, because unlike ollama.com this lane HAS a
-    // designed default (Mino 08-19: glm-5.2 text / effort max). DSH_MODEL
+    // designed default (the owner 08-19: glm-5.2 text / effort max). DSH_MODEL
     // config field overrides unconditionally (hand-edit lane until the
     // settings page grows dsh fields). MODEL is still set in the returned
     // env so spawn-info/laneVision sees the real tag (glm-5.2 -> vision
@@ -934,7 +934,7 @@ const PROVIDER_ROWS = [
 ]
 
 // Local-daemon-era cloud tags do not exist on ollama.com (field receipt:
-// Mino 2026-08-04 17:37 -- every ollama model dead right after the key-mode
+// the owner 2026-08-04 17:37 -- every ollama model dead right after the key-mode
 // swap; validate said `deepseek-v4-flash:0731-cloud` is not in the catalog,
 // whose actual name is `deepseek-v4-flash`). The local ollama convention
 // marked cloud-proxied models with a ':cloud' / ':0731-cloud' style tag;

@@ -160,7 +160,7 @@ function createRoutes(staticCtx) {
         return
       },
     },
-    // POST upload: chat image attachment (2026-08-04, Mino "인앱챗에
+    // POST upload: chat image attachment (2026-08-04, the owner "인앱챗에
     // 이미지 업로드할수있는 방법이 없음 >> 수정해놔야겠지?"). JSON
     // {filename, dataBase64} rather than multipart -- readJsonBody is the
     // one body reader this server has, and a 15MB cap covers a 10MB image
@@ -185,7 +185,7 @@ function createRoutes(staticCtx) {
         // PDFs join images. kind drives the client marker -- 'text' is safe
         // for ANY lane to Read; 'image'/'pdf' are vision-gated (Read renders
         // PDF pages as images, so a non-vision lane must not open them).
-        // 0.1.18 (Mino "파일 주고받기"): media + archives join. kind 'file'
+        // 0.1.18 (the owner "파일 주고받기"): media + archives join. kind 'file'
         // = agent can reference/process it with shell tools but must not
         // Read it (binary; Read renders nothing useful).
         const ext = String(filename || '').toLowerCase().match(/\.(png|jpe?g|gif|webp|pdf|txt|md|csv|tsv|json|log|xml|yaml|yml|mp3|m4a|wav|mp4|mov|webm|zip)$/)
@@ -221,7 +221,7 @@ function createRoutes(staticCtx) {
           const name = `${Date.now()}_${stem}${ext[0]}`
           const full = path.join(dir, name)
           fs.writeFileSync(full, buf, { mode: 0o600 })
-          // Vision stand-in (0.0.56, Mino "작은 비전모델 붙여서"): a lane
+          // Vision stand-in (0.0.56, the owner "작은 비전모델 붙여서"): a lane
           // that provably cannot see images gets a caption from the small
           // vision model, folded into the marker client-side. Only the
           // KNOWN-'no' lane pays the extra call -- 'yes' doesn't need it,

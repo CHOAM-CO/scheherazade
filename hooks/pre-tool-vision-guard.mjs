@@ -5,7 +5,7 @@
 // The failure this closes is documented from the field twice: one image Read
 // on a non-vision ollama model does not just fail -- the image block stays in
 // the transcript and 400s EVERY LATER TURN until the agent restarts
-// (main.cjs's GLM5.2+ollama post-mortem; MAGI run-agent.sh carries the same
+// (main.cjs's GLM5.2+ollama post-mortem; the reference fleet's run-agent.sh carries the same
 // wedge as a warning comment on the hermes lane). Uploads are already
 // vision-gated with a caption stand-in (onboarding/routes/chat.cjs), but
 // nothing stopped the agent itself from Read-ing a screenshot lying on disk.

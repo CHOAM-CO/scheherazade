@@ -1,4 +1,4 @@
-// appearance.js — Appearance tab controller (2026-08-05, Mino "어피어런스
+// appearance.js — Appearance tab controller (2026-08-05, the owner "어피어런스
 // 탭 만들고 ... CSS들 게이지로 쭉 나열").
 //
 // Contract with the rest of the system:
@@ -131,7 +131,7 @@
     swatchRow('ap-bg-options', M.PRESET_BGS, 'bg')
     swatchRow('ap-fg-options', M.PRESET_FGS, 'fg')
     // 'input' fires continuously while the native picker drags — the page
-    // repaints live (Mino: "실시간으로 변하는거 볼 수 있게"); the save stays
+    // repaints live (the owner: "실시간으로 변하는거 볼 수 있게"); the save stays
     // debounced so drags don't hammer the PUT endpoint.
     $('ap-accent-picker').addEventListener('input', (e) => update({ accent: e.target.value }))
     $('ap-bg-picker').addEventListener('input', (e) => update({ bg: e.target.value }))

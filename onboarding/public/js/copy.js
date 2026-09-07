@@ -1,7 +1,7 @@
 // copy.js — single source of truth for every user-facing string in the
 // onboarding wizard + memory pane. Sourced VERBATIM from:
-//   ~/Documents/MAGI_Memory/projects/scheherazade_onboarding_copy_v0_2026-07-03.md
-//   ~/Documents/MAGI_Memory/projects/scheherazade_pane_copy_opener_criteria_2026-07-03.md §A
+//   the onboarding copy v0 source note (2026-07-03)
+//   the pane-copy / opener-criteria source note (2026-07-03) §A
 // Register: 간결 존댓말, no 이모지, no 느낌표, no cheerleading.
 //
 // Only the 제목:/본문:/버튼: lines and the code→copy table rows from the
@@ -12,7 +12,7 @@
 // Strings marked "AUTHORED (not in copy file)" below are new UI surfaces the
 // copy files did not specify (settings page, generic infra-error banner).
 // Written in the same register, flagged here so they are easy to find and
-// replace if Idea/PO writes real copy for them later.
+// replace if design/PO writes real copy for them later.
 
 // getOnboardToken() -- reads the per-launch localhost-auth token that
 // onboarding/http-server.cjs's serveStatic() injects into every page's
@@ -53,19 +53,19 @@ const CRED_STORE_THE = window.IS_MAC ? 'the macOS keychain' : "the OS's encrypte
 window.COPY = {
   step0: {
     title: 'Start setup',
-    // Full-autonomy disclosure (Mino 2026-07-04 16:26 "에이전트한테 권한 다
+    // Full-autonomy disclosure (the owner 2026-07-04 16:26 "에이전트한테 권한 다
     // 주기" + 2026-07-05 02:12 "권한 최대한 열어주기, 반박 안받음"): the old
-    // macOS-protected-folders sentence was REMOVED on Mino's direct order --
+    // macOS-protected-folders sentence was REMOVED on the owner's direct order --
     // onboarding now requests Documents/Downloads/Desktop TCC grants, so
     // that sentence would be false. The folder line below states the new
     // reality honestly. FDA: no longer deferred -- requested at setup via
-    // the Step-0 card below (Mino 2026-07-07 16:58 "full disk access도
+    // the Step-0 card below (the owner 2026-07-07 16:58 "full disk access도
     // 온보딩중에 그냥 설정창 켜버리고 받아버리셈"). Source doc §Step 0
     // updated in the same pass -- keep verbatim-synced.
     body: 'Takes about 3 minutes. Everything stays on this computer. Once set up, the agent works on its own without asking permission every time. It reads and writes directly to your Documents, Downloads, and Desktop folders.',
     button: 'Start',
     // AUTHORED (not in copy source file) -- Full Disk Access card
-    // (2026-07-07, Mino directive above). Honest about the two macOS
+    // (2026-07-07, the owner directive above). Honest about the two macOS
     // constraints: the toggle itself must be clicked by the user (no
     // programmatic grant exists), and the grant needs an app restart
     // (TCC caches at process launch).
@@ -84,14 +84,14 @@ window.COPY = {
   // provider's PRIMARY path is now account login (subscription billing),
   // API key is a folded-away fallback. Ground: key issuance was the
   // highest-friction point in onboarding, and the wrong billing axis for
-  // Max/Plus subscribers -- Mino himself dropped off at Step 1 (01:09) and
+  // Max/Plus subscribers -- the owner himself dropped off at Step 1 (01:09) and
   // NEO logs showed existing subscription OAuth silently beating an
   // injected key anyway.
   //
-  // UI-SCOPE NOTE (2026-07-04 06:xx, Idea/Melchior): the backend's
+  // UI-SCOPE NOTE (2026-07-04 06:xx, design + review): the backend's
   // ROUTER_WIRED flag flipped true overnight (own-infra-first found no
   // router build is needed, direct env wiring suffices) -- but that is a
-  // BACKEND capability fact, separate from the 22:02 Mino-approved UI scope
+  // BACKEND capability fact, separate from the 22:02 the owner-approved UI scope
   // lock (Claude-only ships v1, chatgpt/ollama = v1.1). Do not wire tab
   // visibility straight off GET /api/config's routerWired field. Both the
   // real primary-path copy AND the disabled/coming-soon copy are included
@@ -138,7 +138,7 @@ window.COPY = {
         // paste. Same "don't imply one-click" principle as the Ollama
         // honesty note below -- copy corrected to match implementation.
         primary: {
-          // validating/failure (2026-07-04 06:4x, Melchior's wizard.js gate
+          // validating/failure (2026-07-04 06:4x, the reviewer's wizard.js gate
           // caught this): the submit handler is shared between this
           // sub-mode (provider=claude-subscription, pasting an OAuth token)
           // and the fallback sub-mode (provider=claude, pasting an x-api-key)
@@ -310,7 +310,7 @@ window.COPY = {
         stillMissing: (name) => `${name} still not found. Finish installing, then check again.`,
       },
     },
-    // AUTHORED -- Claude CLI preflight (2026-08-04, Mino "2로 가자"): the
+    // AUTHORED -- Claude CLI preflight (2026-08-04, the owner "2로 가자"): the
     // truly-clean-machine panel. Honesty requirements baked into the copy:
     // the app does NOT bundle claude (license), the install agreement is
     // with Anthropic, and Claude Code needs a PAID plan -- said BEFORE the
@@ -326,7 +326,7 @@ window.COPY = {
       manualLead: 'Manual route:',
       docsLink: 'Setup docs',
     },
-    // AUTHORED -- ollama key-mode strings (2026-08-04 Mino: "ollama ->
+    // AUTHORED -- ollama key-mode strings (2026-08-04 the owner: "ollama ->
     // API키"): the ollama tab is a key-paste + model-name form now, not a
     // login button. Key hint reuses the fallback tab's proven wording.
     ollamaKey: {
@@ -383,7 +383,7 @@ window.COPY = {
     q3YesPrefix: 'Yes, between',
     q3YesSuffix: 'only',
     q3No: 'No',
-    // Flag-follows-copy (Idea copy spec, her lines 46-48): the note has an ON
+    // Flag-follows-copy (the copy spec, lines 46-48): the note has an ON
     // and an OFF version, and it must track the proactive-feature flag so no
     // landing lies. That flag ships default OFF (proactive cycle is not wired
     // this build; only routerWired is in the API surface), so the OFF copy is
@@ -401,7 +401,7 @@ window.COPY = {
     body: (name) => `${name} can talk right here in the app — no accounts, no tokens. Connecting a messenger is optional, now or anytime from the Channels tab.`,
     startChat: 'Start chatting now',
     startChatNote: 'Finishes setup and opens the conversation',
-    // Mino 07-13 click-test: three platform buttons, each a redirect.
+    // the owner 07-13 click-test: three platform buttons, each a redirect.
     // Discord keeps the real flow (opens the dev portal AND enters the
     // existing tutorial -- redirect alone would kill the guided steps,
     // 2FA warning and Sirin's friction fixes included). Slack/Telegram
@@ -423,9 +423,9 @@ window.COPY = {
       telegram: 'https://t.me/botfather',
     },
     // History, kept because it reads like a contradiction otherwise: an
-    // early local-chat fallback idea was rejected (Mino 07-13, "localhost
+    // early local-chat fallback idea was rejected (the owner 07-13, "localhost
     // is onboarding-only") and this section long said so. The in-app chat
-    // BACKEND (channel-local.mjs + /chat, Mino go 07-30 00:28 on
+    // BACKEND (channel-local.mjs + /chat, the owner go 07-30 00:28 on
     // docs/in-app-chat-plan.md) supersedes that -- it is a real channel,
     // not the rejected localhost stopgap, and the "later — save and wait"
     // button this comment used to describe is gone with it.
@@ -445,7 +445,7 @@ window.COPY = {
         shot: true,
       },
       {
-        // Mino 07-13 click-test: the bare oauth2/authorize link (no scope,
+        // the owner 07-13 click-test: the bare oauth2/authorize link (no scope,
         // no permissions) doesn't install correctly, and the URL Generator
         // dance was the most error-prone part of the old tutorial (Sirin #1
         // was a symptom of it). The invite URL is now minted in-app from the
@@ -477,7 +477,7 @@ window.COPY = {
   // not on ONBOARDING_COMPLETE -- see wizard.js's pollAgentStatus(). The
   // "failed" cause table is sourced verbatim from the source file's §상태3
   // code→copy table; the server only ever sends a stable `code` enum (never
-  // a free-form reason string to render directly -- Melchior 2026-07-03:
+  // a free-form reason string to render directly -- the reviewer 2026-07-03:
   // that class of bug leaks English debug prose into the user-facing UI).
   step5: {
     connecting: {
@@ -485,12 +485,12 @@ window.COPY = {
       body: (name) => `Starting ${name}. This screen updates once Discord connection is confirmed.`,
       button: 'Open Discord',
     },
-    // channelName (2026-07-04 06:35, Melchior raw-verified http-server.cjs:940
+    // channelName (2026-07-04 06:35, the reviewer raw-verified http-server.cjs:940
     // -- validateAndInvite's return already carried channelId/guildId, this
     // adds homeChannel.name, a real field on the Discord API channel object,
     // no extra fetch). DM positive-exposure (source file §상태2 정정,
-    // 2026-07-04 06:2x): DM is a v1-mandatory, already-shipped path (Mino
-    // 01:24 directive, Melchior 02:23 12/12 tests) -- staying silent about a
+    // 2026-07-04 06:2x): DM is a v1-mandatory, already-shipped path (the owner
+    // 01:24 directive, the reviewer 02:23 12/12 tests) -- staying silent about a
     // working required feature is its own copy/implementation gap, same
     // class as promising something that doesn't work, just inverted. Home
     // channel stays the headline (that's where the onboarding funnel points
@@ -507,14 +507,14 @@ window.COPY = {
     failed: {
       title: 'Failed to start',
       causes: {
-        // action text (2026-07-04 06:5x, Melchior's wizard.js gate caught
+        // action text (2026-07-04 06:5x, the reviewer's wizard.js gate caught
         // this): settings.js is rename+Slack-placeholder only -- no real
         // key/model repair UI exists (http-server.cjs:1208 says so in its
         // own comment: "no re-onboarding/provider-switch UI today"). The
         // old action text promised a fix settings can't perform, and this
         // cause is actually reachable now (a junk setup-token passes Step 1
         // and crash-loops at spawn). Real settings repair UI = v1.1 flag
-        // (Melchior's call, separate from this copy fix). Button left as-is
+        // (the reviewer's call, separate from this copy fix). Button left as-is
         // -- opening settings is harmless, just not sufficient, and the v1.1
         // repair UI will land on the same button without another copy pass.
         crash_loop: {
@@ -593,7 +593,7 @@ window.COPY = {
         // That rule is right for the other codes and wrong for this one; making
         // the detail renderable is a bigger change than a copy row, so this row
         // states the situation generically and the specific command still only
-        // reaches the console. Left as a decision for Mino, not silently taken.
+        // reaches the console. Left as a decision for the owner, not silently taken.
         'bootstrap-needed': {
           cause: (name) => `${name} is set to attach mode, but there is no session to attach to yet.`,
           action: () => 'Restart the app once -- the bundled tmux sets itself up on boot. If it persists, switch topology to spawn on the Engine page.',
@@ -611,7 +611,7 @@ window.COPY = {
         // that cannot fix it; if it is theirs, we owe them the specific step.
         cli_missing: {
           cause: () => 'Claude Code is not installed on this machine. Scheherazade runs on top of your own Claude Code -- it does not ship one.',
-          // Install-assist exists now (2026-08-04, Mino "2로 가자"): the
+          // Install-assist exists now (2026-08-04, the owner "2로 가자"): the
           // setup screen's preflight panel has a one-click install button,
           // so the action points there AND carries the manual command for
           // anyone who prefers Terminal.
@@ -727,7 +727,7 @@ window.COPY = {
       empty: (name) => `${name} hasn't written this yet. It's rewritten overnight, during a scheduled memory-consolidation pass — that requires autonomy to be turned on in Settings, and at least one night to have gone by since.`,
       loadError: (msg) => `Couldn't load this (${msg}).`,
     },
-    // AUTHORED -- recently-touched files (같이보기 batch, Mino 2026-08-19:
+    // AUTHORED -- recently-touched files (같이보기 batch, the owner 2026-08-19:
     // "세라가 최근에 건드린 파일들 리스트도 볼 수 있게"). Register rules:
     // failed touches render dimmed with a mark, never hidden -- hiding a
     // failed write is the silent-false-success class this app keeps killing.
@@ -746,7 +746,7 @@ window.COPY = {
     deleteCancel: 'Cancel',
     deleteToast: 'Deleted.',
     deleteLabel: 'Delete',
-    // AUTHORED (not in copy file) -- manual refresh, Mino 07-13 click-test:
+    // AUTHORED (not in copy file) -- manual refresh, the owner 07-13 click-test:
     // "기억페이지 리프레시 버튼이라도 있으면 좋겠어"
     refreshLabel: 'Refresh',
     refreshToast: 'Reloaded.',
@@ -756,10 +756,10 @@ window.COPY = {
   // 2026-07-14 per docs/ia-subpage-plan.md. tabs{} is genuinely new UI (the
   // 3-way split didn't exist before); everything else here is MOVED verbatim
   // from memory.js's inline AGENT_COPY const (Slice 2, 2026-07-09) -- still
-  // eng placeholder pending Mino's copy-track localization pass, unchanged
+  // eng placeholder pending the owner's copy-track localization pass, unchanged
   // by the move itself.
   nav: {
-    // channels FIRST (multichannel v0.0.18, Mino 07-16: "맨 앞에 채널 섹션") --
+    // channels FIRST (multichannel v0.0.18, the owner 07-16: "맨 앞에 채널 섹션") --
     // tab order is meaning here: the messenger the agent lives through
     // outranks what it remembers and how it runs.
     tabs: { chat: 'Chat', channels: 'Channels', memory: 'Memory', connectors: 'Engine', settings: 'Settings', appearance: 'Appearance', logs: 'Logs' },
@@ -789,7 +789,7 @@ window.COPY = {
     updateAvailable: (latest, current) => `Update available: v${latest} (you're on v${current}).`,
     updateOpen: 'Download',
     muteWarn: (n, m) => `${m} was asked to reply ${n}× and didn't. The agent may be unable to send messages.`,
-    // Turn-error strip (2026-08-04, Mino "클로드도 동작안함"): carries the
+    // Turn-error strip (2026-08-04, the owner "클로드도 동작안함"): carries the
     // RAW upstream error text -- that text is the only thing that tells a
     // rate-limit hit ("429/limit reached", wait it out) apart from dead
     // auth ("401/authentication", re-login on Connectors). Paraphrasing it
@@ -811,7 +811,7 @@ window.COPY = {
     autonomyBadge: (start, end) => `autonomy ${start}-${end}`,
   },
 
-  // AUTHORED -- in-app chat page (in-app chat slice 4, Mino go 07-30
+  // AUTHORED -- in-app chat page (in-app chat slice 4, the owner go 07-30
   // 00:28, docs/in-app-chat-plan.md). Same no-false-promise register as
   // logs: statusUnreachable says restarts "usually" clear on their own (a
   // stale port file is exactly that), never "will".
@@ -843,7 +843,7 @@ window.COPY = {
     // agent works, then collapse into the "Worked for" summary when the
     // reply lands.
     activityRunning: (n) => `Working… · ${n} step${n === 1 ? '' : 's'}`,
-    // 0.2.11 storyteller status (Mino 08-21 "'세헤라자드'라는 캐릭터리스틱에
+    // 0.2.11 storyteller status (the owner 08-21 "'세헤라자드'라는 캐릭터리스틱에
     // 맞춰서... 에이전트가 지금 무슨 일을 하고 있는지 알아보기 쉽게"): the
     // LIVE summary names the current move in the storyteller's own register
     // and updates on every event — the pace of change is what reads as
@@ -851,7 +851,7 @@ window.COPY = {
     // the concrete label rides along so it stays informative, not just cute.
     // Labels arrive as `WebFetch: url` / `name: path` / bare bash prose
     // (dsh-lane activityLabelFor + hooks/pre-tool-activity.mjs conventions).
-    // Vocabulary drawn from the Nights themselves (Mino: "천일야화에서
+    // Vocabulary drawn from the Nights themselves (the owner: "천일야화에서
     // 따와서"): scrolls and ink for the scribe's work, caravans for word
     // from the wider world, the lamp's djinn for commands carried out, the
     // astrolabe for computation, and the magic word for a practiced art.
@@ -869,12 +869,12 @@ window.COPY = {
     thinkLive: 'Weaving the tale…',
     activityFoldSummary: (n, secs) => `Worked for ${secs}s · ${n} step${n === 1 ? '' : 's'}`,
     activityFoldAria: 'What the agent did during this turn',
-    // 0.2.1 collapsible Think fold (dsh lane reasoning stream; Mino 08-19
+    // 0.2.1 collapsible Think fold (dsh lane reasoning stream; the owner 08-19
     // "우리도 띵크 접이식으로 가자"). Collapsed by default — the reasoning
     // is there when wanted, never in the way.
     thinkSummary: 'Thinking…',
     thinkFoldSummary: 'Thought process',
-    // 0.2.15 background-subagent pill (Mino 08-24 "서브 스폰하면 서브도
+    // 0.2.15 background-subagent pill (the owner 08-24 "서브 스폰하면 서브도
     // working 정보에 띄우게"): stays visible across turn ends while any
     // background child is still working, so "Worked for Ns" cannot read as
     // "everything is finished".
@@ -892,11 +892,11 @@ window.COPY = {
     activityAria: 'What the agent is working on right now',
     reactAria: (emoji) => `React with ${emoji}`,
     reactFailed: "Couldn't react — try again.",
-    // Message copy button (2026-08-05, colleague feedback via Mino).
+    // Message copy button (2026-08-05, colleague feedback via the owner).
     copyAria: 'Copy this message',
     copied: 'Copied.',
     copyFailed: 'Copy failed. Select the text manually and copy it.',
-    // Image attachments (2026-08-04, Mino "인앱챗에 이미지 업로드할수있는
+    // Image attachments (2026-08-04, the owner "인앱챗에 이미지 업로드할수있는
     // 방법이 없음"). The 10MB number matches the server's hard cap in
     // routes/chat.cjs -- if that changes, change both.
     attachTitle: 'Attach an image (or paste one into the box)',
@@ -925,7 +925,7 @@ window.COPY = {
     newConversationFailed: "Couldn't start a new conversation — try again.",
   },
 
-  // AUTHORED (v0.0.20) -- session log viewer (Mino 07-16: 개발 중 앱이
+  // AUTHORED (v0.0.20) -- session log viewer (the owner 07-16: 개발 중 앱이
   // 깜깜이라 로그 창 요청). Register matches the rest: 간결 존댓말, no
   // promises the code doesn't keep -- redaction is best-effort, so the
   // copy says tokens are "가려집니다" (mechanism) and never "안전합니다"
@@ -980,7 +980,7 @@ window.COPY = {
     // shared with the user's own Claude Code). No euphemisms: "deletes the
     // agent's memory" is the sentence a user must read before clicking.
     groupDanger: 'Danger zone',
-    // AUTHORED -- About / manual update check (2026-08-04, Mino "오토
+    // AUTHORED -- About / manual update check (2026-08-04, the owner "오토
     // 업데이트 버튼 어딨니?"). The nav banner appears only when an update
     // exists; this row is the always-there surface. "Check now" honesty:
     // failure shows the server's detail, up-to-date says so plainly.
@@ -1018,7 +1018,7 @@ window.COPY = {
     updateAvailableLine: (latest) => `v${latest} is available.`,
     updateOpenButton: 'Open download page',
     updateCheckFailed: (detail) => `Couldn't check: ${detail || 'unknown error'}`,
-    // AUTHORED -- Ollama by-URL model picker (2026-08-04, Mino: paste an
+    // AUTHORED -- Ollama by-URL model picker (2026-08-04, the owner: paste an
     // ollama.com/library/{model} URL to run models the dropdown doesn't
     // list). The model-absent line WARNS instead of blocking: the public
     // catalog probe is best-effort and can lag a brand-new model.
@@ -1272,7 +1272,7 @@ window.COPY = {
     permsRelaunchButton: 'Restart App',
   },
 
-  // AUTHORED -- channels page (multichannel v0.0.18, Mino 07-16 15:07:
+  // AUTHORED -- channels page (multichannel v0.0.18, the owner 07-16 15:07:
   // "맨 앞에 채널 섹션 추가하고 Discord/Slack/Telegram 연동 갈아끼울 수
   // 있게" + 15:13 "셋 다 실작동까지 이번에"). The discord reconnect strings
   // MOVED here verbatim from `connectors` (that page no longer renders
@@ -1372,7 +1372,7 @@ window.COPY = {
     backToMemory: 'Back to Memory',
     slackLabel: 'Slack',
     slackNote: 'Support coming later',
-    // AUTHORED -- post-onboarding provider auth (Mino 07-13 click-test:
+    // AUTHORED -- post-onboarding provider auth (the owner 07-13 click-test:
     // "온보딩 끝낸 이후에 ollama cloud 인증 추가 / chatGPT인증 추가").
     providersLabel: 'Providers',
     // providersNote removed (대공사 — subtitle row retired; the label carries it)
@@ -1424,7 +1424,7 @@ window.COPY = {
     usageLabel: 'Usage',
     usageRefresh: 'Refresh',
     usageLoading: 'Reading usage…',
-    // AUTHORED — gauge-UI lane names (2026-08-05, Mino: 텍스트 말고 진짜
+    // AUTHORED — gauge-UI lane names (2026-08-05, the owner: 텍스트 말고 진짜
     // 게이지 "보기쉽게"). Replaced the old one-line text prefixes.
     usageLaneClaude: 'Claude',
     usageLaneCodex: 'Codex',
@@ -1465,7 +1465,7 @@ window.COPY = {
       exit_nonzero: 'Authentication failed. Try again.',
       unknown: 'Authentication failed. Try again.',
     },
-    // AUTHORED -- discord reconnect (Mino 07-14 11:31: "이미 세팅한 상태에서
+    // AUTHORED -- discord reconnect (the owner 07-14 11:31: "이미 세팅한 상태에서
     // 디코 -> 슬랙 -> 텔레그램 해보게"). Failure branches deliberately reuse
     // discordTutorial.failures VERBATIM at the call site (same three causes,
     // same fixes) -- no duplicate strings here, connectors.js reads that map.
@@ -1488,7 +1488,7 @@ window.COPY = {
     discordApplyOk: 'Move',
     discordApplying: 'Applying and restarting the agent…',
     discordApplied: (guild, channel) => `Connected: ${guild} / #${channel}`,
-    // AUTHORED -- Claude subscription re-login row (2026-08-04, Mino
+    // AUTHORED -- Claude subscription re-login row (2026-08-04, the owner
     // "connectors에서 클로드도 re-login 가능하게" + "claude API Key는
     // 없애버리고" -- the claudeKey* BYOK block that lived here is gone with
     // the API-key mode). Wording mirrors the wizard's setup-token panel;
@@ -1511,11 +1511,11 @@ window.COPY = {
     // proxy actually answers; no line when it doesn't run.
     chatgptServing: (model) => `Currently serving: ${model}`,
     chatgptServingUnknown: 'The proxy response has no model info',
-    // AUTHORED -- future client slots (Mino 07-14 11:31 directive names the
+    // AUTHORED -- future client slots (the owner 07-14 11:31 directive names the
     // path: 디코 -> 슬랙 -> 텔레그램).
     telegramLabel: 'Telegram',
     telegramNote: 'Support coming later',
-    // AUTHORED -- claude.ai connector intercept (춘식3 design, 07-14). The
+    // AUTHORED -- claude.ai connector intercept (internal design, 07-14). The
     // lane warning is the load-bearing honesty line: on a non-subscription
     // lane an authorized connector is inert, so we SAY so instead of shipping
     // a dead button.
@@ -1536,7 +1536,7 @@ window.COPY = {
   },
 
   // Sourced from the source file's Step 4 폴백 note: "waiting.html 카피
-  // (폴백 착지 화면)". Not a chat body (Mino rejected web-chat) -- status +
+  // (폴백 착지 화면)". Not a chat body (the owner rejected web-chat) -- status +
   // a single CTA back into the Discord tutorial only.
   waiting: {
     title: 'Settings saved',

@@ -20,7 +20,7 @@ function createRoutes(staticCtx) {
   } = staticCtx
   return [
     // GET /api/logs?since=N — session log tail for the /logs viewer (v0.0.20,
-    // Mino 07-16 "로그 터미널 창"). Cursor-polled: `since` = last seq the
+    // the owner 07-16 "로그 터미널 창"). Cursor-polled: `since` = last seq the
     // client holds, response carries entries after it + nextSeq + dropped
     // (ring overflow gap) + the disk sink path for full-history grabs.
     // Read-only GET, localhost-bound server, and lines are token-redacted at

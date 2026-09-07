@@ -1,5 +1,5 @@
 // permission-probes.cjs — macOS permission-state probes for the P0 checklist
-// (docs/permission-visibility-design.md; 춘식3 proposal §P0, adopted 2026-07-15).
+// (docs/permission-visibility-design.md; the internal proposal §P0, adopted 2026-07-15).
 //
 // Every probe answers one question: "if the agent tries this class of work
 // RIGHT NOW, does it hit a wall?" Three hard facts shape everything here
@@ -84,7 +84,7 @@ function probeAccessibility({ systemPreferences }) {
   }
 }
 
-// sudo — two truthful tiers (Mino 2026-08-19 11:22: the row read Denied on a
+// sudo — two truthful tiers (the owner 2026-08-19 11:22: the row read Denied on a
 // machine where onboarding had already collected and stored the admin
 // password — the probe only knew about tier 1):
 //   1. `sudo -n true` rc 0 -> passwordless sudo works right now.

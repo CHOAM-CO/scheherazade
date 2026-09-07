@@ -96,7 +96,7 @@
     $('set-group-agent').textContent = C.groupAgent || 'Agent'
     $('set-group-system').textContent = C.groupSystem || 'System'
 
-    // ── import from other agents (design-0022, Mino 20:13 "에이전트가
+    // ── import from other agents (design-0022, the owner 20:13 "에이전트가
     // 싹 다 긁어서 '제가 이제 챙길게요'"). Settings is the always-there
     // surface; the wizard step reuses the same endpoints later. This UI
     // is ONLY the consent gate -- the agent performs the sweep itself,
@@ -154,7 +154,7 @@
       }
     }
 
-    // ── handover: custom-path source (design-0023, Mino 2026-08-05
+    // ── handover: custom-path source (design-0023, the owner 2026-08-05
     // "persona.md / agents.md 같은 시스템프롬프트류 파일 긁어서 구조파악하고
     // ... 흡수"). Preview first (names only), then the same one-consent
     // sweep — but structure-map-first, since nobody knows this layout. ──
@@ -235,7 +235,7 @@
       }
     }
 
-    // ── about / manual update check (2026-08-04, Mino "오토 업데이트
+    // ── about / manual update check (2026-08-04, the owner "오토 업데이트
     // 버튼 어딨니?" -- the nav banner is silent when you're current, so
     // this is the always-present surface: version + Check now). ────────
     $('set-group-about').textContent = C.groupAbout || 'About'
@@ -352,7 +352,7 @@
     // Engine cards (model/effort, custom proxy, topology) moved to the
     // Engine page (tab merge 2026-08-06) -- see connectors.js.
     // macOS-only surface, hidden rather than rendered empty on Windows
-    // (Mino, first win install 2026-08-03): every permissions row is a
+    // (the owner, first win install 2026-08-03): every permissions row is a
     // TCC/macOS wall, and the buttons open x-apple.systempreferences:
     // URLs that do nothing off macOS.
     if (window.IS_MAC) {
@@ -436,7 +436,7 @@
     if (row.kind === 'heuristic' && row.granted !== 'indeterminate') text += ` (${C.permsHeuristicMark})`
     else if (row.kind === 'stored') text += ` (${C.permsStoredMark})`
     else if (row.kind === 'verified') text += ` (${C.permsVerifiedMark})`
-    // Dot-only (Mino 08-20 22:00 "여기도 글 말고 초록불/빨간불로") — same
+    // Dot-only (the owner 08-20 22:00 "여기도 글 말고 초록불/빨간불로") — same
     // bean grammar as the nav status. The full sentence (incl. the
     // heuristic/stored/verified honesty marks) rides the hover title; the
     // colored dot renders via #set-perms-rows .status-line::before.

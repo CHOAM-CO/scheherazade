@@ -1,5 +1,5 @@
 // log-buffer.cjs — in-memory ring buffer + on-disk sink for the app's
-// operational log (v0.0.20, Mino 07-16 "로그 터미널 창" commission).
+// operational log (v0.0.20, the owner 07-16 "로그 터미널 창" commission).
 //
 // WHY THIS EXISTS: in the packaged app, main.cjs's console.* goes nowhere a
 // user can see (no terminal; Console.app at best). The agent supervisor's

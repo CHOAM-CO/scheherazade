@@ -34,7 +34,7 @@
 // check is the least important thing it does.
 'use strict'
 
-// 0.2.9 unification (2026-08-21, Mino "진짜 통합"): back on the live public
+// 0.2.9 unification (2026-08-21, the owner "진짜 통합"): back on the live public
 // feed. The dsh track is the main line -- appId/productName/data home now
 // equal the 0.1.x line's, so a 0.2.9+ release on this feed IS a plain
 // upgrade for every installed copy, and the 0.1.x-era cross-coupling worry

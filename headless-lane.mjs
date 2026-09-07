@@ -51,14 +51,14 @@ const MCP_CONFIG_FILE = process.env.MCP_CONFIG_FILE || ''
 
 // Lifecycle logs go to STDOUT: the app's log console colors stderr red
 // ([agent!]), and a healthy boot painted red read as an error to a real
-// user (Mino 16:02 "인디케이터에서는 빨간색으로 떠서 에러난것같음"). The
+// user (the owner 16:02 "인디케이터에서는 빨간색으로 떠서 에러난것같음"). The
 // lane's own stdout is free -- claude's stream-json rides a pipe consumed
 // internally, never this process's stdout. errLog stays on stderr for
 // genuine failures only.
 const log = (m) => process.stdout.write(`[headless-lane] ${m}\n`)
 const errLog = (m) => process.stderr.write(`[headless-lane] ${m}\n`)
 // Per-tool-call chatter drowned the app's log console the moment a real
-// agent got busy (Mino, clean-mac 13:54 "로그 존나뜸"). Lifecycle lines
+// agent got busy (the owner, clean-mac 13:54 "로그 존나뜸"). Lifecycle lines
 // (spawn/init/result/exit/redelivery/strikes) stay on by default;
 // per-event diagnostics go behind this flag.
 const DEBUG = process.env.SCHEHERAZADE_LANE_DEBUG === '1'
@@ -73,12 +73,12 @@ const strikesFile = () => path.join(MEM, '.headless-resume-strikes.json')
 const pendingFile = () => path.join(MEM, '.headless-pending.json')
 
 // Conversation rotation. v1 (UX red-team 2026-08-04 F3) cut purely by AGE;
-// v2 (Mino 2026-08-04 19:44 "시간으로 끊지말고 더 좋은 방법 있나?") cuts by
+// v2 (the owner 2026-08-04 19:44 "시간으로 끊지말고 더 좋은 방법 있나?") cuts by
 // CONTEXT PRESSURE, which is the thing age was a proxy for: what actually
 // degrades a long resume is the context the next turn must carry.
 // v2.1 (2026-08-05 live receipts): the `result` event's usage turns out to be
 // CUMULATIVE across the turn's sub-turn API calls, not standing context —
-// Mino's box read "932,698 tokens" after a turns=35 turn (≈26.6k × 35), the
+// the owner's box read "932,698 tokens" after a turns=35 turn (≈26.6k × 35), the
 // opus probe "190,368" after turns=10 (≈19k × 10). Reading it over-rotated
 // by roughly a factor of num_turns. The LAST `assistant` event's
 // message.usage is the actual standing weight of the newest API call, so
@@ -117,7 +117,7 @@ export function contextTokensOf(usage) {
 // Turn watchdog (2026-08-04, field case: deepseek/glm via ollama.com wedging
 // a turn forever -- process alive, init clean, model call never returns,
 // user sees eternal silence; first reported by external tester #1 as
-// "silent die", reproduced on Mino's own machine 17:47). stream-json emits
+// "silent die", reproduced on the owner's own machine 17:47). stream-json emits
 // per-MESSAGE events, not token deltas, so a slow model is legitimately
 // silent for the length of one API call -- the ceiling must be generous.
 // Default 10min of ZERO child stdout while a turn is in flight = wedged:
@@ -206,13 +206,13 @@ function readPriorSession() {
   }
 }
 
-// ── mute recovery (2026-08-13, Mino field report: in-app 0.1.7, Windows) ─────
+// ── mute recovery (2026-08-13, the owner field report: in-app 0.1.7, Windows) ─────
 // The `-p` mute: a model composes reply text but never calls the reply tool,
 // so the answer sits in the transcript and never reaches the user.
 // hooks/stop-reply-guard.mjs is meant to catch this on Stop and force a resend
 // via exit 2 -- but Claude Code drops a Stop-hook's exit 2 as a NON-blocking
 // error in `claude -p` headless mode ("Failed with non-blocking status code"),
-// because there is no interactive turn for it to block into. Proven on Mino's
+// because there is no interactive turn for it to block into. Proven on the owner's
 // box: the guard fired 7x, every one logged non-blocking, the turns ended
 // silent, and the mute-strike ledger (which only advances behind the guard's
 // blocked-and-retried path) never moved. So the guard's decision moves HERE,
@@ -358,7 +358,7 @@ export function buildArgs({ model, systemPromptFile, mcpConfigFile, resumeId }) 
 }
 
 // ── pre-spawn model preflight (2026-08-13) ──────────────────────────────────
-// Field case (Mino's box, "핑" → eternal silence): the panel held an ollama
+// Field case (the owner's box, "핑" → eternal silence): the panel held an ollama
 // model tag the endpoint did not have (`deepseek-v4-flash:0731`; the local
 // daemon's real tag is `:0731-cloud`). `claude -p` prints "There's an issue
 // with the selected model... may not exist" and exits 0 — NOT an error event,
@@ -526,7 +526,7 @@ async function main() {
     // announce, shutdown flush, autonomy start/stop/brief) — replaying one
     // after a recycle re-runs a moment that is over (live bite 2026-08-05
     // 02:01: the stranded shutdown-flush turn was redelivered into the next
-    // boot and killed it again, extending the quit loop Mino watched).
+    // boot and killed it again, extending the quit loop the owner watched).
     // User messages still redeliver exactly as before.
     const stranded = readPending().filter((ev) => !ev.redelivered && Date.now() - (Number(ev.ts) || 0) < 48 * 3600_000
       && !(ev.meta && ev.meta.sender === 'SYSTEM'))
@@ -570,7 +570,7 @@ async function main() {
       // usage keeps the previous sample instead of zeroing pressure.
       const u = e.message && e.message.usage
       if (u && (u.input_tokens != null || u.cache_read_input_tokens != null)) lastAssistantUsage = u
-      // Turn transcript in the log ring (0.1.4, Mino: "log는 log지 에러메세지
+      // Turn transcript in the log ring (0.1.4, the owner: "log는 log지 에러메세지
       // 창이 아니야" -- the Logs page is where turn detail belongs, not an
       // error banner). One line per tool call (name + a short arg preview)
       // and per text block (first 200 chars): enough to follow what the
@@ -597,7 +597,7 @@ async function main() {
         }
       }
     } else if (e.type === 'system' && e.subtype === 'api_retry') {
-      // Upstream retry storm made VISIBLE (2026-08-13, Mino field log: inbound
+      // Upstream retry storm made VISIBLE (2026-08-13, the owner field log: inbound
       // "님?" reaches stdin, then NOTHING). Mock-429 receipt (/tmp/sched-
       // silentdead): the CLI answers 429 with up to max_retries=10 silent
       // retries at retry_delay_ms=60000 -- ten minutes of dead air per turn --
@@ -634,7 +634,7 @@ async function main() {
       }
       log(`init: model=${e.model} session=${e.session_id} mcp=${JSON.stringify((e.mcp_servers || []).map((s) => `${s.name}:${s.status}`))}`)
     } else if (e.type === 'result') {
-      // Durations exposed for the latency receipts (Mino 2026-08-05 02:47
+      // Durations exposed for the latency receipts (the owner 2026-08-05 02:47
       // "답변 추론에 비해 너무 늦는데"): dur = whole turn wall-clock, api =
       // time inside model calls. dur >> api means harness/tool overhead;
       // api >> expectation with high turns= means sub-turn churn (each

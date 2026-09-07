@@ -1,6 +1,6 @@
 'use strict'
 // cadence/boot-announce.cjs -- pure decision for the boot ping (v0.0.16
-// review fix, Melchior 07-16 13:24 verdict on cf39447: the original
+// review fix, the reviewer 07-16 13:24 verdict on cf39447: the original
 // announceBoot had only {marker exists + 10min staleness} as guards, which
 // caps NOTHING in a crash loop that reaches Discord login each time --
 // backoff tops out at 120s, so a bad-provider-key loop could ping up to
@@ -14,7 +14,7 @@
 // sends); this file owns the rule; tests/test-boot-announce.mjs calls it.
 
 const DEFAULT_MAX_AGE_MIN = 10 // marker older than this = leftover from a dead spawn
-const DEFAULT_THROTTLE_MIN = 15 // min gap between announces (Melchior rec 10~15, conservative end)
+const DEFAULT_THROTTLE_MIN = 15 // min gap between announces (review rec 10~15, conservative end)
 
 function intKnob(raw, fallback) {
   const n = Number.parseInt(raw, 10)

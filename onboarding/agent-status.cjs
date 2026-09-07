@@ -62,7 +62,7 @@
 //   'harness_stale'       -- main.cjs's pre-spawn gate: the boot harness
 //                            re-render failed, so the agent was NOT started
 //                            against an out-of-date CLAUDE.md /
-//                            ONTOLOGY_GUIDE.md / system_prompt.md (nogabi #6).
+//                            ONTOLOGY_GUIDE.md / system_prompt.md (harness-refresh #6).
 //                            Clears itself on the next boot that renders
 //   'timeout'             -- http-server.cjs's computeAgentStatus() backstop
 //                            (connecting exceeded TIMEOUT_MS with no live

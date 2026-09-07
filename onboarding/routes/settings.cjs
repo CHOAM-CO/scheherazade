@@ -76,7 +76,7 @@ function createRoutes(staticCtx) {
           sendJson(res, 400, { error: 'displayName is required' })
           return
         }
-        // Identity firewall (2026-08-15, Artaban bug): the outgoing name is
+        // Identity firewall (2026-08-15, identity-bleed bug): the outgoing name is
         // recorded as a predecessor in .agent-identity in the same request
         // that rewrites DISPLAY_NAME — first-person records written under
         // the old name stay attributable. Best-effort: a provenance-write
@@ -92,7 +92,7 @@ function createRoutes(staticCtx) {
       },
     },
     // POST uninstall: the whole app, all four residue classes, no Terminal
-    // (Mino 07-30 "전체삭제하고 클린테스트하고싶은데" -> productized). Chain:
+    // (the owner 07-30 "전체삭제하고 클린테스트하고싶은데" -> productized). Chain:
     // typed-confirm body gate -> stop agent -> spawn the detached cleanup
     // script (fires only after this process dies) -> answer the page ->
     // trash the .app bundle -> exit. Mutating POST, so the per-launch

@@ -2,14 +2,14 @@
 // pre-reply-negation-check.mjs -- denial gate (PreToolUse on
 // mcp__agent-channel__reply).
 //
-// Port of MAGI fleet hooks/pre-reply-negation-check.mjs (v0.0.4 roadmap item,
-// Mino 2026-07-13 19:40). Blocks "그런 적 없어 / 못 해 / 안 했는데" -class
+// Port of the reference fleet hooks/pre-reply-negation-check.mjs (v0.0.4 roadmap item,
+// the owner 2026-07-13 19:40). Blocks "그런 적 없어 / 못 해 / 안 했는데" -class
 // claims when the reply text shows no sign of having checked the records
 // first. For a companion whose whole value is remembering, a confabulated
 // denial ("we never talked about that") is worse than a wrong fact -- this
 // forces one memory_query / notes check before the denial goes out.
 //
-// The Korean negation regexes carry the MAGI originals VERBATIM, including
+// The Korean negation regexes carry the the reference fleet originals VERBATIM, including
 // the false-positive fixes earned in fleet operation (epistemic-limit verbs
 // exempted 2026-05-30, bare "안 돼" feel-register exempted 2026-06-01,
 // particle-bridge char classes). Do not "simplify" them -- each oddity is a

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // context-gauge.mjs -- Stop + SessionStart hook: context-occupancy tap.
 //
-// WHY (Mino live test 2026-07-16, gpt-5.6-luna 372K lane): the agent hit its
+// WHY (the owner live test 2026-07-16, gpt-5.6-luna 372K lane): the agent hit its
 // context ceiling ~1.5h into real use and every turn drowned in a 2-3min
 // autocompact pass. From the app there was NO way to see occupancy -- the
 // agent terminal is headless (expect-wrapped PTY), /context is a CLI-UI
@@ -75,7 +75,7 @@ async function main() {
   // A fresh session (SessionStart before any turn) legitimately has no
   // usage yet -- keep the previous snapshot rather than blanking the gauge,
   // but MARK it as carried over from an earlier session. Live incident
-  // (Mino, 2026-07-28): a previous session ended near 133K, the agent was
+  // (the owner, 2026-07-28): a previous session ended near 133K, the agent was
   // rebooted on a new build, and the gauge's unmarked leftover read as
   // "133K at boot" -- a 20K arithmetic gap against the real session ledger
   // that cost a three-hypothesis diagnosis to close. An instrument may

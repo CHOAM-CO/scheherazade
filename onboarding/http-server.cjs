@@ -87,7 +87,7 @@ const attachTopology = require('../attach-topology.cjs') // /api/topology read s
 // stores the same 'claude-subscription' credential.
 const { createSetupTokenSession, killSetupTokenChildOnShutdown } = require('../setup-token-session.cjs')
 
-// Full-scope OAuth capture for the usage gauge (2026-08-13, Mino: the win
+// Full-scope OAuth capture for the usage gauge (2026-08-13, the owner: the win
 // tester's gauge is stuck on HTTP 429 because setup-token's user:inference
 // scope cannot read the usage endpoint). Loopback flow, no native module.
 const {
@@ -163,7 +163,7 @@ const AGENT_CONFIG_PATH = path.join(CONFIG_DIR, '.agent-config')
 const ENV_PATH = path.join(CONFIG_DIR, '.env')
 const MCP_JSON_PATH = path.join(CONFIG_DIR, '.mcp.json')
 
-// ── appearance (Appearance tab, 2026-08-05 Mino "어피어런스 탭 만들고") ──
+// ── appearance (Appearance tab, 2026-08-05 the owner "어피어런스 탭 만들고") ──
 // User-tunable look knobs (glass gauge / font / accent). The mapping lives
 // in public/js/appearance-model.js — required HERE too, so the pre-paint
 // <style> the server injects and the browser's live slider apply can never
@@ -309,7 +309,7 @@ function computeAgentStatus() {
   if (proc.state === 'connecting') {
     const connectingSince = Date.parse(proc.since)
     if (Number.isFinite(connectingSince) && Date.now() - connectingSince > TIMEOUT_MS) {
-      // Sleep/wake false-fail fix (2026-08-15, Mino field report): proc.state
+      // Sleep/wake false-fail fix (2026-08-15, the owner field report): proc.state
       // never leaves 'connecting' after a SUCCESSFUL boot -- "live" is derived
       // purely from marker freshness above. So this backstop used to fire for
       // an agent that had been live for HOURS whenever the marker merely went
@@ -370,7 +370,7 @@ const PROVIDERS = ['claude', 'claude-cli', 'claude-subscription', 'chatgpt', 'ol
 // what provider-env.cjs's 'claude-cli' branch arranges.
 const CLAUDE_CLI_CREDENTIALS_PATH = path.join(os.homedir(), '.claude', '.credentials.json')
 
-// Effort allowlist for POST /api/agent/effort (Mino 07-13 click-test item 2).
+// Effort allowlist for POST /api/agent/effort (the owner 07-13 click-test item 2).
 // Values become CLAUDE_CODE_EFFORT_LEVEL in the spawned agent's env via
 // main.cjs -> run.sh:56; run.sh's own fallback default is 'high'.
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'max']
@@ -1091,7 +1091,7 @@ async function validateProviderKey(provider, key, opts = {}) {
     return checkLocalLiveness(`http://localhost:${portResult.port}`, 'codex-as-api proxy')
   }
   if (provider === 'ollama') {
-    // Ollama CLOUD API-key mode (2026-08-04, Mino "ollama -> API키"; the
+    // Ollama CLOUD API-key mode (2026-08-04, the owner "ollama -> API키"; the
     // previous local-daemon check lived here -- see git history. The daemon's
     // port-answers-so-"connected" lie is what a real external tester paid
     // for the same day). Verdict = one authenticated 1-token POST to
@@ -1122,7 +1122,7 @@ async function validateProviderKey(provider, key, opts = {}) {
     // Same signin-era ':cloud' tag normalization the spawn env applies
     // (provider-env.cjs) -- validate must judge the NAME THE LANE WILL SEND,
     // not the raw config string, or an old config reads as broken when the
-    // runtime would actually work (Mino field receipt 2026-08-04 17:37).
+    // runtime would actually work (the owner field receipt 2026-08-04 17:37).
     const wanted = normalizeOllamaCloudModel(wantedRaw)
     const normNote = wantedRaw && wanted !== wantedRaw ? ` (checked as "${wanted}" -- the local ':cloud' tag suffix does not exist on ollama.com and is stripped at spawn too)` : ''
     // Probe with a model the catalog vouches for whenever the wanted one
@@ -1165,7 +1165,7 @@ async function validateProviderKey(provider, key, opts = {}) {
       if (wanted && modelPresent === false) {
         // Name the truncation: showing 8 of N unlabeled reads as "this IS the
         // catalog" -- that misread cost a wrong "glm-5.2 is gone" report on
-        // 2026-08-19 (Mino caught it against the live library page).
+        // 2026-08-19 (the owner caught it against the live library page).
         return { ok: true, reachable: true, modelPresent: false, detail: `ollama.com accepted the key, but model "${wanted}" is not in its model list (${names.length} available, first 8: ${names.slice(0, 8).join(', ')}). Check the name on ollama.com.${normNote}` }
       }
       return { ok: true, reachable: true, modelPresent, detail: (wanted ? `ollama.com accepted the key and model "${wanted}" answered.` : 'ollama.com accepted the key.') + normNote }
@@ -1609,7 +1609,7 @@ function channelBackendReadiness() {
     },
     slack: {
       // Tokens ALONE are a complete slack config since DM-default mode
-      // (2026-08-04, Mino): no home channel means the conversation is the
+      // (2026-08-04, the owner): no home channel means the conversation is the
       // bot's DM. A picked channel still shows as `home` when present.
       configured: Boolean(readOrUnconfigured(readSlackBotToken) && readOrUnconfigured(readSlackAppToken)),
       home: cfg.SLACK_HOME_CHANNEL_NAME || cfg.SLACK_HOME_CHANNEL_ID || 'DM',
@@ -1810,7 +1810,7 @@ function serveStatic(req, res, urlPath) {
     // Platform rides along in the same injection. The UI used to be written
     // for macOS only -- "this Mac", "Run claude in Terminal", a Full Disk
     // Access card and a permissions panel that are macOS concepts with no
-    // Windows equivalent. Mino hit all of it on the first Windows install
+    // Windows equivalent. the owner hit all of it on the first Windows install
     // (2026-08-03 23:56). The renderer cannot see process.platform, so it
     // gets told. copy.js reads this before it builds any string.
     let injected = html.replace(
@@ -1875,7 +1875,7 @@ const LOGIN_SPECS = {
     artifact: () => path.join(os.homedir(), '.codex', 'auth.json'),
     installHint: 'codex CLI가 없습니다. https://github.com/openai/codex 에서 설치 후 다시 시도해주세요.',
   },
-  // 'ollama' REMOVED 2026-08-04 (Mino: "ollama -> API키"): its connect method
+  // 'ollama' REMOVED 2026-08-04 (the owner: "ollama -> API키"): its connect method
   // is now an ollama.com API-key paste stored via the same credential plumbing
   // as claude BYOK (see provider-env.cjs's ollama row + validateProviderKey's
   // ollama branch). No spec here means the login routes reject it and the
@@ -1885,11 +1885,11 @@ const LOGIN_SPECS = {
   // false-"connected" a real external tester hit the same day.
 }
 
-// ── MCP connector OAuth intercept (IA v0.0.9, 춘식3 design + Idea review) ──
+// ── MCP connector OAuth intercept (IA v0.0.9, an internal design + review) ──
 // In-app authorization of claude.ai connectors (Gmail/Calendar/Atlassian/…):
 // spawn `claude mcp login --no-browser "claude.ai <name>"`, capture the
 // authorize URL it prints to stdout, hand it to the UI for the user to open.
-// The user never touches a terminal (Mino constraint: non-programmers).
+// The user never touches a terminal (the owner constraint: non-programmers).
 //
 // Distinct from LOGIN_SPECS (chatgpt/ollama), which have static keys, fixed
 // argv, and a LOCAL artifact. Connectors have dynamic names, a name in argv,
@@ -1909,13 +1909,13 @@ const LOGIN_SPECS = {
 // proxy. connectorLaneWarning() drives the UI to say so vs a dead button.
 const MCP_CONNECTOR_SPEC = {
   argv: (connectorName) => ['mcp', 'login', '--no-browser', `claude.ai ${connectorName}`],
-  // Fix #1 (춘식3 counter-pass, Mino 07-14 re-flag): the query string is
+  // Fix #1 (a counter-pass, the owner 07-14 re-flag): the query string is
   // MANDATORY. The real authorize URL carries `?product_surface=sdk-cli`
   // and WITHOUT it the approval page does not appear, so the regex requires
   // both the query AND that param -- a bare .../mcpsrv_x with no query is a
   // capture MISS, not a match. Origin is pinned to https://claude.ai
   // literally, so a captured string can only ever be a claude.ai authorize
-  // endpoint (Idea hardening #3; the child is our own claude, but defense in
+  // endpoint (red-team hardening #3; the child is our own claude, but defense in
   // depth is cheap here).
   urlRegex: /https:\/\/claude\.ai\/api\/organizations\/[\w-]+\/mcp\/start-auth\/mcpsrv_[\w]+\?[^\s]*product_surface=sdk-cli[^\s]*/,
   installHint: 'claude 실행 파일을 찾을 수 없습니다. 앱을 다시 설치해주세요.',
@@ -2056,7 +2056,7 @@ function parseMcpConnectorList(text) {
 }
 
 // Which providers have a usable credential/auth artifact RIGHT NOW.
-// (post-onboarding multi-provider unlock, Mino 07-13 click-test item 3:
+// (post-onboarding multi-provider unlock, the owner 07-13 click-test item 3:
 // "인증키 있으면 Model Dropdown에서 셀렉 가능하게"). Rides along on GET
 // /api/config as camelCase `availableProviders`, and gates the provider
 // field of POST /api/agent/model server-side. Detection mirrors what spawn
@@ -2188,7 +2188,7 @@ const loginStarting = { chatgpt: false, ollama: false }
 function resolveBin(name) {
   // Same FIXED-locations-only posture on both platforms (no PATH walk --
   // the Codex-review reasoning above is platform-independent). Win list
-  // (win-port Phase 2, UNVERIFIED on magi-win): DATA_HOME/bin is the
+  // (win-port Phase 2, UNVERIFIED on the Windows box): DATA_HOME/bin is the
   // app-managed bootstrap dir on both platforms; the Ollama entry is its
   // installer's default user-scope location (harmlessly absent for other
   // names, same shape as probing /opt/homebrew/bin/<name> on mac).
@@ -2197,7 +2197,7 @@ function resolveBin(name) {
   const fixed = process.platform === 'win32'
     ? [
         path.join(DATA_HOME, 'bin', `${name}.exe`),
-        // Codex standalone installer (OpenAI's own MSI/setup, verified on magi-win)
+        // Codex standalone installer (OpenAI's own MSI/setup, verified on the Windows box)
         path.join(localAppData, 'Programs', 'OpenAI', 'Codex', 'bin', `${name}.exe`),
         // npm global install (.cmd shim — needs shell:true in spawn, see below)
         path.join(appData, 'npm', `${name}.cmd`),
@@ -2417,7 +2417,7 @@ function killAllLoginChildren(signal = 'SIGTERM') {
   if (claudeInstallTimer) { clearTimeout(claudeInstallTimer); claudeInstallTimer = null }
 }
 
-// ── Claude Code CLI install-assist (2026-08-04, Mino "2로 가자") ───────────
+// ── Claude Code CLI install-assist (2026-08-04, the owner "2로 가자") ───────────
 // A truly clean machine has no claude CLI, and the app deliberately ships
 // none (no redistribution grant in its LICENSE -- see main.cjs's
 // resolveClaudeBin comment). Until now the fix was a curl one-liner the UI
@@ -2431,7 +2431,7 @@ function killAllLoginChildren(signal = 'SIGTERM') {
 // kill the whole tree, and completion is exit 0 AND the artifact check
 // (resolveClaudeBin() actually finding a binary) -- the same
 // exit-0-plus-artifact bar the login flows use. darwin-only, same
-// MANAGED_INSTALL_SUPPORTED precedent as bootstrap.cjs (Mino locked 07-13):
+// MANAGED_INSTALL_SUPPORTED precedent as bootstrap.cjs (the owner locked 07-13):
 // Windows stays detection-only with a manual command.
 const CLAUDE_INSTALL_TIMEOUT_MS = 300_000 // installer downloads a real binary; login-flow 180s is too tight on slow links
 const CLAUDE_INSTALL_ARGV = ['-c', 'curl -fsSL https://claude.ai/install.sh | bash'] // FIXED -- the exact command the manual instruction shows
@@ -2538,7 +2538,7 @@ function startMcpConnectorLogin(name, binPath) {
     })
     mcpLoginChildren[name] = child
 
-    // Fix #2 (춘식3): accumulate stdout across chunks. A per-chunk match
+    // Fix #2 (same review): accumulate stdout across chunks. A per-chunk match
     // would drop the URL when it straddles a chunk boundary. Once captured,
     // keep draining (never re-match) so a late chunk can't overwrite it.
     let capturedUrl = ''
@@ -2708,7 +2708,7 @@ function createOnboardingServer(onOnboardingComplete, agentControls) {
         // (32-byte random, 0600 endpoint file, checked fail-closed in the
         // route body). The 2026-08-04 token-on-all-GETs hardening swept this
         // route in and silently killed every `sudo -A` with a gate 403 the
-        // helper's curl -f turned into exit 22 (found live 2026-08-05, Mino
+        // helper's curl -f turned into exit 22 (found live 2026-08-05, the owner
         // "sudo + 비밀번호 앱에서 에이전트한테 제대로 못 넘겨주는것같은데").
         const isAskpassFetch = req.method === 'GET' && pathname === '/api/sudo/password'
         // /api/agent/caption-image is the askpass exemption's POST sibling:
@@ -2844,7 +2844,7 @@ function createOnboardingServer(onOnboardingComplete, agentControls) {
   })
 }
 
-// ── dynamic Claude model catalog (2026-08-13, Mino: "모델 리스트 하드코딩
+// ── dynamic Claude model catalog (2026-08-13, the owner: "모델 리스트 하드코딩
 // 말고 더 좋은 방법 없냐? 다이나믹하게 긁어오는법 있음 좋을듯") ────────────
 // The claude CLI binary carries its own model table as literal
 // `"<id>",context:{window:<n>...}` entries -- the same table the static
@@ -2964,7 +2964,7 @@ function contextCapForModel(model) {
   // /health -> {context_window: 200000}) and compacts at 0.9x that. The
   // model itself is 372K; a user's ~/.codex/config.toml
   // `model_context_window = 372000` overrides the proxy live (that is how the
-  // MAGI caspar lane reports 372000 on 0.6.3). Pin the proxy's default here
+  // one reference-fleet lane reports 372000 on 0.6.3). Pin the proxy's default here
   // so the gauge matches the compaction point on a fresh machine; re-verify
   // when codex-as-api learns the gpt-6 family.
   if (/^gpt-6/.test(base)) return { cap: 200_000, capSource: 'codex-as-api-table' }
@@ -2987,7 +2987,7 @@ function contextCapForModel(model) {
 // (That rule is also spelled without the call syntax on purpose --
 // test-packaging.mjs's require-graph regex reads comments too.)
 // ── BYOS usage gauge + update check (tester requests, 2026-08-04) ─────────
-// Usage: the same Anthropic OAuth usage endpoint MAGI's own fleet gauges
+// Usage: the same Anthropic OAuth usage endpoint the reference fleet gauges
 // poll. Contract discipline inherited from that script: a failed read is
 // null/branch, NEVER 0 -- 0 means "window just reset" and must stay
 // distinguishable from "could not read".
@@ -2995,7 +2995,7 @@ const APP_VERSION = (() => {
   try { return require('../package.json').version } catch { return '0.0.0' }
 })()
 
-// Cache + stale-on-error (2026-08-04, Mino field: "usage는 429가 떠버리네" --
+// Cache + stale-on-error (2026-08-04, the owner field: "usage는 429가 떠버리네" --
 // the OAuth usage endpoint rate-limits fast, and v1 hit it fresh on every
 // page load AND every Refresh click). 60s success TTL absorbs refresh spam;
 // on any failure the LAST GOOD reading is served with stale:true + asOf so
@@ -3003,7 +3003,7 @@ const APP_VERSION = (() => {
 // HTTP 429 -- an error should annotate a gauge, not replace it.
 let usageCache = null // { at, payload } -- last GOOD reading only
 // Failure cooldown (2026-08-13, win-tester field: Claude row stuck on a bare
-// "HTTP 429" -- screenshot receipt in MAGI research notes). Success has a 60s
+// "HTTP 429" -- screenshot receipt in the reference fleet research notes). Success has a 60s
 // TTL but failures had NONE, so every page entry / refresh click hit the
 // rate-limited endpoint again while it was telling us to back off -- the one
 // caller pattern that keeps a 429 a 429. A failed read now also arms a
@@ -3011,10 +3011,10 @@ let usageCache = null // { at, payload } -- last GOOD reading only
 // without touching the network. Cleared by any successful read.
 let usageFailCooldown = null // { until, payload }
 
-// CLI-session token fallback (2026-08-04, Mino field: gauge stuck on
+// CLI-session token fallback (2026-08-04, the owner field: gauge stuck on
 // "HTTP 403"). The app-captured `claude setup-token` carries user:inference
 // ONLY -- the usage endpoint refuses it. The Claude Code CLI's own
-// interactive login token DOES read it (the MAGI fleet's gauge has polled
+// interactive login token DOES read it (the the reference fleet's gauge has polled
 // this endpoint with exactly that credential for weeks). So: try the
 // setup-token first (it's OUR credential, stored with consent), and on
 // 401/403 fall back to the CLI session this machine already has --
@@ -3082,7 +3082,7 @@ async function readUsageOAuthToken() {
   try { return JSON.parse(refreshed).accessToken } catch { return null }
 }
 
-// force (2026-08-05, Mino: 수동 리프레시는 진짜 파싱이어야 함): the Refresh
+// force (2026-08-05, the owner: 수동 리프레시는 진짜 파싱이어야 함): the Refresh
 // button passes ?force=1 to bypass the 60s read-cache -- without it a manual
 // refresh inside the window is a silent no-op. The cache still gets WRITTEN
 // (and stale-on-error still applies), only the read is skipped. All three
@@ -3203,7 +3203,7 @@ async function fetchClaudeSubscriptionUsage(opts = {}) {
   return payload
 }
 
-// ── Codex/ChatGPT usage gauge (2026-08-04, Mino: "ollama/Codex/Claude
+// ── Codex/ChatGPT usage gauge (2026-08-04, the owner: "ollama/Codex/Claude
 // 사용량 게이지 ... CodexBar같은것처럼 잘 보여야하는데, 이게 킥임") ──────
 // Mechanism = CodexBar's own (verified in its docs/codex.md and live
 // against this machine 19:3x: HTTP 200, plan_type/rate_limit shape below):
@@ -3267,7 +3267,7 @@ async function fetchCodexUsage(opts = {}) {
   return payload
 }
 
-// ── Ollama cloud usage gauge (2026-08-04, Mino "ollama도 사용량 받을 수
+// ── Ollama cloud usage gauge (2026-08-04, the owner "ollama도 사용량 받을 수
 // 있어야해, 어떻게든 해봐") ────────────────────────────────────────────
 // No DOCUMENTED usage API exists (ollama/ollama#15663/#16448/#15132), but
 // live probing tonight found UNDOCUMENTED auth-gated endpoints:
@@ -3337,7 +3337,7 @@ async function fetchOllamaUsage(opts = {}) {
   }
   if (!res.ok) return failWith('http_error', `HTTP ${res.status}`)
   if (!body || typeof body !== 'object') return failWith('empty_body')
-  // Shape BOUND from a real-key receipt (Mino's terminal, 2026-08-04
+  // Shape BOUND from a real-key receipt (the owner's terminal, 2026-08-04
   // 19:38): { activity: {cost, period, models}, limits: { session:
   // {usage: 0.918, models:[{name, request_count}...]}, weekly: {usage:
   // 0.428, models:[...]} } }. usage is a 0-1 fraction; NO reset timestamps
@@ -3366,7 +3366,7 @@ async function fetchOllamaUsage(opts = {}) {
   return payload
 }
 
-// ── vision stand-in captioning (0.0.56, Mino 2026-08-04 20:03 "비전이
+// ── vision stand-in captioning (0.0.56, the owner 2026-08-04 20:03 "비전이
 // 없으면 fallback으로 작은 비전모델 붙여서 같이 지원하면 되는거 아니냐") ──
 // When the LANE model cannot see images, the chat upload route asks a
 // small vision-capable cloud model -- same ollama key, same Messages API
@@ -3379,7 +3379,7 @@ async function fetchOllamaUsage(opts = {}) {
 //   vision: kimi-k2.7-code, kimi-k3, kimi-k2.6, gemma4, qwen3.5,
 //           minimax-m3, mistral-large-3
 // chat.js keeps a mirror of this list for its pre-send toast; change both.
-// 0.1.4 policy rewrite (Mino 2026-08-11 13:54): first-party providers are
+// 0.1.4 policy rewrite (the owner 2026-08-11 13:54): first-party providers are
 // vision-'yes'; EVERYTHING else defaults to 'no' (Gemma caption stand-in)
 // unless the model is on the known-vision YES list. There is no 'unknown'
 // state anymore -- 'unknown' was the dangerous one: it skipped the caption
@@ -3449,7 +3449,7 @@ async function fetchImageCaption(imageBase64, mediaType) {
 
 // Update check against the PUBLIC releases repo (the download surface
 // testers actually use). v1 is notify + one-click download page -- a real
-// in-place auto-update needs a signed app on macOS, deferred with Mino.
+// in-place auto-update needs a signed app on macOS, deferred with the owner.
 // Cache: GitHub unauthenticated API allows 60 req/h/IP; 6h on success,
 // 10min on failure so a rate-limit blip cannot wedge the check until
 // restart.
@@ -3460,7 +3460,7 @@ function parseSemverTriple(v) {
   return m.length === 3 && m.every(Number.isFinite) ? m : null
 }
 async function checkForUpdate(force = false) {
-  // force=true (Settings "Check now" button, Mino 19:14 "오토 업데이트
+  // force=true (Settings "Check now" button, the owner 19:14 "오토 업데이트
   // 버튼 어딨니?") bypasses the read side of the cache but still WRITES it,
   // so a manual check refreshes the banner's data too. Rate-limit safety
   // holds: the button is a human click, not a poll loop.
@@ -3538,7 +3538,7 @@ const staticCtx = {
   readAppearance, writeAppearance, AppearanceModel,
   // vision stand-in captioning (0.0.56)
   laneVision, fetchImageCaption,
-  // claude CLI install-assist (2026-08-04, Mino "2로 가자")
+  // claude CLI install-assist (2026-08-04, the owner "2로 가자")
   startClaudeCliInstall, getClaudeInstallStatus,
   // agent status / model table
   computeAgentStatus, contextCapForModel,

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// windowshot -- agent-side "share my screen" helper (같이보기, 2026-08-19 Mino).
+// windowshot -- agent-side "share my screen" helper (같이보기, 2026-08-19 the owner).
 //
 // Lets the agent see a specific app window the user is looking at:
 //   windowshot list                          -> TSV: id, app, title, WxH
@@ -76,7 +76,7 @@ out.join("\\n")`
 
 // EnumWindows + PrintWindow. PrintWindow(...,2) = PW_RENDERFULLCONTENT --
 // needed for DWM-composited apps (Chrome, Discord, Electron). VERIFIED live
-// on magi-win 2026-08-19 (interactive session via schtasks /IT -- a plain
+// on the Windows box 2026-08-19 (interactive session via schtasks /IT -- a plain
 // ssh session sees NO windows, that is Windows session isolation, not a
 // bug): list enumerated 6 windows with correct owners, shoot captured the
 // running Scheherazade Electron window with readable content.
@@ -101,7 +101,7 @@ $rows = New-Object System.Collections.Generic.List[string]
   $sb = New-Object System.Text.StringBuilder ($len + 1); [void][WS]::GetWindowText($h, $sb, $sb.Capacity)
   # $procId, NOT $pid: $PID is PowerShell's read-only automatic variable for
   # the CURRENT process -- using it made every row report app="powershell"
-  # (live catch on magi-win, 2026-08-19).
+  # (live catch on the Windows box, 2026-08-19).
   $procId = 0; [void][WS]::GetWindowThreadProcessId($h, [ref]$procId)
   $app = try { (Get-Process -Id $procId -ErrorAction Stop).ProcessName } catch { "?" }
   $r = New-Object WS+RECT; [void][WS]::GetWindowRect($h, [ref]$r)

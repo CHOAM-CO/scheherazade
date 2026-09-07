@@ -27,7 +27,7 @@ const path = require('path')
 const os = require('os')
 
 // The CLI's project-slug transform: every character outside [A-Za-z0-9] becomes
-// '-'. `/Users/narr/Documents/Scheherazade` -> `-Users-narr-Documents-Scheherazade`.
+// '-'. `/Users/agent/Documents/Scheherazade` -> `-Users-agent-Documents-Scheherazade`.
 function slugForCwd(cwd) {
   return cwd.replace(/[^A-Za-z0-9]/g, '-')
 }
@@ -148,7 +148,7 @@ const USAGE_FIELDS = [
 ]
 
 // ── incremental accumulation ────────────────────────────────────────────────
-// Measured on a real agent-day (2026-07-13, MAGI project): 24 transcripts,
+// Measured on a real agent-day (2026-07-13, an internal project): 24 transcripts,
 // 8113 usage rows. Re-reading those end-to-end on every poll would mean tens
 // of MB of disk per minute, forever, to answer one number. Transcripts are
 // append-only, so we read each file ONCE and thereafter only the bytes that

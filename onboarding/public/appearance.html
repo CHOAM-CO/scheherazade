@@ -15,7 +15,7 @@
       </div>
       <p class="subtitle" id="ap-subtitle"></p>
 
-      <!-- Appearance tab (2026-08-05, Mino: "얼기설기 붙이지 말고 어피어런스
+      <!-- Appearance tab (2026-08-05, the owner: "얼기설기 붙이지 말고 어피어런스
            탭 만들고 -> UX랑 컴포넌트 마진부터 설계"). Margin design mirrors
            the connectors usage-lane pass: three boxed lanes (glass / type /
            accent), each lane owning its rows on the shared --label-col grid,
@@ -31,7 +31,7 @@
           <input type="range" id="ap-glass-range" min="0" max="100" step="5" />
           <span class="ap-value" id="ap-glass-value"></span>
         </div>
-        <!-- v3 (Mino 2026-08-05 16:12 "Background Tint / Background Blur
+        <!-- v3 (the owner 2026-08-05 16:12 "Background Tint / Background Blur
              두개로 간단하게"): the 7-material switcher is gone from the UI.
              Blur is a 3-step control (Off/Soft/Strong) because macOS only
              exposes blur at material granularity — a continuous slider
@@ -59,7 +59,7 @@
         </div>
       </div>
 
-      <!-- v2 (Mino 2026-08-05 "악센트 컬러 / 백그라운드 컬러 colour Picker로
+      <!-- v2 (the owner 2026-08-05 "악센트 컬러 / 백그라운드 컬러 colour Picker로
            찍을 수 있게 ... 기본값은 백그라운드 : 블랙 / 악센트 : 블루"):
            two seed colors, each row = quick-pick swatches + a free picker in
            the readout column. Every pick derives the full palette live via
@@ -76,7 +76,7 @@
           <div class="ap-options" id="ap-accent-options"></div>
           <input type="color" id="ap-accent-picker" class="ap-color-picker" />
         </div>
-        <!-- v3: text seed (Mino 16:12 "텍스트 컬러피커도 빼먹었네").
+        <!-- v3: text seed (the owner 16:12 "텍스트 컬러피커도 빼먹었네").
              One picked color; dim/faint hierarchy derives toward the bg
              seed in the model. -->
         <div class="ap-row">

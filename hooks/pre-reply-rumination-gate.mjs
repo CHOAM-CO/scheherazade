@@ -41,7 +41,7 @@
 // fail again between bounce and retry don't re-bounce the retry — and rows
 // are judged exactly once per reply, never re-litigated.
 //
-// LENGTH BRANCH (v1.3, 2026-08-05 — Mino's Terra T2M session: the agent
+// LENGTH BRANCH (v1.3, 2026-08-05 — the owner's Terra T2M session: the agent
 // pasted a ~5KB subagent report wholesale into reply; "서브에이전트 아웃을
 // 메세지로 뱉는것같디구"): CLASS_D bounces a reply whose text exceeds
 // MAX_REPLY_CHARS. Same grown-inside-this-gate reasoning as the evidence

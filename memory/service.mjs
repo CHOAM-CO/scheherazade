@@ -24,8 +24,8 @@
 //      no db threading; this module owns one lazily-opened connection per
 //      process (the same shape http-server's old getMemory() cache had).
 //
-// Spec: ~/Documents/MAGI_Memory/projects/scheherazade_memory_schema_v0_melchior_2026-07-03.md
-// Pattern source (ported, not reinvented): ~/Desktop/MAGI/ontology/server.mjs
+// Spec: the memory schema v0 design note (2026-07-03)
+// Pattern source (ported, not reinvented): the reference fleet's ontology server
 //   — handleUpdate's read-back-verify (UPDATE...RETURNING + valuesEquivalent +
 //     numericCoerce + null-mirror). Same shape applied here to insert/upsert
 //     too, since memory_write covers both.
@@ -276,7 +276,7 @@ function tableColumns(db, table) {
 // no triggers anywhere, so this is currently dormant; closing it needs
 // either a follow-up SELECT after RETURNING (reintroduces a race window) or
 // a documented "v1 has no triggers" invariant enforced at DDL-review time.
-// Ported verbatim (semantics) from ~/Desktop/MAGI/ontology/server.mjs
+// Ported verbatim (semantics) from the reference fleet's ontology server
 // handleUpdate — conservative equivalence between an intended value and the
 // value actually persisted, read back via ...RETURNING in the SAME atomic
 // statement (no follow-up SELECT, no race window). Must NEVER flag a
@@ -451,7 +451,7 @@ function memoryWriteInsertOrUpsert(db, table, cleanData, cols) {
   // Session-attribution default (2026-08-19): every table's sessionField is
   // NOT NULL by DDL, but weaker models routinely omit it and then flail on
   // the constraint error (measured: deepseek-v4-flash failed memory_write
-  // twice in a row on Mino's box before landing a valid call). The column is
+  // twice in a row on the owner's box before landing a valid call). The column is
   // provenance, not content -- an honest "unattributed" placeholder beats a
   // failed write that costs the model a retry loop.
   if (cfg.sessionField && cleanData[cfg.sessionField] == null && cols.has(cfg.sessionField)) {
@@ -680,11 +680,11 @@ function memoryDelete(db, args) {
 
 // ── memory_recall_material: session-start helper, raw structured data ────
 //
-// Bloat advisory (Mino 2026-07-24): MAGI's markdown memory had no write-side
+// Bloat advisory (the owner 2026-07-24): the reference fleet's markdown memory had no write-side
 // caps and regrew to pre-prune size within 1-3 months.  Scheherazade's DB
 // avoids the flat-file class of that problem, but row counts can still grow
 // unchecked (especially corrections, which had no LIMIT here until now).
-// Rather than a write-side gate (tried and abandoned in early MAGI for false
+// Rather than a write-side gate (tried and abandoned in the early reference fleet for false
 // positives), this is a READ-SIDE advisory: total row counts are returned with
 // every recall, and when any table exceeds its threshold the agent gets a
 // one-line suggestion to ask the user about cleanup.  Advisory only -- never
@@ -826,7 +826,7 @@ function initDb() {
   // alone does not clean the -wal file).
   db.exec('PRAGMA secure_delete = ON')
   db.exec(DDL)
-  // Identity firewall (2026-08-15, Artaban bug — design:
+  // Identity firewall (2026-08-15, identity-bleed bug — design:
   // docs/design-identity-firewall-and-selfops.md): the journal is a
   // first-person surface and DISPLAY_NAME is renameable, so every entry now
   // carries its writer's identity. Idempotent ALTER (duplicate-column throws

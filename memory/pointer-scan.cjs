@@ -14,7 +14,7 @@
 // wants to know what a file SAYS has to go open the file, in the open, with a
 // tool call the user can see.
 //
-// Mino's three gates (2026-07-13), all enforced here or by the caller:
+// the owner's three gates (2026-07-13), all enforced here or by the caller:
 //   1. OPT-IN. This module never runs on its own -- no boot hook, no timer. It
 //      scans only when a user clicks (http-server's POST /api/memory/import).
 //   2. CREDENTIAL EXCLUSION, hard. See DENY below. This is a blocklist AND an
@@ -72,7 +72,7 @@ const DENY_DIRS = new Set([
 ])
 
 // Electron/Chromium RUNTIME NOISE -- a different axis from DENY_DIRS (those
-// are secrets; these are garbage). Found live on Mino's second-device install
+// are secrets; these are garbage). Found live on the owner's second-device install
 // (2026-07-14 10:33, his own paste): the claude-desktop source filled its
 // entire 200-pointer quota with `Cache/Cache_Data/<hex>_0` HTTP-cache blobs,
 // crowding out any real memory file AND making the coverage line ("거의

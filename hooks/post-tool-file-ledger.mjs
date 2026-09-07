@@ -2,7 +2,7 @@
 // post-tool-file-ledger.mjs — PostToolUse hook, file-writing tools only
 // (Write|Edit|MultiEdit|NotebookEdit).
 //
-// WHY (같이보기 batch, Mino 2026-08-19 11:21: "세라가 최근에 건드린 파일들
+// WHY (같이보기 batch, the owner 2026-08-19 11:21: "세라가 최근에 건드린 파일들
 // 리스트도 볼 수 있게"): nothing recorded which files the agent touched —
 // design-0017 v1 explicitly scoped Edit/Write coverage out, and the
 // activity feed deliberately excludes them (a busy turn floods it). This

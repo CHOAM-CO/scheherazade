@@ -258,7 +258,7 @@ const resolveOutboundChannel = createOutboundResolver({
   guidance: GUIDANCE,
 })
 
-// GPT-loop guard (2026-08-04, Mino field report) -- see createOutboundDedup.
+// GPT-loop guard (2026-08-04, the owner field report) -- see createOutboundDedup.
 const checkOutboundDup = createOutboundDedup({ log })
 
 // ── Local history ledger (read_channel_history backing store) ──────────────

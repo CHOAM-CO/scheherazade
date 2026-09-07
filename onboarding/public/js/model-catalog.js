@@ -3,7 +3,7 @@
 // the chat composer (chat.js: quick-switch dropdown, real models only).
 //
 // Extracted from connectors.js 2026-08-20 (0.2.6 UI pass) when the chat
-// surface gained its own model dropdown (Mino 19:09: "LLM 모델 바꾸는건 세팅
+// surface gained its own model dropdown (the owner 19:09: "LLM 모델 바꾸는건 세팅
 // 말고 챗쪽에 드랍다운으로 두는게 더 편할 것 같음") — two inline copies of
 // this list would drift. PURE DATA: no window.COPY reads, no sentinels, no
 // DOM. Sentinel/action rows (Custom proxy, Ollama by-URL) stay in
@@ -11,21 +11,21 @@
 //
 // Row provenance (compressed from the connectors.js comment block; full
 // history in git blame of that file before this extraction):
-// - claude-opus-5 added 08-13 (Mino ask), id verified against the installed
-//   CLI binary's model table + runs live in the MAGI fleet daily.
+// - claude-opus-5 added 08-13 (the owner ask), id verified against the installed
+//   CLI binary's model table + runs live in the the reference fleet daily.
 // - GPT group: versioned 5.6 ids over the old single 'gpt' Codex entry.
 // - Kimi provider-wide drop 07-14 (mute incident, raw <|tool_call|> leakage
 //   on the local lane); kimi-k2.7-code is a DIFFERENT lane (ollama.com
-//   cloud, Anthropic-compat) and returned on Mino's explicit ask 08-04.
+//   cloud, Anthropic-compat) and returned on the owner's explicit ask 08-04.
 //   The mute-strike ledger (hooks/stop-reply-guard.mjs) stays as backstop.
-// - Ollama defaults picked by Mino 08-04 19:17 (kimi/glm/deepseek) and
+// - Ollama defaults picked by the owner 08-04 19:17 (kimi/glm/deepseek) and
 //   expanded 08-13 ("5개~7개까지 기본지원 모델로") — every id verified
 //   against the live ollama.com catalog + tool-call-probed through the
 //   Anthropic-compat lane the same day. NOT picked, with grounds:
 //   nemotron-3-super (72s first token), nemotron-3-nano:30b (never called
 //   the tool), k2.6/m2.7/glm-5.1 (superseded in-family), gemma4:31b (too
 //   small for agent duty). kimi-k3 sat here too (paywalled, 08-13) until
-//   ollama.com opened it — added 08-21 on Mino's ask ("올라마 키미K3
+//   ollama.com opened it — added 08-21 on the owner's ask ("올라마 키미K3
 //   지원기념 K3 ㄱ"), tool-call-probed same day through the local ollama
 //   openai-compat surface (same protocol the lane speaks; lane auth path
 //   is OLLAMA_CLOUD_KEY, probe rode the signin proxy).
@@ -57,7 +57,7 @@
     { id: 'qwen3.5:cloud', label: 'Qwen 3.5 (dsh · vision)', group: 'DSH', providers: ['dsh'] },
   ]
 
-  // Effort ladder (Mino 07-13 click-test item 2). 'high' is run.sh's own
+  // Effort ladder (the owner 07-13 click-test item 2). 'high' is run.sh's own
   // `${EFFORT_LEVEL:-high}` default; labels say so rather than pre-selecting
   // silently.
   window.SCHZ_EFFORT_LEVELS = ['low', 'medium', 'high', 'max']

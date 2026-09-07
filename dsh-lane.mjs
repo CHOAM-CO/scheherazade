@@ -41,7 +41,7 @@ const MEM = process.env.MEM
 const MCP_CONFIG_FILE = process.env.MCP_CONFIG_FILE || ''
 const SYSTEM_PROMPT_FILE = process.env.SYSTEM_PROMPT_FILE || ''
 
-// ── route contract v2 (0.2.2 full harness swap, Mino 08-19 "클로드코드
+// ── route contract v2 (0.2.2 full harness swap, the owner 08-19 "클로드코드
 // 아예 의존성째로 날려버려") ────────────────────────────────────────────
 // Every app provider is now a dsh LLM route; provider-env.cjs's rows emit
 // this env instead of Claude-CLI plumbing:
@@ -164,7 +164,7 @@ function mcpRowsFromClaudeConfig (file) {
       if (Array.isArray(s.args) && s.args.length) {
         lines.push(`        args: [${s.args.map(yamlQuote).join(', ')}]`)
       }
-      // CHANNEL-SECRET SEAM (2026-08-21, Mino field case: discord setup on
+      // CHANNEL-SECRET SEAM (2026-08-21, the owner field case: discord setup on
       // the dsh lane died in a "DISCORD_BOT_TOKEN not set" FATAL loop). The
       // claude lanes forward the full parent env to MCP children, so
       // main.cjs's spawn-time token injection just arrived. The dsh harness
@@ -273,7 +273,7 @@ function buildPatch () {
 - id: tool-ask-user
   # ask_user_question resolves through the dsh WEB UI's question provider,
   # which no Scheherazade user ever opens -- the tool call awaits an answer
-  # forever and the turn hangs (measured: Mino's box 2026-08-19 17:55, turn
+  # forever and the turn hangs (measured: the owner's box 2026-08-19 17:55, turn
   # never completed after ask_user_question). A channel-mediated agent asks
   # questions through the reply tool instead.
   disabled: true
@@ -300,7 +300,7 @@ function buildPatch () {
   # 0.2.4 websearch recovery: the model-facing web_search tool is mounted
   # by the agent PRESET (standard/agent.cordis.yml), not the profile -- the
   # profile-level tool-web row is disabled yet the E2E request header still
-  # carried web_search (measured 2026-08-20; Mino's 0.2.3 "DeepSeek API
+  # carried web_search (measured 2026-08-20; the owner's 0.2.3 "DeepSeek API
   # key" answer was REAL, not confabulated). Preset rows cannot be patched
   # and the launcher force-overwrites config.roots with the shipped root,
   # so the lane authors its OWN preset id into the always-scanned user root
@@ -353,7 +353,7 @@ function ensureLanePreset () {
   const cut = src.indexOf('- id: tool-web')
   let filtered = (cut === -1 ? src : src.slice(0, cut)) +
     '# (tool-web row removed by dsh-lane 0.2.4: web search is the chromux\n' +
-    '# websearch skill -- keyless, backend-independent. Mino 08-20.)\n'
+    '# websearch skill -- keyless, backend-independent. Locked 08-20.)\n'
   // tool-ask-user: PRESET-mounted, so the profile-level `tool-ask-user
   // disabled: true` patch row (added after the 08-19 hang) never reached the
   // session -- the exact "preset rows cannot be patched" class the tool-web
@@ -365,7 +365,7 @@ function ensureLanePreset () {
     /^- id: tool-ask-user\n(?:^ {2}.*\n|^\n)*?(?=^- id: |\Z)/m,
     '# (tool-ask-user row removed by dsh-lane 0.2.17: ask_user_question awaits\n' +
     '# a web-UI answer no Scheherazade user can give -- turn hangs forever.\n' +
-    '# Channel agents ask through the reply tool. Mino 08-27 16:58 hang.)\n'
+    '# Channel agents ask through the reply tool. 08-27 16:58 hang.)\n'
   )
   filtered = guardSubagentRows(filtered, subagentAgentOptions())
   const destDir = path.join(dshHome(), '.agent-presets', LANE_PRESET_ID)
@@ -375,7 +375,7 @@ function ensureLanePreset () {
     'name: Scheherazade standard\ndescription: shipped standard minus web_search (chromux skill carries search)\norder: 1\n')
 }
 
-// Subagent containment (2026-08-20, Mino cto field test: "서브에이전트 메세지가
+// Subagent containment (2026-08-20, the owner cto field test: "서브에이전트 메세지가
 // 계속 인앱챗으로 역류함"). A delegated child joins the SAME preset as its
 // parent (session header agentPreset: schz-standard, measured), so it inherits
 // the full channel surface: the agent-channel MCP reply/react tools AND the
@@ -479,7 +479,7 @@ function spawnEngine (patchPath) {
     // route (PI_AI_ERROR, measured); keyless local proxies get a dummy.
     [DSH_ROUTE_KEY_ENV]: process.env[DSH_ROUTE_KEY_ENV] || 'local-dummy',
     DSH_TELEMETRY_MODE: process.env.DSH_TELEMETRY_MODE || 'DISABLED',
-    // Product contract port (run.sh --dangerously-skip-permissions, Mino
+    // Product contract port (run.sh --dangerously-skip-permissions, the owner
     // 2026-07-04 "bypass까지만 바로 되도록"): full agent autonomy inside its
     // own DATA_HOME, no permission popups. dsh's approval plugin policy is
     // 'ask' under the default workspace-write mode, and the ask resolves
@@ -628,7 +628,7 @@ async function main () {
     postPresence(text.slice(0, 3900), 'think')
   }
 
-  // ── answer stream (0.2.4, Mino "두두두둑 생성되는거 보이잖아, 그런거 가능?") ──
+  // ── answer stream (0.2.4, the owner "두두두둑 생성되는거 보이잖아, 그런거 가능?") ──
   // Visible text-deltas mirror to the local chat page as a GROWING DRAFT
   // bubble: kind:'stream' posts append server-side draft text that /out
   // returns beside the queue (never a transcript item, never persisted).
@@ -795,7 +795,7 @@ async function main () {
       .catch((e) => errLog(`mute nudge failed: ${e.message.slice(0, 120)}`))
   }
 
-  // ── background-subagent roster (0.2.15, Mino "서브 스폰하면 서브도
+  // ── background-subagent roster (0.2.15, the owner "서브 스폰하면 서브도
   // working 정보에 띄우게") ─────────────────────────────────────────────
   // The subagent tool's result names what it launched ("started background
   // subagent job X" / "started subagent Y" -- dsh-tool-subagent's render);
@@ -825,7 +825,7 @@ async function main () {
       if (event.type === 'turn/end') {
         flushThink(true)
         thinkSentThisTurn = 0
-        // Presence turn-close (0.2.11, Mino field report: idle app stuck on
+        // Presence turn-close (0.2.11, the owner field report: idle app stuck on
         // "Thinking…"): the chat page's live folds settle on an AGENT BUBBLE
         // -- but background turns (calendar nudge, watchdog pokes) stream
         // think/activity and end with no bubble at all, leaving the fold
@@ -926,7 +926,7 @@ async function main () {
         log(`tool> ${d.name || '?'}`)
         if (isReplyClassTool(d.name)) sawReplyThisTurn = true
         // Retire the draft on EVERY tool call, not just reply-class (0.2.17,
-        // Mino 08-27 17:08: a multi-step turn's step narration -- "확인해볼게"
+        // the owner 08-27 17:08: a multi-step turn's step narration -- "확인해볼게"
         // / "비교해볼게" between tool calls -- accumulated into one glued
         // wall in the chat pane). Body text before a tool call is step
         // commentary: show it while the step is being written, wipe it when

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // pre-tool-activity.mjs — PreToolUse hook: Bash, WebSearch, WebFetch, and
-// subagent spawns (Agent/Task). Was Bash-only until 2026-08-13 (Mino: a
+// subagent spawns (Agent/Task). Was Bash-only until 2026-08-13 (the owner: a
 // 20-call research turn showed NOTHING in the chat fold).
 //
 // WHY: the in-app chat's only mid-turn signal was the typing dots, capped at
@@ -35,7 +35,7 @@ try {
   // nothing on that platform because the path does not exist there).
   const payload = JSON.parse(readFileSync(0, 'utf8'))
   const input = payload.tool_input || {}
-  // Per-tool label builders (2026-08-13, Mino: "채팅창에서는 WebFetch /
+  // Per-tool label builders (2026-08-13, the owner: "채팅창에서는 WebFetch /
   // sub spawn같은 정보가 아예 안보이네" -- the panel log ring showed a
   // 20-call research turn while the chat fold showed nothing, because this
   // hook was Bash-only). Bash keeps its bare description (the model writes
@@ -50,7 +50,7 @@ try {
   }
   let label = ''
   if (payload.tool_name === 'Bash' || payload.tool_name === 'PowerShell') {
-    // PowerShell is what the shell tool is CALLED on native Windows (magi-win
+    // PowerShell is what the shell tool is CALLED on native Windows (the Windows box
     // live repro 2026-08-14: matcher "Bash" meant the feed never fired there
     // at all). Same shape, same bare-description treatment.
     label = trunc(input.description || input.command)

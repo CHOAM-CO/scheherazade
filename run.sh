@@ -4,16 +4,16 @@
 # down. Since design-0020 the leaf is `node headless-lane.mjs` (claude -p
 # stream-json) -- no expect, no PTY, no TUI dialog handling.
 #
-# Reference: MAGI's doze-portable/launcher.sh and run-doze-isolated.sh for
+# Reference: the reference fleet's doze-portable/launcher.sh and run-doze-isolated.sh for
 # the restart-loop shape (its expect layer is gone since design-0020).
 # Backoff numbers here (5/10/20/40/120) are
-# a simpler ladder than MAGI's production values (3/30/120/300/600) --
+# a simpler ladder than the reference fleet's production values (3/30/120/300/600) --
 # deliberate simplification for a single lightweight agent, not a copy
-# error. --dangerously-skip-permissions IS used here (REVERSAL, Mino
+# error. --dangerously-skip-permissions IS used here (REVERSAL, the owner
 # directive 2026-07-04 16:26 "bypass까지만 바로 되도록": product concept =
 # full agent autonomy inside its own DATA_HOME, no permission popups;
 # Full Disk Access deliberately NOT requested at setup -- deferred to
-# feature-need time, see Idea's 16:2x home-channel verdict). The previous
+# feature-need time, see the 16:2x home-channel verdict). The previous
 # stance (settings.local.json permissions.allow as the narrower scope)
 # still ships as a harmless belt, but the flag is now the product
 # behavior; the honest disclosure line lives in onboarding copy
@@ -58,7 +58,7 @@ NODE_BIN="${NODE_BIN:-node}"
 # Claude Code tuning knobs carried over from the source launchers -- all
 # overridable via env, all optional (Claude Code defaults these itself if
 # unset).
-# Default effort max -> high (Mino 07-13 click-test: sonnet-5 felt slow;
+# Default effort max -> high (the owner 07-13 click-test: sonnet-5 felt slow;
 # max buys thinking budget casual chat doesn't need). An effort selector
 # next to the model dropdown is the real fix (click-test item 2); until it
 # lands, EFFORT_LEVEL env remains the override.
@@ -337,7 +337,7 @@ run_loop() {
     export SYSTEM_PROMPT_FILE="$MEM/system_prompt.md"
   fi
 
-  # Context-bleed fix (2026-07-28, Mino live catch: 133K context AT BOOT on
+  # Context-bleed fix (2026-07-28, the owner live catch: 133K context AT BOOT on
   # his install; product's own share measured at ~40K). Without
   # --strict-mcp-config the spawned claude ALSO loads every MCP server from
   # the user's global ~/.claude.json -- schemas the agent never asked for,
