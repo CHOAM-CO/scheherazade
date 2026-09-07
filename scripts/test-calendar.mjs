@@ -70,6 +70,21 @@ console.log('\n-- failure classification')
     u.code === 'unknown' && /some stderr/.test(u.reason))
 }
 
+// LIVE lane gate (P1, design-0023): the block below calls osascript against
+// THIS machine's real Calendar, so its result depends on TCC state a test run
+// cannot create. Under the runner (scripts/run-tests.mjs) it runs only with
+// --live; a bare `node scripts/test-calendar.mjs` keeps today's behavior. Off
+// darwin the reader returns unsupported_platform and every assertion below
+// passes vacuously -- say so with the marker instead of banking a fake green.
+const LIVE_OK = process.env.RUN_TESTS !== '1' || process.env.RUN_TESTS_LIVE === '1'
+const LIVE_REASON = process.platform !== 'darwin'
+  ? `calendar LIVE lane -- EventKit is darwin-only (this host is ${process.platform}); the reader answers unsupported_platform and the live assertions would pass vacuously`
+  : !LIVE_OK
+    ? 'calendar LIVE lane -- reads the real Calendar (TCC state); run `npm test -- --live`'
+    : null
+if (LIVE_REASON) {
+  console.log(`\nSKIP: ${LIVE_REASON}; NOT a pass`)
+} else {
 console.log('\n-- LIVE, against the real Calendar on this machine')
 {
   const t0 = Date.now()
@@ -92,6 +107,7 @@ console.log('\n-- LIVE, against the real Calendar on this machine')
     console.log(`      (live: refused with code="${r.code}", authStatus=${r.authStatus})`)
     console.log('      NOTE: the positive path (fullAccess -> real events) is NOT proven by this run.')
   }
+}
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

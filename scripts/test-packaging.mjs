@@ -296,8 +296,23 @@ console.log(`\n-- the required graph vs the shipped asar (${WIN_LANE ? 'staged w
 // catch: no-dmg postdist skipped green, and a version-fallback verified the
 // wrong dmg.) startsWith: the win lane fires as predist:win / postdist:win.
 const lifecycle = process.env.npm_lifecycle_event || ''
+// P1 (design-0023): this file is BOTH the predist/postdist ship gate and a
+// member of the `npm test` suite. Those two callers want opposite things from a
+// missing artifact. The ship gate must fail hard -- it is the only closure gate
+// this project has on what actually ships. The suite runs on a working tree
+// where nobody has built anything, and a permanently-red file in the default
+// gate teaches everyone to ignore the gate.
+//
+// The runner (scripts/run-tests.mjs) sets RUN_TESTS=1 and, with --live,
+// RUN_TESTS_LIVE=1. npm's predist/postdist hooks set NEITHER. So: under the
+// runner without --live the artifact lane skips with the marker; from the dist
+// lifecycle, from `npm test -- --live`, or from a bare manual run it is
+// fail-closed exactly as before.
+const RUNNER_WITHOUT_LIVE = process.env.RUN_TESTS === '1' && process.env.RUN_TESTS_LIVE !== '1'
 if (lifecycle.startsWith('predist')) {
   console.log(`  SKIP  artifact asar closure -- predist (pre-build); postdist verifies the freshly built ${pkg.version} artifact; NOT a pass`)
+} else if (RUNNER_WITHOUT_LIVE) {
+  console.log(`SKIP: artifact asar closure -- needs a freshly built ${pkg.version} ${WIN_LANE ? 'installer' : 'dmg'}; run \`npm test -- --live\` after a build, or \`npm run dist\` (predist/postdist run this file fail-closed); NOT a pass`)
 } else {
   const isPost = lifecycle.startsWith('postdist')
   const asarResult = WIN_LANE ? stagedWinAsarEntries() : mountedAsarEntries()

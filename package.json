@@ -9,6 +9,7 @@
   },
   "main": "main.cjs",
   "scripts": {
+    "test": "node scripts/run-tests.mjs",
     "start": "node channel.mjs",
     "electron:dev": "electron .",
     "dist": "electron-builder --mac dmg --publish never",

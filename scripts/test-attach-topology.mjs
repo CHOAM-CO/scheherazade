@@ -30,7 +30,17 @@ function check(name, cond, detail) {
   else { fail++; console.log(`  FAIL ${name}${detail ? ` -- ${detail}` : ''}`) }
 }
 
-const tmuxBin = attach.resolveTmuxBin()
+// LIVE lane gate (P1, design-0023): sections 1 and 2 drive a REAL tmux binary,
+// and section 2 creates and tears down a server on an isolated socket. Under
+// the runner (scripts/run-tests.mjs) that needs --live; a bare manual run keeps
+// today's behavior (run it, or skip loudly when tmux is absent).
+const LIVE_OK = process.env.RUN_TESTS !== '1' || process.env.RUN_TESTS_LIVE === '1'
+const tmuxFound = attach.resolveTmuxBin()
+const tmuxBin = LIVE_OK ? tmuxFound : null
+const NO_TMUX_REASON = tmuxFound ? 'runner without --live; run `npm test -- --live`' : 'tmux not found on this machine'
+if (!tmuxBin) {
+  console.log(`SKIP: tmux live lanes (negative control + lifecycle) -- ${NO_TMUX_REASON}; NOT a pass`)
+}
 
 // ── 1. the no-server-spawn invariant ────────────────────────────────────────
 console.log('no-server-spawn invariant:')
@@ -53,14 +63,14 @@ console.log('no-server-spawn invariant:')
     check('...and leaves no socket file', !socketExists)
     check('...and no server process', !serverAlive)
   } else {
-    console.log('  SKIP live negative control: tmux not found on this machine')
+    console.log(`  SKIP live negative control: ${NO_TMUX_REASON}`)
   }
 }
 
 // ── 2. live lifecycle: bootstrap shape -> state -> dead pane -> respawn ────
 console.log('live lifecycle (isolated socket):')
 if (!tmuxBin) {
-  console.log('  SKIP: tmux not found on this machine')
+  console.log(`  SKIP live lifecycle: ${NO_TMUX_REASON}`)
 } else {
   const sock = `test-attach-${process.pid}`
   const mem = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-attach-'))
