@@ -51,7 +51,7 @@ function buildUninstallPlan(dataHome, home = os.homedir()) {
   // Electron app rewrites parts of userData on shutdown, so deleting before
   // exit re-creates residue -- the exact half-clean this feature exists to
   // end. The attach-lane tmux server (if any) is app infrastructure, not a
-  // user process: after uninstall it would supervise a deleted run.sh, so it
+  // user process: after uninstall it would supervise a deleted launcher, so it
   // goes too.
   const script = [
     `while /bin/kill -0 ${process.pid} 2>/dev/null; do sleep 0.2; done`,

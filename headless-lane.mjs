@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // headless-lane.mjs — the -p (headless stream-json) spawn lane. design-0020.
 //
-// Replaces run.sh's expect script: instead of driving an interactive TUI
+// Replaces the old expect script: instead of driving an interactive TUI
 // blind (ANSI scraping, dialog-answering regexes, PTY process groups), this
 // lane spawns `claude -p --input-format stream-json --output-format
 // stream-json` and owns both pipes:
@@ -16,7 +16,7 @@
 // What this lane deliberately does NOT do:
 //   - no TUI dialog handling: -p mode has no trust prompt, no theme picker,
 //     no dev-channels warning (probe 1 hit none of them)
-//   - no restart/backoff: run.sh's loop stays the supervisor; this process
+//   - no restart/backoff: supervisor.mjs's loop owns that; this process
 //     exits with the child's exit code and the loop decides
 //   - no transcript/queue logic: that is the channel backend's job
 //
@@ -418,7 +418,7 @@ export async function preflightModel({ baseUrl, model, authToken, apiKey, timeou
 
 async function main() {
   if (!MEM || !MODEL) {
-    log('FATAL: MEM and MODEL env vars are required (run.sh exports both)')
+    log('FATAL: MEM and MODEL env vars are required (the supervisor exports both)')
     process.exit(78) // EX_CONFIG
   }
   // Pre-spawn model preflight -- see judgeModelProbe's block comment for the
@@ -666,7 +666,7 @@ async function main() {
         // recycle above. A single healthy turn resets the streak, so a
         // transient provider outage (1-2 errored turns) never triggers this.
         // If fresh sessions ALSO error (dead key), the streak trips again and
-        // run.sh's crash-loop marker takes over -- visible, not silent.
+        // the supervisor's crash-loop marker takes over -- visible, not silent.
         errorTurnStreak += 1
         if (errorTurnStreak >= 3) {
           errLog(`3 consecutive error turns -- treating the resumed conversation as poisoned; recycling into a FRESH session (old transcript stays on disk, it is just no longer auto-resumed)`)

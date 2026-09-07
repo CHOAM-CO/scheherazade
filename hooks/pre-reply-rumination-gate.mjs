@@ -80,7 +80,8 @@ const REPLY_TOOL = 'mcp__agent-channel__reply' // confirmed: .mcp.json server na
 // Kill switch (product-prefixed, mirrors SCHEHERAZADE_MEMORY_DB naming).
 if (process.env.SCHEHERAZADE_RUMINATION_GATE === '0') process.exit(0)
 
-// DATA_HOME resolution matches channel.mjs / run.sh / memory/server.mjs:
+// DATA_HOME resolution comes from data-home.cjs, shared with channel.mjs /
+// the supervisor / memory/server.mjs:
 // AGENT_DATA_HOME env override, else ~/Documents/Scheherazade.
 const DATA_HOME = resolveDataHome()
 const CACHE_DIR = path.join(DATA_HOME, '.gates')

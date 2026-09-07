@@ -1,19 +1,20 @@
 #!/usr/bin/env node
 // test-hook-lane-path.mjs -- the v0.0.21 fix for the hook-dead bash lane,
 // attacked at two levels. Context (live receipt, Mino 07-16 18:01 log paste
-// via the /logs viewer): v0.0.15's ensureNodeShim lived only in the NODE
-// supervisor lane; production spawns the BASH lane (run.sh), so packaged
-// installs ran every Claude Code hook into `/bin/sh: node: command not
-// found` -- stop-reply-guard included, which is why a promised Discord
-// reply could die as terminal text with nothing bouncing it back.
+// via the /logs viewer): v0.0.15's ensureNodeShim lived only in the node
+// supervisor lane, which production did not take (mac and Linux ran the bash
+// run.sh loop until design-0023 P3), so packaged installs ran every Claude
+// Code hook into `/bin/sh: node: command not found` -- stop-reply-guard
+// included, which is why a promised Discord reply could die as terminal text
+// with nothing bouncing it back.
 //
 // The promises:
 //   1. END-TO-END: with a node-less PATH (verified by negative control),
 //      appending the shim dir makes `/bin/sh -c "node ..."` actually run --
 //      the exact resolution path Claude Code hooks use.
 //   2. WIRING TRIPWIRE: main.cjs patches supervisorEnv.PATH through
-//      ensureNodeShim at the SHARED env layer (both lanes). If someone
-//      un-hoists it back into one lane, this fails by name.
+//      ensureNodeShim at the SHARED env layer, before the spawn. If someone
+//      pushes it back down into the supervisor only, this fails by name.
 //
 // Run: node tests/test-hook-lane-path.mjs
 

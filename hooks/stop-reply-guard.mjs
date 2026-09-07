@@ -72,7 +72,7 @@ const SCAN_STEPS = [
 // Every fs path here is best-effort and swallowed: a ledger that throws must
 // never trap the agent (same fail-open contract as the rest of this hook).
 // AGENT_DATA_HOME is exported into the agent's env by main.cjs:872 (and honored
-// by run.sh:49), and this hook runs inside that env -- so prefer it over
+// by the supervisor), and this hook runs inside that env -- so prefer it over
 // re-deriving the path. The literal fallback matches http-server.cjs's DATA_HOME
 // for the case where a hook is invoked outside a managed spawn.
 const DATA_HOME = resolveDataHome()

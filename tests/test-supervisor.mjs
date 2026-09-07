@@ -63,41 +63,34 @@ function ok(name, cond, detail = '') {
   else { fail++; console.log(`FAIL  ${name}${detail ? ` -- ${detail}` : ''}`) }
 }
 
-// ── 1+2. headless lane parity (design-0020) ────────────────────────────────
-// The old sections here pinned the expect-dialog matcher and its run.sh
-// twin. Both are GONE with the PTY. What replaces the mirror-contract: both
-// lanes must exec the SAME headless-lane.mjs with the SAME env contract, so
-// argv parity is by construction. These pins scream when one lane moves
-// alone.
-console.log('\n-- headless lane parity: both lanes exec headless-lane.mjs')
+// ── 1+2. THE lane (design-0020 + design-0023 P3) ───────────────────────────
+// This section used to pin run.sh and supervisor.mjs against each other, a
+// string-parity contract that existed only because two supervisors shipped.
+// One lane now: run.sh is deleted, and what these pins defend is that the
+// surviving one still carries every semantic the bash loop was trusted for --
+// the lane spawn on OUR OWN runtime, the env contract, the guarded
+// SYSTEM_PROMPT_FILE/MCP_CONFIG_FILE, the two reaper patterns.
+console.log('\n-- one lane: supervisor.mjs execs the lane on its own runtime')
 {
-  const runSh = fs.readFileSync(path.join(ROOT, 'run.sh'), 'utf8')
   const supSrc = fs.readFileSync(path.join(ROOT, 'supervisor.mjs'), 'utf8')
-  ok('run.sh spawns the lane under the timeout ceiling (LANE_SCRIPT: headless default, dsh via LANE_KIND)',
-    runSh.includes('"$NODE_BIN" "$SCRIPT_DIR/$LANE_SCRIPT"') &&
-    runSh.includes('LANE_SCRIPT="headless-lane.mjs"') &&
-    runSh.includes('LANE_SCRIPT="dsh-lane.mjs"'))
-  ok('run.sh carries NO expect script anymore', !runSh.includes('/usr/bin/expect'))
-  ok('run.sh exports the env contract (AGENT_NAME MEM CLAUDE_BIN MODEL)',
-    runSh.includes('export AGENT_NAME MEM CLAUDE_BIN MODEL'))
-  ok('run.sh guards SYSTEM_PROMPT_FILE / MCP_CONFIG_FILE on existence',
-    runSh.includes('export SYSTEM_PROMPT_FILE="$MEM/system_prompt.md"') &&
-    runSh.includes('export MCP_CONFIG_FILE="$MEM/.mcp.json"'))
+  ok('run.sh is GONE from the tree (a resurrected second supervisor fails here)',
+    !fs.existsSync(path.join(ROOT, 'run.sh')))
+  ok('nothing in the runtime spawns bash as a launcher',
+    !fs.readFileSync(path.join(ROOT, 'main.cjs'), 'utf8').includes("'/bin/bash'"))
   ok('supervisor spawns the SAME lane script on its own runtime (dsh lane switched by cfg.laneKind, 0.2.1)',
     supSrc.includes("new URL('./headless-lane.mjs', import.meta.url)") &&
     supSrc.includes("cpSpawn(process.execPath, [cfg.laneKind === 'dsh' ? DSH_LANE_PATH : HEADLESS_LANE_PATH]"))
   for (const key of ['AGENT_NAME: cfg.agentName', 'MEM: cfg.mem', 'CLAUDE_BIN: cfg.claudeBin', 'MODEL: cfg.model']) {
     ok(`supervisor child env carries ${key.split(':')[0]}`, supSrc.includes(key))
   }
-  ok('supervisor passes SYSTEM_PROMPT_FILE / MCP_CONFIG_FILE guarded like run.sh',
+  ok('supervisor passes SYSTEM_PROMPT_FILE / MCP_CONFIG_FILE guarded on existence',
     supSrc.includes('SYSTEM_PROMPT_FILE: cfg.systemPromptFile') &&
     supSrc.includes('MCP_CONFIG_FILE: cfg.mcpConfigFile'))
   ok('node-pty is fully gone from the supervisor', !supSrc.includes("require_('node-pty')"))
-  // reaper parity: same two patterns on both lanes
-  ok('run.sh reaper patterns: FULL lane path + --mcp-config leaf (basename alone cross-matches editors/greps -- live bite 2026-08-04)',
-    runSh.includes('PKILL_PATTERN="${SCRIPT_DIR}/headless-lane.mjs"') &&
-    runSh.includes('PKILL_LEAF_PATTERN="--mcp-config ${MEM}/.mcp.json"'))
-  ok('supervisor reaper patterns mirror run.sh (full path; dsh lane keys on its --patch argv)',
+  // reaper patterns: FULL lane path + the leaf argv. A basename alone
+  // cross-matched any process whose argv mentions the file -- an editor, a
+  // grep, the E2E driver's own pkill (live bite 2026-08-04).
+  ok('supervisor reaper patterns (full path; dsh lane keys on its --patch argv)',
     supSrc.includes("laneKind === 'dsh' ? 'dsh-lane.mjs' : 'headless-lane.mjs'") &&
     supSrc.includes("`--mcp-config ${path.join(mem, '.mcp.json')}`") &&
     supSrc.includes("`--patch ${path.join(mem, '.dsh-lane-home', 'lane.patch.yml')}`"))
@@ -206,14 +199,15 @@ console.log('\n-- isOurSupervisor: never trust, never force-kill an unverified p
   ok('null/garbage pid -> NOT verified', isOurSupervisor(null) === false && isOurSupervisor(0) === false)
 }
 {
-  // Cross-lane hazard: a LIVE run.sh-lane supervisor on the shared PIDFILE
-  // is FOREIGN, not stale -- treating it as stale would delete the pidfile
-  // out from under a running agent and let the next start double-spawn onto
-  // one Discord token.
+  // Upgrade hazard: an install coming from <=0.2.20 can still have a LIVE
+  // `bash run.sh __loop` supervisor on this PIDFILE. Calling it stale would
+  // delete the pidfile out from under a running agent and let the next start
+  // double-spawn onto one Discord token. It is LEGACY: recognized, stoppable,
+  // never adopted as ours.
   const SIG = '/some/install/supervisor.mjs __loop'
   const alive = process.pid
-  ok("live run.sh supervisor -> 'foreign_supervisor', never 'stale'",
-    classifyPidfileOwner(alive, { signature: SIG, readCommandLine: () => '/bin/bash /Applications/S.app/Contents/Resources/app.asar.unpacked/run.sh __loop' }) === 'foreign_supervisor')
+  ok("live 0.2.x bash supervisor -> 'legacy_supervisor', never 'stale'",
+    classifyPidfileOwner(alive, { signature: SIG, readCommandLine: () => '/bin/bash /Applications/S.app/Contents/Resources/app.asar.unpacked/run.sh __loop' }) === 'legacy_supervisor')
   ok("our own signature -> 'ours'",
     classifyPidfileOwner(alive, { signature: SIG, readCommandLine: () => `node ${SIG}` }) === 'ours')
   ok("recycled pid (unrelated argv) -> 'stale'",
@@ -221,31 +215,38 @@ console.log('\n-- isOurSupervisor: never trust, never force-kill an unverified p
   ok("dead pid -> 'stale'", classifyPidfileOwner(999999999, { signature: SIG }) === 'stale')
 }
 
-// ── 6b. main.cjs seam source pins (SUPERVISOR_LANE wiring) ─────────────────
-console.log('\n-- main.cjs seam: SUPERVISOR_LANE wiring stays welded')
+// ── 6b. main.cjs seam source pins (the ONE lane) ───────────────────────────
+console.log('\n-- main.cjs seam: one launcher, one stopper, one signature')
 {
   // main.cjs is Electron-main and cannot be unit-imported here; these pins
-  // keep the three seam points (spawn / stop routing / identity) from
-  // silently drifting apart. The REAL proof is a full live session on the
-  // node lane -- until then run.sh stays production (design doc).
+  // keep the three seam points (spawn / stop / identity) from drifting apart.
   const mainSrc = fs.readFileSync(path.join(ROOT, 'main.cjs'), 'utf8')
-  // Two properties now, not one string. win32 is FORCED to the node lane
-  // (BASH_BIN is a hardcoded /bin/bash, so the bash lane cannot exist there --
-  // it spawned ENOENT and parked the agent at 'failed' forever, 2026-08-03),
-  // while POSIX keeps opt-in-by-env with bash as the default.
-  ok('lane flag defaults to bash on POSIX', mainSrc.includes("=== 'node'\n      ? 'node'\n      : 'bash'"))
-  ok('lane flag is FORCED to node on win32',
-    /SUPERVISOR_LANE =\s*\n\s*process\.platform === 'win32'\s*\n\s*\? 'node'/.test(mainSrc))
-  ok('node lane spawns supervisor.mjs under ELECTRON_RUN_AS_NODE',
-    mainSrc.includes("spawn(process.execPath, [SUPERVISOR_MJS_PATH, '__loop']") && mainSrc.includes("ELECTRON_RUN_AS_NODE: '1'"))
-  ok('identity check recognizes BOTH lane signatures (lane-agnostic recognition)',
-    mainSrc.includes('${RUN_SH_PATH} __loop') && mainSrc.includes('${SUPERVISOR_MJS_PATH} __loop'))
-  ok('stop path routes by the LIVE supervisor lane (supervisorStopCommand)',
-    mainSrc.includes('function supervisorStopCommand') && !/spawn\(BASH_BIN, \[RUN_SH_PATH, 'stop'\]/.test(mainSrc))
+  // design-0023 P3: the lane SELECTOR is gone, not merely defaulted. A
+  // reintroduced env switch is a second lane by another name.
+  ok('no SUPERVISOR_LANE selector survives', !mainSrc.includes('SUPERVISOR_LANE ='))
+  ok('no BASH_BIN / run.sh launcher constants survive',
+    !mainSrc.includes('BASH_BIN') && !mainSrc.includes('RUN_SH_PATH'))
+  ok('every platform spawns supervisor.mjs under ELECTRON_RUN_AS_NODE, detached',
+    /spawn\(process\.execPath, \[SUPERVISOR_MJS_PATH, '__loop'\], \{[\s\S]*?ELECTRON_RUN_AS_NODE: '1'[\s\S]*?detached: true/.test(mainSrc))
+  ok('the spawn is NOT platform-branched (one lane, not a win32 fork)',
+    (mainSrc.match(/SUPERVISOR_MJS_PATH, '__loop'/g) || []).length === 1)
+  // Upgrade path: an install coming from <=0.2.20 can still have a live bash
+  // supervisor on this PIDFILE. Recognizing it is what stops a double-spawn
+  // onto one Discord token; spawning one is what must never happen again.
+  ok('identity recognizes our signature AND a leftover 0.2.x bash supervisor',
+    mainSrc.includes('SUPERVISOR_SIGNATURE') && mainSrc.includes("LEGACY_BASH_SIGNATURE = 'run.sh __loop'"))
+  ok('nothing can SPAWN the legacy lane (recognition only)',
+    !/spawn\([^)]*LEGACY_BASH_SIGNATURE/.test(mainSrc) && !mainSrc.includes("'/bin/bash'"))
+  ok('the stop path is the supervisor on every platform (no lane router left)',
+    mainSrc.includes('function supervisorStopCommand') &&
+    /args: \[SUPERVISOR_MJS_PATH, 'stop'\]/.test(mainSrc) &&
+    !mainSrc.includes("args: [RUN_SH_PATH, 'stop']"))
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
   ok('supervisor.mjs ships (build.files)', pkg.build.files.includes('supervisor.mjs'))
   ok('supervisor.mjs is a REAL file on disk (asarUnpack) -- plain node cannot read inside app.asar',
     pkg.build.asarUnpack.includes('supervisor.mjs'))
+  ok('run.sh is out of build.files and asarUnpack (the payload followed the deletion)',
+    !pkg.build.files.includes('run.sh') && !pkg.build.asarUnpack.includes('run.sh'))
 }
 
 // ── 8. runLoop ladder attacks: REAL loop, fake child + fake clock ───────────

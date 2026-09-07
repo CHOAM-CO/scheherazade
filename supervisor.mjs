@@ -1,27 +1,28 @@
 #!/usr/bin/env node
-// supervisor.mjs -- node port of run.sh (Windows-port Phase 1).
+// supervisor.mjs -- THE agent supervisor, on mac, Windows and Linux.
 //
-// This file REPLICATES run.sh's battle-tested semantics and FIXES exactly
-// the two things docs/supervisor-design.md's review verdicts approved: kill
-// by child HANDLE instead of blind pkill on the stop path, and a signal
-// handler that reaps the child before exiting. Everything else -- backoff
-// ladder, uptime-only restart policy, the 25s one-shot auto-answer window,
-// the verbatim prompt table (incl. the load-bearing bare-"1"-no-CR API-key
-// answer), asymmetric KST resets, once-per-lifetime env resolution -- is
-// copied deliberately, with run.sh line receipts in the comments. Do not
-// "improve" any of it here; improvements are their own loudly-noted changes
-// AFTER the port proves itself -- see docs/supervisor-design.md for the
-// full verdict rationale.
+// It began (Windows-port Phase 1) as a node port of the bash `run.sh` loop and
+// ran only on Windows while run.sh stayed production on mac and Linux. Since
+// design-0023 P3 there is one lane: run.sh is deleted and this file is what
+// main.cjs spawns everywhere, as `process.execPath supervisor.mjs __loop` with
+// ELECTRON_RUN_AS_NODE=1. What that bought: one restart ladder instead of two,
+// one watchdog instead of three (timeout(1) / a bash sleep+pkill subshell /
+// this file's timers), no `/bin/bash` hardcode to ENOENT on a minimal Linux
+// image, and a DETERMINISTIC runtime for the lane and the dsh engine
+// (process.execPath) instead of whatever `node` PATH happened to resolve.
 //
-// Runtime: plain node OR Electron with ELECTRON_RUN_AS_NODE=1. node-pty is
-// GONE (design-0020): the child is headless-lane.mjs -> claude -p
-// stream-json over plain pipes, so no native module, no ABI question, no
-// PTY. (The old node-pty receipts live in docs/supervisor-design.md and
-// git history.)
+// The semantics are still run.sh's, deliberately: backoff ladder 5/10/20/40/120,
+// uptime-only restart policy, the daily backoff reset, the `.agent-failed.json`
+// shape, and the PIDFILE/STOPFLAG/FAILFILE contract shared with main.cjs
+// (docs/supervisor-design.md -- a LOCKED contract, names and semantics). The
+// two deliberate improvements over the bash original are kill-by-HANDLE on the
+// stop path instead of a blind pkill, and a signal handler that reaps the child
+// before exiting. run.sh line receipts stay in the comments below: they are the
+// argument for why each rule exists, and they outlived the file.
 //
-// run.sh stays the production mac lane until this has run a full real
-// session on both platforms (design: "What run.sh keeps doing"). The seam in
-// main.cjs selects lanes via SUPERVISOR_LANE=node|bash, default bash.
+// Runtime: plain node OR Electron with ELECTRON_RUN_AS_NODE=1. No node-pty, no
+// PTY, no TUI: the child is dsh-lane.mjs (default) or headless-lane.mjs over
+// plain pipes.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -132,7 +133,7 @@ export function resolveConfig(env = process.env, scriptDir = SCRIPT_DIR) {
     logfile: path.join(mem, 'logs', 'agent.log'),
     stopflag: path.join(mem, '.stop_requested'),
     failfile: path.join(mem, '.agent-failed.json'),
-    // Stop-time reaper patterns, lane parity with run.sh's
+    // Stop-time reaper patterns, carried over verbatim from run.sh's
     // PKILL_PATTERN/PKILL_LEAF_PATTERN (design-0020): the lane's FULL
     // script path (basename alone cross-matched any argv mentioning the
     // file -- editor, grep, the E2E driver's own pkill; live bite
@@ -177,12 +178,11 @@ export function resolveConfig(env = process.env, scriptDir = SCRIPT_DIR) {
   }
 }
 
-// Child argv: OWNED BY headless-lane.mjs (buildArgs) since design-0020.
-// Both lanes (run.sh and this supervisor) now exec the SAME lane script and
-// pass the SAME env contract (AGENT_NAME / MEM / CLAUDE_BIN / MODEL /
-// SYSTEM_PROMPT_FILE? / MCP_CONFIG_FILE? / tuning knobs) -- argv parity is
-// by construction, not by mirrored code. test-supervisor.mjs pins the env
-// contract instead of an argv table.
+// Child argv: OWNED BY headless-lane.mjs (buildArgs) since design-0020. This
+// supervisor only passes the env contract (AGENT_NAME / MEM / CLAUDE_BIN /
+// MODEL / SYSTEM_PROMPT_FILE? / MCP_CONFIG_FILE? / tuning knobs), so argv is
+// single-sourced by construction. test-supervisor.mjs pins the env contract
+// instead of an argv table.
 
 // ── node shim for the hook lane (v0.0.15 Root A fix) ────────────────────────
 // Claude Code hook commands (ours AND third-party plugins') start with bare
@@ -291,26 +291,27 @@ export function clearFailureMarker(failfile) {
   try { fs.rmSync(failfile, { force: true }) } catch {}
 }
 
-// ── identity check (run.sh is_our_supervisor, main.cjs isOurSupervisor) ─────
-// Signature = the CONTIGUOUS substring `<SELF_PATH> __loop`, same convention
-// as `<RUN_SH_PATH> __loop` (contiguity + ps -ww receipts: run.sh:126-174).
+// ── identity check (main.cjs isOurSupervisor's twin) ───────────────────────
+// Signature = the CONTIGUOUS substring `<SELF_PATH> __loop`, the exact
+// command line main.cjs spawns and the attach bootstrap execs (contiguity +
+// `ps -ww` receipts: run.sh:126-174, the argument outlived the file).
 // Fail SAFE: lookup erroring/empty/non-matching all resolve to "not
 // verified" -- callers never trust it as already-running, never force-kill.
 export function isOurSupervisor(pid, opts = {}) {
   return classifyPidfileOwner(pid, opts) === 'ours'
 }
 
-// Cross-LANE hazard (the reason 'foreign_supervisor' exists as a third
-// verdict): run.sh and supervisor.mjs share the same PIDFILE, and each
-// lane's stopper only recognizes its own spawn signature. Treating a LIVE
-// other-lane supervisor as "stale" would delete the pidfile out from under
-// it -- orphaning a running agent with a live Discord connection, and
-// letting the next start double-spawn a second supervisor onto the same
-// token (the exact Fix-C class disaster main.cjs's PIDFILE participation
-// exists to prevent). run.sh is frozen (production mac lane until the port
-// proves itself), so the tolerance lives HERE: a live pid whose command
-// line carries the bash lane's contiguous `run.sh __loop` marker is
-// FOREIGN, not stale -- refuse to touch its state, tell the caller.
+// UPGRADE hazard (the reason 'legacy_supervisor' exists as a third verdict):
+// an install updating from <=0.2.20 can still have a live `bash .../run.sh
+// __loop` supervisor holding this same PIDFILE. Calling it "stale" would
+// delete the pidfile out from under a running agent -- orphaning it with a
+// live Discord connection, and letting the next start double-spawn a second
+// supervisor onto the same token (the exact Fix-C class disaster main.cjs's
+// PIDFILE participation exists to prevent). So a live pid whose command line
+// carries the old contiguous `run.sh __loop` marker is LEGACY: recognized,
+// never adopted as ours, and stoppable (stopAgent below reaps it the same way
+// it reaps ours -- there is no `run.sh stop` left to delegate to). Remove this
+// verdict once no install can still be running a 0.2.x lane.
 export function classifyPidfileOwner(pid, {
   signature = `${SELF_PATH} __loop`,
   readCommandLine = defaultReadCommandLine,
@@ -320,9 +321,12 @@ export function classifyPidfileOwner(pid, {
   try { cmd = readCommandLine(pid) } catch { return 'stale' }
   if (!cmd) return 'stale'
   if (cmd.includes(signature)) return 'ours'
-  if (cmd.includes('run.sh __loop')) return 'foreign_supervisor'
+  if (cmd.includes(LEGACY_BASH_SIGNATURE)) return 'legacy_supervisor'
   return 'stale'
 }
+
+// The pre-0.3 bash lane's contiguous spawn signature. Recognition only.
+const LEGACY_BASH_SIGNATURE = 'run.sh __loop'
 
 const defaultReadCommandLine = procReadCommandLine
 
@@ -888,10 +892,10 @@ function startAgent(cfg) {
     log(`${cfg.agentName} already running (pid ${existingPid})`)
     return
   }
-  if (owner === 'foreign_supervisor') {
+  if (owner === 'legacy_supervisor') {
     // Starting anyway would put two supervisors on one agent name / one
-    // Discord token. Fail loud, change nothing.
-    console.error(`a run.sh-lane supervisor (pid ${existingPid}) is already running for ${cfg.agentName} -- stop it with 'run.sh stop' before starting the node lane`)
+    // Discord token. Fail loud, change nothing. `stop` (below) can end it.
+    console.error(`a pre-0.3 (run.sh) supervisor (pid ${existingPid}) is already running for ${cfg.agentName} -- stop it first: '${SELF_PATH} stop'`)
     process.exitCode = 1
     return
   }
@@ -929,14 +933,12 @@ async function stopAgent(cfg) {
   }
   const pid = readPid(cfg.pidfile)
   const owner = classifyPidfileOwner(pid)
-  if (owner === 'foreign_supervisor') {
-    // NOT ours to stop, and NOT ours to "clean up" either -- deleting a
-    // live supervisor's pidfile orphans it (see classifyPidfileOwner).
-    console.error(`pid ${pid} is a live run.sh-lane supervisor -- refusing to touch its pidfile; stop it with 'run.sh stop'`)
-    process.exitCode = 1
-    return
-  }
-  if (owner !== 'ours') {
+  // A leftover pre-0.3 bash supervisor IS this agent, in an older shape, and
+  // there is no `run.sh stop` left to delegate to -- so stop it here. What we
+  // must never do is fall through to the "stale" branch below and delete a
+  // LIVE supervisor's pidfile, which orphans it (see classifyPidfileOwner).
+  if (owner === 'legacy_supervisor') log(`pid ${pid} is a pre-0.3 (run.sh) supervisor -- stopping it with this lane's stop path`)
+  if (owner !== 'ours' && owner !== 'legacy_supervisor') {
     log(`stale/unverified pidfile (pid ${pid} is dead, or was recycled to an unrelated process), cleaning up`)
     try { fs.rmSync(cfg.pidfile, { force: true }) } catch {}
     return
@@ -972,7 +974,7 @@ async function stopAgent(cfg) {
 
   // Re-verify identity before force-kill: up to 15s elapsed, enough for the
   // pid to have died and been recycled (run.sh:462-474, fail SAFE).
-  if (isOurSupervisor(pid)) {
+  if (classifyPidfileOwner(pid) !== 'stale') {
     log('did not stop in time, forcing')
     try { process.kill(pid, 'SIGKILL') } catch {}
   } else {

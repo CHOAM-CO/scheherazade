@@ -1,7 +1,7 @@
 // attach-topology.cjs -- tmux IPC helpers for the attach lane (0.1.0 prep).
 //
 // TOPOLOGY (docs/design-0016-attach-topology.md, O2): the agent supervisor
-// (`run.sh __loop`) lives in a pane of a tmux server the USER bootstrapped
+// (`supervisor.mjs __loop`) lives in a pane of a tmux server the USER bootstrapped
 // from their own terminal (onboarding/templates/attach-bootstrap.sh, rendered
 // into DATA_HOME). TCC attributes permissions to the tmux server's terminal
 // ancestry, so grants survive the app's per-release ad-hoc signature churn --
@@ -129,8 +129,8 @@ function attachSessionState() {
   }
 }
 
-// Revive a dead agent pane: respawn (same original command = fresh
-// `bash run.sh __loop`, which re-sources .agent-config -- so a model swap
+// Revive a dead agent pane: respawn (same original command = a fresh
+// `supervisor.mjs __loop`, which re-reads .agent-config -- so a model swap
 // written to config before this call takes effect), re-apply pipe-pane (it
 // does not reliably survive respawn), return the new pane pid.
 function respawnAttachPane({ logFile }) {

@@ -10,7 +10,7 @@
 // path, so Node's module cache shares the object -- no IPC.
 //
 // Deliberately SEPARATE from agent-status.cjs rather than folded into it:
-// that module tracks the long-lived run.sh supervisor's process liveness;
+// that module tracks the long-lived supervisor's process liveness;
 // this one tracks short-lived, user-initiated login children, per provider,
 // with a different state vocabulary. Merging them would overload
 // agent-status's `state` enum that computeAgentStatus() and the Step 5

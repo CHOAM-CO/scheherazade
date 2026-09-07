@@ -477,7 +477,7 @@ const MAX_IMAGE_BYTES = 20 * 1024 * 1024 // same cap as channel.mjs downloadBuff
 // Lane vision verdict, channel-side (0.1.4). Mirrors the onboarding
 // server's laneVision POLICY (first-party yes / default no / YES-list
 // exception) but from the channel process's vantage: PROVIDER is not in
-// this env (run.sh exports MODEL only), so first-party is detected by model
+// this env (the supervisor exports MODEL only), so first-party is detected by model
 // name. Default-'no' is the fail-safe: the worst case is telling a
 // vision-capable unlisted model to be honest about an image it could have
 // read; the old worst case (Read invitation on a non-vision lane) poisoned

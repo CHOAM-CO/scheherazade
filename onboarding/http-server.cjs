@@ -15,7 +15,7 @@
 // the user-facing display name collected in the wizard (Step 2, Korean by
 // default: "세헤라자드"). Two reasons this is NOT the same field:
 //   1. setup.sh's AGENT_NAME feeds directly into filesystem paths
-//      ($HOME/Documents/$AGENT_NAME) and a shell PKILL_PATTERN in run.sh --
+//      ($HOME/Documents/$AGENT_NAME) and the supervisor's own reaper pattern --
 //      arbitrary user text (Korean, spaces, shell metacharacters) is not
 //      safe there. (That's setup.sh's own CLI-launcher deployment path --
 //      separate from this file's DATA_HOME, see below.)
@@ -130,7 +130,7 @@ const AGENT_NAME = 'scheherazade'
 // SCHEHERAZADE_MEMORY_DB env override (used by tests/smoke.mjs) still
 // works unchanged.
 //
-// AGENT_DATA_HOME override: channel.mjs and run.sh (MEM=) have always
+// AGENT_DATA_HOME override: channel.mjs and the supervisor (MEM=) have always
 // honored this env var; production is unaffected -- main.cjs passes
 // AGENT_DATA_HOME into the env of the children it spawns, never into its
 // own process.env, and http-server runs inside main. (history: docs/HISTORY.md)
@@ -222,7 +222,7 @@ function readLivenessMarker() {
 // reported "live" for a broken agent. channel.mjs's writeLivenessMarker()
 // stamps its own process.pid into the marker (see channel.mjs); this checks
 // that pid is actually still alive on this machine before trusting the
-// timestamp at all. Uses the same kill(pid, 0)-probe idiom run.sh's own
+// timestamp at all. Uses the same kill(pid, 0)-probe idiom the supervisor's own
 // is_alive() uses, just from Node -- ESRCH means dead, EPERM means alive but
 // owned by another user (still "alive" for our purposes, just not ours).
 function isPidAlive(pid) {
@@ -368,13 +368,13 @@ const CLAUDE_CLI_CREDENTIALS_PATH = path.join(os.homedir(), '.claude', '.credent
 
 // Effort allowlist for POST /api/agent/effort (the owner 07-13 click-test item 2).
 // Values become CLAUDE_CODE_EFFORT_LEVEL in the spawned agent's env via
-// main.cjs -> run.sh:56; run.sh's own fallback default is 'high'.
+// main.cjs -> the supervisor's childEnvExtra; its fallback default is 'high'.
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'max']
 
 // Shared pattern-validation for any model id accepted from the client, no
 // matter which route (POST /api/agent/model and POST /api/agent/custom-
 // provider both write this into MODEL, which becomes `--model <MODEL>`
-// argv at spawn -- run.sh). Extracted to one const (custom-provider
+// argv at spawn -- the supervisor). Extracted to one const (custom-provider
 // addition, 2026-07-25) so the two routes can never drift apart on what
 // counts as a safe model id.
 const MODEL_ID_PATTERN = /^[A-Za-z0-9._:/-]+$/
@@ -610,7 +610,7 @@ function writeAgentConfig(fields) {
   const merged = { ...readAgentConfig(), ...fields }
   const lines = Object.entries(merged).map(([k, v]) => `${k}=${shellQuote(v)}`)
   // Atomic (tmp + rename), NOT a plain writeFileSync (red-team 2026-07-13).
-  // This file has readers in OTHER processes -- run.sh sources it at spawn, and
+  // This file has readers in OTHER processes -- the supervisor parses it at spawn, and
   // hooks/stop-reply-guard.mjs reads MODEL out of it to stamp the strike ledger.
   // writeFileSync truncates first, so a reader landing inside that window sees a
   // half-written or empty config. For the hook that means a strike attributed to

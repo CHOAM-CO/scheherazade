@@ -21,7 +21,15 @@ set -euo pipefail
 
 SOCKET="scheherazade"
 SESSION="agent"
-RUN_SH="{AGENT_DIR}/run.sh"
+# design-0023 P3: one supervisor on every platform. This pane used to exec
+# `bash {AGENT_DIR}/run.sh __loop`; run.sh is gone and the pane now execs the
+# app's OWN runtime as node on supervisor.mjs -- the same command line
+# main.cjs spawns, so the app's identity check (`<supervisor.mjs> __loop`,
+# contiguous) recognizes this pane exactly as it recognizes its own child.
+# NOTHING about the topology changes: the tmux server is still yours, started
+# from your terminal, and the app still never creates one (design-0016).
+SUPERVISOR="{AGENT_DIR}/supervisor.mjs"
+NODE_RUNTIME="{EXEC_PATH}"
 MEM="{MEMORY_DIR}"
 CONFIG="$MEM/.agent-config"
 PIDFILE="$MEM/.agent.pid"
@@ -46,9 +54,14 @@ fi
 # find; macOS ships a full db at /usr/share/terminfo (verified: xterm-/
 # screen-/tmux-256color all present). No-op when the user already set one.
 export TERMINFO_DIRS="${TERMINFO_DIRS:-/usr/share/terminfo}"
-if [ ! -f "$RUN_SH" ]; then
-  echo "run.sh가 없습니다: $RUN_SH" >&2
+if [ ! -f "$SUPERVISOR" ]; then
+  echo "supervisor.mjs가 없습니다: $SUPERVISOR" >&2
   echo "(앱 버전과 어긋난 상태 -- 앱을 한 번 실행하면 이 스크립트가 재렌더됩니다)" >&2
+  exit 1
+fi
+if [ ! -x "$NODE_RUNTIME" ]; then
+  echo "앱 런타임을 찾을 수 없습니다: $NODE_RUNTIME" >&2
+  echo "(앱을 한 번 실행하면 이 스크립트가 현재 설치 경로로 재렌더됩니다)" >&2
   exit 1
 fi
 if [ ! -f "$CONFIG" ]; then
@@ -81,10 +94,12 @@ case "$HS_OUT" in
 esac
 
 # A spawn-lane supervisor already running would double-book the bot token.
-# Same identity check run.sh's is_our_supervisor uses (command-line match).
+# Same identity check the supervisor and main.cjs use (command-line match);
+# `run\.sh __loop` is still matched so an upgrade from <=0.2.20 with a live
+# bash supervisor is caught instead of double-booked.
 if [ -f "$PIDFILE" ]; then
   EXISTING_PID="$(cat "$PIDFILE" 2>/dev/null || true)"
-  if [ -n "$EXISTING_PID" ] && ps -ww -o command= -p "$EXISTING_PID" 2>/dev/null | grep -q "run\.sh __loop"; then
+  if [ -n "$EXISTING_PID" ] && ps -ww -o command= -p "$EXISTING_PID" 2>/dev/null | grep -qE "supervisor\.mjs __loop|run\.sh __loop"; then
     echo "에이전트가 이미 앱 스폰 레인으로 돌고 있습니다 (pid $EXISTING_PID)." >&2
     echo "앱 상단 바에서 정지시킨 뒤 이 스크립트를 다시 실행하세요." >&2
     exit 1
@@ -106,10 +121,12 @@ else
 fi
 
 # Session command: env baked into the string (explicit > inherited), exec so
-# the pane pid IS `bash run.sh __loop` -- the exact command-line signature
-# run.sh's is_our_supervisor() and main.cjs's isOurSupervisor() both verify.
+# the pane pid IS `<runtime> supervisor.mjs __loop` -- the exact command-line
+# signature the supervisor's own classifyPidfileOwner() and main.cjs's
+# isOurSupervisor() both verify. ELECTRON_RUN_AS_NODE makes the app binary
+# behave as node (a no-op for a plain node runtime in a dev checkout).
 "$TMUX_BIN" -L "$SOCKET" new-session -d -s "$SESSION" \
-  "AGENT_DATA_HOME='$MEM' AGENT_CONFIG_FILE='$CONFIG' CLAUDE_BIN='$CLAUDE_BIN_BAKED' SUDO_ASKPASS='$MEM/sudo-askpass.sh' exec bash '$RUN_SH' __loop"
+  "AGENT_DATA_HOME='$MEM' AGENT_CONFIG_FILE='$CONFIG' CLAUDE_BIN='$CLAUDE_BIN_BAKED' SUDO_ASKPASS='$MEM/sudo-askpass.sh' ELECTRON_RUN_AS_NODE=1 exec '$NODE_RUNTIME' '$SUPERVISOR' __loop"
 
 # Server must outlive the agent process (live-verified 2026-07-16: default
 # exit-empty kills the server with its last session, which would strand the

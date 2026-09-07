@@ -32,7 +32,8 @@ import { resolveDataHome } from '../data-home.cjs' // one resolver: AGENT_DATA_H
 // Kill switch (product-prefixed, mirrors SCHEHERAZADE_RUMINATION_GATE).
 if (process.env.SCHEHERAZADE_RECEIPT_LEDGER === '0') process.exit(0)
 
-// DATA_HOME resolution matches channel.mjs / run.sh / the gate pack.
+// DATA_HOME resolution comes from data-home.cjs (channel.mjs / the
+// supervisor / the gate pack all share it).
 const DATA_HOME = resolveDataHome()
 const GATES_DIR = path.join(DATA_HOME, '.gates')
 const LEDGER_PATH = path.join(GATES_DIR, 'receipt-ledger.jsonl')

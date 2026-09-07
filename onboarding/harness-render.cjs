@@ -749,6 +749,11 @@ function createHarnessRender(ctx) {
         .replaceAll('{AGENT_DIR}', agentDir)
         .replaceAll('{AGENT_NAME}', AGENT_NAME)
         .replaceAll('{MEMORY_DIR}', DATA_HOME)
+        // {EXEC_PATH} = this app's own runtime (design-0023 P3). The attach
+        // bootstrap execs it as node on supervisor.mjs, so a user-run pane and
+        // an app-spawned child are the SAME command line; re-rendered every
+        // boot, so an app move or update repoints it.
+        .replaceAll('{EXEC_PATH}', process.execPath)
       staged.push({ dstName, rendered, mode })
     }
 

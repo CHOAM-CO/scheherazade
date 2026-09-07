@@ -462,7 +462,7 @@ for (const f of RUNTIME_ENTRYPOINTS) {
 console.log(`   (outside Electron: ${[...mustBeReal].sort().join(', ')})`)
 ok('the calendar server is known to run outside Electron', mustBeReal.has('calendar'),
   'the CLI spawns it as a plain node process; if the scan lost that, the unpack check below is empty and always passes')
-// Some of these are single files (channel.mjs, run.sh), not directories. Print
+// Some of these are single files (channel.mjs, supervisor.mjs), not directories. Print
 // them as what they are: a check that misnames what it looked at is one you
 // cannot read the output of.
 for (const d of [...mustBeReal].sort()) {

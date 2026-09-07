@@ -4,7 +4,7 @@
 // WHY THIS EXISTS: in the packaged app, main.cjs's console.* goes nowhere a
 // user can see (no terminal; Console.app at best). The agent supervisor's
 // stdout/stderr are piped INTO main.cjs (spawn stdio 'pipe') and were only
-// re-echoed to that same invisible console — run.sh's own LOGFILE is used
+// re-echoed to that same invisible console — the supervisor's own LOGFILE is used
 // only by its standalone `start` path, never by the app's `__loop` spawn.
 // So during live debugging the user is fully blind ("지금 너무 깜깜이라").
 // This module is the single tap point: main.cjs appends every line here,

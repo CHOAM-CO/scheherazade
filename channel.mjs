@@ -61,12 +61,12 @@ const DISCORD_TOKEN = process.env.DISCORD_BOT_TOKEN
 const HOME_CHANNEL_ID = process.env.HOME_CHANNEL_ID
 
 // DATA_HOME + marker files come from channel-runtime.mjs (see its header for
-// the run.sh MEM formula lock). Markers are set up here, before the
+// the data-home.cjs resolver). Markers are set up here, before the
 // DISCORD_TOKEN/HOME_CHANNEL_ID guards below, so a missing-token FATAL exit
-// can itself write a failure marker instead of just dying into run.sh's
+// can itself write a failure marker instead of just dying into the supervisor's
 // restart loop with nothing but a stderr line. main.cjs's pollFailureMarker()
 // surfaces the failure marker as setAgentStatus('failed', code, reason);
-// run.sh's write_failure() shares the same file, so main.cjs polls one file
+// the supervisor's own marker shares the same file, so main.cjs polls one file
 // regardless of which layer detected the problem first. (history: docs/HISTORY.md)
 const DATA_HOME = resolveDataHome(AGENT_NAME)
 const markers = createMarkerStore({ dataHome: DATA_HOME })
@@ -688,7 +688,7 @@ function startAutonomyWatcher() {
 // ── Boot ping (channel-runtime) ─────────────────────────────────────────────
 // The two-part announce unit, marker protocol, throttle, and home->persisted-
 // last-channel fallback all live in createBootAnnouncer (channel-runtime.mjs).
-// The .boot-event.json marker is written by the supervisor (run.sh /
+// The .boot-event.json marker is written by the supervisor (
 // supervisor.mjs, both lanes) immediately before each leaf spawn; only leaves
 // that live long enough to reach ClientReady ping at all, so a quick-death
 // crash loop never spams the channel. Only the Discord IO is wired here.
@@ -922,7 +922,7 @@ async function boot() {
     // gateway rejects it in seconds, not a 12h hang) -- write the distinct
     // failure marker so main.cjs's poller surfaces this as
     // setAgentStatus('failed', 'discord_token_bad', reason) instead of the
-    // UI sitting on "connecting" forever while run.sh's __loop keeps
+    // UI sitting on "connecting" forever while the supervisor's __loop keeps
     // restarting this process. Same code as the missing-token guard above
     // -- same user-facing action either way: fix the Discord bot token.
     const reason = `discord.login failed: ${err.message}`

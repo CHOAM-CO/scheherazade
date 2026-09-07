@@ -50,7 +50,7 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
 const HOME_CHANNEL_ID = process.env.HOME_CHANNEL_ID // Telegram chat id (string)
 
 // ── DATA_HOME + markers (channel-runtime) ──────────────────────────────────
-// Same marker files as every backend on purpose -- main.cjs/run.sh poll ONE
+// Same marker files as every backend on purpose -- main.cjs/the supervisor poll ONE
 // contract (.agent-live, .agent-failed.json, .boot-event.json, ...)
 // regardless of which channel backend is running.
 const DATA_HOME = resolveDataHome(AGENT_NAME)

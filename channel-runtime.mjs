@@ -8,7 +8,7 @@
 // message normalization, event wiring. tests/test-channel-runtime.mjs is
 // the tripwire that keeps it that way.
 //
-// resolveDataHome() MUST stay formula-identical to run.sh's MEM resolution
+// resolveDataHome() delegates to data-home.cjs, the ONE resolution
 // (`MEM="${AGENT_DATA_HOME:-$HOME/Documents/$AGENT_NAME}"`): same env var,
 // same fallback, keyed by AGENT_NAME. main.cjs / onboarding/http-server.cjs
 // compute DATA_HOME independently and poll the marker files written here —
@@ -54,7 +54,7 @@ export function resolveDataHome(agentName) {
 }
 
 // ── atomic JSON write (temp file + rename) ─────────────────────────────────
-// Shared with run.sh's write_failure() convention: pollers read these files
+// Shared with the supervisor's failure-marker convention: pollers read these files
 // on a timer, and a plain writeFile leaves a window where a poll tick lands
 // mid-write and JSON.parses a truncated read. fs.rename is atomic on the
 // same filesystem, which a temp file in the same directory always is.
@@ -84,7 +84,7 @@ function localWeekday(ms = Date.now()) {
 
 export const localNow = () => `${localISO()} (${localWeekday()})`
 
-// ── agent config (.agent-config, the shell KEY="value" file run.sh sources) ─
+// ── agent config (.agent-config, the shell KEY="value" file the supervisor parses) ─
 // Read on demand, never cached by callers that gate spending: the settings
 // page can flip consent or a cap at any moment.
 export async function readAgentConfig(dataHome) {

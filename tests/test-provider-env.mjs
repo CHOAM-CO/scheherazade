@@ -216,7 +216,7 @@ function fakeReadProviderKey(store) {
   assert(result.env.ANTHROPIC_AUTH_TOKEN === undefined && 'ANTHROPIC_AUTH_TOKEN' in result.env, 'ollama: CLI-era Bearer field actively cleared')
   assert(result.env.ANTHROPIC_API_KEY === undefined && 'ANTHROPIC_API_KEY' in result.env, 'ollama: ANTHROPIC_API_KEY explicitly cleared (a stale Anthropic key as x-api-key must not shadow the Bearer auth)')
   assert(result.env.MODEL === 'glm-5.2', 'ollama: signin-era ":cloud" tag stripped at spawn -- ollama.com has no such names (Mino field receipt 2026-08-04 17:37)')
-  assert(result.env.SKIP_MODEL_GUARD === '1', 'ollama: SKIP_MODEL_GUARD == "1" (matches run-agent.sh:205 shape; NOTE run.sh has no such guard today -- see task report gaps)')
+  assert(result.env.SKIP_MODEL_GUARD === '1', 'ollama: SKIP_MODEL_GUARD == "1" (matches run-agent.sh:205 shape; NOTE the supervisor has no such guard -- see task report gaps)')
   assert(result.env.CLAUDE_CODE_OAUTH_TOKEN === undefined && 'CLAUDE_CODE_OAUTH_TOKEN' in result.env, 'ollama: CLAUDE_CODE_OAUTH_TOKEN explicitly cleared (force api-key auth precedence)')
 }
 {

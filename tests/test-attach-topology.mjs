@@ -75,13 +75,16 @@ if (!tmuxBin) {
   const sock = `test-attach-${process.pid}`
   const mem = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-attach-'))
   fs.mkdirSync(path.join(mem, 'logs'), { recursive: true })
-  const fakeRun = path.join(mem, 'run.sh')
+  // A stand-in for the real supervisor, named supervisor.mjs because the
+  // SIGNATURE is what the app's identity check matches (design-0023 P3: the
+  // pane execs `<runtime> supervisor.mjs __loop`, the same command line
+  // main.cjs spawns -- it used to exec `bash run.sh __loop`).
+  const fakeSup = path.join(mem, 'supervisor.mjs')
   // Must keep PRINTING, not just print once: pipe-pane attaches a moment
   // after new-session, so a single early echo can legitimately miss the pipe
   // (true in the real bootstrap too -- boot-banner lines may predate the
   // mirror; the STREAM is what's contracted).
-  fs.writeFileSync(fakeRun, '#!/bin/bash\nwhile true; do echo "loop-alive pid=$$"; sleep 1; done\n')
-  fs.chmodSync(fakeRun, 0o755)
+  fs.writeFileSync(fakeSup, 'setInterval(() => console.log(`loop-alive pid=${process.pid}`), 1000)\n')
   const logFile = path.join(mem, 'logs', 'agent.log')
 
   // Mimic the bootstrap template's exact moves (same verbs, same options) on
@@ -89,7 +92,7 @@ if (!tmuxBin) {
   // lane the template runs in, not the app lane under test.
   const t = (args) => execFileSync(tmuxBin, ['-L', sock, ...args], { encoding: 'utf8' })
   try {
-    t(['new-session', '-d', '-s', 'agent', `exec bash '${fakeRun}' __loop`])
+    t(['new-session', '-d', '-s', 'agent', `exec '${process.execPath}' '${fakeSup}' __loop`])
     t(['set', '-s', 'exit-empty', 'off'])
     t(['set-option', '-t', 'agent', 'remain-on-exit', 'on'])
     t(['pipe-pane', '-o', '-t', 'agent', `cat >> '${logFile}'`])
@@ -101,7 +104,7 @@ if (!tmuxBin) {
     const [dead0, pid0] = panes.split(' ')
     check('live pane visible (pane_dead=0)', dead0 === '0', panes)
     const paneCmd = execFileSync('ps', ['-ww', '-o', 'command=', '-p', pid0], { encoding: 'utf8' }).trim()
-    check('pane command carries the run.sh __loop signature', paneCmd.includes(`${fakeRun} __loop`), paneCmd)
+    check('pane command carries the supervisor.mjs __loop signature', paneCmd.includes(`${fakeSup} __loop`), paneCmd)
 
     // pipe-pane mirrors output. POLL, don't sleep a fixed time: the ticker
     // echoes every 1s and a fixed 700ms wait loses the race by ~100ms
@@ -128,7 +131,7 @@ if (!tmuxBin) {
     const [dead2, pid2] = panes2.split(' ')
     check('respawn-pane revives (dead=0, new pid)', dead2 === '0' && pid2 !== pid0, panes2)
     const paneCmd2 = execFileSync('ps', ['-ww', '-o', 'command=', '-p', pid2], { encoding: 'utf8' }).trim()
-    check('respawned command keeps the signature', paneCmd2.includes(`${fakeRun} __loop`), paneCmd2)
+    check('respawned command keeps the signature', paneCmd2.includes(`${fakeSup} __loop`), paneCmd2)
 
     // exit-empty off: killing the session leaves the server alive
     t(['kill-session', '-t', 'agent'])
@@ -240,7 +243,15 @@ console.log('template + wiring tripwires:')
   check('bootstrap writes the PIDFILE (pane_pid)', tpl.includes('#{pane_pid}') && tpl.includes('.agent.pid'))
   check('bootstrap bakes CLAUDE_BIN for app-only machines', tpl.includes("CLAUDE_BIN='$CLAUDE_BIN_BAKED'"))
   check('bootstrap bakes SUDO_ASKPASS', tpl.includes('SUDO_ASKPASS='))
-  check('bootstrap refuses when a spawn-lane supervisor is live', tpl.includes('run\\.sh __loop'))
+  check('bootstrap refuses when a spawn-lane supervisor is live (both shapes: 0.3 and a leftover 0.2.x bash loop)',
+    tpl.includes('supervisor\\.mjs __loop|run\\.sh __loop'))
+  // design-0023 P3: the pane runs the SAME launcher main.cjs spawns. A pane
+  // execing anything else re-opens the two-lane split this phase closed.
+  check('bootstrap execs the app runtime on supervisor.mjs __loop',
+    tpl.includes("exec '$NODE_RUNTIME' '$SUPERVISOR' __loop") && tpl.includes('ELECTRON_RUN_AS_NODE=1'))
+  check('bootstrap carries no run.sh reference in its launch path', !tpl.includes('$RUN_SH'))
+  check('bootstrap checks the launcher AND the runtime exist before bootstrapping',
+    tpl.includes('if [ ! -f "$SUPERVISOR" ]') && tpl.includes('if [ ! -x "$NODE_RUNTIME" ]'))
   // v0.0.35 portable-tmux moves:
   check('bootstrap prefers the app-shipped tmux over PATH', tpl.includes('TMUX_BIN="$MEM/bin/tmux-portable/tmux"'))
   check('bootstrap never tells the user to brew install', !tpl.includes('brew install'))
@@ -250,7 +261,12 @@ console.log('template + wiring tripwires:')
     !/^\s*tmux /m.test(tpl) && !/\| tmux /.test(tpl))
 
   // Rendered form must be valid bash.
-  const rendered = tpl.replaceAll('{AGENT_DIR}', '/tmp/fake-agent-dir').replaceAll('{MEMORY_DIR}', '/tmp/fake-mem')
+  const rendered = tpl
+    .replaceAll('{AGENT_DIR}', '/tmp/fake-agent-dir')
+    .replaceAll('{MEMORY_DIR}', '/tmp/fake-mem')
+    .replaceAll('{EXEC_PATH}', process.execPath)
+  check('no placeholder survives rendering (an unrendered {EXEC_PATH} would exec a literal brace)',
+    !/\{[A-Z_]+\}/.test(rendered))
   const tmp = path.join(os.tmpdir(), `attach-bs-render-${process.pid}.sh`)
   fs.writeFileSync(tmp, rendered)
   // bash -n needs bash. The bootstrap script is the mac attach lane's own
@@ -269,6 +285,8 @@ console.log('template + wiring tripwires:')
   // PR-3) -- same assertions, new home.
   const renderSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'harness-render.cjs'), 'utf8')
   check('harness render includes attach-bootstrap.sh', renderSrc.includes("'attach-bootstrap.sh')"))
+  check('harness render substitutes {EXEC_PATH} (the app runtime the pane execs)',
+    renderSrc.includes("replaceAll('{EXEC_PATH}', process.execPath)"))
   // The 0o700 used to be a chmodSync line naming the file; renderHarnessFiles
   // became all-or-nothing (nogabi #6) so the mode now rides along with the
   // staged write. Source-text shape moved, behaviour did not -- and the real
