@@ -1,107 +1,258 @@
 # Release runbook
 
-First written 2026-08-11 alongside the auto-update wiring (0.1.5). Before this
-file the process lived in IDEA's session notes; the auto-updater made two steps
-load-bearing enough (latest.yml, blockmap) that forgetting them silently breaks
-every installed Windows copy's update check — so it gets a checked-in runbook.
+First written 2026-08-11 alongside the auto-update wiring (0.1.5), as prose a
+human executed by hand. Rewritten 2026-09-07 (design-0023 P2) around
+`tools/release-all.mjs`, because prose could not catch what prose let ship:
+v0.2.20's `Scheherazade-0.2.20-x86_64.AppImage` was built on the arm64 Mac, so
+`file` on its AppRun said **aarch64** and its bundled natives were
+`@koromix/koffi-darwin-arm64`, `@img/sharp-darwin-arm64`,
+`@vscode/ripgrep-darwin-arm64` — an "x86_64"-named artifact that no x86_64
+Linux can execute at all. It was published, and it was caught days later by a
+human running `file` on a hunch.
+
+So the runbook is a program now. This document is what you need to know to run
+it, and what it refuses to do for you.
+
+---
 
 ## 0. Preflight
 
-- [ ] `package.json` version bumped (single source of truth for the tag).
+- [ ] `package.json` version bumped. **Single source of truth for the tag** —
+      the driver refuses any `--tag` that disagrees, and that check is never
+      waived: the version is baked into every artifact filename and into the
+      `package.json` inside the staged asar.
 - [ ] `onboarding/templates/user-changes.md` gained a `## <version>` section
       (one or two user-facing Korean lines — the agent briefs these in-chat
       after the update lands; a missing section briefs as a bare version bump).
-- [ ] Full suite green: `npm test` (`tools/run-tests.mjs` — 86 programs,
-      exits non-zero if anything FAILed; per-test logs in `release/test-logs/`).
+- [ ] Full suite green: `npm test` (`tools/run-tests.mjs` — 86 programs, exits
+      non-zero if anything FAILed; per-test logs in `release/test-logs/`).
       The loop that used to live on this line echoed "FAIL <file>" and then
       exited 0, so a red suite read as a green one.
-      `test-packaging.mjs`'s ARTIFACT lane is skipped in that run — it checks
-      the require graph against a freshly built artifact, which does not exist
-      yet at preflight. Step 1 covers it: predist/postdist run the same file
-      fail-closed, and postdist must be green.
 - [ ] Every SKIP the run prints is "could not run here", never a pass. Read
-      them. After the build, `npm test -- --live` re-runs the artifact lane
-      against the real dmg plus the Calendar (TCC) and tmux lanes.
-- [ ] Release notes drafted (`docs/release-notes-v<version>.md` when it's more
-      than a patch; the gh release body otherwise).
-
-## 1. Build — macOS (this machine)
-
-```sh
-npm run dist          # electron-builder --mac dmg --publish never
-```
-
-- pre/postdist run `tools/test-packaging.mjs`; postdist must be green now.
-- Artifact: `release/Scheherazade-<version>-arm64.dmg`.
-
-## 2. Build — Windows (magi-win over ssh)
+      them. `test-packaging`'s ARTIFACT lanes (asar closure, natives, payload)
+      skip in a plain `npm test` because nothing has been built yet; they run
+      fail-closed inside `npm run dist`'s predist/postdist, and again under
+      `npm test -- --live` after a build.
+- [ ] Release notes drafted: `docs/release-notes-v<version>.md`. `--publish`
+      requires a notes file — a release nobody can read is not a release.
+- [ ] Commit pushed **and the tag pushed**. `gh release create` with no
+      `--target` tags the remote default branch's CURRENT head, so an unpushed
+      tag lands on the previous release's commit (caught live on 0.1.9). The
+      driver checks `git ls-remote --tags origin` for exactly this.
 
 ```sh
-# sync exactly what git knows about (no working-tree strays):
-git archive HEAD | ssh -o ServerAliveInterval=15 magi-win "cd C:/Users/minom/sch-build && tar -xf -"
-ssh -o ServerAliveInterval=15 magi-win "cd C:/Users/minom/sch-build && npm install && npm run dist:win"
-scp magi-win:C:/Users/minom/sch-build/release/Scheherazade-Setup-<version>.exe dist/
-scp "magi-win:C:/Users/minom/sch-build/release/latest.yml" dist/
-scp "magi-win:C:/Users/minom/sch-build/release/Scheherazade-Setup-<version>.exe.blockmap" dist/
+git push origin main
+git tag -a v<version> -m "v<version>" && git push origin v<version>
 ```
 
-Gotchas learned in the field:
-- `ServerAliveInterval=15` or the long `npm install` kills the ssh session
-  silently (exit 255, no output).
-- The Windows test-suite output goes to STDERR — `2>/dev/null` makes a healthy
-  run look hung.
+---
 
-## 3. Publish
-
-**Push the release commit FIRST.** `gh release create` with no `--target` tags
-the remote default branch's CURRENT head — so an unpushed version bump lands the
-tag on the PREVIOUS release's commit. The artifacts are still correct (they
-build from your working tree), but `git checkout v<version>` on the canonical
-repo then gives the wrong source. Caught live on 0.1.9 (Idea); the fix was a
-`git push` + delete-and-recreate of the canonical release. Do the push here:
+## 1. The driver
 
 ```sh
-git push origin master
+node tools/release-all.mjs --tag v<version>
 ```
 
-Two repos get the release, one gets the update feed:
+Builds all three platforms from HEAD, pulls every artifact into `release/`,
+opens each one and verifies it, then **prints the `gh` command and stops**.
+Nothing is published without `--publish`.
+
+| flag | what it does |
+|---|---|
+| `--tag vX.Y.Z` | default `v` + package.json version; must equal it |
+| `--only mac\|win\|linux` | repeatable; default all three |
+| `--dry-run` | print every build / ssh / scp / gh command, run nothing |
+| `--allow-dirty` | rehearsal: branch / clean-tree / tag checks become warnings. Refuses `--publish`, and refuses to touch the shared box |
+| `--verify-only` | build nothing; open what `release/` already holds and check it. This is how a leg someone else ran gets checked here |
+| `--publish` | actually create the release on `Mino-is-me/scheherazade-releases` |
+| `--clobber` | the release already exists: `gh release upload --clobber` instead of refusing |
+| `--notes <file>` | release notes; required by `--publish` |
+| `--keep-remote` | leave the remote build directory in place |
+
+Everything the run says — including npm's, electron-builder's and the remote
+builds' own output — is tee'd to `release/release-all-<tag>.log`.
+
+### Rehearsing
 
 ```sh
-# canonical (private, code + provenance):
-gh release create v<version> --repo CHOAM-CO/scheherazade \
-  release/Scheherazade-<version>-arm64.dmg release/Scheherazade-Setup-<version>.exe \
-  --title "v<version>" --notes-file <notes>
-
-# distribution + UPDATE FEED (public — this is what installed apps poll):
-gh release create v<version> --repo Mino-is-me/scheherazade-releases \
-  release/Scheherazade-<version>-arm64.dmg release/Scheherazade-Setup-<version>.exe \
-  release/latest.yml "release/Scheherazade-Setup-<version>.exe.blockmap" \
-  --title "v<version>" --notes-file <notes>
+node tools/release-all.mjs --dry-run --tag v<version>   # every command, nothing run
+node tools/release-all.mjs --only mac --allow-dirty     # a real mac build off a dirty tree
 ```
 
-**latest.yml + .exe.blockmap are NOT optional.** electron-updater on every
-installed Windows copy resolves the newest release of
-`Mino-is-me/scheherazade-releases` and fetches `latest.yml` from its assets:
+---
 
-- release without `latest.yml` → every update check errors (log-only, users
-  stay stranded on their version, silently).
-- `latest.yml` without the `.blockmap` → full-size download instead of a
-  differential one (works, but slow) — ship both.
-- macOS copies only compare the release TAG (vX.Y.Z) via the GitHub API and
-  link to the download page (unsigned build — no auto-install; see
-  updater.cjs's header comment), so the tag format matters: always `v<semver>`.
+## 2. What each leg does, and the traps it is written around
 
-## 4. Post-ship verification
+### mac — this machine (darwin/arm64)
+
+`npm test`, then `npm run dist`. `predist` asserts the host before
+`test-packaging` runs (npm executes pre-scripts first, so before 0.3 P2
+`npm run dist:win` on this Mac ran the whole mac-lane packaging test and only
+*then* refused). `postdist` mounts the freshly built exact-version dmg and
+verifies the require graph, the natives, and the payload gate against it.
+
+Artifacts: `Scheherazade-<version>-arm64.dmg`, `.dmg.blockmap`,
+`latest-mac.yml`. arm64 only. Unsigned (`identity: "-"`), so mac updater mode
+is **notify**: installed copies compare the release TAG and link to the
+download page. Tag format is therefore load-bearing — always `v<semver>`.
+
+### win — ON the Windows box, never cross-built
+
+`git archive HEAD` → scp to `C:\Users\magi\sch-build\<tag>\src.tar.gz` → a
+generated `build.cmd` → `npm ci` → `npm run dist:win` → scp back.
+Prereqs on that box: node ≥ 24 (24.20 today), npm 11.19.0, `tar` (ships with
+Windows 10+), the `magi-win` ssh alias reachable from this Mac.
+
+Traps the generated script exists to survive — each one produces **exit 0 with
+no build**, which is worse than a failure:
+
+- **`call npm`, always.** In a `.cmd`, cmd.exe *transfers* control to another
+  batch file instead of calling it, and `npm` on Windows is `npm.cmd`. A bare
+  `npm ci` ends the script there and every line after it silently never runs.
+- **Never pipe on the remote side.** A `| tail` inside the ssh command string
+  is interpreted by the remote cmd.exe, not by your shell. On 2026-09-02 that
+  exited 0 with `npm ci` never having run.
+- **Nothing in the background.** Anything backgrounded dies when the ssh
+  session ends. Every remote step runs in the foreground.
+- **`ServerAliveInterval=15`.** `npm ci` goes silent for minutes and used to
+  drop the connection with exit 255, no output.
+- Windows test output goes to **STDERR** — `2>/dev/null` makes a healthy run
+  look hung.
+
+Artifacts: `Scheherazade-Setup-<version>.exe`, `.exe.blockmap`, `latest.yml`.
+x64 only, unsigned NSIS (SmartScreen "More info → Run anyway" is accepted).
+Windows updater mode is **auto**, which is why `latest.yml` and the blockmap
+are not optional (see §4).
+
+> The installer's `file` header reads `PE32 executable (GUI) Intel 80386 …
+> Nullsoft Installer self-extracting archive`. That is **correct**: the NSIS
+> stub is 32-bit by design whatever the payload is. Do not "fix" it. The
+> payload's x64-ness is guaranteed one level in, by `tools/assert-platform.mjs`
+> (wrong host) plus `test-packaging`'s NATIVES gate (wrong contents), both of
+> which run inside the Windows build itself.
+
+### linux — WSL2 (Ubuntu) on the same Windows box, `/root/schz`
+
+`git bundle HEAD` → scp to `C:\Users\magi\` → a generated bash script, also
+scp'd there, run as
+`ssh magi-win "wsl -d Ubuntu -u root -- bash /mnt/c/Users/magi/<script>.sh"`.
+Locked call (2026-09-07): Linux stays a WSL build on that box. No Linux CI.
+
+Traps:
+
+- **The script's first line is `exec </dev/null`, and it is run BY PATH.**
+  Never feed a script over stdin — `ssh box "wsl … bash" < script` hands git
+  and npm the same stdin and they eat it.
+- **That tree has no GitHub credentials.** Source travels as a single `git
+  bundle` file, fetched from `/mnt/c/Users/magi/<bundle>`, never cloned.
+- **`git checkout -- package-lock.json` first.** `npm install` there leaves the
+  lockfile dirty and a dirty lockfile blocks the next checkout.
+- **scp cannot reach into the WSL filesystem.** Artifacts are `cp`'d to
+  `/mnt/c/Users/magi/` and scp'd from the Windows side.
+
+Artifacts: `Scheherazade-<version>-x86_64.AppImage`, `latest-linux.yml`. No
+blockmap — electron-builder emits none for AppImage. Linux updater mode is
+**notify**, same as mac, deliberately.
+
+---
+
+## 3. Verification (the driver does this; know what it is claiming)
+
+For every artifact it collected:
+
+- it **exists**, with its size printed;
+- `file`'s header: AppImage must be `ELF … x86-64` (the row that would have
+  caught v0.2.20), the exe must be a Windows PE NSIS installer;
+- the matching `latest*.yml` parses, its `version:` equals the tag, it lists
+  the artifact, and its `size` and `sha512` match the bytes on disk.
+  A yml written for a different build is not cosmetic: electron-updater
+  rejects the download, so the update fails for every installed copy with no
+  visible cause;
+- blockmaps present for dmg and exe.
+
+Any failure blocks `--publish`.
+
+### The both-box E2E rule (standing, 2026-08-19)
+
+`release-all` verifies **artifacts**. It does not verify that the app *runs*.
+Before any release, the D-73 rule still stands: an E2E on **both** boxes.
+
+- **mac**: install the dmg → drive the packaged wizard over CDP
+  (`--remote-debugging-port`) → provider found-login card → lane up → one small
+  task turn (file written, reply delivered, `turn end (completed)`).
+- **win**: NSIS silent install as a scheduled task (Interactive principal, or
+  the `schztest` rig in session 0) → app with
+  `--remote-debugging-port=9222 --disable-gpu --no-sandbox` → `ssh -L 19222`
+  tunnel → CDP wizard → lane up → task turn. Graceful close via an Interactive
+  task (`taskkill /IM`, no `/F`) — minutes, not seconds. Log-poll regexes need
+  `-Raw` strings.
+- **linux**: xvfb boot smoke in WSL — the AppImage launches and reaches the
+  onboarding server. That is the whole Linux bar today; Secret Service keyring
+  and bwrap sandboxing remain "unsupported with honest UI".
+
+Clean up the rig afterwards: scheduled tasks, tunnels, test installs.
+
+---
+
+## 4. Publish
+
+```sh
+node tools/release-all.mjs --tag v<version> --publish --notes docs/release-notes-v<version>.md
+```
+
+Publishing is a human's call, every time. Without `--publish` the driver prints
+the exact command and the asset list and stops.
+
+The eight assets:
+
+| | |
+|---|---|
+| mac | `Scheherazade-<v>-arm64.dmg`, `.dmg.blockmap`, `latest-mac.yml` |
+| win | `Scheherazade-Setup-<v>.exe`, `.exe.blockmap`, `latest.yml` |
+| linux | `Scheherazade-<v>-x86_64.AppImage`, `latest-linux.yml` |
+
+**The yml files are not optional.** electron-updater on every installed Windows
+copy resolves the newest release of `Mino-is-me/scheherazade-releases` and
+fetches `latest.yml` from its assets:
+
+- release without `latest.yml` → every update check errors (log-only; users
+  stay stranded on their version, silently);
+- `latest.yml` without the `.blockmap` → full download instead of a
+  differential one (works, but slow) — ship both;
+- mac and Linux copies compare the release TAG via the GitHub API and link to
+  the download page (unsigned build, no auto-install — see `updater.cjs`).
+
+The public feed is `Mino-is-me/scheherazade-releases` (`build.publish`,
+`updater.cjs`'s `UPDATE_OWNER`/`UPDATE_RELEASES_REPO`). The canonical private
+repo `CHOAM-CO/scheherazade` holds code and provenance; publishing there is a
+separate, manual `gh release create` and is not what installed apps poll.
+
+---
+
+## 5. Post-ship
 
 - [ ] `gh release view v<version> --repo Mino-is-me/scheherazade-releases --json assets -q '.assets[].name'`
-      lists dmg, exe, latest.yml, blockmap.
-- [ ] `latest.yml`'s `version:` line matches the tag.
-- [ ] Receipt to Mino: version, what changed, both release URLs.
+      lists all eight.
+- [ ] Each `latest*.yml`'s `version:` matches the tag
+      (`--verify-only` re-checks this locally against what you uploaded).
+- [ ] Receipt to the owner: version, what changed, the release URL.
+- [ ] `release/release-all-<tag>.log` kept with the run.
+
+---
 
 ## History
 
-- 0.1.5: auto-update lands. Until 0.1.4 every fix was hand-delivered
-  (build → send file → ask user to reinstall); from the first post-0.1.5
-  release onward, Windows installs pull updates themselves and macOS installs
-  get a notify-with-link. NOTE: users ON 0.1.4 or older still need one last
-  manual install to get onto the update train.
+- **0.1.5**: auto-update lands. Until 0.1.4 every fix was hand-delivered
+  (build → send file → ask user to reinstall). Users on 0.1.4 or older still
+  need one manual install to get onto the update train.
+- **0.2.9**: the update feed unified back onto the public repo. Installs from
+  0.2.1–0.2.8 (which pointed at the private repo and got 404s) need one manual
+  reinstall.
+- **0.2.19–0.2.20**: Linux AppImage joins the asset set. 0.2.20's was
+  cross-built on the Mac and republished from WSL on 2026-09-07; the pair of
+  gates that makes that impossible to repeat — `tools/assert-platform.mjs` and
+  `test-packaging`'s NATIVES lane — landed the same day.
+- **0.3.0 (design-0023 P2)**: this driver. The old §2's
+  `C:/Users/minom/sch-build` path and `npm install` step were already stale
+  when they were the runbook; the build rig moved to `C:\Users\magi\sch-build`
+  after the 2026-08-28 ACL cutover and the step is `npm ci`.

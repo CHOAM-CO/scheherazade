@@ -26,21 +26,40 @@ conventions live in its history — when in doubt, `git log` a similar change.
   honest commit bodies (what/why/receipts, refuted alternatives). Keep it.
 - Agent-authored commits carry their `Co-Authored-By:` line.
 
+## Where things live (0.3 P2 — this moved)
+
+| dir | what | ships in the installer? |
+|---|---|---|
+| `tests/` | every test program, `test-*.{mjs,cjs}` + `smoke.mjs` | **no** |
+| `tools/` | the runner, the packaging gate, the host assert, the release driver, the skill-hash generator, dev/probe drivers | **no** |
+| `scripts/` | the three runtime cycle scripts only — `journal-compress.mjs`, `madoromi-solo.mjs`, `persona-reflux.mjs` | **yes**, and unpacked |
+
+Until 0.3 P2 all of it lived in `scripts/`, which `build.files` shipped whole
+and `asarUnpack` made executable on disk — 85 test programs and every dev tool
+in every installer. `tools/test-packaging.mjs`'s PAYLOAD gate now fails the
+build if anything under `tests/`, `tools/` or `docs/` finds its way back in,
+and fails it the other way too if a file in `scripts/` is not named in
+`build.files`. If you add a script, that gate makes you say which kind it is.
+
 ## Tests
 
-- Full regression before merging to master: **`npm test`**
-  (`tools/run-tests.mjs`: every `tests/test-*.{mjs,cjs}` plus
-  `tests/smoke.mjs`, one process each, per-file timeout, exit non-zero if
-  anything failed). Flags: `--live`, `--filter <substr>`, `--list`,
-  `--timeout <s>`; per-test logs land in `release/test-logs/` (gitignored).
-  The old line here -- `node tests/test-*.mjs` -- ran ONE file and passed
-  the other 84 paths to it as argv.
+- Full regression before merging to trunk: **`npm test`**
+  (`tools/run-tests.mjs`: every `tests/test-*.{mjs,cjs}` plus `tests/smoke.mjs`
+  and `tools/test-packaging.mjs`, one process each, per-file timeout, exit
+  non-zero if anything failed). Flags: `--live`, `--filter <substr>`,
+  `--list`, `--timeout <s>`; per-test logs land in `release/test-logs/`
+  (gitignored). Run one file directly with
+  `node tests/test-<name>.mjs`. The old line here -- `node scripts/test-*.mjs`
+  -- ran ONE file and passed the other 84 paths to it as argv.
 - `npm test -- --live` adds the three lanes that need this machine's real
   state: `test-calendar` (the real Calendar, TCC), `test-attach-topology`
   (a real tmux binary + server), and `test-packaging`'s artifact lane (a
   freshly built dmg/exe). Without `--live` they print the skip marker.
   `test-packaging` still runs fail-closed as `npm run dist`'s
   predist/postdist hook -- that is the ship gate, and it stays hard.
+  `predist` also runs `tools/assert-platform.mjs <target>` FIRST, so a
+  `npm run dist:win` on a Mac refuses before it spends four minutes running
+  the mac-lane packaging test.
 - SKIP is never a pass. A program that cannot run on this host prints
   `SKIP: <reason>` at COLUMN 0 and exits 0; a SECTION that could not be set
   up prints an INDENTED `  SKIP ...` and the file keeps running. The runner
@@ -58,6 +77,7 @@ conventions live in its history — when in doubt, `git log` a similar change.
 - **Merging to `master` goes through a PR** once there is more than one
   committer (i.e., now). Review: PO (Idea) or Mino; author merges after
   review + green tests.
+- Releases: `docs/RELEASE.md`, driven by `node tools/release-all.mjs`.
 - Small docs/chore changes: PR still, review may be a one-line ack.
 - No force-push to `master`. Force-push to your own feature branch is
   your business.
