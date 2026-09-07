@@ -169,6 +169,13 @@ function resolveOnPath(bin, {
 } = {}) {
   if (!bin) return null
   const isWin = platform === 'win32'
+  // Join in the TARGET platform's dialect, not the running host's. `platform`
+  // is process.platform in every production call, so this is the same thing
+  // path.join already did there -- but the injected-platform seam the tests use
+  // crosses hosts, and a bare path.join answered '\evil\codex' when a Windows
+  // runner asked a linux question. Same fix, and same reason, as platform.cjs's
+  // binDirsFor. (Found by running the suite on the Windows box, not here.)
+  const P = isWin ? path.win32 : path.posix
   const sep = delimiter || (isWin ? ';' : ':')
   if (bin.includes('/') || bin.includes('\\')) return existsSync(bin) ? bin : null
   const exts = isWin ? (env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean) : ['']
@@ -181,7 +188,7 @@ function resolveOnPath(bin, {
       candidates.push(bin + ext.toLowerCase(), bin + ext)
     }
     for (const cand of candidates) {
-      const full = path.join(dir, cand)
+      const full = P.join(dir, cand)
       if (existsSync(full)) return full
     }
   }

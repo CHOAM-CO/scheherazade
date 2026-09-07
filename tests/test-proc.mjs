@@ -36,31 +36,33 @@ function ok(name, cond, detail = '') {
 console.log('\n-- resolveOnPath: fake PATH + PATHEXT (win32 lane exercised from any host)')
 {
   const winFiles = new Set([
-    path.join('C:\\tools', 'claude.exe'),
-    path.join('C:\\tools', 'node.CMD'),
-    path.join('C:\\other', 'claude.exe'),
+    'C:\\tools\\claude.exe',
+    'C:\\tools\\node.CMD',
+    'C:\\other\\claude.exe',
   ])
   const winEnv = { PATH: 'C:\\tools;C:\\other', PATHEXT: '.COM;.EXE;.BAT;.CMD' }
   const win = (bin, env = winEnv) => resolveOnPath(bin, {
     env, platform: 'win32', delimiter: ';', existsSync: (f) => winFiles.has(f),
   })
-  ok('win32 finds bin+.EXE for a bare name', win('claude') === path.join('C:\\tools', 'claude.exe'), String(win('claude')))
+  ok('win32 finds bin+.EXE for a bare name', win('claude') === 'C:\\tools\\claude.exe', String(win('claude')))
   ok('win32 finds an UPPER-case PATHEXT file on disk (node.CMD)',
-    win('node') === path.join('C:\\tools', 'node.CMD'), String(win('node')))
+    win('node') === 'C:\\tools\\node.CMD', String(win('node')))
   ok('win32 honours PATH ORDER (first dir wins)',
     win('claude').startsWith('C:\\tools'), String(win('claude')))
   ok('win32 name that already carries an extension resolves as-is',
-    win('claude.exe') === path.join('C:\\tools', 'claude.exe'), String(win('claude.exe')))
+    win('claude.exe') === 'C:\\tools\\claude.exe', String(win('claude.exe')))
   ok('win32 bare name with NO PATHEXT match -> null (a .cmd shim is not exec-able by spawn)',
     win('claude', { PATH: 'C:\\tools', PATHEXT: '.COM' }) === null)
   ok('win32 stripped PATHEXT env falls back to the default list',
-    win('claude', { PATH: 'C:\\tools' }) === path.join('C:\\tools', 'claude.exe'))
+    win('claude', { PATH: 'C:\\tools' }) === 'C:\\tools\\claude.exe')
   ok('empty PATH entries are skipped, not joined into ./bin',
-    win('claude', { PATH: ';C:\\tools;', PATHEXT: '.EXE' }) === path.join('C:\\tools', 'claude.exe'))
+    win('claude', { PATH: ';C:\\tools;', PATHEXT: '.EXE' }) === 'C:\\tools\\claude.exe')
 
-  // path.join is the HOST's, so build the fixture with it (as winFiles does)
-  // -- a literal '/opt/bin/claude' never matches on a Windows runner.
-  const POSIX_CLAUDE = path.join('/opt/bin', 'claude')
+  // Literal, deliberately: resolveOnPath joins in the TARGET platform's dialect
+  // now, so a linux question answers in posix from any runner. Building this
+  // with the host's path.join is what made it runner-dependent in the first
+  // place (3eca41c), and it went red on Windows for exactly that reason.
+  const POSIX_CLAUDE = '/opt/bin/claude'
   const posixFiles = new Set([POSIX_CLAUDE])
   const posix = (bin, env = { PATH: '/nope:/opt/bin' }) => resolveOnPath(bin, {
     env, platform: 'linux', delimiter: ':', existsSync: (f) => posixFiles.has(f),
@@ -73,7 +75,7 @@ console.log('\n-- resolveOnPath: fake PATH + PATHEXT (win32 lane exercised from 
   // and missed this line, which is why it went red on Windows and nowhere else.)
   ok('an explicit path is checked as given, never PATH-walked',
     resolveOnPath(POSIX_CLAUDE, { platform: 'linux', existsSync: (f) => posixFiles.has(f) }) === POSIX_CLAUDE &&
-    resolveOnPath(path.join('/opt/bin', 'nope'), { platform: 'linux', existsSync: (f) => posixFiles.has(f) }) === null)
+    resolveOnPath('/opt/bin/nope', { platform: 'linux', existsSync: (f) => posixFiles.has(f) }) === null)
   ok('empty/undefined bin -> null', resolveOnPath('') === null && resolveOnPath(undefined) === null)
 }
 
