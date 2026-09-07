@@ -25,9 +25,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # AGENT_CONFIG_FILE / AGENT_DATA_HOME overrides (agent-lifecycle fix,
 # 2026-07-03): this script now has TWO callers with different filesystem
 # shapes.
-#   1. Standalone CLI (setup.sh's own deployment path, agent-portable fork,
-#      this repo's own top-level use): .agent-config lives next to run.sh
-#      itself, at $SCRIPT_DIR/.agent-config -- unchanged default below.
+#   1. Standalone CLI (the agent-portable fork's own deployment path; its
+#      setup.sh bootstrap was deleted 2026-09-07, design-0023 P2 -- the app's
+#      onboarding is the only writer of .agent-config now): .agent-config
+#      lives next to run.sh itself, at $SCRIPT_DIR/.agent-config -- unchanged
+#      default below.
 #   2. Electron-bundled internal launcher (main.cjs's spawnRealAgentChild):
 #      a packaged app's run.sh lives inside
 #      Contents/Resources/app.asar.unpacked/ (see main.cjs's RUN_SH_PATH /
@@ -43,7 +45,7 @@ if [ -f "$CONFIG_FILE" ]; then
   # shellcheck source=/dev/null
   source "$CONFIG_FILE"
 elif [ -z "${AGENT_NAME:-}" ]; then
-  echo "no .agent-config found at $CONFIG_FILE, and AGENT_NAME is not already set in the environment -- run ./setup.sh first, or invoke with AGENT_NAME (and optionally CLAUDE_BIN/MODEL/AGENT_DATA_HOME) pre-exported" >&2
+  echo "no .agent-config found at $CONFIG_FILE, and AGENT_NAME is not already set in the environment -- run the app once to complete onboarding (it writes .agent-config), or invoke with AGENT_NAME (and optionally CLAUDE_BIN/MODEL/AGENT_DATA_HOME) pre-exported" >&2
   exit 1
 fi
 AGENT_NAME="${AGENT_NAME:?AGENT_NAME missing from config/env}"
@@ -82,7 +84,8 @@ FAILFILE="$MEM/.agent-failed.json"
 # puts the lane/claude in their own process group, see run_headless() below),
 # so pkill is the only mechanism actually reaching the leaf.
 # Rebuilt on STABLE discriminators only: AGENT_NAME is product-fixed
-# (onboarding/http-server.cjs's AGENT_NAME, or setup.sh's one-time prompt)
+# (onboarding/http-server.cjs's AGENT_NAME -- the only writer left since
+# setup.sh was deleted 2026-09-07)
 # and CLAUDE_BIN is stable within an install -- MODEL is the only
 # post-spawn-mutable field of the three, so it's the only one dropped.
 # CLAUDE_BIN can't be re-joined onto "--name ${AGENT_NAME}" as a literal
@@ -325,8 +328,8 @@ run_loop() {
   export AGENT_NAME MEM CLAUDE_BIN MODEL
   # Custom personality prompt (2026-07-08): rides ABOVE the Claude Code
   # default system prompt via --append-system-prompt-file. Rendered by
-  # setup.sh (CLI path) or onboarding-complete (app path) into
-  # $MEM/system_prompt.md. Guarded: a missing file must not become a CLI
+  # onboarding-complete into $MEM/system_prompt.md (setup.sh used to render
+  # it on the CLI path; deleted 2026-09-07, so the app is the only renderer). Guarded: a missing file must not become a CLI
   # arg error, so the flag is only added when the file exists (see the
   # expect-side extra_args branch). Own env var = one Tcl word, same
   # spaced-path reasoning as CLAUDE_BIN/MODEL above.

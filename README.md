@@ -23,15 +23,25 @@ read yourself at any time.
 
 ## Quick Start
 
+> **2026-09-07 (design-0023 P2): `setup.sh` is deleted.** It had been broken
+> for a while -- `set -euo pipefail` plus a final `chmod +x hooks/*.sh
+> scripts/*.sh` for globs that match nothing, so every run aborted after doing
+> its work and before printing what it had done. The app's onboarding
+> (`onboarding/http-server.cjs`) is now the only thing that writes
+> `.agent-config` and renders the harness into `~/Documents/<name>/`.
+> `run-cli.sh` is deleted too (nothing called it). Everything below this note
+> describes the pre-fork agent-portable CLI and is kept as history; the
+> supported path is the packaged app.
+
 ```bash
 git clone <this-repo> ~/agent-portable
 cd ~/agent-portable
-./setup.sh
+./setup.sh   # DELETED -- see the note above
 ./run.sh
 ```
 
-`setup.sh` asks for an agent name (default `companion`), creates
-`~/Documents/<name>/`, and seeds it with a rendered `CLAUDE.md`, hook
+`setup.sh` asked for an agent name (default `companion`), created
+`~/Documents/<name>/`, and seeded it with a rendered `CLAUDE.md`, hook
 wiring, and a blank `self_persona.md`. `run.sh` launches `claude` there,
 headless, with an auto-restart loop.
 
@@ -71,14 +81,14 @@ Stop it:
 ```
 agent-portable/                    (this repo -- "code")
 ├── CLAUDE.md                      agent system prompt template
-├── setup.sh                       one-time: creates memory dir, renders templates
+├── (setup.sh)                     DELETED 2026-09-07 -- the app's onboarding does this
 ├── run.sh                         launch / stop, with auto-restart
 ├── .claude/settings.local.json    hook wiring template
 ├── hooks/                         3 hooks (SessionStart, 2x Stop)
 ├── scripts/                       3 cycle scripts (compress, reflux, dream)
 └── docs/ARCHITECTURE.md
 
-~/Documents/<AGENT_NAME>/          ("memory" -- created by setup.sh)
+~/Documents/<AGENT_NAME>/          ("memory" -- created by the app's onboarding)
 ├── CLAUDE.md                      rendered copy, placeholders resolved
 ├── .claude/settings.local.json    rendered copy
 ├── self_persona.md                identity, evolves via reflux
@@ -101,9 +111,9 @@ those are unset.
 
 ## Customize
 
-- **Agent name** -- re-run `./setup.sh`, or hand-edit
+- **Agent name** -- rename in the app's settings, or hand-edit
   `~/Documents/<name>/CLAUDE.md` (data files like `self_persona.md` are
-  never touched by re-running setup).
+  never touched by a re-render).
 - **Persona** -- edit `~/Documents/<name>/self_persona.md` directly any
   time, or let it evolve through the reflux cycle (`CLAUDE.md` §4).
 - **Hooks** -- edit the scripts in `hooks/`; they read `AGENT_NAME`/`MEM`

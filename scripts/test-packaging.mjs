@@ -608,6 +608,18 @@ if (IS_PREDIST) {
     `${LANE === 'mac' ? 'the mounted DMG has no app.asar.unpacked/node_modules' : `no readable node_modules under ${path.relative(ROOT, path.join(STAGED_RESOURCES, 'app.asar.unpacked'))}`} (or the artifact above would not open) -- the natives in it are UNVERIFIED`)
 } else {
   checkNatives(`the built ${LANE} bundle`, bundleNatives)
+  // LICENSE GATE, artifact half (2026-09-07, design-0023 P2). @anthropic-ai/
+  // claude-code stopped being a dependency in this phase, and with it went the
+  // two `!node_modules/@anthropic-ai/claude-code*` negations in build.files.
+  // The section below still asserts no build lane NAMES the CLI in
+  // extraResources -- config-level, and it was config that used to do the
+  // excluding. Now that nothing excludes it, the proof has to come from the
+  // artifact itself: is the package in there or not. Same principle the
+  // license section states out loud -- a green suite is only evidence that the
+  // build matches what the suite was told to want.
+  const cliPkgs = [...bundleNatives].filter((n) => n === '@anthropic-ai/claude-code' || n.startsWith('@anthropic-ai/claude-code-'))
+  ok('the built bundle does NOT redistribute the claude CLI package', cliPkgs.length === 0,
+    `${cliPkgs.join(', ')} is inside the artifact -- its LICENSE.md reads "(c) Anthropic PBC. All rights reserved." with no redistribution grant; the user installs the CLI themselves`)
 }
 
 // ── node-pty: RETIRED (design-0023 P2, 2026-09-07) ──────────────────────────

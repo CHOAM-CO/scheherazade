@@ -121,7 +121,7 @@ export function resolveConfig(env = process.env, scriptDir = SCRIPT_DIR) {
   if (fs.existsSync(configFile)) {
     fileVals = parseAgentConfig(fs.readFileSync(configFile, 'utf8'))
   } else if (!env.AGENT_NAME) {
-    throw new Error(`no .agent-config found at ${configFile}, and AGENT_NAME is not already set in the environment -- run ./setup.sh first, or invoke with AGENT_NAME (and optionally CLAUDE_BIN/MODEL/AGENT_DATA_HOME) pre-exported`)
+    throw new Error(`no .agent-config found at ${configFile}, and AGENT_NAME is not already set in the environment -- run the app once to complete onboarding (it writes .agent-config), or invoke with AGENT_NAME (and optionally CLAUDE_BIN/MODEL/AGENT_DATA_HOME) pre-exported`)
   }
   const merged = { ...env, ...fileVals }
   // Lane switch (0.2.2 full harness swap): EVERY provider row now emits
