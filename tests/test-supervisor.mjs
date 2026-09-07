@@ -17,7 +17,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import {
   backoffFor,
-  kstDate,
+  localDate,
   parseAgentConfig,
   writeFailureMarker,
   clearFailureMarker,
@@ -368,7 +368,7 @@ const NOON_KST = Date.UTC(2026, 6, 14, 3, 0, 0) // 12:00 KST -- far from rollove
   await runLoop(h.cfg, h.deps)
   ok('rollover reset the ladder (post-midnight crash sleeps 5s, not 40s)', h.sleeps.join(',') === '5000,10000,20000,5000', h.sleeps.join(','))
   ok('rollover did NOT clear the failure marker (asymmetric on purpose)', fs.existsSync(h.cfg.failfile))
-  ok('sanity: the clock really did cross a KST date boundary', kstDate(h.deps.now()) === '2026-07-15', kstDate(h.deps.now()))
+  ok('sanity: the clock really did cross a local date boundary', localDate(h.deps.now()) === '2026-07-15', localDate(h.deps.now()))
   h.cleanup()
 }
 {

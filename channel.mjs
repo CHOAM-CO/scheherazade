@@ -735,10 +735,10 @@ function startNoteCadenceWatcher() {
     try {
       const config = await readAgentConfigFile()
       // Filename convention MUST match hooks/session-start.mjs's TODAY
-      // exactly (currently hardcoded Asia/Seoul there -- a known port
-      // wrinkle, see release notes v0.0.16; if that ever moves to system
-      // tz, move this with it in the same commit).
-      const noteDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+      // exactly. Both call the SAME helper now (local-date.cjs, AGENT_TZ with
+      // the Asia/Seoul default) -- the "known port wrinkle" this comment used
+      // to describe is closed: there is one definition of the agent's day.
+      const noteDate = localDate()
       let noteMtimeMs = null
       try {
         noteMtimeMs = (await fs.stat(path.join(DATA_HOME, 'session_notes', `${noteDate}.md`))).mtimeMs

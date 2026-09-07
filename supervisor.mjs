@@ -36,6 +36,7 @@ import { createRequire } from 'node:module'
 // (main.cjs, the onboarding server, ollama-daemon) shares them.
 import { isPidAlive, readCommandLine as procReadCommandLine, killTree, sweepByPattern, resolveOnPath } from './proc.cjs'
 import { resolveDataHome } from './data-home.cjs'
+import { localDate, localStamp, agentTimeZone } from './local-date.cjs'
 
 const SELF_PATH = fileURLToPath(import.meta.url)
 const SCRIPT_DIR = path.dirname(SELF_PATH)
@@ -61,21 +62,15 @@ export function backoffFor(restartCount) {
   return 120
 }
 
-// ── KST clock (run.sh uses TZ=Asia/Seoul date; we use Intl, no TZ env games) ─
-const KST_DATE_FMT = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' })
-const KST_TIME_FMT = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
-
-export function kstDate(nowMs = Date.now()) {
-  return KST_DATE_FMT.format(new Date(nowMs)) // en-CA => YYYY-MM-DD
-}
-
-function kstStamp(nowMs = Date.now()) {
-  // run.sh log(): [%Y-%m-%d %H:%M:%S %Z] with TZ=Asia/Seoul
-  return `${KST_DATE_FMT.format(new Date(nowMs))} ${KST_TIME_FMT.format(new Date(nowMs))} KST`
-}
+// ── local clock (design-0023 P3: one helper, AGENT_TZ, default Asia/Seoul) ──
+// The daily backoff reset and the log stamp used to hardcode Asia/Seoul here
+// and in six other files. Same default, so KST installs see no change; a user
+// who sets AGENT_TZ now gets a supervisor whose "new day" is the same day the
+// note filenames, the journal rows and the nightly cadence use.
+export { localDate }
 
 function makeLog(now = () => Date.now()) {
-  return (msg) => console.log(`[${kstStamp(now())}] ${msg}`)
+  return (msg) => console.log(`[${localStamp(now())}] ${msg}`)
 }
 
 // ── .agent-config parser ────────────────────────────────────────────────────
@@ -778,7 +773,7 @@ export async function runLoop(cfg, deps = {}) {
 
   let restartCount = 0
   let spawnSeq = 0 // boot-event iteration counter (run.sh's SPAWN_SEQ twin)
-  let lastKstDate = kstDate(now())
+  let lastLocalDate = localDate(now())
   // Fresh loop start: don't carry a failure marker over from a previous life
   // (run.sh:353-356 -- e.g. the user fixed a bad key and relaunched).
   clearFailureMarker(cfg.failfile)
@@ -816,17 +811,17 @@ export async function runLoop(cfg, deps = {}) {
       log('shutdown-request cleared -- resuming spawn loop')
     }
 
-    const curKst = kstDate(now())
-    if (curKst !== lastKstDate) {
+    const curLocalDate = localDate(now())
+    if (curLocalDate !== lastLocalDate) {
       // Verdict 6, REPLICATED asymmetry with the presumed reason written
       // down: a new day resets PATIENCE (the backoff count), it does not fix
       // a bad token -- so the failure marker deliberately survives the
       // rollover until a run actually lives past 300s. If this presumption
       // is wrong, this comment is where to find the decision; silence made
       // the bash version archaeology.
-      log(`KST date rolled over (${lastKstDate} -> ${curKst}), backoff reset`)
+      log(`local date rolled over in ${agentTimeZone()} (${lastLocalDate} -> ${curLocalDate}), backoff reset`)
       restartCount = 0
-      lastKstDate = curKst
+      lastLocalDate = curLocalDate
     }
 
     sweepOrphans()

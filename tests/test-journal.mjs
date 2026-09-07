@@ -22,6 +22,11 @@ import { fileURLToPath } from 'node:url'
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-journal-'))
 process.env.SCHEHERAZADE_MEMORY_DB = path.join(tmp, 'memory.db')
+// The journal's "local day" is the AGENT's day since design-0023 P3
+// (local-date.cjs, AGENT_TZ, default Asia/Seoul). Pin it so this file asserts
+// the same day boundary on a CI box in any timezone -- unpinned, section 7
+// would pass in Seoul and fail in Berlin for a reason that is not a bug.
+process.env.AGENT_TZ = 'Asia/Seoul'
 
 const mod = await import('../memory/server.mjs')
 
@@ -124,7 +129,10 @@ const db = mod.initDb()
 {
   const today = mod.localToday()
   check('localToday is YYYY-MM-DD', /^\d{4}-\d{2}-\d{2}$/.test(today), today)
-  const local = mod.localToday(new Date(2026, 6, 13, 23, 30)) // 23:30 local, July 13
+  // AGENT_TZ pinned at the top of this file: 'local' is the AGENT's day
+  // (local-date.cjs) since design-0023 P3, so the fixture must construct its
+  // instant in that same zone rather than the host's.
+  const local = mod.localToday(new Date('2026-07-13T23:30:00+09:00')) // 23:30 KST, July 13
   check('23:30 local is still the 13th (would be the 14th in UTC east of GMT)', local === '2026-07-13', local)
 
   const r = mod.journalWrite(db, { body: 'no date given' })

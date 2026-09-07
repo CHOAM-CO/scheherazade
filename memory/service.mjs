@@ -44,6 +44,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { resolveDataHome, resolveMemoryDb } from '../data-home.cjs'
+import { localDayKey } from '../local-date.cjs'
 import * as entityIndex from './entity-index.mjs'
 
 // ── Config ──────────────────────────────────────────────────────────────
@@ -874,12 +875,13 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 // The agent's day is the LOCAL day. A journal keyed on UTC would roll over
 // mid-evening for the user it belongs to, which is the kind of small lie that
 // makes a memory feel like a machine's.
-function localToday(now = new Date()) {
-  const y = now.getFullYear()
-  const m = String(now.getMonth() + 1).padStart(2, '0')
-  const d = String(now.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
-}
+// design-0023 P3: "local" is now the AGENT'S day (local-date.cjs, AGENT_TZ,
+// default Asia/Seoul) rather than the host process's timezone. Before this the
+// DB rolled over on system time while the note filenames and the nightly
+// cadence rolled over on KST -- off KST those two disagreed by a day, so the
+// journal row and the session note of the same evening carried different
+// dates. One helper, one boundary, everywhere.
+const localToday = localDayKey
 
 // Identity firewall (2026-08-15): the journal writer's identity, read from
 // the .agent-config sitting NEXT TO the DB (http-server's CONFIG_DIR ===

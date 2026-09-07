@@ -15,9 +15,13 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { localDate } from '../local-date.cjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const TODAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+// The hooks under test key their filenames on local-date.cjs; the test must
+// ask the same helper, not re-hardcode a zone (the drift this whole change
+// exists to end).
+const TODAY = localDate()
 
 let pass = 0
 let fail = 0

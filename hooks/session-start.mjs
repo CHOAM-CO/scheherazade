@@ -14,9 +14,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { resolveDataHome } from '../data-home.cjs' // one resolver: AGENT_DATA_HOME || MEM || ~/Documents/Scheherazade
+import { localDate } from '../local-date.cjs'
 
 const MEM = resolveDataHome()
-const TODAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+const TODAY = localDate() // AGENT_TZ, default Asia/Seoul -- same helper channel.mjs's note cadence uses
 
 for (const dir of ['session_notes', 'journals', 'dreams', 'logs']) {
   fs.mkdirSync(path.join(MEM, dir), { recursive: true })
