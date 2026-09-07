@@ -296,9 +296,14 @@ function mountedAsarEntries() {
     // is what a user actually gets, so that is the tree the natives gate
     // reads -- but it disappears with the unmount, so hand back the answer
     // rather than the path.
-    const nativesDir = path.join(resources, 'app.asar.unpacked', 'node_modules')
+    const unpackedRoot = path.join(resources, 'app.asar.unpacked')
+    const nativesDir = path.join(unpackedRoot, 'node_modules')
     const natives = fs.existsSync(nativesDir) ? installedPackageNames(nativesDir) : null
-    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^\/+/, ''))), chromuxShipped, agentToolsShipped, natives }
+    // Same reason as `natives`: the mount goes away in the finally block, so
+    // hand back the ANSWER, not a path that will be gone by the time the
+    // payload gate reads it.
+    const unpacked = fs.existsSync(unpackedRoot) ? unpackedFiles(unpackedRoot) : null
+    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^\/+/, ''))), chromuxShipped, agentToolsShipped, natives, unpacked }
   } catch (e) {
     // A DMG that EXISTS but will not mount / list is fail-CLOSED, never a skip.
     // (Skia fail-open catch: the old null-collapse let an hdiutil failure pass
@@ -335,9 +340,11 @@ function stagedAsarEntries() {
     // check the vendored chromux and agent-tools directly.
     const chromuxShipped = fs.existsSync(path.join(STAGED_RESOURCES, 'chromux', 'chromux.mjs'))
     const agentToolsShipped = fs.existsSync(path.join(STAGED_RESOURCES, 'agent-tools', 'windowshot.cjs'))
-    const nativesDir = path.join(STAGED_RESOURCES, 'app.asar.unpacked', 'node_modules')
+    const unpackedRoot = path.join(STAGED_RESOURCES, 'app.asar.unpacked')
+    const nativesDir = path.join(unpackedRoot, 'node_modules')
     const natives = fs.existsSync(nativesDir) ? installedPackageNames(nativesDir) : null
-    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^[/\\]+/, '').split('\\').join('/'))), chromuxShipped, agentToolsShipped, natives }
+    const unpacked = fs.existsSync(unpackedRoot) ? unpackedFiles(unpackedRoot) : null
+    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^[/\\]+/, '').split('\\').join('/'))), chromuxShipped, agentToolsShipped, natives, unpacked }
   } catch (e) {
     // fail-CLOSED, same as the dmg lane: an artifact that exists but cannot be
     // listed is an UNVERIFIED artifact, never a skip.
@@ -371,6 +378,10 @@ const IS_PREDIST = lifecycle.startsWith('predist')
 // volume attached. Whatever the lane learned about app.asar.unpacked/node_modules
 // is stashed here for it.
 let bundleNatives = null
+// The PAYLOAD gate below reads the same opened artifact (see its header for why
+// it is not allowed to open one of its own).
+let bundleEntries = null
+let bundleUnpacked = null
 if (IS_PREDIST) {
   console.log(`  SKIP  artifact asar closure -- predist (pre-build); postdist verifies the freshly built ${pkg.version} ${ARTIFACT_NOUN}; NOT a pass`)
 } else if (RUNNER_WITHOUT_LIVE) {
@@ -393,6 +404,8 @@ if (IS_PREDIST) {
       `${LANE === 'mac' ? 'hdiutil/listPackage' : 'asar extract/list'} failed on an existing artifact: ${asarResult.reason}`)
   } else {
     bundleNatives = asarResult.natives
+    bundleUnpacked = asarResult.unpacked
+    bundleEntries = asarResult.entries
     const asarEntries = asarResult.entries
     ok(`the ${LANE === 'mac' ? 'mounted' : 'staged'} asar listed something (an empty listing always passes)`, asarEntries.size > 0)
     ok('vendored chromux ships as an extraResource next to app.asar (web-search path for non-Anthropic backends)',
@@ -528,6 +541,30 @@ function lockPlatformVariants() {
   return variants
 }
 
+// Every REAL FILE the bundle carries outside the archive, ROOT-relative and
+// POSIX-normalized. asarUnpack copies these to app.asar.unpacked/, where the
+// agent's own Bash tool can read and RUN them -- which is why the payload gate
+// below asks this tree the same question it asks the asar. node_modules is
+// skipped on purpose: it is the natives gate's subject, it is enormous, and
+// third-party packages legitimately carry *.test.js files that say nothing
+// about whether OUR dev payload shipped.
+function unpackedFiles(unpackedDir) {
+  const found = []
+  const visit = (dir, prefix, depth) => {
+    if (depth > 12) return
+    let entries
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+    for (const e of entries) {
+      if (e.name === 'node_modules') continue
+      const rel = prefix ? `${prefix}/${e.name}` : e.name
+      if (e.isDirectory()) visit(path.join(dir, e.name), rel, depth + 1)
+      else found.push(rel)
+    }
+  }
+  visit(unpackedDir, '', 0)
+  return found
+}
+
 // Walk an npm tree the way npm lays one out: a node_modules holds packages (or
 // @scopes holding packages), and a package may hold its own nested
 // node_modules. Only those two shapes are descended into, so this never walks
@@ -620,6 +657,141 @@ if (IS_PREDIST) {
   const cliPkgs = [...bundleNatives].filter((n) => n === '@anthropic-ai/claude-code' || n.startsWith('@anthropic-ai/claude-code-'))
   ok('the built bundle does NOT redistribute the claude CLI package', cliPkgs.length === 0,
     `${cliPkgs.join(', ')} is inside the artifact -- its LICENSE.md reads "(c) Anthropic PBC. All rights reserved." with no redistribution grant; the user installs the CLI themselves`)
+}
+
+// ── PAYLOAD: the dev harness must not be in the bundle (design-0023 P2) ────
+//
+// WHAT SHIPPED UNTIL 2026-09-07. build.files carried "scripts/**/*" and
+// "docs/**/*"; asarUnpack carried "scripts/**". So every installer contained
+// all 85 test programs, five dev/probe drivers, this file, the build helpers,
+// memory/smoke.mjs (via the memory/** glob) and 49 internal documents --
+// roughly 1.3 MB of a developer's working tree. The tests were not merely
+// present: asarUnpack made them REAL EXECUTABLE FILES under
+// app.asar.unpacked/scripts/, on a machine where the agent has its own Bash
+// tool. They carried dev paths, internal review notes and fleet names.
+//
+// Nothing about that was caught by anything. The rest of this file asks "did
+// what we need get IN"; nothing asked "did what we do not need STAY OUT", and
+// an allowlist that nobody re-reads only ever grows. So the question is now a
+// gate, in two halves, for the same reason the natives pair is two halves:
+//
+//   CONFIG half   -- runs on every invocation including predist, where there
+//                    is no artifact yet. It reads build.files / asarUnpack,
+//                    which are the only inputs that decide the answer, so a
+//                    re-added glob fails BEFORE a four-minute build.
+//   ARTIFACT half -- opens what was actually produced (asar members + the
+//                    app.asar.unpacked tree) and says what is really inside.
+//                    A config that looks right and an artifact that is right
+//                    are different claims; only the second one ships.
+//
+// SHIPPED_DOCS is the escape hatch, deliberately narrow and deliberately
+// explicit. Nothing under docs/ is read at runtime today -- grepped across
+// main.cjs, onboarding/, channel*, memory/, hooks/ and the templates: every
+// docs/ mention in shipped code is a comment pointing a DEVELOPER at history,
+// and the one document the AGENT actually reads (SCHEHERAZADE_MANUAL.md) was
+// moved to onboarding/templates/ and harness-rendered into the data dir long
+// ago, precisely because a doc inside app.asar exists and cannot be opened.
+// If a doc ever must ship, name it here and in build.files; the gate then
+// requires both, so the two lists cannot drift apart.
+const SHIPPED_DOCS = []
+const FORBIDDEN_DIRS = ['tests', 'tools']
+const FORBIDDEN_FILES = ['main-v2.cjs']
+const isTestFilename = (rel) => /(^|\/)[^/]*\.test\.[^/]*$/.test(rel)
+const isForbiddenDoc = (rel) => rel === 'docs' || (rel.startsWith('docs/') && !SHIPPED_DOCS.includes(rel))
+
+console.log('\n-- payload: the dev harness is NOT in the bundle (config half)')
+{
+  // A gate whose subject does not exist passes vacuously. tests/ and tools/
+  // are the directories this whole phase created; if a later refactor folds
+  // them back into scripts/ this row says so instead of going quietly green.
+  for (const d of FORBIDDEN_DIRS) {
+    const there = fs.existsSync(path.join(ROOT, d)) && fs.readdirSync(path.join(ROOT, d)).length > 0
+    ok(`${d}/ exists in the source tree (an empty gate always passes)`, there,
+      `no ${d}/ -- either the dev payload moved somewhere new and this gate is now blind, or it moved back into a shipped directory`)
+  }
+
+  const positives = pkg.build.files.filter((f) => !String(f).startsWith('!'))
+  for (const d of [...FORBIDDEN_DIRS, 'docs']) {
+    const hits = positives.filter((f) => f === d || f.startsWith(`${d}/`))
+      .filter((f) => !(d === 'docs' && SHIPPED_DOCS.includes(f)))
+    ok(`build.files ships nothing under ${d}/`, hits.length === 0,
+      `${hits.join(', ')} -- the dev payload is back in the installer` +
+      (d === 'docs' ? '; if a doc must ship, add it to SHIPPED_DOCS here as well' : ''))
+  }
+  for (const d of [...FORBIDDEN_DIRS, 'docs']) {
+    const hits = (pkg.build.asarUnpack || []).filter((f) => f === d || f.startsWith(`${d}/`))
+    ok(`build.asarUnpack unpacks nothing under ${d}/`, hits.length === 0,
+      `${hits.join(', ')} -- asarUnpack is what makes a shipped file EXECUTABLE on the user's disk`)
+  }
+  const named = [...positives, ...(pkg.build.asarUnpack || [])]
+    .filter((f) => FORBIDDEN_FILES.includes(path.posix.basename(String(f))) || isTestFilename(String(f)))
+  ok('no build pattern names a dead entrypoint or a *.test.* file', named.length === 0, named.join(', '))
+  for (const d of SHIPPED_DOCS) {
+    ok(`SHIPPED_DOCS entry ${d} is actually listed in build.files`, positives.includes(d),
+      'an allowlist entry that build.files does not carry is a doc the runtime will not find')
+  }
+
+  // The other direction, for the one shipped directory that still holds
+  // hand-written scripts. build.files now names the three cycle scripts
+  // explicitly instead of globbing scripts/**/*, which is what keeps a future
+  // dev helper out -- but the same explicitness silently DROPS a new runtime
+  // cycle script, and the failure would appear as an agent that cannot run its
+  // own journal compression on a packaged install. Both directions, loud.
+  const inScripts = fs.readdirSync(path.join(ROOT, 'scripts')).filter((f) => !f.startsWith('.'))
+  ok('scripts/ still holds the runtime cycle scripts', inScripts.length > 0,
+    'CLAUDE.md and procedures/ render `node {AGENT_DIR}/scripts/<name>.mjs`')
+  for (const f of inScripts) {
+    ok(`scripts/${f} is named in build.files (the agent runs it by absolute path)`,
+      shipsUnderBuildFiles(`scripts/${f}`, pkg.build.files),
+      'either it is runtime -- add it to build.files -- or it is a dev tool and belongs in tools/')
+  }
+}
+
+console.log(`\n-- payload: the dev harness is NOT in the bundle (artifact half, ${LANE} lane)`)
+if (IS_PREDIST) {
+  console.log(`  SKIP  built-artifact payload gate -- predist (pre-build); the config half above already failed closed on the patterns, postdist opens the built ${pkg.version} ${ARTIFACT_NOUN}; NOT a pass`)
+} else if (RUNNER_WITHOUT_LIVE) {
+  console.log(`SKIP: built-artifact payload gate -- needs a freshly built ${pkg.version} ${ARTIFACT_NOUN}; run \`npm test -- --live\` after a build, or \`${DIST_SCRIPT}\` (predist/postdist run this file fail-closed); NOT a pass`)
+} else if (bundleEntries === null) {
+  // The closure section above already said why it could not open the artifact;
+  // do not double-report the reason, but never let this question pass silently.
+  ok(`the ${LANE} bundle could be opened for the payload gate`, false,
+    'the artifact would not open above -- what is inside it is UNVERIFIED')
+} else {
+  // node_modules is excluded from BOTH lists: it is the natives gate's subject,
+  // and third-party packages ship their own *.test.js by the thousand, which
+  // says nothing about whether OUR harness leaked in.
+  const asarMembers = [...bundleEntries].filter((e) => !e.startsWith('node_modules/'))
+  ok('the payload scan has entries to scan (an empty scan always passes)', asarMembers.length > 0)
+  const unpackedMembers = bundleUnpacked || []
+  ok('the app.asar.unpacked tree was readable (asarUnpack is what makes a file executable on disk)',
+    bundleUnpacked !== null,
+    'no app.asar.unpacked next to app.asar -- the natives and every unpacked script are UNVERIFIED')
+
+  const offenders = (list) => list.filter((rel) =>
+    FORBIDDEN_DIRS.some((d) => rel === d || rel.startsWith(`${d}/`)) ||
+    isForbiddenDoc(rel) ||
+    FORBIDDEN_FILES.includes(path.posix.basename(rel)) ||
+    isTestFilename(rel))
+
+  const inAsar = offenders(asarMembers)
+  ok(`the shipped app.asar carries no tests/, tools/, unshipped docs/, ${FORBIDDEN_FILES.join('/')} or *.test.*`,
+    inAsar.length === 0,
+    `${inAsar.slice(0, 12).join(', ')}${inAsar.length > 12 ? ` (+${inAsar.length - 12} more)` : ''}`)
+  const inUnpacked = offenders(unpackedMembers)
+  ok('app.asar.unpacked carries none of them either (these are real files the agent can execute)',
+    inUnpacked.length === 0,
+    `${inUnpacked.slice(0, 12).join(', ')}${inUnpacked.length > 12 ? ` (+${inUnpacked.length - 12} more)` : ''}`)
+
+  // The positive half of the same trim: dropping scripts/**/* must not have
+  // taken the three cycle scripts with it. An agent whose journal-compress is
+  // missing fails at a moment nobody is watching.
+  for (const f of ['journal-compress.mjs', 'madoromi-solo.mjs', 'persona-reflux.mjs']) {
+    ok(`scripts/${f} is still in the bundle`, bundleEntries.has(`scripts/${f}`),
+      'CLAUDE.md renders `node {AGENT_DIR}/scripts/<name>.mjs`; a missing one is a cycle the agent cannot run')
+    ok(`...and unpacked as a real file`, unpackedMembers.includes(`scripts/${f}`),
+      'the agent runs it as a plain node process; plain node cannot read inside app.asar')
+  }
 }
 
 // ── node-pty: RETIRED (design-0023 P2, 2026-09-07) ──────────────────────────
