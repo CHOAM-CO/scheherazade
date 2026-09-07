@@ -325,7 +325,10 @@ function preflight(opts, tag) {
   soft('the working tree is clean', dirty === '',
     `${dirty.split('\n').filter(Boolean).length} modified/untracked path(s) would be built into the artifacts`)
 
-  const tagSha = q('git', ['rev-parse', '-q', '--verify', `refs/tags/${tag}`]).out
+  // Peel to the commit: RELEASE.md says `git tag -a`, and an annotated tag's own
+  // object id is never HEAD, so without ^{commit} the documented command could not
+  // pass its own preflight (found on the first v0.3.0 attempt).
+  const tagSha = q('git', ['rev-parse', '-q', '--verify', `refs/tags/${tag}^{commit}`]).out
   soft(`the tag ${tag} exists locally`, !!tagSha, 'git tag -a ' + tag)
 
   const head = q('git', ['rev-parse', 'HEAD']).out
