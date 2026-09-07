@@ -60,10 +60,33 @@ const failureExpr = failureMatch ? failureMatch[0].replace(/^failure:\s*/, '') :
 // no binding for them, so they are injected as parameters here. Building the
 // mapper once PER PLATFORM also makes this test prove the mapper survives both
 // -- a string that only renders on mac is exactly the bug being fixed.
+// Positional mirror of copy.js's four module-level consts, in declaration
+// order: THIS_MACHINE, SHELL_APP, CRED_STORE, CRED_STORE_THE. LINUX IS A ROW
+// (design-0023 P1): copy.js computes those consts from window.IS_MAC /
+// window.IS_WIN, so a Linux host takes the non-mac value of one pair and the
+// non-win value of the other -- a combination no row here ever exercised, and
+// the shipped Linux AppImage renders exactly it. These pin CURRENT behavior.
 const PLATFORM_BINDINGS = {
   darwin: ['this Mac', 'Terminal', "this Mac's keychain", 'the macOS keychain'],
   win32: ['this computer', 'PowerShell', "this computer's encrypted credential store", "the OS's encrypted credential store"],
+  linux: ['this computer', 'Terminal', "this computer's encrypted credential store", "the OS's encrypted credential store"],
 }
+// Non-vacuity: a hand-typed binding that copy.js no longer contains would make
+// every row below render a string that ships nowhere. Every value must be a
+// literal the real file still carries.
+for (const [platform, bindings] of Object.entries(PLATFORM_BINDINGS)) {
+  for (const b of bindings) {
+    assert(copySrc.includes(b), `copy.js still carries the ${platform} binding ${JSON.stringify(b)}`)
+  }
+}
+// And the linux row must be DERIVABLE from copy.js's own ternaries rather than
+// invented here: IS_MAC false + IS_WIN false picks the second arm of each.
+assert(/const THIS_MACHINE = window\.IS_MAC \? 'this Mac' : 'this computer'/.test(copySrc),
+  'THIS_MACHINE is an IS_MAC ternary -- linux takes the non-mac arm')
+assert(/const SHELL_APP = window\.IS_WIN \? 'PowerShell' : 'Terminal'/.test(copySrc),
+  'SHELL_APP is an IS_WIN ternary -- linux takes the non-win arm (Terminal, which is also the honest word there)')
+assert(!/IS_LINUX/.test(copySrc),
+  'CURRENT: copy.js has no IS_LINUX -- linux is still the else-arm of two mac/win ternaries (design-0023 P4 R2 adds a real third row; this pin makes that change visible)')
 const makeFailureFn = (platform) =>
   new Function('reason', 'THIS_MACHINE', 'SHELL_APP', 'CRED_STORE', 'CRED_STORE_THE',
     `return (${failureExpr})(reason)`)
@@ -86,9 +109,19 @@ if (failureFn) {
   // Same completeness check on the Windows bindings: a mapper that throws or
   // returns undefined off macOS ships a blank error message to the user.
   for (const reason of [...reasons, 'user_cancelled']) {
-    const winText = callFailure('win32', reason)
-    assert(typeof winText === 'string' && winText.length > 0,
-      `win32 bindings render "${reason}" as a non-empty string`)
+    for (const platform of ['win32', 'linux']) {
+      const text = callFailure(platform, reason)
+      assert(typeof text === 'string' && text.length > 0,
+        `${platform} bindings render "${reason}" as a non-empty string`)
+      // The bug this guards: a message that only reads correctly on one OS.
+      // On linux nothing may call the machine a Mac or send the user to
+      // PowerShell -- and today that holds only because both words come from
+      // the ternaries above.
+      if (platform === 'linux') {
+        assert(!/\bMac\b|keychain|PowerShell/i.test(text),
+          `linux message for "${reason}" names no mac/windows-only thing`)
+      }
+    }
   }
 
   const emitted = [...reasons, 'user_cancelled']

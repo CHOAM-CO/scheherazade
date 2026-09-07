@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const require_ = createRequire(path.join(ROOT, 'package.json'))
-const { buildUninstallPlan } = require_(path.join(ROOT, 'onboarding', 'routes', 'settings.cjs'))
+const { buildUninstallPlan, createRoutes } = require_(path.join(ROOT, 'onboarding', 'routes', 'settings.cjs'))
 
 let pass = 0
 let fail = 0
@@ -29,7 +29,79 @@ function assert(cond, label) {
   else { fail++; console.log(`  FAIL ${label}`) }
 }
 
-// darwin only. buildUninstallPlan emits macOS residue classes (~/Library/...,
+// ── 0. the platform table, exercised on EVERY host ────────────────────────
+// design-0023 P1: linux was never a row here -- it fell into "not darwin",
+// which on a Linux box meant the file asserted two source-text pins and
+// exited. The route decides at CALL time (process.platform inside the
+// handler), so the linux row can be driven from any host by overriding
+// process.platform around one call. Both sections below pin CURRENT behavior;
+// P4/R6 changes it, and these are what will notice.
+console.log('\n0. linux row: the in-app uninstall REFUSES through the real route')
+{
+  const sent = []
+  const routes = createRoutes({
+    sendJson: (res, code, body) => { sent.push({ code, body }) },
+    readJsonBody: async () => ({ confirm: 'DELETE' }), // past the fat-finger gate
+    writeAgentConfig: () => ({}),
+    DATA_HOME: '/home/testuser/Documents/Scheherazade',
+    getElectron: () => { throw new Error('no Electron in a test') },
+  })
+  const route = routes.find((r) => r.method === 'POST' && r.match('/api/uninstall'))
+  assert(Boolean(route), 'the uninstall route is registered')
+  const realPlatform = process.platform
+  let overridden = false
+  try {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
+    overridden = process.platform === 'linux'
+    // The handler is called ONLY once the override is confirmed. On darwin its
+    // very next move is a DETACHED /bin/bash reaper that rm -rf's this
+    // machine's real residue paths and deletes the Keychain entry. A test in
+    // the default gate must not be one failed defineProperty away from running
+    // a real uninstall -- so a failed override skips the section, loudly.
+    if (overridden) await route.handler({}, {}, {})
+  } finally {
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true })
+  }
+  if (!overridden) {
+    console.log('  SKIP linux route row -- process.platform is not overridable on this runtime; the handler is NOT called on a real host; NOT a pass')
+  } else {
+    assert(sent.length === 1, 'the handler answers exactly once')
+    assert(sent[0] && sent[0].code === 501, 'linux: 501, not a half-run cleanup (the mac plan is ~/Library + security + pkill top to bottom)')
+    assert(sent[0] && sent[0].body && sent[0].body.reason === 'unsupported_platform',
+      "linux: the refusal carries reason 'unsupported_platform' (the UI switches on it)")
+    // CURRENT, and wrong for a Linux user: the message names only the Windows
+    // remedy, and settings.js renders the danger-zone button on every platform,
+    // so a Linux user gets this text as an error toast (read-C G9).
+    assert(sent[0] && /Windows/i.test(sent[0].body.error) && !/Linux/i.test(sent[0].body.error),
+      'CURRENT: the 501 message names only the Windows NSIS path -- nothing for Linux (design-0023 P4/R6)')
+  }
+  assert(process.platform === realPlatform, 'process.platform is restored for the rest of the file')
+}
+
+console.log('\n0b. linux row: buildUninstallPlan has no Linux form yet')
+{
+  // Separator-agnostic: path.join returns backslashes on Windows, which is the
+  // 2026-08-04 lesson this file's header records.
+  const norm = (p) => String(p).split('\\').join('/')
+  const home = '/home/testuser'
+  const dataHome = '/home/testuser/Documents/Scheherazade'
+  const dirs = buildUninstallPlan(dataHome, home).dirs.map(norm)
+  assert(dirs.includes(dataHome), 'DATA_HOME is on the list for a linux home too (the agent itself)')
+  assert(dirs.includes('/home/testuser/.claude/projects/-home-testuser-Documents-Scheherazade'),
+    'the CLI transcript slug for OUR workspace is on the list on any platform')
+  assert(!dirs.includes('/home/testuser/.claude'), '~/.claude itself is NEVER on the list, on any platform')
+  assert(!dirs.some((d) => d.endsWith('.claude.json')), '~/.claude.json is NEVER on the list, on any platform')
+  assert(dirs.every((d) => d.startsWith(home)), 'every target lives under the user home -- nothing system-wide')
+  // The gap, pinned as data rather than left implied.
+  assert(dirs.some((d) => d.includes('/Library/')),
+    'CURRENT: the residue list is macOS-shaped (~/Library/...) even for a linux home')
+  assert(!dirs.some((d) => d.includes('/.config/Scheherazade')),
+    'CURRENT: no ~/.config/Scheherazade (Electron userData on linux) on the list -- P4/R6 adds it')
+  assert(!buildUninstallPlan(dataHome, home).script.includes('APPIMAGE'),
+    'CURRENT: nothing removes the AppImage itself ($APPIMAGE) -- P4/R6 adds it')
+}
+
+// darwin only from here down. buildUninstallPlan emits macOS residue classes (~/Library/...,
 // a .plist, `security delete-generic-password`) and this file asserts them as
 // literal POSIX paths; path.join inside the builder returns backslashes on
 // Windows, so every includes() missed (2026-08-04 win suite). The Windows

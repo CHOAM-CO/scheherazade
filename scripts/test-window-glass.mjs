@@ -33,7 +33,9 @@ const cases = [
   ['win32', '10.0.22621'],  // exact 22H2 floor
   ['win32', '10.0.19045'],  // Win10 -- no material support
   ['win32', ''],            // unparseable release
-  ['linux', '6.1.0'],
+  ['linux', '6.1.0'],       // a kernel release, not a Windows build number
+  ['linux', '6.8.0-45-generic'], // the shape os.release() actually returns there
+  ['linux', ''],            // release unavailable
 ]
 for (const [platform, release] of cases) {
   const o = glassOptions(platform, release)
@@ -64,7 +66,31 @@ assert(!('backgroundColor' in win11), 'win11 carries NO backgroundColor (it kill
 assert(glassOptions('win32', `10.0.${WIN11_22H2_BUILD}`).backgroundMaterial === 'acrylic', `build ${WIN11_22H2_BUILD} (22H2 floor) is inclusive`)
 assert(glassOptions('win32', '10.0.19045').backgroundColor === FLAT_FALLBACK, 'win10 falls back to the flat color')
 assert(glassOptions('win32', '').backgroundColor === FLAT_FALLBACK, 'unparseable win release degrades to flat, never throws')
-assert(glassOptions('linux', '6.1.0').backgroundColor === FLAT_FALLBACK, 'linux falls back to the flat color')
+
+console.log('\n2c. linux row (explicit, not the else-branch)')
+// Linux used to be covered only by "everything else". 0.3 ships it as a
+// first-class platform (design-0023), so the row is spelled out and pins
+// CURRENT behavior: flat, always. There is no Electron API for GNOME/KDE
+// blur, so unlike win10 this is not a version floor anyone can cross -- a
+// future linux material would have to change window-glass.cjs, and these
+// assertions are what would notice.
+for (const release of ['6.1.0', '6.8.0-45-generic', '']) {
+  const o = glassOptions('linux', release)
+  assert(o.backgroundColor === FLAT_FALLBACK && !('vibrancy' in o) && !('backgroundMaterial' in o),
+    `linux ${release || '(empty release)'}: flat fallback, no platform effect (${JSON.stringify(o)})`)
+}
+assert(glassOptions('linux', '6.1.0', 'hud').backgroundColor === FLAT_FALLBACK,
+  'a saved mac material is a no-op on linux (the switcher cannot turn blur ON there)')
+assert(glassOptions('linux', '6.1.0', 'under-window').backgroundColor === FLAT_FALLBACK,
+  "...including the default material name")
+assert(glassOptions('linux', '6.1.0', 'none').backgroundColor === FLAT_FALLBACK,
+  "the blur-off sentinel is already what linux gets -- 'none' changes nothing there")
+// A build-number parse must never leak across from the win32 branch: '6.1.0'
+// has no third component the win path would read as >= 22621, but a linux
+// release string like '6.8.0-45-generic' would parse as 0 anyway. Assert the
+// branch, not the arithmetic.
+assert(!('backgroundMaterial' in glassOptions('linux', '10.0.26100')),
+  'a Windows-SHAPED release string on linux still gets no acrylic (the platform decides, not the version)')
 
 console.log('\n3. main.cjs uses glassOptions and does not reintroduce the 0.59 shape')
 const main = readFileSync(path.join(root, 'main.cjs'), 'utf8')

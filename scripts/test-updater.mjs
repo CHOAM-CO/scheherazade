@@ -7,6 +7,7 @@
 // produce a false "update available" prompt or an exception that reaches the
 // boot path. It must not.
 
+import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
@@ -50,14 +51,39 @@ ok('garbage remote tag can NEVER prompt', !isNewerVersion('latest', '0.1.4'))
 ok('empty remote tag can NEVER prompt', !isNewerVersion('', '0.1.4'))
 ok('garbage local version can NEVER prompt', !isNewerVersion('0.2.0', 'dev'))
 
-// ── pickUpdateMode ────────────────────────────────────────────────────────
-eq('dev mac -> off', pickUpdateMode({ platform: 'darwin', isPackaged: false }), 'off')
-eq('dev win -> off', pickUpdateMode({ platform: 'win32', isPackaged: false }), 'off')
-eq('packaged win -> auto', pickUpdateMode({ platform: 'win32', isPackaged: true }), 'auto')
-eq('packaged mac -> notify (unsigned build, no auto-install)',
-  pickUpdateMode({ platform: 'darwin', isPackaged: true }), 'notify')
-eq('packaged linux -> notify (no installer artifact)',
-  pickUpdateMode({ platform: 'linux', isPackaged: true }), 'notify')
+// ── pickUpdateMode: the whole table, all three platforms ──────────────────
+// Written as a TABLE for 0.3 (design-0023 P1): mac and win were rows here and
+// linux was the else-branch nobody had named. pickUpdateMode takes its platform
+// as an ARGUMENT, so every row is exercised on every host -- the linux
+// expectation below is checked on this Mac, not skipped as "not our platform".
+// These rows pin CURRENT behavior, including the parts 0.3 may want to change.
+for (const [platform, isPackaged, expected, why] of [
+  ['darwin', false, 'off', 'unpackaged (electron:dev): never check, never prompt'],
+  ['win32', false, 'off', 'unpackaged'],
+  ['linux', false, 'off', 'unpackaged'],
+  ['win32', true, 'auto', 'NSIS + electron-updater over latest.yml + blockmap'],
+  ['darwin', true, 'notify', 'ad-hoc signature: Squirrel.Mac would refuse the install; dmg is not an updater artifact'],
+  ['linux', true, 'notify', 'AppImage: latest-linux*.yml is generated but never uploaded or read, so linux runs the SAME GitHub-tag notifier as mac'],
+]) {
+  eq(`${isPackaged ? 'packaged' : 'dev'} ${platform} -> ${expected} (${why})`,
+    pickUpdateMode({ platform, isPackaged }), expected)
+}
+// The feed each mode reads, so "linux -> notify" means something concrete.
+// notify (mac AND linux) hits the public releases API and offers the releases
+// page; auto (win only) is the one path that loads electron-updater, which
+// reads app-update.yml/latest.yml instead. If a Linux auto-update lane ever
+// lands, these three rows are what has to change with it.
+ok('the notify feed is the public releases repo API',
+  updater.LATEST_API === 'https://api.github.com/repos/Mino-is-me/scheherazade-releases/releases/latest', updater.LATEST_API)
+ok('the notify prompt offers that repo\'s releases page',
+  updater.RELEASES_PAGE === 'https://github.com/Mino-is-me/scheherazade-releases/releases/latest', updater.RELEASES_PAGE)
+{
+  const src = fs.readFileSync(new URL('../updater.cjs', import.meta.url), 'utf8')
+  ok('electron-updater is loaded ONLY on the auto row (win32) -- linux and mac never touch it',
+    /if \(mode === 'auto'\) initWindowsUpdater/.test(src) &&
+    /function initWindowsUpdater[\s\S]*?require\('electron-updater'\)/.test(src) &&
+    !/initMacNotifier[\s\S]*?require\('electron-updater'\)/.test(src.slice(src.indexOf('function initMacNotifier'))))
+}
 
 // ── fetchLatestTag: everything the network can throw at it ────────────────
 function mockFetch(status, body) {
