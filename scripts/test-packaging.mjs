@@ -610,87 +610,25 @@ if (IS_PREDIST) {
   checkNatives(`the built ${LANE} bundle`, bundleNatives)
 }
 
-console.log('\n-- node-pty: the one native module (supervisor lane)')
-// node-pty 1.1.0's published tarball ships spawn-helper WITHOUT the exec bit
-// (verified against the registry tarball, 2026-07-14) -- every pty.spawn on
-// macOS dies with "posix_spawnp failed". Our postinstall
-// (scripts/fix-pty-helper.mjs) repairs the repo copy; THIS check is the hard
-// gate on what actually ships. Artifact checks skip LOUDLY when no build
-// output exists (fresh clone) -- a skip that looks like a pass would defeat
-// the point of this file.
-ok('postinstall wires the spawn-helper exec-bit repair', (pkg.scripts.postinstall || '').includes('fix-pty-helper'),
-  'npm-installed node-pty arrives broken on macOS without it')
-// node-pty is N-API: the npm prebuilt binding passed the pty probe under BOTH
-// runtimes (node abi 137, electron abi 148 -- receipts in
-// docs/supervisor-design.md), so electron-builder's rebuild buys nothing and
-// adds a second binary lineage (build/Release shadows prebuilds in node-pty's
-// loader order). Honest history: the artifact probe failure was FIRST blamed
-// on the rebuilt binding -- wrong. The real cause was node-pty's helperPath
-// double-replace (see fix-pty-helper.mjs defect 2), which breaks ANY binding
-// loaded from an app.asar.unpacked path. npmRebuild stays false for the
-// determinism reason, not the debunked one.
-ok('electron-builder native rebuild is OFF (npmRebuild:false)', pkg.build.npmRebuild === false,
-  'the N-API prebuild already works under both runtimes; a rebuild only adds a shadowing second lineage')
-const PATCHED_LINE = "if (!helperPath.includes('app.asar.unpacked')) helperPath = helperPath.replace('app.asar', 'app.asar.unpacked');"
-ok('postinstall carries the helperPath double-replace patch', fs.readFileSync(path.join(ROOT, 'scripts', 'fix-pty-helper.mjs'), 'utf8').includes(PATCHED_LINE),
-  'without it, pty.spawn from the unpacked tree resolves spawn-helper to app.asar.unpacked.unpacked -> ENOENT')
-// spawn-helper, and therefore the whole helperPath defect, is a POSIX-only
-// thing: node-pty on Windows goes through conpty/winpty and ships no helper,
-// which is why fix-pty-helper.mjs prints "win32: nothing to do". Asserting the
-// patch unconditionally made predist:win fail a row it can never satisfy
-// (found on magi-win 2026-08-03). Guard it, do not weaken it.
-if (WIN_LANE) {
-  console.log('  n/a  unixTerminal.js helperPath patch -- POSIX-only (win32 uses conpty; no spawn-helper ships)')
-} else {
-  ok('repo node_modules unixTerminal.js is patched (postinstall ran)', fs.readFileSync(path.join(ROOT, 'node_modules', 'node-pty', 'lib', 'unixTerminal.js'), 'utf8').includes(PATCHED_LINE),
-    'run node scripts/fix-pty-helper.mjs (or npm install) -- the unpatched line corrupts helperPath in the packed app')
-}
-if (WIN_LANE) {
-  // The mac rows above are what stands between us and "installs fine, dies at
-  // first PTY spawn" -- assert-platform.mjs exists for that exact class. Leaving
-  // the win lane with only an n/a would have left that hole open one layer
-  // down: a green dist:win proving nothing about the natives it shipped.
-  // Different natives, same question (conpty replaces spawn-helper; no exec
-  // bit and no unixTerminal patch on this platform).
-  const unpackedPty = path.join(STAGED_RESOURCES, 'app.asar.unpacked', 'node_modules', 'node-pty')
-  if (!fs.existsSync(unpackedPty)) {
-    console.log(`  SKIP  built-artifact node-pty checks -- no release/${STAGE_DIR} output present (run ${DIST_SCRIPT} first); NOT a pass`)
-  } else {
-    const prebuild = path.join(unpackedPty, 'prebuilds', 'win32-x64')
-    for (const f of ['pty.node', 'conpty.node', 'conpty_console_list.node', 'winpty.dll', 'winpty-agent.exe']) {
-      ok(`artifact carries win32-x64/${f} as a real file`, fs.existsSync(path.join(prebuild, f)),
-        'a missing native here installs fine and dies at the first terminal spawn -- the v0.0.23 class')
-    }
-    ok('artifact carries the conpty support directory', fs.existsSync(path.join(prebuild, 'conpty')),
-      'conpty/conpty.dll is loaded at runtime alongside the .node binding')
-    ok('artifact has NO build/Release shadowing the prebuild', !fs.existsSync(path.join(unpackedPty, 'build', 'Release')),
-      'node-pty loads build/Release FIRST; a second lineage there silently wins over the tested prebuild')
-  }
-} else if (LANE === 'linux') {
-  // node-pty 1.1.0's published tarball has NO linux prebuild, and the
-  // postinstall above deletes the build/ that node-gyp would have produced --
-  // so there is nothing on Linux for this section to assert about. The dep is
-  // retired in the next commit of this phase (design-0023 P2); until then, say
-  // so rather than running the mac rows against a linux bundle.
-  console.log('  n/a  built-artifact node-pty checks -- node-pty 1.1.0 publishes no linux prebuild (retired in P2)')
-} else {
-  const unpackedPty = path.join(STAGED_RESOURCES, 'app.asar.unpacked', 'node_modules', 'node-pty')
-  if (!fs.existsSync(unpackedPty)) {
-    console.log(`  SKIP  built-artifact node-pty checks -- no release/${STAGE_DIR} build output present (run ${DIST_SCRIPT} first); NOT a pass`)
-  } else {
-    const helper = path.join(unpackedPty, 'prebuilds', 'darwin-arm64', 'spawn-helper')
-    const binding = path.join(unpackedPty, 'prebuilds', 'darwin-arm64', 'pty.node')
-    ok('artifact carries the darwin-arm64 pty.node prebuild as a real file', fs.existsSync(binding))
-    ok('artifact spawn-helper exists as a real file', fs.existsSync(helper))
-    ok('artifact spawn-helper is EXECUTABLE (the upstream tarball defect, caught at ship time)',
-      fs.existsSync(helper) && Boolean(fs.statSync(helper).mode & 0o111),
-      'a stripped exec bit means pty.spawn posix_spawnp-fails in the shipped app')
-    ok('artifact has NO build/Release shadowing the prebuild', !fs.existsSync(path.join(unpackedPty, 'build', 'Release')),
-      'node-pty loads build/Release FIRST; a second lineage there silently wins over the tested prebuild (rm -rf node_modules/node-pty/build before dist)')
-    ok('artifact unixTerminal.js carries the helperPath patch', fs.readFileSync(path.join(unpackedPty, 'lib', 'unixTerminal.js'), 'utf8').includes(PATCHED_LINE),
-      'the shipped app would corrupt helperPath to app.asar.unpacked.unpacked at first pty.spawn')
-  }
-}
+// ── node-pty: RETIRED (design-0023 P2, 2026-09-07) ──────────────────────────
+// This file used to carry ~70 lines gating a native module that is no longer a
+// dependency: the postinstall exec-bit repair, the helperPath double-replace
+// patch in the repo tree AND in the artifact, the darwin-arm64 prebuild rows
+// and the win32-x64 conpty rows. All of it guarded scripts/fix-pty-helper.mjs
+// (deleted) and node-pty 1.1.0 (removed from package.json), whose ONE runtime
+// caller was setup-token-session.cjs's pty login -- a lane superseded by
+// in-app loopback OAuth in 0.2.18 and now refusing with `unsupported`.
+//
+// The rows are not replaced one-for-one, they are subsumed: the NATIVES gate
+// above asks the same question of every native that actually ships (koffi,
+// sharp + libvips, ripgrep, landlock) instead of the one that did not. Note
+// what the old header claimed -- "the one native module" -- while dsh shipped
+// five of them unguarded. That sentence was the bug.
+//
+// dsh's own nested node-pty (1.2.0-beta.15 under
+// @deepseek-ai/dsh-subprocess-local, prebuilds for all six platforms including
+// linux) is untouched and stays shipped; it is not a dependency of ours and
+// nothing here should start gating it by hand.
 
 console.log('\n-- claude CLI is NOT redistributed (license gate)')
 {

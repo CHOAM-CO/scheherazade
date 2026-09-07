@@ -303,5 +303,28 @@ const serverSrc = fs.readFileSync(new URL('../onboarding/http-server.cjs', impor
     'claude-subscription stored-token fallback precedes the empty-key guard (keyless Test works)')
 }
 
+// ── the retired pty lane refuses with somewhere to go (design-0023 P2) ─────
+// node-pty is gone, so /api/setup-token/start can only ever answer 409. A 409
+// whose body says "spawn failed" would send a user hunting for a broken CLI;
+// the whole point of keeping the route is that it names its replacement.
+// routeSrc has sat unused in this file since it was opened -- it is read here.
+console.log('\nsetup-token: the retired pty lane')
+assert(/reason === 'unsupported'/.test(routeSrc), 'the start route branches on the unsupported reason')
+assert(/\/api\/claude-login\/start/.test(routeSrc), 'the refusal names the in-app login route as the replacement')
+assert(/useInstead/.test(routeSrc), 'the refusal carries a machine-readable pointer, not only prose')
+// The session must be the thing that decides, not the route: a route-side
+// hardcode would go stale the day a pty lane comes back.
+assert(/setState\('failed', 'unsupported'\)/.test(sessionSrc), 'the session is what emits unsupported')
+assert(/spawnPty = null/.test(sessionSrc), 'there is no default pty spawner left to fall back on')
+assert(!/require\('node-pty'\)/.test(sessionSrc), 'the session no longer requires node-pty')
+// And the copy for it must exist and point at the button, not at a shell.
+const unsupportedMsg = failureFn ? failureFn('unsupported') : ''
+assert(typeof unsupportedMsg === 'string' && unsupportedMsg.length > 0, 'unsupported has copy')
+assert(/Log in with Claude/.test(unsupportedMsg), 'the copy names the in-app login button')
+for (const platform of ['darwin', 'win32', 'linux']) {
+  const text = callFailure(platform, 'unsupported')
+  assert(!/Terminal|PowerShell/.test(text), `${platform}: the unsupported line does not send the user to a shell`)
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

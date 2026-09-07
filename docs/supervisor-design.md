@@ -67,6 +67,25 @@
   prebuild present as real file, helper executable, no build/Release
   shadow, helperPath patch present in repo and artifact. 24/24 at close.
 
+> **Amendment 2026-09-07 (design-0023 P2) — node-pty is retired.** Everything
+> above stayed true of the shipped supervisor for exactly zero days: the ported
+> supervisor.mjs never spawned a pty (it spawns `process.execPath` with
+> ELECTRON\_RUN\_AS\_NODE and holds a real child handle, which is the same
+> structural win without the native module — see supervisor.mjs's own header).
+> The dependency survived on ONE caller, setup-token-session.cjs's pty login,
+> which 0.2.18 superseded with in-app loopback OAuth. It has now been dropped:
+> `node-pty` is out of package.json dependencies and allowScripts, the
+> `postinstall` hook and `scripts/fix-pty-helper.mjs` are deleted,
+> `scripts/probe-pty.mjs` is deleted, and test-packaging's node-pty section is
+> replaced by a NATIVES gate covering the natives that actually ship (koffi,
+> sharp + libvips, @vscode/ripgrep, landlock-run — dsh's, all five unguarded
+> the whole time this section called node-pty "the one native module").
+> What forced the retirement: node-pty 1.1.0 publishes NO linux prebuild, and
+> fix-pty-helper's `rm -rf node_modules/node-pty/build` ran on every platform,
+> so on Linux the postinstall deleted the only binding node-gyp had just built.
+> dsh's nested node-pty 1.2.0-beta.15 (prebuilds for all six platforms) is
+> untouched and still ships.
+
 ## The 7 inventory flags — verdicts
 
 1. **Leaf identity (blind pkill)** → FIX. The supervisor kills by child

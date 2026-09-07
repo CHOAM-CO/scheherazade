@@ -17,7 +17,6 @@
     "dist:mac": "node scripts/assert-platform.mjs mac && electron-builder --mac dmg --publish never",
     "dist:win": "node scripts/assert-platform.mjs win && electron-builder --win nsis --publish never",
     "dist:linux": "node scripts/assert-platform.mjs linux && electron-builder --linux AppImage --x64 --publish never",
-    "postinstall": "node scripts/fix-pty-helper.mjs",
     "predist": "node scripts/test-packaging.mjs",
     "postdist": "node scripts/test-packaging.mjs",
     "predist:mac": "node scripts/test-packaging.mjs",
@@ -37,7 +36,6 @@
     "discord.js": "^14.26.4",
     "dotenv": "^17.4.2",
     "electron-updater": "^6.8.9",
-    "node-pty": "^1.1.0",
     "undici": "^7.28.0",
     "zod": "^4.4.3",
     "@deepseek-ai/cordis-plugin-group": "1.0.1",
@@ -207,7 +205,6 @@
   "allowScripts": {
     "@anthropic-ai/claude-code": true,
     "electron": true,
-    "electron-winstaller": true,
-    "node-pty": true
+    "electron-winstaller": true
   }
 }

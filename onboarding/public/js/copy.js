@@ -198,6 +198,16 @@ window.COPY = {
             failure: (reason) => ({
               cli_missing: `The claude command was not found on ${THIS_MACHINE}. Install it, then try again.`,
               spawn_failed: 'The login could not be started. Try the manual steps below.',
+              // 2026-09-07 (design-0023 P2): the flow that drove the CLI under
+              // a terminal is retired with the native module it needed, so
+              // /api/setup-token/start now answers `unsupported`. Nothing in
+              // the shipped wizard calls that route any more -- the button
+              // above is the in-app loopback login -- but a stale page or a
+              // bookmarked client can still land here, and a refusal with no
+              // next step is the thing this whole map exists to prevent.
+              // Platform-neutral wording on purpose: this one is not about a
+              // shell the user should open.
+              unsupported: 'This version no longer logs in through the command line. Use the "Log in with Claude" button above, or the manual steps below.',
               timeout: 'The login was not finished in time. Try again.',
               // Capture-failure family. These five differ only in how the
               // read went wrong, and the user's remedy is identical for all

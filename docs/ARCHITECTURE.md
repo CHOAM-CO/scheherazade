@@ -214,6 +214,9 @@ design and went stale; run.sh's own header carries the directive.
 The expect layer that used to answer onboarding-class prompts is gone:
 `claude -p` renders no dialogs. OAuth is unchanged -- `claude` must
 already be authenticated once, interactively, before the supervisor is
-used (the in-app setup-token flow covers this; it is the one place that
-still legitimately drives a real TTY, via node-pty in
-setup-token-session.cjs).
+used (the in-app Claude login covers this). That login is loopback OAuth
+run in-process since 0.2.18 -- onboarding/routes/oauth-login.cjs ->
+oauth-usage-session.cjs, node:crypto + node:http and nothing else. As of
+2026-09-07 (design-0023 P2) NOTHING in the app drives a real TTY: the
+node-pty lane in setup-token-session.cjs is retired and refuses with
+`unsupported`, and the dependency is gone from package.json.

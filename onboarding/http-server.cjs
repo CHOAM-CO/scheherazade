@@ -78,9 +78,13 @@ const autonomyCycle = require(path.join(__dirname, '..', 'autonomy', 'cycle.cjs'
 const { LOGIN_PROVIDERS, setLoginStatus, getLoginStatus } = require('./login-status.cjs')
 const logBuffer = require('./log-buffer.cjs') // /api/logs read side; main.cjs owns the write side + sink init
 const attachTopology = require('../attach-topology.cjs') // /api/topology read side (0.1.0 prep); no Electron deps, safe here
-// In-app `claude setup-token` capture. Pure-JS state machine; node-pty is
-// required lazily inside it, so importing this here cannot fail the server
-// boot on a box where the native module did not build.
+// In-app `claude setup-token` capture. Pure-JS state machine, and now a
+// REFUSING one: the pty it drove came from the top-level node-pty dependency,
+// retired 2026-09-07 (design-0023 P2). getSetupTokenSession() injects no
+// spawner, so start() answers 'unsupported' and routes/setup-token.cjs points
+// the caller at /api/claude-login/* -- the in-app loopback OAuth below, which
+// has been the wizard's primary Claude login since 0.2.18, needs no CLI, and
+// stores the same 'claude-subscription' credential.
 const { createSetupTokenSession, killSetupTokenChildOnShutdown } = require('../setup-token-session.cjs')
 
 // Full-scope OAuth capture for the usage gauge (2026-08-13, Mino: the win

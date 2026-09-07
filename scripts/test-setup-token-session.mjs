@@ -475,5 +475,46 @@ function makeHarness(overrides = {}) {
   assert(h.session.status().reason === null, 'no stale timeout reason survives')
 }
 
+// ── the PRODUCTION shape: no pty spawner at all (design-0023 P2) ───────────
+// Every harness above injects a fake spawnPty, which is what makes the state
+// machine testable -- and which means none of them exercise what the app
+// actually constructs. onboarding/http-server.cjs's getSetupTokenSession()
+// passes resolveClaudeBin / validateProviderKey / storeProviderKeyVerified /
+// log and NO spawner, because node-pty is retired. That path deserves its own
+// rows, or "the pty lane refuses honestly" is a claim nothing checks.
+{
+  const logs = []
+  let resolveCalls = 0
+  const session = createSetupTokenSession({
+    // A machine WITH the CLI installed. The refusal must not depend on the
+    // binary being missing -- that would make the reason wrong (and the copy
+    // send the user off to install something that would not help) on exactly
+    // the machines where the old flow used to work.
+    resolveClaudeBin: () => { resolveCalls++; return '/fake/bin/claude' },
+    validateProviderKey: async () => { throw new Error('must never validate') },
+    storeProviderKeyVerified: () => { throw new Error('must never store') },
+    log: (m) => logs.push(m),
+  })
+  const r = session.start()
+  assert(r.ok === false, 'a session with no pty spawner refuses to start')
+  assert(r.reason === 'unsupported', 'the reason is unsupported (not cli_missing, not spawn_failed)')
+  assert(session.status().state === 'failed', 'status reports the terminal failure')
+  assert(session.status().reason === 'unsupported', 'status carries the same reason the client got')
+  assert(resolveCalls === 0, 'it refuses BEFORE resolving a claude binary')
+  assert(session.status().provider === PROVIDER_ID,
+    'the refusal still names the provider slot the in-app login writes instead')
+  // Repeat calls must stay refusals, not flip to alreadyRunning: nothing was
+  // started, so there is nothing to be already running.
+  const again = session.start()
+  assert(again.ok === false && again.reason === 'unsupported', 'a second start is refused the same way')
+  // The client-facing surface stays enum-only, same guarantee as every other
+  // state in this file.
+  assert(JSON.stringify(session.status()).includes('unsupported'), 'status serialises')
+  assert(!JSON.stringify(session.status()).includes('/fake/bin/claude'), 'status carries no path')
+  // submitCode/cancel on a session that never started must not throw.
+  assert(session.submitCode('abcdef1234').ok === false, 'submitCode on a never-started session is refused')
+  assert(session.cancel().alreadyStopped === true, 'cancel on a never-started session is a no-op')
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)
