@@ -62,10 +62,25 @@ function writeTranscript(dir, name, lines, mtime = NOW) {
   return file
 }
 
-console.log('\n-- slug transform (checked against a real observed slug)')
+console.log('\n-- slug transform (shape observed from a real CLI transcript dir)')
+// The literal here used to be a real dev path from the author's own machine.
+// Every file under scripts/ ships inside every
+// installer (package.json build.files "scripts/**/*" + asarUnpack), so that
+// pin put a developer's directory layout on every user's disk and tied a test
+// to one box. The SHAPE is what the assertion was ever about -- an absolute
+// POSIX path folds into one flat, separator-free segment -- so it is asserted
+// on a neutral literal, plus on the real tmp fixture this file already builds.
 eq('slugForCwd matches the CLI\'s own scheme',
-  budget.slugForCwd('/Users/narr/Desktop/MAGI'), '-Users-narr-Desktop-MAGI')
+  budget.slugForCwd('/Users/agent/Desktop/Workspace'), '-Users-agent-Desktop-Workspace')
 eq('slug replaces dots too', budget.slugForCwd('/a/b.c'), '-a-b-c')
+{
+  // The fixture below is a REAL mkdtemp path, so the transform has to survive
+  // whatever this machine's tmpdir looks like (/var/folders/... on mac,
+  // /tmp/... on linux, C:\Users\...\AppData\Local\Temp\... on Windows).
+  const slug = budget.slugForCwd(DATA_HOME)
+  ok('a real tmp fixture path slugs into one flat segment', /^[A-Za-z0-9-]+$/.test(slug), slug)
+  ok('...carrying no path separator from the original', !slug.includes(path.sep), slug)
+}
 
 console.log('\n-- resolveTranscriptDir: it must never invent a directory')
 {

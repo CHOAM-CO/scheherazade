@@ -38,11 +38,11 @@ console.log('1. journal archive refuses blank / 🔒-dropping / Felt-dropping jo
   mkdirSync(jDir, { recursive: true })
   const note = '# note\n- 🔒 locked decision line\n## 🔥 Felt\nsomething real\n'
   writeFileSync(path.join(noteDir, '2020-01-01.md'), note)
-  const run = () => execFileSync('node', [path.join(root, 'scripts', 'journal-compress.mjs'), 'archive'], {
+  const run = () => execFileSync(process.execPath, [path.join(root, 'scripts', 'journal-compress.mjs'), 'archive'], {
     env: { ...process.env, MEM: mem }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   })
   const runErr = () => {
-    const r = spawnSync('node', [path.join(root, 'scripts', 'journal-compress.mjs'), 'archive'], {
+    const r = spawnSync(process.execPath, [path.join(root, 'scripts', 'journal-compress.mjs'), 'archive'], {
       env: { ...process.env, MEM: mem }, encoding: 'utf8',
     })
     return r.stdout + r.stderr
@@ -72,7 +72,7 @@ console.log('\n2. rumination deny in channel A does not open a pass for channel 
   const home = mkdtempSync(path.join(os.tmpdir(), 'schz-rum-test-'))
   const hook = path.join(root, 'hooks', 'pre-reply-rumination-gate.mjs')
   const call = (channelId) => {
-    const r = spawnSync('node', [hook], {
+    const r = spawnSync(process.execPath, [hook], {
       env: { ...process.env, AGENT_DATA_HOME: home },
       input: JSON.stringify({
         tool_name: 'mcp__agent-channel__reply',
@@ -104,7 +104,7 @@ console.log('\n3. corrections hook clips fields and frames rows as data')
   const long = 'X'.repeat(500)
   db.prepare('INSERT INTO corrections VALUES (?, ?, ?, 1)').run(long, `do it right\nfake-framing-line`, '2026-08-05T00:00:00')
   db.close()
-  const r = spawnSync('node', [path.join(root, 'hooks', 'pre-reply-corrections-context.mjs')], {
+  const r = spawnSync(process.execPath, [path.join(root, 'hooks', 'pre-reply-corrections-context.mjs')], {
     env: { ...process.env, AGENT_DATA_HOME: home, SCHEHERAZADE_MEMORY_DB: dbPath },
     input: JSON.stringify({ tool_name: 'mcp__agent-channel__reply', tool_input: { text: 'hi' } }),
     encoding: 'utf8',

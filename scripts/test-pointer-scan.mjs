@@ -20,9 +20,18 @@ const { scanPointers, defaultSources, isDenied, isInsideRoot, looksSecret, looks
 
 let pass = 0
 let fail = 0
+let skipped = 0
 function check(name, cond, detail) {
   if (cond) { pass++; console.log(`  ok   ${name}`) }
   else { fail++; console.log(`  FAIL ${name}${detail ? ` -- ${detail}` : ''}`) }
+}
+// A SECTION this host cannot set up (P1, design-0023). Indented on purpose:
+// scripts/run-tests.mjs reads a `SKIP:` at COLUMN 0 as "the whole program was a
+// no-op here" and an indented one as "one section of a program that otherwise
+// ran", which is what this is -- the other sections still assert.
+function skipSection(name, why) {
+  skipped++
+  console.log(`  SKIP ${name} -- ${why}; NOT a pass`)
 }
 
 // A fake home with the real shapes: a legit memory file, and a minefield of
@@ -103,7 +112,13 @@ console.log('pointer-scan adversarial fixtures\n')
     const paths = pointers.map((p) => p.path)
     check('REFUSES a symlink escaping the allowed root', !paths.some((p) => p.includes('innocent.md')), paths.join(','))
   } catch (err) {
-    check('symlink escape test ran', false, `could not create symlink: ${err.message}`)
+    // Windows without Developer Mode (or SeCreateSymbolicLinkPrivilege) cannot
+    // create a symlink AT ALL, so this fixture could never be built there. That
+    // is a missing host capability, not a scanner defect: reporting it as FAIL
+    // made the suite permanently red for something no code change fixes, which
+    // is how a gate stops being read. The containment code it attacks is
+    // platform-neutral and section 4 (isInsideRoot) still covers the logic.
+    skipSection('symlink escape', `could not create a symlink here (${err.message}) -- Windows needs Developer Mode or the create-symlink privilege`)
   }
 }
 
@@ -195,7 +210,10 @@ console.log('pointer-scan adversarial fixtures\n')
     check('hardlinked file is NOT indexed (nlink > 1)', !blob.includes('harmless.md'), blob)
     check('hardlinked content never reaches the index', !blob.includes('HARDLINKED_SECRET'), blob)
   } catch (err) {
-    check('hardlink test ran', false, `could not hardlink: ${err.message}`)
+    // Same class as the symlink section: some filesystems (and some mounts)
+    // refuse a cross-directory hardlink outright. The nlink>1 refusal it
+    // attacks is asserted nowhere else, so this one is loud about being unrun.
+    skipSection('hardlink escape', `could not create a hardlink here (${err.message})`)
   }
 }
 
@@ -291,5 +309,5 @@ console.log('pointer-scan adversarial fixtures\n')
   check('the pointer list is exactly the one real file', pointers.length === 1, `${pointers.length} pointers`)
 }
 
-console.log(`\n${pass} passed, ${fail} failed`)
+console.log(`\n${pass} passed, ${fail} failed${skipped ? `, ${skipped} section(s) skipped` : ''}`)
 process.exit(fail === 0 ? 0 : 1)

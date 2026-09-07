@@ -22,7 +22,7 @@
 //   3. EXISTING installs -- a create-time-only mode would leave every file
 //      already on disk at 0644 forever, which is the whole population that
 //      needs the fix
-import { mkdtempSync, mkdirSync, chmodSync, statSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, chmodSync, statSync, existsSync, writeFileSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -34,15 +34,35 @@ function assert(cond, label, detail) {
 const mode = (p) => statSync(p).mode & 0o777
 const oct = (p) => '0' + mode(p).toString(8)
 
-// POSIX only, said out loud rather than skipped in silence. fs.chmod on
-// Windows maps only the read-only bit, so these assertions would fail forever
-// there; what bounds access on Windows is the user profile's inherited ACL.
-// Naming that is the honest version -- it is a weaker protection than 0600,
-// and pretending the test "passed" would hide which platform is which.
-if (process.platform === 'win32') {
+// POSIX modes only, said out loud rather than skipped in silence. What decides
+// is not the platform NAME but whether chmod actually sticks on this host --
+// fs.chmod maps only the read-only bit on Windows (so these assertions can
+// never hold there; the profile's inherited ACL is what bounds access, weaker
+// than 0600 and asserted by nothing today), and it is equally a no-op on a
+// FAT/exFAT/SMB mount under any OS. So: probe the capability (P1,
+// design-0023). A 3-line chmod-then-stat on a tmp file is cheaper than being
+// wrong about which hosts can run this, and it makes the file run on Linux --
+// where it does hold -- without anyone adding a platform to a list.
+function chmodIsHonored() {
+  let dir = null
+  try {
+    dir = mkdtempSync(path.join(os.tmpdir(), 'sched-atrest-probe-'))
+    const f = path.join(dir, 'probe')
+    writeFileSync(f, 'x')
+    chmodSync(f, 0o600)
+    return (statSync(f).mode & 0o777) === 0o600
+  } catch {
+    return false
+  } finally {
+    if (dir) { try { rmSync(dir, { recursive: true, force: true }) } catch { /* tmp */ } }
+  }
+}
+
+if (!chmodIsHonored()) {
   console.log('memory at rest:')
-  console.log('  n/a  0600/0700 modes -- fs.chmod is a no-op on Windows; the profile ACL is what bounds access there (weaker than 0600, and not asserted by anything today)')
-  console.log('\n0 passed, 0 failed (skipped on win32)')
+  console.log('  n/a  0600/0700 modes -- chmod is not honored on this host (Windows maps only the read-only bit; so do FAT/exFAT/SMB mounts). What bounds access there is the profile ACL: weaker than 0600, and asserted by nothing today.')
+  console.log(`SKIP: memory-at-rest 0600/0700 file modes -- chmod does not stick on this filesystem (${process.platform}); NOT a pass`)
+  console.log('\n0 passed, 0 failed (capability probe: chmod not honored)')
   process.exitCode = 0
 } else {
   console.log('memory at rest:')

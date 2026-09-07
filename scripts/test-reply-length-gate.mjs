@@ -32,7 +32,7 @@ function assert(cond, name) {
 }
 
 function call(home, text, extraEnv = {}, channelId = 'chan-main') {
-  const r = spawnSync('node', [hook], {
+  const r = spawnSync(process.execPath, [hook], {
     env: { ...process.env, AGENT_DATA_HOME: home, ...extraEnv },
     input: JSON.stringify({
       tool_name: 'mcp__agent-channel__reply',

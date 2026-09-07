@@ -26,7 +26,9 @@
 // a file keep their INDENTED "  SKIP ..." / "  n/a ..." form and do not mark the
 // file: a file that ran 60 assertions and skipped one section is a PASS, not a
 // SKIP. Column 0 is the entire difference, which is why nothing else in the
-// suite prints an unindented SKIP line.
+// suite prints an unindented SKIP line. Indented ones are still COUNTED and
+// listed under the table -- "green on Windows" used to mean "green with nine
+// sections silently unrun", and that is the number that says so.
 //
 // LIVE LANES. Three lanes need something this process cannot conjure -- the
 // real Calendar (TCC), a tmux binary + server, a freshly built dmg/exe. They
@@ -138,6 +140,16 @@ function firstFailingLine(out) {
 }
 
 const SKIP_MARKER = /^SKIP:[ \t]*(.*)$/m
+// Section-level skips: the INDENTED form ("  SKIP ...", "  n/a ...") that a
+// file prints when one of its sections could not be set up on this host while
+// the rest of it ran. They do not change the file's status -- a file that
+// asserted 58 things and skipped one fixture is a PASS -- but they are the
+// difference between "green on Windows" and "green on Windows with nine
+// sections silently unrun", so they are counted and named.
+const SECTION_SKIP = /^[ \t]+(?:SKIP|n\/a)\b[ \t:-]*(.*)$/gm
+function sectionSkipsIn(out) {
+  return [...out.matchAll(SECTION_SKIP)].map((m) => m[1].trim())
+}
 
 function runOne(rel, { timeoutMs, env, logPath }) {
   return new Promise((resolve) => {
@@ -179,6 +191,7 @@ function runOne(rel, { timeoutMs, env, logPath }) {
       if (truncated) out += `\n[run-tests: output truncated at ${MAX_CAPTURE} bytes]\n`
       try { fs.writeFileSync(logPath, out) } catch { /* log is a convenience, not the gate */ }
 
+      const sectionSkips = sectionSkipsIn(out)
       let status
       let note = ''
       if (spawnError) {
@@ -195,7 +208,7 @@ function runOne(rel, { timeoutMs, env, logPath }) {
         if (m) { status = 'SKIP'; note = m[1].trim() }
         else { status = 'PASS' }
       }
-      resolve({ rel, status, seconds, note, code, signal, timedOut })
+      resolve({ rel, status, seconds, note, sectionSkips, code, signal, timedOut })
     }
 
     child.on('error', (err) => finish(null, null, err))
@@ -256,7 +269,8 @@ async function main() {
   console.log(`${'test'.padEnd(width)}  status  secs  detail`)
   console.log('-'.repeat(Math.min(width + 60, 120)))
   for (const r of results) {
-    const detail = r.status === 'PASS' ? '' : r.note.slice(0, 90)
+    const skips = r.sectionSkips.length ? `${r.status === 'PASS' ? '' : ' '}(${r.sectionSkips.length} section skip${r.sectionSkips.length > 1 ? 's' : ''})` : ''
+    const detail = `${r.status === 'PASS' ? '' : r.note.slice(0, 90)}${skips}`
     console.log(`${r.label.padEnd(width)}  ${r.status.padEnd(6)}  ${r.seconds.toFixed(1).padStart(4)}  ${detail}`)
   }
 
@@ -271,6 +285,14 @@ async function main() {
   if (skips.length) {
     console.log('\nskipped (not run on this host -- NOT a pass):')
     for (const r of skips) console.log(`  ${r.label}: ${r.note}`)
+  }
+  const sectioned = results.filter((r) => r.sectionSkips.length)
+  if (sectioned.length) {
+    const total = sectioned.reduce((n, r) => n + r.sectionSkips.length, 0)
+    console.log(`\n${total} section(s) skipped inside files that otherwise ran (also NOT a pass):`)
+    for (const r of sectioned) {
+      for (const why of r.sectionSkips) console.log(`  ${r.label}: ${why || '(no reason given)'}`)
+    }
   }
   if (failures.length) {
     console.log('\nFAILED:')

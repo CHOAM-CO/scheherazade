@@ -72,7 +72,7 @@ function runHook(home, { replied, capHit, deliveredTo }) {
   const transcript = makeTranscript(home, { replied, deliveredTo })
   let code = 0
   try {
-    execFileSync('node', [HOOK], {
+    execFileSync(process.execPath, [HOOK], {
       input: JSON.stringify({ transcript_path: transcript, stop_hook_active: Boolean(capHit) }),
       env: { ...process.env, AGENT_DATA_HOME: home },
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -207,7 +207,7 @@ console.log('mute-strike ledger fixtures\n')
   fs.writeFileSync(tp, JSON.stringify({ type: 'user', message: { content: 'just a local task, no channel tag' } }) + '\n')
   let code = 0
   try {
-    execFileSync('node', [HOOK], {
+    execFileSync(process.execPath, [HOOK], {
       input: JSON.stringify({ transcript_path: tp, stop_hook_active: true }),
       env: { ...process.env, AGENT_DATA_HOME: home },
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -229,7 +229,7 @@ console.log('mute-strike ledger fixtures\n')
   }) + '\n')
   let code = 0
   try {
-    execFileSync('node', [HOOK], {
+    execFileSync(process.execPath, [HOOK], {
       input: JSON.stringify({ transcript_path: tp, stop_hook_active: true }),
       env: { ...process.env, AGENT_DATA_HOME: home },
       stdio: ['pipe', 'pipe', 'pipe'],

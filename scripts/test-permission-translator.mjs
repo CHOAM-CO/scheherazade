@@ -28,7 +28,7 @@ function check(name, cond, detail = '') {
 
 function run(payload) {
   const input = typeof payload === 'string' ? payload : JSON.stringify(payload)
-  const r = spawnSync('node', [HOOK], { input, encoding: 'utf8', timeout: 15000 })
+  const r = spawnSync(process.execPath, [HOOK], { input, encoding: 'utf8', timeout: 15000 })
   let ctx = null
   if (r.stdout && r.stdout.trim()) {
     try { ctx = JSON.parse(r.stdout).hookSpecificOutput?.additionalContext ?? null } catch { ctx = `UNPARSEABLE: ${r.stdout.slice(0, 80)}` }

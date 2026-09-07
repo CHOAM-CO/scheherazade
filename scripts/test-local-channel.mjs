@@ -13,13 +13,33 @@
 //
 // Mirrors scripts/test-provider-env.mjs's assert()/pass/fail convention.
 
-import {
+import fsBoot from 'node:fs'
+import osBoot from 'node:os'
+import pathBoot from 'node:path'
+
+// HERMETIC (P1, design-0023). channel-local.mjs resolves
+//   DATA_HOME = AGENT_DATA_HOME || ~/Documents/<AGENT_NAME || 'agent'>
+// AT IMPORT TIME (channel-local.mjs:63-66), sweeps stale atomic tmp files
+// there, and §12's send_file_to_discord copies into <DATA_HOME>/chat_uploads.
+// With a STATIC import of that module there is no statement this file can run
+// first -- ESM hoists and evaluates imports before any module body -- so every
+// run of this test wrote into the REAL ~/Documents/agent/ of whoever ran the
+// suite. (Verified 2026-09-07: chat_uploads/ mtime tracked the run.) A test
+// that touches a real user's data home is not a test you can put in a gate.
+//
+// So: set the env, THEN import dynamically. The dynamic import cannot be
+// hoisted above these lines, which is the whole point.
+const TEST_DATA_HOME = fsBoot.mkdtempSync(pathBoot.join(osBoot.tmpdir(), 'sched-local-home-'))
+process.env.AGENT_DATA_HOME = TEST_DATA_HOME
+process.env.AGENT_NAME = 'local-channel-test'
+
+const {
   enqueueOutbound, enqueueInbound, enqueueReaction, enqueueActivity, readOutbound, resetQueueForTest,
   deliverInbound, deliverReaction, transcriptState, handleToolCall,
   createRequestHandler, LOCAL_CHANNEL_ID, MAX_QUEUE, USER_REACTIONS,
   enableTranscriptPersistence, flushTranscript, clearTranscript,
   upsertBgTask, retireBgTask, listBgTasks,
-} from '../channel-local.mjs'
+} = await import('../channel-local.mjs')
 
 let pass = 0
 let fail = 0
@@ -786,6 +806,9 @@ console.log('\n12. send_file_to_discord: copies into chat_uploads, marker the pa
   await new Promise((res) => srv.close(res))
   resetQueueForTest()
 }
+
+// The scratch data home this file pointed the module at (see the header).
+try { fsBoot.rmSync(TEST_DATA_HOME, { recursive: true, force: true }) } catch { /* best effort */ }
 
 console.log(`\n${pass} passed, ${fail} failed`)
 // exitCode, not process.exit() -- see the long note at the bottom of
