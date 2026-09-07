@@ -15,12 +15,18 @@
 //   3. CAP TABLE: http-server's contextCapForModel() returns the receipts-
 //      backed caps (claude CLI 2.1.211 binary table / codex-as-api 0.6.3
 //      table) and null for unknown ids -- never a guessed number.
+//   4. SINGLE SOURCE (0.3 P4): onboarding/public/js/model-catalog.cjs is the
+//      only model list. Every row carries a positive-integer contextWindow,
+//      the catalog and the cap table agree wherever both have an opinion,
+//      the dual export really serves BOTH node and a <script> tag, and no
+//      second hardcoded catalog has reappeared anywhere in the shipped code.
 //
 // Run: node tests/test-context-gauge.mjs
 
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import vm from 'node:vm'
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
@@ -188,17 +194,16 @@ console.log('cap table:')
   // user picks a model from our own menu and the context meter silently
   // stops working. Nothing today catches that; this does.
   //
-  // Source-text read, not import: connectors.js is browser code (it touches
-  // `window` at load) and importing it here would fail rather than test.
-  // 0.2.6 extracted the catalog out of connectors.js into the shared
-  // model-catalog.js (window.SCHZ_MODEL_CATALOG); this scan rotted unnoticed
-  // until the 0.2.9 full-suite run. Same anchor discipline, new file.
-  const settingsSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'public', 'js', 'model-catalog.js'), 'utf8')
-  const catStart = settingsSrc.indexOf('window.SCHZ_MODEL_CATALOG = [')
-  const catEnd = settingsSrc.indexOf('\n  ]', catStart)
-  check('located SCHZ_MODEL_CATALOG in model-catalog.js', catStart !== -1 && catEnd > catStart)
-  const catalogIds = [...settingsSrc.slice(catStart, catEnd).matchAll(/\{\s*id:\s*'([^']+)'/g)].map((m) => m[1])
-  check(`MODEL_CATALOG scan found rows (${catalogIds.length})`, catalogIds.length >= 5, catalogIds.join(','))
+  // REQUIRED, not source-scanned (0.3 P4). Until now this read the catalog
+  // out of a browser file with a regex, because connectors.js touched
+  // `window` at load and could not be imported -- and that scan silently
+  // rotted through the 0.2.6 extraction until the 0.2.9 full-suite run caught
+  // it. The catalog is now a .cjs with a dual export, so the test loads the
+  // same object the lane loads; a regex that stops matching cannot quietly
+  // reduce this section to zero assertions any more.
+  const catalog = require_(path.join(ROOT, 'onboarding', 'public', 'js', 'model-catalog.cjs'))
+  const catalogIds = catalog.MODELS.map((m) => m.id)
+  check(`MODEL_CATALOG loaded rows (${catalogIds.length})`, catalogIds.length >= 5, catalogIds.join(','))
 
   for (const id of catalogIds) {
     // Ollama and custom-proxy ids are third-party model tags -- we have no
@@ -215,6 +220,119 @@ console.log('cap table:')
     const got = contextCapForModel(id)
     check(`catalog model '${id}' resolves to a cap (else its gauge silently disappears)`, got.cap !== null, JSON.stringify(got))
   }
+}
+
+// ── 4b. the catalog is SINGLE (0.3 P4) ─────────────────────────────────────
+// What this section is defending. Before P4 the model list existed in five
+// places: a browser file (ids/labels, no windows), http-server's cap table
+// (windows, by regex, for a superset of ids), dsh-lane's one blanket 131072,
+// this test's hand-typed cap cases, and test-codex-proxy-model's hand-typed
+// GPT list. Four of those five are now derived from
+// onboarding/public/js/model-catalog.cjs. The fifth -- contextCapForModel --
+// stays separate on purpose: it answers for ids the picker does not offer and
+// has a live tier that reads the installed CLI binary. So the rule is not
+// "one table exists" but "the two that remain agree wherever both speak", and
+// no THIRD one may appear.
+console.log('single source:')
+{
+  const require_ = createRequire(path.join(ROOT, 'package.json'))
+  const CATALOG_REL = 'onboarding/public/js/model-catalog.cjs'
+  const catalog = require_(path.join(ROOT, CATALOG_REL))
+  const { contextCapForModel } = require_(path.join(ROOT, 'onboarding', 'http-server.cjs'))
+
+  // A context window is a denominator. A zero, a float or a string does not
+  // fail loudly at the division -- it produces a gauge that reads wrong, or a
+  // patch file dsh accepts and then behaves strangely under.
+  for (const m of catalog.MODELS) {
+    check(`'${m.id}' contextWindow is a positive integer`,
+      Number.isInteger(m.contextWindow) && m.contextWindow > 0, JSON.stringify(m.contextWindow))
+    check(`'${m.id}' says where its window came from`,
+      typeof m.contextWindowSource === 'string' && m.contextWindowSource.length > 0, String(m.contextWindowSource))
+  }
+
+  // The cross-check that makes two tables safe. Compared on VALUE, not on
+  // capSource: section 4's binary-scan block populates http-server's live
+  // tier cache, which relabels some ids 'claude-cli-binary' depending on test
+  // order. The number is the fact; the label is provenance for the UI.
+  for (const m of catalog.MODELS) {
+    const { cap } = contextCapForModel(m.id)
+    if (cap === null) continue // no receipt in the cap table; the catalog's dsh-lane-declared number stands alone
+    check(`'${m.id}': catalog window === contextCapForModel cap (${cap})`, m.contextWindow === cap,
+      `catalog=${m.contextWindow} capTable=${cap} -- one of the two moved without the other`)
+  }
+
+  // The dual export IS the single-source mechanism: node gets module.exports,
+  // the browser gets the globals, from the same bytes. If someone "tidies"
+  // the guard at the bottom of the file into one branch, one of the two
+  // consumers loads nothing -- and on the browser side that is a blank model
+  // picker with no error anyone sees. Evaluate the file the way a <script>
+  // tag would (no module, a window object) and check what it published.
+  {
+    const src = fs.readFileSync(path.join(ROOT, CATALOG_REL), 'utf8')
+    const win = {}
+    const ctx = vm.createContext({ window: win })
+    vm.runInContext(src, ctx, { filename: CATALOG_REL })
+    check('browser branch publishes window.SCHZ_MODEL_CATALOG', Array.isArray(win.SCHZ_MODEL_CATALOG) && win.SCHZ_MODEL_CATALOG.length === catalog.MODELS.length,
+      `got ${win.SCHZ_MODEL_CATALOG && win.SCHZ_MODEL_CATALOG.length} rows, node side has ${catalog.MODELS.length}`)
+    check('browser branch publishes the effort globals',
+      Array.isArray(win.SCHZ_EFFORT_LEVELS) && typeof win.SCHZ_EFFORT_DEFAULT === 'string')
+    check('both sides carry the SAME ids in the SAME order',
+      JSON.stringify((win.SCHZ_MODEL_CATALOG || []).map((m) => m.id)) === JSON.stringify(catalog.MODELS.map((m) => m.id)))
+    check('browser rows carry contextWindow too (not stripped by the export path)',
+      (win.SCHZ_MODEL_CATALOG || []).every((m) => Number.isInteger(m.contextWindow) && m.contextWindow > 0))
+  }
+
+  // No second catalog. Scanned, not listed: the point is to catch the copy
+  // nobody told this test about. Two shapes are hunted --
+  //   a catalog ROW literal ({ id: ..., label: ..., group: ... }), and
+  //   an assignment to the browser global.
+  // http-server.cjs is the ONE documented exception for windows-by-id (its
+  // cap table, cross-checked above); it is not exempt from the row-literal
+  // scan, because a row literal there would be a real second picker list.
+  const SCAN_DIRS = ['', 'onboarding', 'onboarding/routes', 'onboarding/public/js', 'hooks']
+  const files = []
+  for (const d of SCAN_DIRS) {
+    const abs = path.join(ROOT, d)
+    for (const name of fs.readdirSync(abs)) {
+      if (!/\.(mjs|cjs|js)$/.test(name)) continue
+      const rel = d ? `${d}/${name}` : name
+      if (fs.statSync(path.join(abs, name)).isDirectory()) continue
+      files.push(rel)
+    }
+  }
+  check(`the scan covers the shipped code (${files.length} files; a scanner that reads nothing always passes)`, files.length > 20, String(files.length))
+  check('the scan can see the catalog file itself', files.includes(CATALOG_REL))
+
+  const ROW_SHAPE = /\{\s*id:\s*['"][^'"]+['"]\s*,\s*label:\s*['"][^'"]*['"]\s*,\s*group:/
+  const GLOBAL_ASSIGN = /(?:window|root|globalThis)\s*\.\s*SCHZ_MODEL_CATALOG\s*=/
+  // Reported as two rows naming the offenders, not one row per file: 60-odd
+  // green lines saying nothing is how a real failure gets scrolled past.
+  const withRows = []
+  const withAssign = []
+  for (const rel of files) {
+    if (rel === CATALOG_REL) continue
+    const src = fs.readFileSync(path.join(ROOT, rel), 'utf8')
+    if (ROW_SHAPE.test(src)) withRows.push(rel)
+    if (GLOBAL_ASSIGN.test(src)) withAssign.push(rel)
+  }
+  check('no other file declares model rows of its own', withRows.length === 0,
+    `${withRows.join(', ')} -- a second picker list has appeared; move the rows into ${CATALOG_REL}`)
+  check('no other file assigns SCHZ_MODEL_CATALOG', withAssign.length === 0,
+    `${withAssign.join(', ')} -- the browser global has a second writer; load order now decides which catalog the page gets`)
+  // And the scan's own anchor: the two regexes above must actually match the
+  // real thing, or every row above passes by failing to look.
+  const catSrc = fs.readFileSync(path.join(ROOT, CATALOG_REL), 'utf8')
+  check('the row-shape regex matches the real catalog (the guard is not blind)', ROW_SHAPE.test(catSrc))
+  check('the global-assign regex matches the real catalog (the guard is not blind)', GLOBAL_ASSIGN.test(catSrc))
+
+  // dsh-lane reads the catalog rather than carrying a window of its own. The
+  // env override stays -- it is the hand-tuned-lane escape hatch -- but a
+  // bare numeric literal back in the model row would be the old blanket
+  // constant returning.
+  const laneSrc = fs.readFileSync(path.join(ROOT, 'dsh-lane.mjs'), 'utf8')
+  check('dsh-lane requires the shared catalog', laneSrc.includes(`require('./${CATALOG_REL}')`))
+  check('dsh-lane declares no hardcoded contextWindow number', !/contextWindow:\s*\$?\{?\s*\d/.test(laneSrc),
+    'the declared model row is back to a literal window -- it must come from the catalog')
 }
 
 // ── 5. wiring tripwires: template + existing-install migration ─────────────

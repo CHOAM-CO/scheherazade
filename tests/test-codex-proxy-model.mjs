@@ -122,8 +122,14 @@ console.log('\n-- context-cap drift guard (proxy /health vs the hand-pinned cap)
   const prevHome = process.env.CODEX_HOME
   process.env.CODEX_HOME = emptyHome
   try {
-    // Every gpt-* row the static catalog offers for the chatgpt provider.
-    const CATALOG_GPT = ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']
+    // Every gpt-* row the static catalog offers for the chatgpt provider,
+    // DERIVED from the catalog rather than hand-typed (0.3 P4). The old
+    // literal list was a fourth copy of the model list: adding a GPT row to
+    // the picker left it unproven against the live proxy, and this guard
+    // would have kept passing while saying nothing about the new model.
+    const catalog = require_(path.join(ROOT, 'onboarding', 'public', 'js', 'model-catalog.cjs'))
+    const CATALOG_GPT = catalog.MODELS.filter((m) => m.providers.includes('chatgpt')).map((m) => m.id)
+    ok('the catalog offers chatgpt rows to check (an empty loop always passes)', CATALOG_GPT.length > 0, CATALOG_GPT.join(','))
     for (const model of CATALOG_GPT) {
       process.env.CODEX_AS_API_MODEL = model
       const health = await healthOf(loadFresh().createApp)
@@ -132,6 +138,16 @@ console.log('\n-- context-cap drift guard (proxy /health vs the hand-pinned cap)
         health.context_window === pinned.cap,
         `proxy=${health.context_window} pin=${pinned.cap} (a mismatch means the 0.6.x bump moved the table -- re-verify contextCapForModel)`)
       ok(`${model}: cap source labeled codex-as-api-table`, pinned.capSource === 'codex-as-api-table', String(pinned.capSource))
+      // The same receipt, applied to the number the dsh lane DECLARES to its
+      // engine. Until 0.3 P4 the lane declared a blanket 131072 for every
+      // hand-declared route including this one, so the engine compacted a
+      // ChatGPT lane against less than half its real window while the gauge
+      // in front of the user divided by the proxy's 272000. One live source,
+      // both consumers.
+      const row = catalog.MODELS.find((m) => m.id === model)
+      ok(`${model}: catalog contextWindow === proxy /health context_window`,
+        row && row.contextWindow === health.context_window,
+        `catalog=${row && row.contextWindow} proxy=${health.context_window}`)
     }
     delete process.env.CODEX_AS_API_MODEL
   } finally {

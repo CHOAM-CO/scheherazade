@@ -761,12 +761,12 @@
   // sol/luna are the owner-named siblings -- live-verify on first swap, the
   // mute-strike ledger is the backstop either way.
   // The real model rows live in the SHARED static catalog
-  // (js/model-catalog.js, loaded before this file) since the chat composer
+  // (js/model-catalog.cjs, loaded before this file) since the chat composer
   // grew its own quick-switch dropdown (0.2.6, the owner 08-20 19:09) — one list,
   // two surfaces. This page adds its two ACTION sentinels on top: they are
   // settings-page interactions (reveal a form section), not models, so the
   // chat dropdown never sees them. Row provenance/verification history moved
-  // to model-catalog.js.
+  // to model-catalog.cjs.
   // Sentinel model-select value for the Custom catalog entry (custom-
   // provider addition, 2026-07-25) -- never sent to the server as a real
   // model id (see the onchange handler's early-return branch for it).

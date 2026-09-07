@@ -459,6 +459,48 @@ for (const f of RUNTIME_ENTRYPOINTS) {
     mustBeReal.add(m[1])
   }
 }
+// TRANSITIVE closure (0.3 P4). The set above stops at the file that gets
+// spawned; nothing walked what that file then loads. supervisor.mjs is
+// unpacked because main.cjs hands its path to toUnpackedPath -- and it runs
+// from app.asar.unpacked, so ITS __dirname is the unpacked tree and every
+// relative require it makes must be a real file there too. Same again one hop
+// on: supervisor spawns dsh-lane.mjs / headless-lane.mjs via
+// new URL('./x.mjs', import.meta.url), which the require/from regexes cannot
+// see at all, and the lane's own requires inherit the same unpacked
+// __dirname. Before this walk, dsh-lane requiring a file that ships only
+// inside app.asar was a MODULE_NOT_FOUND at lane start -- the app boots, the
+// agent never does, and every packaging row stays green. The lanes were
+// hand-listed in asarUnpack, which is exactly the memory this file exists to
+// replace.
+{
+  const isFile = (rel) => {
+    try { return fs.statSync(path.join(ROOT, rel)).isFile() } catch { return false }
+  }
+  const queue = [...mustBeReal].filter(isFile)
+  const walked = new Set()
+  while (queue.length) {
+    const file = queue.shift()
+    if (walked.has(file)) continue
+    walked.add(file)
+    const src = fs.readFileSync(path.join(ROOT, file), 'utf8')
+    const fileDir = path.dirname(file).split(path.sep).join('/')
+    const specs = rootModulesReferencedBy(file)
+    // Spawn targets addressed as URLs relative to the spawning module, the
+    // shape supervisor.mjs uses for both lanes.
+    for (const m of src.matchAll(/new URL\(\s*['"](\.\.?\/[A-Za-z0-9_./-]+\.(?:cjs|mjs|js))['"]\s*,\s*import\.meta\.url\s*\)/g)) {
+      specs.push(path.posix.normalize(path.posix.join(fileDir === '.' ? '' : fileDir, m[1])))
+    }
+    for (const spec of specs) {
+      mustBeReal.add(spec)
+      if (isFile(spec) && !walked.has(spec)) queue.push(spec)
+    }
+  }
+  // The walk's own anchor: if the regexes rot, this set collapses back to the
+  // hand-listed entrypoints and every row below passes by looking at nothing.
+  ok('the unpacked-closure walk reaches the lanes the supervisor spawns',
+    mustBeReal.has('dsh-lane.mjs') && mustBeReal.has('headless-lane.mjs'),
+    'supervisor.mjs spawns both via new URL(..., import.meta.url); if the walk lost them, their requires are unchecked')
+}
 console.log(`   (outside Electron: ${[...mustBeReal].sort().join(', ')})`)
 ok('the calendar server is known to run outside Electron', mustBeReal.has('calendar'),
   'the CLI spawns it as a plain node process; if the scan lost that, the unpack check below is empty and always passes')

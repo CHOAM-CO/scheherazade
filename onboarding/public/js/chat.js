@@ -954,7 +954,7 @@
   // 말고 챗쪽에 드랍다운으로 두는게 더 편할 것 같음") ─────────────────────
   // A chip-styled native <select> in the composer bar, claude.ai pattern
   // (composer-corner model chip, 08-20 reference capture). Reads the SHARED
-  // static catalog (js/model-catalog.js) and fires the same POST
+  // static catalog (js/model-catalog.cjs) and fires the same POST
   // /api/agent/model the Engine page fires -- one server contract, two
   // surfaces. Engine keeps the full picker (Custom proxy / Ollama-by-URL
   // action rows, effort, apply-state line); this is the quick lane only.

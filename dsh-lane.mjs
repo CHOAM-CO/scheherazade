@@ -36,6 +36,11 @@ import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
 const { DshClient, promptAndCollect } = require('./dsh-client.cjs')
+// The model catalog is the app's ONE list of ids and their context windows
+// (0.3 P4). The lane reads the same file the Engine page's picker loads, so a
+// window declared to the engine here and a window shown to the user there are
+// the same number by construction rather than by two people remembering.
+const MODEL_CATALOG = require('./onboarding/public/js/model-catalog.cjs')
 
 const MEM = process.env.MEM
 const MCP_CONFIG_FILE = process.env.MCP_CONFIG_FILE || ''
@@ -58,7 +63,10 @@ const SYSTEM_PROMPT_FILE = process.env.SYSTEM_PROMPT_FILE || ''
 //   DSH_MODEL_VISION   '1' -> the MAIN model sees images: declared rows get
 //                      input:[text,image] and markers attach inline
 //   DSH_VISION_SIDECAR sidecar caption model id (local-ollama route only)
-//   DSH_MODEL_CONTEXT / DSH_MODEL_MAXTOK  declared model row numbers
+//   DSH_MODEL_CONTEXT / DSH_MODEL_MAXTOK  declared model row numbers.
+//                      DSH_MODEL_CONTEXT is now an OVERRIDE only: unset, the
+//                      window comes from the shared model catalog per model
+//                      id (see declaredContextFor below).
 // Defaults reproduce the 0.2.1 local-ollama lane so a bare `MEM=... node
 // dsh-lane.mjs` still boots the glm/qwen testbed.
 const DSH_ROUTE = process.env.DSH_ROUTE || 'declared'
@@ -69,7 +77,17 @@ const DSH_ROUTE_KEY_ENV = process.env.DSH_ROUTE_KEY_ENV || 'OLLAMA_API_KEY'
 const DSH_MODEL = process.env.DSH_MODEL || 'glm-5.2:cloud'
 const DSH_EFFORT = process.env.DSH_EFFORT || 'max'
 const DSH_MODEL_VISION = process.env.DSH_MODEL_VISION === '1'
-const DSH_MODEL_CONTEXT = Number(process.env.DSH_MODEL_CONTEXT) > 0 ? Number(process.env.DSH_MODEL_CONTEXT) : 131072
+// Declared window, in precedence order: an explicit DSH_MODEL_CONTEXT wins
+// (hand-tuned lane), then the catalog's number for THIS model, then the
+// catalog's floor -- which is the 131072 this line carried as a blanket
+// constant until 0.3 P4. Per-model matters: the codex route is a `declared`
+// route too, so every ChatGPT lane was telling the engine its gpt-5.x model
+// held 131072 tokens while codex-as-api 0.6.5 advertises 272000 and the app's
+// own gauge divided by 272000. The engine compacted against a window less
+// than half the real one, and nothing anywhere disagreed out loud.
+const declaredContextFor = (id) => Number(process.env.DSH_MODEL_CONTEXT) > 0
+  ? Number(process.env.DSH_MODEL_CONTEXT)
+  : MODEL_CATALOG.dshContextWindowFor(id)
 const DSH_MODEL_MAXTOK = Number(process.env.DSH_MODEL_MAXTOK) > 0 ? Number(process.env.DSH_MODEL_MAXTOK) : 16384
 // 같이보기/vision: three lanes, decided by the route --
 //   inline  (DSH_MODEL_VISION)   the main model sees the image part itself
@@ -257,13 +275,21 @@ function personaRow () {
 }
 
 function buildPatch () {
-  const efforts = ['off', 'low', 'high', 'max']
+  // The ladder the lane DECLARES to the engine. It is deliberately not the
+  // same list as the picker's (model-catalog.cjs EFFORT_LEVELS): 'off' is
+  // declared here and offered nowhere, 'medium' is offered by the picker and
+  // declared nowhere. Both lists now live in the catalog file so the gap is
+  // readable in one place; closing it is a live-engine decision, not a
+  // refactor's.
+  const efforts = MODEL_CATALOG.DSH_REASONING_EFFORTS
     .map((e) => e === 'off' ? '              off:' : `              ${e}: ${e}`).join('\n')
+  // Per-model window, so the vision sidecar declares its OWN number instead
+  // of inheriting the main model's -- they are different models.
   const modelRow = (id, name, vision) => [
     `          - id: ${yamlQuote(id)}`,
     `            name: ${yamlQuote(name)}`,
     `            input: [${vision ? 'text, image' : 'text'}]`,
-    `            contextWindow: ${DSH_MODEL_CONTEXT}`,
+    `            contextWindow: ${declaredContextFor(id)}`,
     `            maxTokens: ${DSH_MODEL_MAXTOK}`,
     `            reasoningEfforts:`,
     efforts
