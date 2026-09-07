@@ -63,6 +63,16 @@ const { spawn, execFile } = require('node:child_process')
 // finding #3 these call sites exist to prevent. (Found 2026-08-03.)
 const { killTree } = require('../proc.cjs')
 
+// ── the host capability table (design-0023 P4) ──────────────────────────
+// Every `process.platform === 'darwin'` / `!== 'win32'` test that used to
+// live in this file is a lookup on HOST now. The ones this file owned:
+// the calendar MCP registration, the safeStorage refusal wording, the
+// claude-cli keychain probe, resolveBin's candidate list, the claude
+// installer's platform gate, and readCliSessionToken. Each of them had
+// Linux as an unnamed else-branch; see onboarding/platform.cjs's header.
+const platformTable = require('./platform.cjs')
+const HOST = platformTable.host()
+
 // The autonomous cycle's meter and decision logic. The SAME modules the
 // channel.mjs watcher enforces against -- the settings page must not compute
 // the user's token count a second, subtly different way. One implementation,
@@ -834,7 +844,7 @@ function ensureMcpJsonAgentName() {
   // darwin only: the calendar server is osascript + macOS Calendar all the way
   // down (calendar/read.cjs). Registering it on Windows handed the agent a tool
   // that can only ever fail, which is worse than not having one.
-  if (!servers['calendar'] && process.platform === 'darwin') {
+  if (!servers['calendar'] && HOST.calendarMcp) {
     servers['calendar'] = {
       command: process.execPath,
       args: [CALENDAR_SERVER_SCRIPT_PATH],
@@ -914,12 +924,8 @@ function storeProviderKey(provider, key) {
       // and telling a Windows user their macOS Keychain is unreachable is the
       // same class of visibly-false sentence as the "Claude Code is not
       // installed" one in main.cjs -- it teaches them to stop reading.
-      'safeStorage encryption unavailable on this system (' +
-        (process.platform === 'darwin'
-          ? 'macOS Keychain not reachable'
-          : process.platform === 'win32'
-            ? 'Windows DPAPI not reachable'
-            : 'no OS credential store reachable -- on Linux this needs a running keyring, e.g. gnome-keyring or kwallet') +
+      `safeStorage encryption unavailable on this system (${HOST.credStoreName} not reachable` +
+        (HOST.isLinux ? ' -- this needs a running keyring, e.g. gnome-keyring or kwallet' : '') +
         ') -- refusing to store the key in plaintext.'
     )
   }
@@ -1761,6 +1767,19 @@ async function getSessionEvents() {
 }
 
 // ── static file serving ──────────────────────────────────────────────────
+// Escape a string for use inside a double-quoted HTML attribute. The
+// capability JSON below carries `"` on every key, and `&`/`<` would let a
+// future field close the tag. Five entities, no HTML parser, same posture as
+// the literal-<head>-replace this file already documents.
+function htmlAttr(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+}
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -1823,9 +1842,15 @@ function serveStatic(req, res, urlPath) {
     // Windows equivalent. the owner hit all of it on the first Windows install
     // (2026-08-03 23:56). The renderer cannot see process.platform, so it
     // gets told. copy.js reads this before it builds any string.
+    // host-capabilities rides beside host-platform (design-0023 P4). The
+    // page needs the ANSWERS, not the platform id, at FIRST PAINT: copy.js
+    // and every render gate used to re-derive "is this a Mac?" from the id
+    // and get Linux wrong three different ways. Same JSON GET /api/config
+    // serves, so the pre-fetch page and the post-fetch page cannot disagree.
+    const capsJson = htmlAttr(JSON.stringify(HOST.clientView()))
     let injected = html.replace(
       '<head>',
-      `<head>\n    <meta name="onboard-token" content="${SERVER_TOKEN}">\n    <meta name="host-platform" content="${process.platform}">`
+      `<head>\n    <meta name="onboard-token" content="${SERVER_TOKEN}">\n    <meta name="host-platform" content="${HOST.id}">\n    <meta name="host-capabilities" content="${capsJson}">`
     )
     // Appearance overrides ride the SAME serve (Appearance tab, 2026-08-05):
     // injected before </head> so they land AFTER app.css's <link> and win
@@ -2097,7 +2122,7 @@ function computeAvailableProviders() {
   try {
     if (fs.existsSync(CLAUDE_CLI_CREDENTIALS_PATH)) {
       out.push('claude-cli')
-    } else if (process.platform === 'darwin') {
+    } else if (HOST.cliCredentialKeychain) {
       // macOS CLI logins live in the login keychain, not the JSON file --
       // without this branch the found-login card NEVER shows on a typical
       // Mac (0.2.3 E2E find, 2026-08-19). Existence-only stays true to the
@@ -3040,7 +3065,7 @@ let usageFailCooldown = null // { until, payload }
 function readCliSessionToken() {
   try {
     let raw = null
-    if (process.platform === 'darwin') {
+    if (HOST.cliCredentialKeychain) {
       const r = require('child_process').spawnSync('security',
         ['find-generic-password', '-s', 'Claude Code-credentials', '-w'], { encoding: 'utf8' })
       if (r.status === 0 && r.stdout) raw = r.stdout.trim()
@@ -3556,6 +3581,9 @@ const staticCtx = {
   autonomyBudget, autonomyCycle, readAutonomyState,
   // logs / topology / permission probes
   logBuffer, attachTopology, permissionProbes,
+  // host capability table (design-0023 P4) -- routes ask it instead of
+  // re-testing process.platform. One require, one answer, three platforms.
+  HOST,
   // onboarding-complete side effects + the memory boundary
   writePersonaPreferences, renderAgentSubstrate: harnessRender.renderAgentSubstrate,
   getSessionEvents, getMemoryService, CATEGORY_TABLES,
@@ -3679,6 +3707,9 @@ module.exports = {
   // main.cjs's quit/fatal cleanup hook.
   LOGIN_TIMEOUT_MS,
   resolveBin,
+  // The host capability table, re-exported so a test (or main.cjs) can read
+  // the SAME answers the routes do without a second require path.
+  HOST,
   killAllLoginChildren,
   // Multichannel: backend resolution + per-backend credential readers for
   // main.cjs's spawn-time env injection (same seam as readDiscordToken

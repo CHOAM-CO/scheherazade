@@ -25,7 +25,7 @@ function createRoutes(staticCtx) {
     extractClaudeModelsFromBin, fetchOllamaCloudCatalog, fetchImageCaption,
     startClaudeCliInstall, getClaudeInstallStatus,
     readAppearance, writeAppearance, AppearanceModel,
-    path, DATA_HOME,
+    path, DATA_HOME, HOST,
   } = staticCtx
   return [
     {
@@ -48,7 +48,12 @@ function createRoutes(staticCtx) {
           planRequirement: info.planRequirement || null,
           licenseUrl: info.licenseUrl || null,
           docsUrl: info.docsUrl || null,
-          managed: process.platform !== 'win32',
+          // The Claude CLI's own installer is a POSIX shell script; Windows
+          // has a PowerShell one-liner we deliberately do not run for the
+          // user. This used to read `!== 'win32'`, which told a Linux box
+          // "managed" -- true by accident, and by the same accident it told
+          // an Intel Mac the same thing about the codex/ollama bootstrap.
+          managed: Boolean(HOST.claudeCliInstall),
         })
         return
       },
@@ -327,12 +332,20 @@ function createRoutes(staticCtx) {
         // 2026-07-25): computed live from the safeStorage credential store,
         // boolean-only (see hasStoredCustomApiKey()'s own header for why this
         // is never the key itself).
+        // hostPlatform/hostCapabilities ride along camelCase like the three
+        // above: computed, never stored. This is the SAME object the served
+        // HTML carries in <meta name="host-capabilities">, so the page's
+        // first paint and its first fetch cannot disagree about what this
+        // machine can do (design-0023 P4). Every render gate that used to
+        // ask `window.IS_MAC` reads a named capability from here instead.
         sendJson(res, 200, {
           ...readAgentConfig(),
           homeChannelId: readHomeChannelId(),
           routerWired: ROUTER_WIRED,
           availableProviders: computeAvailableProviders(),
           hasCustomApiKey: hasStoredCustomApiKey(),
+          hostPlatform: HOST.id,
+          hostCapabilities: HOST.clientView(),
         })
         return
       },
