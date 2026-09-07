@@ -28,8 +28,24 @@ conventions live in its history — when in doubt, `git log` a similar change.
 
 ## Tests
 
-- Full regression before merging to master: `node scripts/test-*.mjs`
-  (each file is standalone; all green = mergeable).
+- Full regression before merging to master: **`npm test`**
+  (`scripts/run-tests.mjs`: every `scripts/test-*.{mjs,cjs}` plus
+  `memory/smoke.mjs`, one process each, per-file timeout, exit non-zero if
+  anything failed). Flags: `--live`, `--filter <substr>`, `--list`,
+  `--timeout <s>`; per-test logs land in `release/test-logs/` (gitignored).
+  The old line here -- `node scripts/test-*.mjs` -- ran ONE file and passed
+  the other 84 paths to it as argv.
+- `npm test -- --live` adds the three lanes that need this machine's real
+  state: `test-calendar` (the real Calendar, TCC), `test-attach-topology`
+  (a real tmux binary + server), and `test-packaging`'s artifact lane (a
+  freshly built dmg/exe). Without `--live` they print the skip marker.
+  `test-packaging` still runs fail-closed as `npm run dist`'s
+  predist/postdist hook -- that is the ship gate, and it stays hard.
+- SKIP is never a pass. A program that cannot run on this host prints
+  `SKIP: <reason>` at COLUMN 0 and exits 0; a SECTION that could not be set
+  up prints an INDENTED `  SKIP ...` and the file keeps running. The runner
+  counts both and lists them under the summary. If you add a skip, say what
+  is missing and why the assertions could not hold here.
 - Anything touching agent lifecycle, tmux, or spawn paths must keep
   `scripts/test-attach-topology.mjs` green. The one-line invariant it
   protects: **the app must NEVER cause a tmux server to exist**

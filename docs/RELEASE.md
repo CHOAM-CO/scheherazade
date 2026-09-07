@@ -11,10 +11,17 @@ every installed Windows copy's update check — so it gets a checked-in runbook.
 - [ ] `onboarding/templates/user-changes.md` gained a `## <version>` section
       (one or two user-facing Korean lines — the agent briefs these in-chat
       after the update lands; a missing section briefs as a bare version bump).
-- [ ] Full suite green: `for t in scripts/test-*.mjs; do node "$t" || echo "FAIL $t"; done`
-      — `test-packaging.mjs` checks the require graph against the LAST built
-      artifact, so a brand-new required file legitimately fails here until the
-      build below regenerates the asar. Anything else failing blocks the ship.
+- [ ] Full suite green: `npm test` (`scripts/run-tests.mjs` — 86 programs,
+      exits non-zero if anything FAILed; per-test logs in `release/test-logs/`).
+      The loop that used to live on this line echoed "FAIL <file>" and then
+      exited 0, so a red suite read as a green one.
+      `test-packaging.mjs`'s ARTIFACT lane is skipped in that run — it checks
+      the require graph against a freshly built artifact, which does not exist
+      yet at preflight. Step 1 covers it: predist/postdist run the same file
+      fail-closed, and postdist must be green.
+- [ ] Every SKIP the run prints is "could not run here", never a pass. Read
+      them. After the build, `npm test -- --live` re-runs the artifact lane
+      against the real dmg plus the Calendar (TCC) and tmux lanes.
 - [ ] Release notes drafted (`docs/release-notes-v<version>.md` when it's more
       than a patch; the gh release body otherwise).
 
