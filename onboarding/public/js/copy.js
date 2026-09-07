@@ -37,18 +37,91 @@ window.HOST_PLATFORM = (function () {
 })()
 window.IS_WIN = window.HOST_PLATFORM === 'win32'
 window.IS_MAC = window.HOST_PLATFORM === 'darwin'
+window.IS_LINUX = window.HOST_PLATFORM === 'linux'
 
-// The two words that appear all over this file. THIS_MACHINE replaces the
-// literal "this Mac" -- deliberately not "this PC", because the same string
-// ships to Linux dev runs too. SHELL_APP is what the user opens to type a
-// command: Terminal on mac, PowerShell on Windows.
-const THIS_MACHINE = window.IS_MAC ? 'this Mac' : 'this computer'
-const SHELL_APP = window.IS_WIN ? 'PowerShell' : 'Terminal'
-// Where safeStorage actually puts things: Keychain on mac, DPAPI on Windows.
-// Naming the real store matters -- a user who goes looking for "the keychain"
-// on Windows finds nothing and concludes we lied about where their token is.
-const CRED_STORE = window.IS_MAC ? "this Mac's keychain" : "this computer's encrypted credential store"
-const CRED_STORE_THE = window.IS_MAC ? 'the macOS keychain' : "the OS's encrypted credential store"
+// What this machine can actually DO, injected beside the platform id by the
+// same serveStatic pass (design-0023 P4). The page used to derive every
+// capability from `IS_MAC` -- so "not a Mac" silently meant "no uninstall, no
+// permissions panel, no blur, no sudo card... except the sudo card, which
+// rendered anyway". These are the SERVER's answers (onboarding/platform.cjs),
+// identical to the ones GET /api/config returns, so a pre-fetch render and a
+// post-fetch render cannot disagree. `{}` when the meta is absent (a stale
+// cached page, dev-serve): every gate below treats a missing flag as false
+// except where the pre-P4 default was mac, which is what HOST_PLATFORM's own
+// 'darwin' default preserves.
+window.HOST_CAPS = (function () {
+  const meta = document.querySelector('meta[name="host-capabilities"]')
+  if (!meta) return {}
+  try { return JSON.parse(meta.getAttribute('content') || '{}') || {} } catch { return {} }
+})()
+
+// ── the three-way word table ──────────────────────────────────────────────
+// Before P4 there were two arms and an else: `IS_MAC ? 'this Mac' : 'this
+// computer'`, `IS_WIN ? 'PowerShell' : 'Terminal'`. Linux was never named, it
+// was the leftover of two unrelated ternaries -- which is why it read
+// tolerably in four places and wrongly in a dozen others ("This Mac already
+// has a Claude Code login", "Mac login password", "already in the Trash").
+// One table, one row per platform, and the row is SELECTED, never fallen into.
+//
+// machine/shell/credStore mirror onboarding/platform.cjs's clientView
+// (machineWord/shellName); tests/test-setup-token-copy.mjs pins that the two
+// agree, because the server writes sentences too and they must not contradict
+// the page's.
+const PLATFORM_WORDS = {
+  darwin: {
+    machine: 'this Mac',
+    shell: 'Terminal',
+    credStore: "this Mac's keychain",
+    credStoreThe: 'the macOS keychain',
+    // Where a deleted app goes. On Windows the NSIS uninstaller removes it
+    // outright and on Linux the AppImage is unlinked -- neither has a Trash
+    // the user can go look in, which is what the old line promised everyone.
+    deletedPlace: 'in the Trash',
+    // What the sudo/admin password IS called by the OS the user is on.
+    adminPasswordLabel: 'Mac login password',
+    // Package managers the user might otherwise reach for; named only to say
+    // the official installer needs none of them.
+    packageTools: 'npm or Homebrew',
+  },
+  win32: {
+    machine: 'this PC',
+    shell: 'PowerShell',
+    // safeStorage is DPAPI here, not a keychain. A user who goes looking for
+    // "the keychain" on Windows finds nothing and concludes we lied about
+    // where their token is.
+    credStore: "this PC's encrypted credential store",
+    credStoreThe: "Windows' encrypted credential store",
+    deletedPlace: 'removed',
+    adminPasswordLabel: 'Administrator password',
+    packageTools: 'npm',
+  },
+  linux: {
+    machine: 'this computer',
+    shell: 'Terminal',
+    // safeStorage needs a Secret Service keyring here (gnome-keyring,
+    // kwallet). Naming it is the difference between "we lost your key" and
+    // "your desktop has no keyring running".
+    credStore: "this computer's encrypted credential store",
+    credStoreThe: "the OS's encrypted credential store",
+    deletedPlace: 'removed',
+    adminPasswordLabel: 'Your login password (sudo)',
+    packageTools: 'npm or your package manager',
+  },
+}
+// Unknown platform -> linux row: the most conservative wording of the three
+// (no Mac, no Windows, no keychain), never a mac default.
+const P = PLATFORM_WORDS[window.HOST_PLATFORM] || PLATFORM_WORDS.linux
+const THIS_MACHINE = P.machine
+// Sentence-initial form, so no string has to hardcode "This Mac".
+const THIS_MACHINE_CAP = THIS_MACHINE.charAt(0).toUpperCase() + THIS_MACHINE.slice(1)
+const SHELL_APP = P.shell
+const CRED_STORE = P.credStore
+const CRED_STORE_THE = P.credStoreThe
+// Exposed for the page-local copy blocks that live outside this file
+// (memory.js's JOURNAL_COPY/POINTERS_COPY), which used to re-derive the word
+// from window.IS_MAC with their own inline ternary.
+window.PLATFORM_WORDS = P
+window.THIS_MACHINE = THIS_MACHINE
 
 window.COPY = {
   step0: {
@@ -110,7 +183,7 @@ window.COPY = {
     //   3. `alt` keeps the other paths visible. A found login is an offer, not
     //      a fait accompli.
     foundLogin: {
-      title: 'This Mac already has a Claude Code login',
+      title: `${THIS_MACHINE_CAP} already has a Claude Code login`,
       body: "You can use that login as-is. We don't copy it, store it separately, or open its contents (we only checked that it exists). No key to paste.",
       cost: 'Usage is deducted from your Claude subscription.',
       use: 'Use this login',
@@ -319,13 +392,13 @@ window.COPY = {
     // with Anthropic, and Claude Code needs a PAID plan -- said BEFORE the
     // user invests in the flow, not after a failed spawn.
     cliPreflight: {
-      title: 'Claude Code is not on this Mac yet',
+      title: `Claude Code is not on ${THIS_MACHINE} yet`,
       body: 'Scheherazade runs on top of your own Claude Code — it does not ship one. Install it with the button below (runs Anthropic’s official installer; the agreement is between you and Anthropic).',
       plan: (req) => (req ? `Note: Claude Code requires a paid plan — ${req}.` : 'Note: Claude Code requires a paid Claude plan.'),
       installButton: 'Install Claude Code',
       installing: 'Installing… (downloads from claude.ai, usually under a minute)',
       done: 'Installed. You can continue below.',
-      failed: (detail) => `Install did not complete${detail ? ` — ${detail}` : ''}. Try again, or run the command below in Terminal.`,
+      failed: (detail) => `Install did not complete${detail ? ` — ${detail}` : ''}. Try again, or run the command below in ${SHELL_APP}.`,
       manualLead: 'Manual route:',
       docsLink: 'Setup docs',
     },
@@ -617,8 +690,13 @@ window.COPY = {
           // Install-assist exists now (2026-08-04, the owner "2로 가자"): the
           // setup screen's preflight panel has a one-click install button,
           // so the action points there AND carries the manual command for
-          // anyone who prefers Terminal.
-          action: () => 'The setup screen now has an "Install Claude Code" button (one click, official installer). Manual route: curl -fsSL https://claude.ai/install.sh | bash — then reopen this app.',
+          // anyone who prefers a shell. The curl|bash line is upstream's
+          // POSIX installer -- printing it to a Windows user (which is what
+          // this string did) sends them to a command their shell cannot run,
+          // so Windows gets the install PAGE instead of a fake command.
+          action: () => (window.IS_WIN
+            ? 'The setup screen now has an "Install Claude Code" button (one click, official installer). Manual route: install Claude Code from docs.anthropic.com, then reopen this app.'
+            : 'The setup screen now has an "Install Claude Code" button (one click, official installer). Manual route: curl -fsSL https://claude.ai/install.sh | bash — then reopen this app.'),
           buttons: ['openLogs'],
         },
         ollama_unavailable: {
@@ -824,13 +902,11 @@ window.COPY = {
     placeholder: 'Message the agent…',
     send: 'Send',
     statusChecking: 'Checking the chat channel…',
-    statusUp: (agent) => (agent ? `${agent} is listening.` : 'Connected.'),
     statusNotRunning: "The agent isn't running — start it from the bar above.",
     statusUnreachable: "The agent isn't answering. If it's restarting, this usually clears on its own.",
     // wrongBackend retired 2026-08-05: in-app chat is hosted by every
     // backend now, so that state no longer exists.
     gapMarker: '— some earlier messages fell out of the buffer —',
-    empty: 'No messages yet. Say hi.',
     // P1 (design-research 2026-08): empty state doubles as example prompts
     // (Notion pattern). Click fills the composer — never auto-sends.
     emptyTitle: 'No messages yet. Try one of these, or just say hi:',
@@ -935,7 +1011,6 @@ window.COPY = {
   // (guarantee it can't make).
   logs: {
     title: 'Logs',
-    backToMemory: 'Back to Memory',
     subtitle: 'Live logs from the app and agent session. Known secrets like tokens are masked automatically.',
     copyButton: 'Copy all',
     copied: 'Copied. Paste it as-is to share.',
@@ -953,7 +1028,20 @@ window.COPY = {
     title: 'Appearance',
     subtitle: 'Tune the look. Every change applies instantly — this page is the preview — and saves on its own.',
     glassLabel: 'Background',
-    glassNote: 'Tint is how much your background color covers the window glass. Blur is the glass itself — it has three levels because the OS only offers blur in steps, and Windows pauses it while the window is in the background.',
+    // Three-way (design-0023 P4): the old single sentence explained a
+    // Windows quirk to everyone and told Linux users their blur setting was
+    // doing something. It is not -- Electron has no compositor API for
+    // GNOME/KDE blur, so the value was saved and inert with nothing saying
+    // so. The row itself is disabled off the back of GET /api/appearance's
+    // supportsBlur; this is the sentence beside it.
+    glassNote: window.IS_MAC
+      ? 'Tint is how much your background color covers the window glass. Blur is the glass itself — it has three levels because the OS only offers blur in steps.'
+      : window.IS_WIN
+        ? 'Tint is how much your background color covers the window glass. Blur is the glass itself — it has three levels because the OS only offers blur in steps, and Windows pauses it while the window is in the background.'
+        : 'Tint is how much your background color covers the window glass.',
+    // Shown INSTEAD of a working blur control where the platform has no
+    // window-material API at all. Saying nothing was the old behavior.
+    blurUnsupported: 'Window blur is not available on this desktop — there is no system API for it here, so this setting would do nothing.',
     glassRangeLabel: 'Tint',
     blurLabel: 'Blur',
     blurLevels: { off: 'Off', soft: 'Soft', strong: 'Strong' },
@@ -972,7 +1060,6 @@ window.COPY = {
 
   settings: {
     title: 'Settings',
-    backToMemory: 'Back to Memory', // unused since the IA pass removed the back link; kept so a future page can reuse it
     // Three group headings (IA pass 2026-07-25). The page used to run seven
     // flat blocks; these name the question each group answers, so the answer
     // to "where do I change X" is one read instead of a scan.
@@ -1035,24 +1122,21 @@ window.COPY = {
     ollamaUrlModelWarn: (m) => `ollama.com's catalog doesn't list "${m}" right now — it may still work if it's brand new.`,
     ollamaUrlApplyFailed: 'Switch failed — the agent kept its previous model.',
     ollamaUrlApplied: (m) => `Switched to ${m}. The agent is restarting.`,
-    // Usage gauge cli-session source label (403-scope fix): honest about
-    // WHICH login the number describes.
-    usageCliSourceNote: 'via this Mac\'s Claude CLI login',
-    usageSetupTokenSourceNote: 'via the setup-token — may not read usage; connect below for accuracy',
-    // Full-scope usage-login CTA (2026-08-13, the real fix for the stuck 429).
-    usageConnectCta: 'Connect Claude usage',
-    usageConnectStarting: 'Opening a login window…',
-    usageConnectWaiting: 'Finish signing in in the browser — this updates on its own.',
-    usageConnectDone: 'Connected — reading usage.',
-    usageConnectFailed: 'Login did not finish. Try again.',
-    usageConnectTimeout: 'Login timed out. Try again.',
+    // (settings.usage* deleted, design-0023 P4: nine keys duplicating
+    // connectors.usage*, referenced by connectors.js off ITS own block and by
+    // settings.js not at all. The dead copy is where "via this Mac's Claude
+    // CLI login" survived the platform pass -- an unused string nobody could
+    // have seen go wrong.)
     dangerLabel: 'Delete the app and everything it made',
-    dangerNote: "Removes the agent, its memory and journals, saved credentials, caches, and the app itself — everything, without Terminal. Your personal Claude Code settings (~/.claude.json) are left untouched.",
+    dangerNote: `Removes the agent, its memory and journals, saved credentials, caches, and the app itself — everything, without ${SHELL_APP}. Your personal Claude Code settings (~/.claude.json) are left untouched.`,
     dangerButton: 'Delete everything…',
     dangerConfirm: (name) => `This permanently deletes ${name} — the agent, all of its memory and journals, saved tokens, and the app itself. There is no undo. The app will close when it's done.`,
     dangerConfirmButton: 'Delete everything',
     dangerCancel: 'Keep it',
-    dangerDone: 'Deleting. The app will close itself in a moment — it is already in the Trash.',
+    // "already in the Trash" was true on exactly one of three platforms: the
+    // mac lane trashes the .app bundle, Windows hands off to the NSIS
+    // uninstaller, and Linux unlinks the AppImage. P.deletedPlace says which.
+    dangerDone: `Deleting. The app will close itself in a moment — it is already ${P.deletedPlace}.`,
     renameLabel: 'Name',
     renameButton: 'Save',
     renameSaved: 'Saved.',
@@ -1091,7 +1175,7 @@ window.COPY = {
     sudoLabel: 'Admin privileges (sudo)',
     sudoNote: `When on, the agent can use sudo commands. The password is encrypted and stored in a vault backed by ${CRED_STORE_THE}, and is designed to never appear in chat, logs, or conversation history. sudo doesn't work while the app is off.`,
     sudoEnableLabel: 'Allow sudo',
-    sudoPasswordLabel: 'Mac login password',
+    sudoPasswordLabel: P.adminPasswordLabel,
     sudoSave: 'Save',
     sudoSaved: 'Saved.',
     sudoStateStored: 'A password is stored in the vault. To change it, enter a new one and save.',
@@ -1372,9 +1456,6 @@ window.COPY = {
   // 존댓말, no 이모지, no 느낌표, no cheerleading.
   connectors: {
     title: 'Connectors',
-    backToMemory: 'Back to Memory',
-    slackLabel: 'Slack',
-    slackNote: 'Support coming later',
     // AUTHORED -- post-onboarding provider auth (the owner 07-13 click-test:
     // "온보딩 끝낸 이후에 ollama cloud 인증 추가 / chatGPT인증 추가").
     providersLabel: 'Providers',
@@ -1419,7 +1500,7 @@ window.COPY = {
     doctorPresent: 'Found',
     doctorMissing: 'Missing',
     doctorCredentialFix: 'Connect it in the Providers card above.',
-    doctorInstallHint: 'Run this in Terminal, then Re-check. It installs the official CLI without needing npm or Homebrew.',
+    doctorInstallHint: `Run this in ${SHELL_APP}, then Re-check. It installs the official CLI without needing ${P.packageTools}.`,
     doctorInstallCopy: 'Copy command',
     doctorInstallCopied: 'Install command copied.',
     doctorDocs: 'Open install guide',
@@ -1446,7 +1527,7 @@ window.COPY = {
     usageConnectFailed: 'Login did not finish. Try again.',
     usageConnectTimeout: 'Login timed out. Try again.',
     usageNoToken: 'no Claude login on file',
-    usageCodexNoLogin: 'no Codex login on this Mac (~/.codex)',
+    usageCodexNoLogin: `no Codex login on ${THIS_MACHINE} (~/.codex)`,
     usageOllamaNoKey: 'no ollama.com API key on file',
     // unknown_shape = the undocumented ollama.com endpoint answered with a
     // shape we have not bound yet; the field list IS the receipt to send us.
@@ -1516,8 +1597,6 @@ window.COPY = {
     chatgptServingUnknown: 'The proxy response has no model info',
     // AUTHORED -- future client slots (the owner 07-14 11:31 directive names the
     // path: 디코 -> 슬랙 -> 텔레그램).
-    telegramLabel: 'Telegram',
-    telegramNote: 'Support coming later',
     // AUTHORED -- claude.ai connector intercept (internal design, 07-14). The
     // lane warning is the load-bearing honesty line: on a non-subscription
     // lane an authorized connector is inert, so we SAY so instead of shipping

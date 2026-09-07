@@ -61,32 +61,59 @@ const failureExpr = failureMatch ? failureMatch[0].replace(/^failure:\s*/, '') :
 // mapper once PER PLATFORM also makes this test prove the mapper survives both
 // -- a string that only renders on mac is exactly the bug being fixed.
 // Positional mirror of copy.js's four module-level consts, in declaration
-// order: THIS_MACHINE, SHELL_APP, CRED_STORE, CRED_STORE_THE. LINUX IS A ROW
-// (design-0023 P1): copy.js computes those consts from window.IS_MAC /
-// window.IS_WIN, so a Linux host takes the non-mac value of one pair and the
-// non-win value of the other -- a combination no row here ever exercised, and
-// the shipped Linux AppImage renders exactly it. These pin CURRENT behavior.
-const PLATFORM_BINDINGS = {
-  darwin: ['this Mac', 'Terminal', "this Mac's keychain", 'the macOS keychain'],
-  win32: ['this computer', 'PowerShell', "this computer's encrypted credential store", "the OS's encrypted credential store"],
-  linux: ['this computer', 'Terminal', "this computer's encrypted credential store", "the OS's encrypted credential store"],
+// order: THIS_MACHINE, SHELL_APP, CRED_STORE, CRED_STORE_THE.
+//
+// design-0023 P4: these are no longer two ternaries with an unnamed else.
+// copy.js carries PLATFORM_WORDS -- one ROW per platform, selected by
+// HOST_PLATFORM -- so the values below are READ OUT OF THAT TABLE rather than
+// re-typed here. A hand-typed expectation would agree with a wrong row; the
+// table is parsed out of the real file and the assertions compare against it.
+const readRow = (platform) => {
+  const rowMatch = copySrc.match(new RegExp(`\\n  ${platform}: \\{([\\s\\S]*?)\\n  \\},`))
+  if (!rowMatch) return null
+  const field = (name) => {
+    const m = rowMatch[1].match(new RegExp(`${name}: (?:'((?:[^'\\\\]|\\\\.)*)'|"([^"]*)")`))
+    return m ? (m[1] !== undefined ? m[1].replace(/\\'/g, "'") : m[2]) : null
+  }
+  return [field('machine'), field('shell'), field('credStore'), field('credStoreThe')]
 }
-// Non-vacuity: a hand-typed binding that copy.js no longer contains would make
-// every row below render a string that ships nowhere. Every value must be a
-// literal the real file still carries.
+const PLATFORM_BINDINGS = {
+  darwin: readRow('darwin'),
+  win32: readRow('win32'),
+  linux: readRow('linux'),
+}
+assert(/window\.IS_LINUX = window\.HOST_PLATFORM === 'linux'/.test(copySrc),
+  'copy.js names Linux (it used to be the leftover of two unrelated mac/win ternaries)')
+assert(/const PLATFORM_WORDS = \{/.test(copySrc) && /const P = PLATFORM_WORDS\[window\.HOST_PLATFORM\] \|\| PLATFORM_WORDS\.linux/.test(copySrc),
+  'the row is SELECTED from a table, and an unknown platform falls back to the linux row, never the mac one')
+// Non-vacuity: the extraction must really have found three complete rows, or
+// every check below renders a string that ships nowhere.
 for (const [platform, bindings] of Object.entries(PLATFORM_BINDINGS)) {
-  for (const b of bindings) {
+  assert(Array.isArray(bindings) && bindings.length === 4 && bindings.every((b) => typeof b === 'string' && b.length > 0),
+    `copy.js's ${platform} row parsed into four words (got ${JSON.stringify(bindings)})`)
+  for (const b of bindings || []) {
     assert(copySrc.includes(b), `copy.js still carries the ${platform} binding ${JSON.stringify(b)}`)
   }
 }
-// And the linux row must be DERIVABLE from copy.js's own ternaries rather than
-// invented here: IS_MAC false + IS_WIN false picks the second arm of each.
-assert(/const THIS_MACHINE = window\.IS_MAC \? 'this Mac' : 'this computer'/.test(copySrc),
-  'THIS_MACHINE is an IS_MAC ternary -- linux takes the non-mac arm')
-assert(/const SHELL_APP = window\.IS_WIN \? 'PowerShell' : 'Terminal'/.test(copySrc),
-  'SHELL_APP is an IS_WIN ternary -- linux takes the non-win arm (Terminal, which is also the honest word there)')
-assert(!/IS_LINUX/.test(copySrc),
-  'CURRENT: copy.js has no IS_LINUX -- linux is still the else-arm of two mac/win ternaries (design-0023 P4 R2 adds a real third row; this pin makes that change visible)')
+// The rows must DIFFER -- a "three-way table" whose rows are identical is the
+// old two-arm ternary with extra steps.
+assert(PLATFORM_BINDINGS.darwin[0] !== PLATFORM_BINDINGS.win32[0]
+  && PLATFORM_BINDINGS.win32[0] !== PLATFORM_BINDINGS.linux[0]
+  && PLATFORM_BINDINGS.darwin[0] !== PLATFORM_BINDINGS.linux[0],
+  'all three machine words are different (this Mac / this PC / this computer)')
+assert(!/Mac|keychain/i.test(PLATFORM_BINDINGS.linux.join(' ')), 'the linux row names no Apple thing')
+assert(!/Mac|keychain/i.test(PLATFORM_BINDINGS.win32.join(' ')), 'the win32 row names no Apple thing')
+// The server writes sentences too (the safeStorage refusal, the uninstall
+// replacement text). Its words come from onboarding/platform.cjs; if the two
+// tables disagree the user reads two names for one machine.
+{
+  const caps = (await import('node:module')).createRequire(path.join(ROOT, 'package.json'))(path.join(ROOT, 'onboarding', 'platform.cjs'))
+  for (const [platform, bindings] of Object.entries(PLATFORM_BINDINGS)) {
+    const t = caps.capabilities({ platform, arch: 'x64', env: {}, home: '/h', dataHome: '/h/d', existsSync: () => false, hasTmux: () => false })
+    assert(t.machineWord === bindings[0], `${platform}: server machineWord (${t.machineWord}) == page machine word (${bindings[0]})`)
+    assert(t.shellName === bindings[1], `${platform}: server shellName (${t.shellName}) == page shell word (${bindings[1]})`)
+  }
+}
 const makeFailureFn = (platform) =>
   new Function('reason', 'THIS_MACHINE', 'SHELL_APP', 'CRED_STORE', 'CRED_STORE_THE',
     `return (${failureExpr})(reason)`)
@@ -324,6 +351,75 @@ assert(/Log in with Claude/.test(unsupportedMsg), 'the copy names the in-app log
 for (const platform of ['darwin', 'win32', 'linux']) {
   const text = callFailure(platform, 'unsupported')
   assert(!/Terminal|PowerShell/.test(text), `${platform}: the unsupported line does not send the user to a shell`)
+}
+
+// ── the whole copy file, rendered on all three platforms ──────────────────
+// design-0023 P4. The failure mapper above proves ONE function survives three
+// platforms. This renders the ENTIRE window.COPY tree under each host and
+// looks for Apple vocabulary that reached a non-Apple user -- the class of
+// bug that shipped "This Mac already has a Claude Code login", "Mac login
+// password", "already in the Trash" and "without needing npm or Homebrew" to
+// every Windows and Linux install.
+//
+// MAC_GATED is the honest exception list: strings that DO name macOS and are
+// only ever rendered behind a mac-only capability gate (the FDA card, the
+// permissions panel, the attach-topology card). It is an allowlist of four
+// paths, not a regex loophole -- a fifth mac string appearing anywhere else
+// fails this section.
+console.log('\ncopy.js renders on all three platforms')
+{
+  const APPLE_WORDS = /\b(Mac|Macs|macOS|Keychain|keychain|Homebrew|Trash|Finder|Apple)\b/
+  const MAC_GATED = new Set([
+    'step0.fda.bodyMissing',        // wizard.js FDA card -- permissionsPanel only
+    'settings.topologyBootstrapWhy', // connectors.js topology card -- attachTopology only
+    'settings.permsNote',            // settings.js permissions panel -- permissionsPanel only
+    'settings.permsClassNotes.automation',
+  ])
+  const WINDOWS_WORDS = /\b(PowerShell|Windows|PC)\b/
+  const rendered = {}
+  for (const platform of ['darwin', 'win32', 'linux']) {
+    const sandbox = { window: {}, document: { querySelector: (q) => (q.includes('host-platform') ? { getAttribute: () => platform } : null) } }
+    // The file is browser JS: give it the two globals it reads and nothing else.
+    const run = new Function('window', 'document', copySrc + '\nreturn window')
+    const w = run(sandbox.window, sandbox.document)
+    assert(w.COPY && typeof w.COPY === 'object', `${platform}: copy.js evaluates and exports window.COPY`)
+    assert(w.HOST_PLATFORM === platform, `${platform}: HOST_PLATFORM comes from the meta tag`)
+    const leaves = []
+    const walk = (node, at) => {
+      for (const k of Object.keys(node || {})) {
+        const v = node[k]
+        const dotted = at ? `${at}.${k}` : k
+        if (typeof v === 'string') leaves.push([dotted, v])
+        else if (typeof v === 'function') {
+          // Template strings take one argument in this file; a throw just
+          // means this one needs a shape we are not going to fabricate.
+          try { const out = v('x'); if (typeof out === 'string') leaves.push([dotted, out]) } catch { /* not renderable blind */ }
+        } else if (Array.isArray(v)) v.forEach((x, i) => (typeof x === 'string' ? leaves.push([`${dotted}[${i}]`, x]) : (x && typeof x === 'object' && walk(x, `${dotted}[${i}]`))))
+        else if (v && typeof v === 'object') walk(v, dotted)
+      }
+    }
+    walk(w.COPY, '')
+    rendered[platform] = leaves
+    assert(leaves.length > 300, `${platform}: the walk really reached the whole tree (${leaves.length} strings)`)
+    if (platform === 'darwin') continue
+    for (const [dotted, text] of leaves) {
+      if (MAC_GATED.has(dotted)) continue
+      assert(!APPLE_WORDS.test(text), `${platform}: ${dotted} names an Apple-only thing: ${JSON.stringify(text.slice(0, 90))}`)
+    }
+    if (platform === 'linux') {
+      for (const [dotted, text] of leaves) {
+        assert(!WINDOWS_WORDS.test(text), `linux: ${dotted} names a Windows-only thing: ${JSON.stringify(text.slice(0, 90))}`)
+      }
+    }
+  }
+  // Non-vacuity, the other direction: the three renders must actually DIFFER,
+  // or the walk above is asserting over one platform's output three times.
+  const flat = (p) => rendered[p].map(([k, v]) => `${k}=${v}`).join('\n')
+  assert(flat('darwin') !== flat('win32') && flat('win32') !== flat('linux') && flat('darwin') !== flat('linux'),
+    'the three renders differ (a table whose rows produce identical copy is not a table)')
+  const macOnly = rendered.darwin.filter(([k, v]) => APPLE_WORDS.test(v)).map(([k]) => k)
+  assert(macOnly.length > MAC_GATED.size,
+    `mac still gets its own words (${macOnly.length} Apple-named strings on darwin) -- nothing was flattened away to pass this test`)
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
