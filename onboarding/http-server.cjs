@@ -53,7 +53,7 @@ const OLLAMA_CLOUD_TIMEOUT_MS = 15_000
 // any FUTURE external-binary spawn (Codex security review, 2026-07-07):
 // resolve via resolveBin() below and use a FIXED argv -- the LOGIN_SPECS
 // table is the single existing site.
-const { spawn, execFile, execFileSync } = require('node:child_process')
+const { spawn, execFile } = require('node:child_process')
 
 // Kill a detached child AND its descendants. Negative-pid process-group signals
 // do not exist on Windows, so every group-kill below threw straight into its
@@ -61,13 +61,7 @@ const { spawn, execFile, execFileSync } = require('node:child_process')
 // children outlived app quit, and an orphaned OAuth flow can still finish its
 // exchange and write credentials after the app is gone -- the exact Codex
 // finding #3 these call sites exist to prevent. (Found 2026-08-03.)
-function killTree(pid, signal) {
-  if (process.platform === 'win32') {
-    execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
-    return
-  }
-  process.kill(-pid, signal)
-}
+const { killTree } = require('../proc.cjs')
 
 // The autonomous cycle's meter and decision logic. The SAME modules the
 // channel.mjs watcher enforces against -- the settings page must not compute

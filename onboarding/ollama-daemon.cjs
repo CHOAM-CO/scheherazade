@@ -46,7 +46,7 @@
 // (local tags need `ollama pull`; :cloud tags need the signin this app
 // already does). Model-availability UX is a separate onboarding item.
 
-const { spawn, execFileSync } = require('node:child_process')
+const { spawn } = require('node:child_process')
 
 const { resolveBin } = require('./http-server.cjs')
 const { verifyManagedBin, verifySignedByPinnedTeam } = require('./bootstrap.cjs')
@@ -77,43 +77,13 @@ async function alive(port) {
   }
 }
 
-function listenerPids(port) {
-  try {
-    if (process.platform === 'win32') {
-      const out = execFileSync('powershell.exe', ['-NoProfile', '-Command',
-        `Get-NetTCPConnection -LocalPort ${Number(port)} -State Listen | Select-Object -ExpandProperty OwningProcess`],
-        { encoding: 'utf8', timeout: 5000 })
-      return [...new Set(out.split('\n').map((s) => s.trim()).filter(Boolean))]
-    }
-    const out = execFileSync('/usr/sbin/lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {
-      encoding: 'utf8',
-      timeout: 3000,
-    })
-    return out.split('\n').map((s) => s.trim()).filter(Boolean)
-  } catch {
-    return []
-  }
-}
-
-function execPathOfPid(pid) {
-  try {
-    if (process.platform === 'win32') {
-      const out = execFileSync('powershell.exe', ['-NoProfile', '-Command',
-        `(Get-Process -Id ${Number(pid)}).Path`], { encoding: 'utf8', timeout: 5000 })
-      return out.trim() || null
-    }
-    // comm= on macOS reports the executable path the process was launched
-    // as, un-truncated (unlike args-derived guesses). A relative/deleted
-    // path simply fails the codesign step below -- fail-closed either way.
-    const out = execFileSync('/bin/ps', ['-p', String(pid), '-o', 'comm='], {
-      encoding: 'utf8',
-      timeout: 3000,
-    })
-    return out.trim() || null
-  } catch {
-    return null
-  }
-}
+// Port owner + executable path: proc.cjs (one platform seam). The old copies
+// here were mac-only -- `/usr/sbin/lsof` does not exist on Linux (empty
+// listener list -> owner "unknown" -> fail-closed refusal), and procps
+// `ps -o comm=` reports the SHORT name, not the path the codesign check
+// needs. proc.listenerPids falls back to `ss -ltnp` and proc.execPathOfPid
+// reads /proc/<pid>/exe there.
+const { listenerPids, execPathOfPid, killTree } = require('../proc.cjs')
 
 // Every listening pid on the port must be a codesign-verified Ollama
 // binary. Plural pids on one LISTEN port is abnormal; requiring ALL to
@@ -269,11 +239,7 @@ function killOllamaDaemon(signal = 'SIGTERM') {
     // Windows has no process groups to signal, so taskkill /T is the
     // equivalent -- without it this always threw and the fallback below
     // reached only the daemon, leaving model-runner grandchildren alive.
-    if (process.platform === 'win32') {
-      execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
-    } else {
-      process.kill(-pid, signal)
-    }
+    killTree(pid, signal)
     log(`killOllamaDaemon: sent ${signal} to process tree ${pid}`)
   } catch (err) {
     // Group already gone, or platform quirk -- fall back to the lone child.

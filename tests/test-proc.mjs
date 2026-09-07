@@ -1,0 +1,210 @@
+// test-proc.mjs -- proc.cjs, the one process-control seam (design-0023 P3).
+// Run: node tests/test-proc.mjs
+//
+// Attacks, not demonstrations. The win32 lanes are exercised FROM MAC through
+// the injectable platform/env/existsSync seams -- that is the whole point of
+// having one module: the Windows behavior must be reviewable on the box the
+// developer actually has. Anything that needs a real Windows kernel
+// (taskkill, Get-CimInstance) is named in the report as unverified here, not
+// faked into a green tick.
+
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+
+import {
+  isPidAlive,
+  killTree,
+  gracefulStop,
+  resolveOnPath,
+  readCommandLine,
+} from '../proc.cjs'
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const IS_WIN = process.platform === 'win32'
+
+let pass = 0
+let fail = 0
+function ok(name, cond, detail = '') {
+  if (cond) { pass++; console.log(`  ok  ${name}`) }
+  else { fail++; console.log(`FAIL  ${name}${detail ? ` -- ${detail}` : ''}`) }
+}
+
+// ── resolveOnPath: PATHEXT is the win32 half nobody could test on mac ───────
+console.log('\n-- resolveOnPath: fake PATH + PATHEXT (win32 lane exercised from any host)')
+{
+  const winFiles = new Set([
+    path.join('C:\\tools', 'claude.exe'),
+    path.join('C:\\tools', 'node.CMD'),
+    path.join('C:\\other', 'claude.exe'),
+  ])
+  const winEnv = { PATH: 'C:\\tools;C:\\other', PATHEXT: '.COM;.EXE;.BAT;.CMD' }
+  const win = (bin, env = winEnv) => resolveOnPath(bin, {
+    env, platform: 'win32', delimiter: ';', existsSync: (f) => winFiles.has(f),
+  })
+  ok('win32 finds bin+.EXE for a bare name', win('claude') === path.join('C:\\tools', 'claude.exe'), String(win('claude')))
+  ok('win32 finds an UPPER-case PATHEXT file on disk (node.CMD)',
+    win('node') === path.join('C:\\tools', 'node.CMD'), String(win('node')))
+  ok('win32 honours PATH ORDER (first dir wins)',
+    win('claude').startsWith('C:\\tools'), String(win('claude')))
+  ok('win32 name that already carries an extension resolves as-is',
+    win('claude.exe') === path.join('C:\\tools', 'claude.exe'), String(win('claude.exe')))
+  ok('win32 bare name with NO PATHEXT match -> null (a .cmd shim is not exec-able by spawn)',
+    win('claude', { PATH: 'C:\\tools', PATHEXT: '.COM' }) === null)
+  ok('win32 stripped PATHEXT env falls back to the default list',
+    win('claude', { PATH: 'C:\\tools' }) === path.join('C:\\tools', 'claude.exe'))
+  ok('empty PATH entries are skipped, not joined into ./bin',
+    win('claude', { PATH: ';C:\\tools;', PATHEXT: '.EXE' }) === path.join('C:\\tools', 'claude.exe'))
+
+  const posixFiles = new Set(['/opt/bin/claude'])
+  const posix = (bin, env = { PATH: '/nope:/opt/bin' }) => resolveOnPath(bin, {
+    env, platform: 'linux', delimiter: ':', existsSync: (f) => posixFiles.has(f),
+  })
+  ok('posix resolves a bare name with no extension games', posix('claude') === '/opt/bin/claude')
+  ok('posix miss -> null', posix('ollama') === null)
+  ok('an explicit path is checked as given, never PATH-walked',
+    resolveOnPath('/opt/bin/claude', { platform: 'linux', existsSync: (f) => posixFiles.has(f) }) === '/opt/bin/claude' &&
+    resolveOnPath('/opt/bin/nope', { platform: 'linux', existsSync: (f) => posixFiles.has(f) }) === null)
+  ok('empty/undefined bin -> null', resolveOnPath('') === null && resolveOnPath(undefined) === null)
+}
+
+// ── isPidAlive / readCommandLine ───────────────────────────────────────────
+console.log('\n-- isPidAlive + readCommandLine on this host')
+{
+  ok('our own pid is alive', isPidAlive(process.pid))
+  ok('an absurd pid is not', !isPidAlive(999999999))
+  ok('garbage pids are not alive', !isPidAlive(null) && !isPidAlive(0) && !isPidAlive('x'))
+  let line = ''
+  try { line = readCommandLine(process.pid) } catch { /* reported below */ }
+  ok('readCommandLine returns OUR OWN argv (contiguous, un-truncated)',
+    line.includes('test-proc.mjs'), line.trim().slice(0, 200))
+}
+
+// ── gracefulStop: the stop contract, with a real child ─────────────────────
+// Attack: (a) the stopflag is written even when the process is already gone,
+// (b) a child that exits on SIGTERM is NOT force-killed, (c) a child that
+// ignores SIGTERM IS force-killed after the grace window, (d) `verify`
+// vetoing the force-kill leaves the process alone (the pid-recycling guard).
+console.log('\n-- gracefulStop: stopflag + grace window + force')
+if (IS_WIN) {
+  console.log('  SKIP  gracefulStop child lanes -- POSIX signal semantics; the win32 lane needs a real Windows box (see report)')
+} else {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proc-stop-'))
+  const stopflag = path.join(dir, '.stop_requested')
+  const waitUntil = async (fn, ms) => {
+    const end = Date.now() + ms
+    while (Date.now() < end) { if (fn()) return true; await new Promise((r) => setTimeout(r, 50)) }
+    return fn()
+  }
+  // READY MARKER, not "spawn returned": isPidAlive() is true the instant the
+  // node process exists, which is BEFORE it has run a line of the script --
+  // so a stop issued then hits a process whose SIGTERM handler is not
+  // installed yet, and the "ignores TERM" fixture dies to the default
+  // disposition. The first run of this suite convicted gracefulStop of
+  // skipping its grace window for exactly that reason; the grace window was
+  // innocent.
+  const spawnChild = async (body) => {
+    const id = Math.random().toString(16).slice(2)
+    const file = path.join(dir, `child-${id}.mjs`)
+    const ready = path.join(dir, `ready-${id}`)
+    fs.writeFileSync(file, `import fs from 'node:fs'\n${body}\nfs.writeFileSync(${JSON.stringify(ready)}, '1')\n`)
+    // detached: the child leads its own group, exactly like the supervisor --
+    // gracefulStop signals the GROUP, and a non-detached child would put this
+    // test runner in the blast radius.
+    const c = spawn(process.execPath, [file], { detached: true, stdio: 'ignore' })
+    await waitUntil(() => fs.existsSync(ready), 10000)
+    return c
+  }
+
+  {
+    const c = await spawnChild('setTimeout(() => {}, 60000)') // default SIGTERM handling = dies
+    const res = await gracefulStop(c.pid, { stopflag, graceMs: 8000, pollMs: 50 })
+    ok('stopflag written', fs.existsSync(stopflag))
+    ok('a TERM-honouring child stops WITHOUT the force kill', res.stopped && !res.forced, JSON.stringify(res))
+    ok('and is actually dead', !isPidAlive(c.pid))
+    fs.rmSync(stopflag, { force: true })
+  }
+
+  {
+    // Ignores TERM: only SIGKILL ends it. graceMs short so the test is fast.
+    const c = await spawnChild("process.on('SIGTERM', () => {})\nsetInterval(() => {}, 1000)")
+    const t0 = Date.now()
+    const res = await gracefulStop(c.pid, { stopflag, graceMs: 1000, pollMs: 50 })
+    ok('a TERM-ignoring child is force-killed after the grace window', res.forced === true, JSON.stringify(res))
+    ok('the grace window was actually waited out (not an instant kill)', Date.now() - t0 >= 950, `${Date.now() - t0}ms`)
+    ok('and it is dead', await waitUntil(() => !isPidAlive(c.pid), 3000))
+    fs.rmSync(stopflag, { force: true })
+  }
+
+  {
+    // verify() vetoes the force kill -- the pid-recycled guard. The child
+    // survives, which is the POINT: never SIGKILL an unconfirmed pid.
+    const c = await spawnChild("process.on('SIGTERM', () => {})\nsetInterval(() => {}, 1000)")
+    const res = await gracefulStop(c.pid, { stopflag, graceMs: 600, pollMs: 50, verify: () => false })
+    ok('verify()=false refuses the force kill', res.forced === false && res.stopped === false, JSON.stringify(res))
+    ok('the unconfirmed pid is left alive', isPidAlive(c.pid))
+    try { killTree(c.pid, 'SIGKILL') } catch {}
+    fs.rmSync(stopflag, { force: true })
+  }
+
+  {
+    // Already dead: still writes the flag (the belt the supervisor loop reads)
+    // and reports stopped without touching a pid that is not there.
+    const res = await gracefulStop(999999999, { stopflag, graceMs: 100 })
+    ok('a dead pid stops immediately and still leaves the stopflag',
+      res.stopped && !res.forced && fs.existsSync(stopflag), JSON.stringify(res))
+  }
+
+  {
+    // killTree reaches a GRANDCHILD through the process group -- the property
+    // main.cjs's quit path and the supervisor's stop both rely on.
+    const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'proc-tree-'))
+    const marker = path.join(dir2, 'grandchild.pid')
+    const src = `import { spawn } from 'node:child_process'\n` +
+      `const g = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' })\n` +
+      `fs.writeFileSync(${JSON.stringify(marker)}, String(g.pid))\n` +
+      `process.on('SIGTERM', () => {})\nsetInterval(() => {}, 1000)`
+    const c = await spawnChild(src)
+    await waitUntil(() => fs.existsSync(marker), 8000)
+    const gpid = Number(fs.readFileSync(marker, 'utf8').trim())
+    ok('grandchild is alive before the group kill', isPidAlive(gpid))
+    killTree(c.pid, 'SIGKILL')
+    ok('killTree(-pid) reaped the GRANDCHILD too', await waitUntil(() => !isPidAlive(gpid), 5000))
+    fs.rmSync(dir2, { recursive: true, force: true })
+  }
+
+  fs.rmSync(dir, { recursive: true, force: true })
+}
+
+// ── the copies are actually gone ───────────────────────────────────────────
+// The reason this module exists is that four files each carried their own
+// taskkill/ps/lsof. A resurrected copy fails here, loudly, in the same commit
+// that writes it.
+console.log('\n-- no second copy of the process-control primitives')
+{
+  const sources = {
+    'main.cjs': fs.readFileSync(path.join(ROOT, 'main.cjs'), 'utf8'),
+    'supervisor.mjs': fs.readFileSync(path.join(ROOT, 'supervisor.mjs'), 'utf8'),
+    'onboarding/http-server.cjs': fs.readFileSync(path.join(ROOT, 'onboarding', 'http-server.cjs'), 'utf8'),
+    'onboarding/ollama-daemon.cjs': fs.readFileSync(path.join(ROOT, 'onboarding', 'ollama-daemon.cjs'), 'utf8'),
+  }
+  // Match CALL SITES, not prose: every one of these files legitimately talks
+  // about the primitives in comments now that it delegates them.
+  for (const [name, src] of Object.entries(sources)) {
+    ok(`${name}: no local taskkill call`, !src.includes("'taskkill'"))
+    ok(`${name}: no local CIM command-line read`, !src.includes('Get-CimInstance Win32_Process'))
+    ok(`${name}: no local lsof/ps port-owner exec`,
+      !src.includes("execFileSync('/usr/sbin/lsof'") && !src.includes("'-iTCP:"))
+    ok(`${name}: no local process-group kill`, !/process\.kill\(-/.test(src))
+    ok(`${name}: pulls the primitives from proc.cjs`, /(require\(['"][^'"]*proc\.cjs['"]\))|(from '\.\/proc\.cjs')/.test(src))
+  }
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
+  ok('proc.cjs ships (build.files)', pkg.build.files.includes('proc.cjs'))
+  ok('proc.cjs is a REAL file on disk (asarUnpack) -- supervisor.mjs runs unpacked',
+    pkg.build.asarUnpack.includes('proc.cjs'))
+}
+
+console.log(`\n${pass} passed, ${fail} failed`)
+process.exit(fail === 0 ? 0 : 1)

@@ -26,27 +26,19 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { execFileSync, spawn as cpSpawn } from 'node:child_process'
+import { spawn as cpSpawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
+// One process-control seam for all three platforms (design-0023 P3): the
+// absolute-powershell CommandLine read, the $PID-excluding orphan sweep, the
+// taskkill /T tree kill and the PATHEXT resolver all used to live HERE as the
+// best of four hand-copies. They now live in proc.cjs and every caller
+// (main.cjs, the onboarding server, ollama-daemon) shares them.
+import { isPidAlive, readCommandLine as procReadCommandLine, killTree, sweepByPattern, resolveOnPath } from './proc.cjs'
 
 const SELF_PATH = fileURLToPath(import.meta.url)
 const SCRIPT_DIR = path.dirname(SELF_PATH)
 const IS_WIN = process.platform === 'win32'
-
-// Absolute powershell path (2026-08-13, the Windows box log: "orphan sweep failed
-// (spawnSync powershell.exe ENOENT)"). The supervisor spawns with a scrubbed
-// PATH (ensureNodeShim rebuilds it for the CLI child, but the supervisor's own
-// execFileSync calls run in the parent env, which on Windows does not
-// guarantee System32 is on PATH). A bare 'powershell.exe' then ENOENTs and the
-// CommandLine read + orphan sweep both silently no-op. Resolve against
-// %SystemRoot% when we can; fall back to the bare name (which still works
-// wherever PATH is intact) so a missing env var never makes this worse.
-const POWERSHELL_EXE = IS_WIN
-  ? (process.env.SystemRoot
-    ? path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-    : 'powershell.exe')
-  : 'powershell.exe'
 
 // ── auto-answer layer: REMOVED (design-0020, headless topology) ─────────────
 // The expect-parity dialog matcher (trust / confirm / local development /
@@ -336,22 +328,7 @@ export function classifyPidfileOwner(pid, {
   return 'stale'
 }
 
-function isPidAlive(pid) {
-  try { process.kill(pid, 0); return true } catch (err) { return err.code === 'EPERM' }
-}
-
-function defaultReadCommandLine(pid) {
-  if (IS_WIN) {
-    // VERIFIED BY EXECUTION 2026-08-01 (a spike on the Windows box): CommandLine
-    // read from a node-spawned child, 3 runs 268/295/405ms (all <2s),
-    // CommandLine present and matching -- receipts in
-    // docs/supervisor-design.md (Architecture). Fail-safe posture stands:
-    // an error here just reads as "not verified".
-    return execFileSync(POWERSHELL_EXE, ['-NoProfile', '-Command',
-      `(Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}").CommandLine`], { encoding: 'utf8' }).trim()
-  }
-  return execFileSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8' })
-}
+const defaultReadCommandLine = procReadCommandLine
 
 // ── orphan sweep (run.sh:372 pre-spawn pkill, replicated per-iteration) ─────
 // Design verdict 1 keeps the pattern sweep ONLY as orphan cleanup mirroring
@@ -362,30 +339,7 @@ function defaultReadCommandLine(pid) {
 // are leaves that outlived their supervisor. stop-path blind sweeps
 // (run.sh:455,475) are DROPPED; the handle replaces them (verdict 1).
 function sweepOrphansDefault(pkillPattern, log) {
-  try {
-    if (IS_WIN) {
-      // VERIFIED BY EXECUTION 2026-08-18 (a repro on the Windows box): the sweep
-      // powershell's OWN command line contains `*<pattern>*`, so the
-      // Where-Object matched the sweep process itself and Stop-Process
-      // -Force killed it mid-pipeline -- exit 0xFFFFFFFF, empty
-      // stdout/stderr, "orphan sweep failed" on EVERY win boot, and no
-      // orphan was ever actually swept. `-ne ${process.pid}` excludes the
-      // supervisor (node), not this powershell child; POSIX pkill never
-      // matches itself, which is why only win32 broke. Fix: also exclude
-      // $PID (powershell's own-process automatic variable). Receipts:
-      // repro matrix 2026-08-18, current shape FAIL -1 / +$PID OK, and a
-      // planted fake-cmdline orphan still gets swept.
-      const escaped = pkillPattern.replace(/'/g, "''")
-      execFileSync(POWERSHELL_EXE, ['-NoProfile', '-Command',
-        `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${escaped}*' -and $_.ProcessId -ne ${process.pid} -and $_.ProcessId -ne $PID } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`],
-        { encoding: 'utf8' })
-    } else {
-      execFileSync('pkill', ['-f', '--', pkillPattern], { encoding: 'utf8' })
-    }
-  } catch (err) {
-    // pkill exit 1 = "no process matched" -- the normal case, not an error.
-    if (err.status !== 1) log(`orphan sweep failed (${err.message}) -- continuing`)
-  }
+  sweepByPattern(pkillPattern, { log })
 }
 
 // ── stall/thrash watchdog (v0.0.15 Root B fix) ──────────────────────────────
@@ -744,17 +698,14 @@ function spawnHeadlessChild(cfg, { now = () => Date.now(), log, watchdogBounces 
 
   function killHandle(sig) {
     try {
-      if (IS_WIN) {
-        // taskkill /T = whole tree. VERIFIED BY EXECUTION 2026-08-01 (a
-        // spike on the Windows box): synthetic 3-level node tree, grandchild
-        // explicitly reported terminated -- receipts in
-        // docs/supervisor-design.md (Kill lane). Caveat kept honest: tree
-        // was plain node processes; re-run the same driver against the real
-        // CLI+MCP tree once a live win session exists.
-        execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { encoding: 'utf8' })
-      } else {
-        child.kill(sig)
-      }
+      // proc.killTree: taskkill /PID /T /F on win32 (whole tree -- VERIFIED BY
+      // EXECUTION 2026-08-01 on the Windows box against a synthetic 3-level
+      // node tree; the real CLI+MCP tree receipt is still owed), a plain
+      // handle kill here on POSIX because the child is not a group leader --
+      // it shares OUR group, so a negative-pid signal would hit this
+      // supervisor too.
+      if (IS_WIN) killTree(child.pid, sig)
+      else child.kill(sig)
     } catch {}
   }
 
@@ -929,21 +880,6 @@ export async function runLoop(cfg, deps = {}) {
 }
 
 // ── start / stop modes (run.sh start_agent/stop_agent) ──────────────────────
-function resolveOnPath(bin) {
-  if (bin.includes(path.sep)) return fs.existsSync(bin) ? bin : null
-  const exts = IS_WIN ? (process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';') : ['']
-  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
-    if (!dir) continue
-    for (const ext of exts) {
-      const candidate = path.join(dir, bin + ext.toLowerCase())
-      if (fs.existsSync(candidate)) return candidate
-      const candidateUpper = path.join(dir, bin + ext)
-      if (ext && fs.existsSync(candidateUpper)) return candidateUpper
-    }
-  }
-  return null
-}
-
 function startAgent(cfg) {
   const log = console.log
   if (!resolveOnPath(cfg.claudeBin)) {
@@ -1021,7 +957,7 @@ async function stopAgent(cfg) {
     // Windows has no graceful cross-process signal: node's process.kill()
     // is TerminateProcess (handler never runs, child would orphan). Kill
     // the whole tree instead. UNVERIFIED on the Windows box (design doc flag).
-    try { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { encoding: 'utf8' }) } catch {}
+    try { killTree(pid) } catch {}
     try { fs.rmSync(cfg.pidfile, { force: true }) } catch {}
     try { fs.rmSync(cfg.stopflag, { force: true }) } catch {}
     log('stopped')

@@ -105,9 +105,14 @@ console.log('\n-- headless lane parity: both lanes exec headless-lane.mjs')
   // sweep powershell's own command line contains `*<pattern>*`, so without
   // excluding $PID the Where-Object matches the sweep itself and
   // Stop-Process kills it mid-pipeline (exit -1, empty output, every boot).
-  // POSIX pkill self-excludes; win32 must do it explicitly.
+  // POSIX pkill self-excludes; win32 must do it explicitly. The sweep moved
+  // into proc.cjs with P3 (one seam, four callers) -- the pin moved with it,
+  // it did not get dropped.
+  const procSrc = fs.readFileSync(path.join(ROOT, 'proc.cjs'), 'utf8')
   ok('win orphan sweep excludes its own powershell ($PID) -- self-kill regression',
-    supSrc.includes('-and $_.ProcessId -ne $PID }'))
+    procSrc.includes('-and $_.ProcessId -ne $PID }'))
+  ok('the supervisor sweeps through proc.cjs, not a private copy',
+    supSrc.includes('sweepByPattern(pkillPattern, { log })') && !supSrc.includes('Get-CimInstance Win32_Process'))
 }
 
 // ── 2b. the lane's claude argv (the ONE argv builder) ──────────────────────

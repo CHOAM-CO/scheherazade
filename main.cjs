@@ -47,7 +47,13 @@ const { app, BrowserWindow, shell, dialog } = require('electron')
 // below this block isn't initialized yet when this line runs)
 app.setPath('userData', require('node:path').join(app.getPath('appData'), 'scheherazade'))
 
-const { spawn, execFileSync } = require('node:child_process')
+const { spawn } = require('node:child_process')
+// One process-control seam for all three platforms (design-0023 P3):
+// killTree, the ps/CIM command-line read and the port-owner lookup used to
+// be hand-copied here, in supervisor.mjs, in the onboarding server and in
+// ollama-daemon -- four branches of differing quality, so a Linux fix meant
+// four edits. proc.cjs is the one implementation now.
+const proc = require('./proc.cjs')
 const attachTopology = require('./attach-topology.cjs')
 const { startShimmedProxy } = require('./codex-proxy-shim.cjs')
 const path = require('node:path')
@@ -561,15 +567,7 @@ const FAILURE_POLL_MS = 3_000
 // uses. Not re-exported/shared as a module between the two files: it's a
 // six-line pure function, not worth a shared-module seam between a CJS
 // onboarding server and this CJS main process for.
-function isPidAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (err) {
-    return err.code === 'EPERM'
-  }
-}
+const isPidAlive = proc.isPidAlive
 
 // Bug 1 fix (agent-lifecycle, 2026-07-03, cross-model adversarial review):
 // isPidAlive() alone is IDENTITY-BLIND -- it only proves *some* process
@@ -616,15 +614,7 @@ function isPidAlive(pid) {
 // daemons survived app quit as orphans, and an orphaned OAuth flow can still
 // complete and write credentials after the app is gone. taskkill /T is the
 // Windows equivalent; supervisor.mjs:684 already uses it.
-function killTree(pid, signal) {
-  if (process.platform === 'win32') {
-    // /F because a detached console child will not honour a polite close, /T
-    // for the descendants the process group would have covered on POSIX.
-    execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
-    return
-  }
-  process.kill(-pid, signal)
-}
+const killTree = proc.killTree
 
 function isOurSupervisor(pid) {
   // Recognition is deliberately LANE-AGNOSTIC (SUPERVISOR_LANE seam,
@@ -640,18 +630,13 @@ function isOurSupervisor(pid) {
 function readSupervisorCommandLine(pid) {
   if (!isPidAlive(pid)) return null
   let commandLine
-  // Windows has no `ps`. Without this branch EVERY lookup threw, so every
+  // proc.readCommandLine: `ps -ww` on POSIX, Get-CimInstance on Windows
+  // (which has no `ps` -- without that branch EVERY lookup threw, so every
   // supervisor read as UNVERIFIED: a live supervisor's PIDFILE was called
-  // stale and the next launch double-spawned onto the same Discord token --
-  // the Fix-C disaster the lane-agnostic matching above exists to prevent.
-  // Same CIM read supervisor.mjs's defaultReadCommandLine() uses, which was
-  // execution-verified on the Windows box 2026-08-01 (268/295/405ms).
-  const reader = process.platform === 'win32'
-    ? () => execFileSync('powershell.exe', ['-NoProfile', '-Command',
-        `(Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}").CommandLine`], { encoding: 'utf8' })
-    : () => execFileSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8' })
+  // stale and the next launch double-spawned onto the same Discord token,
+  // the Fix-C disaster the matching below exists to prevent).
   try {
-    commandLine = reader()
+    commandLine = proc.readCommandLine(pid)
   } catch (err) {
     log(`readSupervisorCommandLine(${pid}): process lookup failed (${err.message}) -- treating as UNVERIFIED, fail-safe`)
     return null
@@ -856,16 +841,11 @@ async function ensureCodexProxy(config) {
   }
   // Diagnostics ONLY (never a decision input -- see BIND-FIRST above).
   const listenerPidsForLog = () => {
-    try {
-      const out = execFileSync('/usr/sbin/lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {
-        encoding: 'utf8',
-        timeout: 3000,
-      })
-      const pids = out.split('\n').map((s) => s.trim()).filter(Boolean)
-      return pids.length ? pids.join(',') : 'unknown'
-    } catch {
-      return 'unknown'
-    }
+    // proc.listenerPids: /usr/sbin/lsof on mac, PATH lsof or `ss -ltnp` on
+    // linux (where /usr/sbin/lsof does not exist and this always returned
+    // 'unknown'), Get-NetTCPConnection on win32.
+    const pids = proc.listenerPids(port)
+    return pids.length ? pids.join(',') : 'unknown'
   }
 
   if (codexProxyServer) {
