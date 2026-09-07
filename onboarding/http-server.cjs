@@ -139,7 +139,9 @@ const AGENT_NAME = 'scheherazade'
 // into the canonical one at boot (see the fold-in block there). The other
 // two fixed resolutions (onboarding/bootstrap.cjs, memory/service.mjs)
 // carry the same name -- change all three together.
-const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', 'Scheherazade')
+const { resolveDataHome, resolveMemoryDb } = require('../data-home.cjs')
+const DATA_HOME = resolveDataHome({ allowMem: false }) // app process: MEM is the lane->hook spelling, never an input here
+const MEMORY_DB_PATH = resolveMemoryDb({ dataHome: DATA_HOME })
 
 // CONFIG_DIR: where every *writable* runtime config file lives -- the same
 // directory as DATA_HOME/memory.db, kept as a separate name below purely
@@ -785,6 +787,20 @@ function ensureMcpJsonAgentName() {
   // load): this function runs on every boot AND on every channel switch
   // (POST /api/channels/switch calls it before restarting the agent), so
   // the entry always tracks the currently-picked backend.
+  // Data-home contract for every MCP child (design-0023 P3). cwd alone was
+  // load-bearing before: channel.mjs resolved its home from cwd/AGENT_DATA_HOME
+  // and memory/service.mjs from a hardcoded literal, so a user with a moved
+  // AGENT_DATA_HOME got a channel in the new home and a database in the old
+  // one (read-D §6 #3). Both paths now ride in the row's env, which the claude
+  // lane merges over the inherited env and the dsh lane emits verbatim into
+  // its patch (dsh-lane.mjs mcpRowsFromClaudeConfig) -- one seam, both lanes.
+  // No secret ever goes here (see the BOT-TOKEN SEAM note below).
+  const MCP_CHILD_ENV = {
+    AGENT_NAME,
+    ELECTRON_RUN_AS_NODE: '1',
+    AGENT_DATA_HOME: DATA_HOME,
+    SCHEHERAZADE_MEMORY_DB: MEMORY_DB_PATH,
+  }
   const KNOWN_SERVERS = {
     'agent-channel': activeChannelScriptPath(),
     memory: MEMORY_SERVER_SCRIPT_PATH,
@@ -795,7 +811,7 @@ function ensureMcpJsonAgentName() {
     servers[name].command = process.execPath
     servers[name].args = [KNOWN_SERVERS[name]]
     servers[name].cwd = DATA_HOME
-    servers[name].env = { ...(servers[name].env || {}), AGENT_NAME, ELECTRON_RUN_AS_NODE: '1' }
+    servers[name].env = { ...(servers[name].env || {}), ...MCP_CHILD_ENV }
   }
   // If either expected server entry is missing (fresh clone before any
   // setup.sh run), seed it with the same corrected shape.
@@ -804,7 +820,7 @@ function ensureMcpJsonAgentName() {
       command: process.execPath,
       args: [activeChannelScriptPath()],
       cwd: DATA_HOME,
-      env: { AGENT_NAME, ELECTRON_RUN_AS_NODE: '1' },
+      env: { ...MCP_CHILD_ENV },
     }
   }
   if (!servers['memory']) {
@@ -812,7 +828,7 @@ function ensureMcpJsonAgentName() {
       command: process.execPath,
       args: [MEMORY_SERVER_SCRIPT_PATH],
       cwd: DATA_HOME,
-      env: { AGENT_NAME, ELECTRON_RUN_AS_NODE: '1' },
+      env: { ...MCP_CHILD_ENV },
     }
   }
   // darwin only: the calendar server is osascript + macOS Calendar all the way
@@ -823,7 +839,7 @@ function ensureMcpJsonAgentName() {
       command: process.execPath,
       args: [CALENDAR_SERVER_SCRIPT_PATH],
       cwd: DATA_HOME,
-      env: { AGENT_NAME, ELECTRON_RUN_AS_NODE: '1' },
+      env: { ...MCP_CHILD_ENV },
     }
   }
   // BUG 3 (bot-token seam, security review 2026-07-03): DISCORD_BOT_TOKEN

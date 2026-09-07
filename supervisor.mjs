@@ -35,6 +35,7 @@ import { createRequire } from 'node:module'
 // best of four hand-copies. They now live in proc.cjs and every caller
 // (main.cjs, the onboarding server, ollama-daemon) shares them.
 import { isPidAlive, readCommandLine as procReadCommandLine, killTree, sweepByPattern, resolveOnPath } from './proc.cjs'
+import { resolveDataHome } from './data-home.cjs'
 
 const SELF_PATH = fileURLToPath(import.meta.url)
 const SCRIPT_DIR = path.dirname(SELF_PATH)
@@ -124,7 +125,7 @@ export function resolveConfig(env = process.env, scriptDir = SCRIPT_DIR) {
   const laneKind = merged.LANE_KIND === 'headless' ? 'headless' : 'dsh'
   const agentName = merged.AGENT_NAME
   if (!agentName) throw new Error('AGENT_NAME missing from config/env')
-  const mem = merged.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', agentName)
+  const mem = resolveDataHome({ env: merged, agentName, allowMem: false }) // the supervisor SETS MEM for its child; reading one from its own env would be circular
   const model = merged.MODEL || 'claude-opus-4-6'
   const claudeBin = merged.CLAUDE_BIN || 'claude'
   return {

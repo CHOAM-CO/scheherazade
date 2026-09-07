@@ -7,8 +7,9 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { resolveDataHome } from '../data-home.cjs' // one resolver: AGENT_DATA_HOME || MEM || ~/Documents/Scheherazade
 
-const MEM = process.env.MEM || process.cwd()
+const MEM = resolveDataHome()
 const checkpointFile = path.join(MEM, 'checkpoint.md')
 const nudgeFile = path.join(MEM, '.last_checkpoint_nudge')
 const THRESHOLD_SEC = 1800

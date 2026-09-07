@@ -33,8 +33,8 @@
 
 import { readFileSync, existsSync } from 'node:fs'
 import path from 'node:path'
-import os from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
+import { resolveDataHome } from '../data-home.cjs' // one resolver: AGENT_DATA_HOME || MEM || ~/Documents/Scheherazade
 
 const HOOK = 'pre-reply-corrections-context'
 const REPLY_TOOL = 'mcp__agent-channel__reply'
@@ -55,7 +55,7 @@ function clip(v) {
 // hook always reads the SAME database the running memory MCP server writes
 // to. SCHEHERAZADE_MEMORY_DB is the one deliberate override point (also used
 // by tests/smoke.mjs against a disposable temp db).
-const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', 'Scheherazade')
+const DATA_HOME = resolveDataHome()
 const DB_PATH = process.env.SCHEHERAZADE_MEMORY_DB || path.join(DATA_HOME, 'memory.db')
 
 // ── PRODUCT COPY — PO 최종화 대기 ──────────────────────────────────────────

@@ -71,8 +71,8 @@
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync, unlinkSync, readdirSync } from 'node:fs'
 import path from 'node:path'
-import os from 'node:os'
 import { createHash } from 'node:crypto'
+import { resolveDataHome } from '../data-home.cjs' // one resolver: AGENT_DATA_HOME || MEM || ~/Documents/Scheherazade
 
 const HOOK = 'pre-reply-rumination-gate'
 const REPLY_TOOL = 'mcp__agent-channel__reply' // confirmed: .mcp.json server name "agent-channel" (channel.mjs)
@@ -82,7 +82,7 @@ if (process.env.SCHEHERAZADE_RUMINATION_GATE === '0') process.exit(0)
 
 // DATA_HOME resolution matches channel.mjs / run.sh / memory/server.mjs:
 // AGENT_DATA_HOME env override, else ~/Documents/Scheherazade.
-const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', 'Scheherazade')
+const DATA_HOME = resolveDataHome()
 const CACHE_DIR = path.join(DATA_HOME, '.gates')
 // Marker scope history: global (pre-P0-3) → per (channel × classes) in the
 // filename (P0-3, 2026-08-05 AM) → per channel in the filename with classes

@@ -43,6 +43,7 @@ import { DatabaseSync } from 'node:sqlite'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { resolveDataHome, resolveMemoryDb } from '../data-home.cjs'
 import * as entityIndex from './entity-index.mjs'
 
 // ── Config ──────────────────────────────────────────────────────────────
@@ -59,8 +60,14 @@ import * as entityIndex from './entity-index.mjs'
 // point at a disposable temp db. Read ONCE, at import time — callers that
 // override it (smoke, tests) must set the env var BEFORE importing.
 // 0.2.9 unification: canonical home -- see onboarding/http-server.cjs DATA_HOME.
-const DATA_HOME = path.join(os.homedir(), 'Documents', 'Scheherazade')
-const DB_PATH = process.env.SCHEHERAZADE_MEMORY_DB || path.join(DATA_HOME, 'memory.db')
+// design-0023 P3: resolved through data-home.cjs like every other component,
+// so an AGENT_DATA_HOME override finally moves the DATABASE too. Before this,
+// the literal below ignored the override and a user who moved their data home
+// kept writing memories into the OLD one -- everything else followed, memory
+// did not (read-D §6 #3). The fixed default name is unchanged and still not
+// keyed on AGENT_NAME (see data-home.cjs's lock note and the comment above).
+const DATA_HOME = resolveDataHome({ allowMem: false })
+const DB_PATH = resolveMemoryDb({ dataHome: DATA_HOME })
 
 const log = (msg) => process.stderr.write(`[memory] ${msg}\n`)
 const nowISO = () => new Date().toISOString()

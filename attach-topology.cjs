@@ -36,9 +36,10 @@ const { execFileSync } = require('node:child_process')
 const ATTACH_SOCKET = 'scheherazade'
 const ATTACH_SESSION = 'agent'
 
-// Same DATA_HOME convention as the hooks (stop-reply-guard.mjs): honor the
-// managed-spawn env first, fall back to the literal install path.
-const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', 'Scheherazade')
+// Same DATA_HOME convention as every other component -- one resolver since
+// design-0023 P3 (data-home.cjs): AGENT_DATA_HOME || MEM || ~/Documents/<name>.
+const { resolveDataHome } = require('./data-home.cjs')
+const DATA_HOME = resolveDataHome({ allowMem: false })
 
 // Verbs that cannot create a tmux server (all error with "no server running"
 // on a dead socket). Anything not listed here throws before reaching tmux.

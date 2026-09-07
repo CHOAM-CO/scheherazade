@@ -58,8 +58,17 @@ console.log('channel-runtime purity (zero transport imports)')
   const src = fs.readFileSync(RUNTIME_PATH, 'utf8')
   const specifiers = [...src.matchAll(/^\s*import\s+(?:[^'"]+\s+from\s+)?['"]([^'"]+)['"]/gm)].map((m) => m[1])
   check('the import scan found something (an empty scan always passes)', specifiers.length > 0)
+  // node: builtins, plus a NAMED allowlist of Electron-free repo modules. The
+  // promise this section defends is protocol neutrality (no transport SDK, no
+  // npm package riding into three MCP children), not "no local modules" -- and
+  // a shared resolver that the hooks, the supervisor and the memory DB also
+  // use is the opposite of drift. Anything not on this list, relative or not,
+  // still fails: adding a row here is a deliberate act. (design-0023 P3)
+  const ALLOWED_LOCAL = new Set(['./data-home.cjs'])
   for (const spec of specifiers) {
-    check(`import '${spec}' is a node: builtin`, spec.startsWith('node:'), 'transport SDKs / packages are banned in the runtime')
+    check(`import '${spec}' is a node: builtin or an allowlisted local module`,
+      spec.startsWith('node:') || ALLOWED_LOCAL.has(spec),
+      'transport SDKs / packages are banned in the runtime')
   }
   for (const banned of ["'discord.js'", '@slack/socket-mode', '@slack/web-api', 'dotenv']) {
     check(`no ${banned} anywhere in the runtime source`, !src.includes(banned))

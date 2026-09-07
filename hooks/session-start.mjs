@@ -13,8 +13,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
+import { resolveDataHome } from '../data-home.cjs' // one resolver: AGENT_DATA_HOME || MEM || ~/Documents/Scheherazade
 
-const MEM = process.env.MEM || process.cwd()
+const MEM = resolveDataHome()
 const TODAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
 
 for (const dir of ['session_notes', 'journals', 'dreams', 'logs']) {

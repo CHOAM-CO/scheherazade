@@ -48,7 +48,11 @@ const { Readable } = require('node:stream')
 const { execFile } = require('node:child_process')
 
 // 0.2.9 unification: canonical home -- see onboarding/http-server.cjs DATA_HOME.
-const DATA_HOME = path.join(os.homedir(), 'Documents', 'Scheherazade')
+// design-0023 P3: through data-home.cjs, so an AGENT_DATA_HOME override puts
+// the managed codex/ollama binaries in the SAME home as everything else (this
+// literal used to ignore it and install into the default one).
+const { resolveDataHome } = require('../data-home.cjs')
+const DATA_HOME = resolveDataHome({ allowMem: false })
 const MANAGED_BIN_DIR = path.join(DATA_HOME, 'bin')
 const MANIFEST_PATH = path.join(MANAGED_BIN_DIR, '.manifest.json')
 const STAGING_DIR = path.join(DATA_HOME, 'bootstrap-staging')

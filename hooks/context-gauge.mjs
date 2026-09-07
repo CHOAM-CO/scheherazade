@@ -21,10 +21,11 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { resolveDataHome } from '../data-home.cjs' // one resolver: AGENT_DATA_HOME || MEM || ~/Documents/Scheherazade
 
 const TAIL_BYTES = 500 * 1024 // same tail budget as stop-reply-guard
 
-const MEM = process.env.AGENT_DATA_HOME || process.env.MEM || process.cwd()
+const MEM = resolveDataHome()
 const STATUS_PATH = path.join(MEM, 'context-status.json')
 
 function tailLines(filePath) {

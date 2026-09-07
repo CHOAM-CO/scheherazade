@@ -23,12 +23,12 @@
 
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import os from 'node:os'
+import { resolveDataHome } from '../data-home.cjs' // one resolver: AGENT_DATA_HOME || MEM || ~/Documents/Scheherazade
 
 // Kill switch (product-prefixed, mirrors SCHEHERAZADE_RUMINATION_GATE).
 if (process.env.SCHEHERAZADE_ACTIVITY_FEED === '0') process.exit(0)
 
-const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', 'Scheherazade')
+const DATA_HOME = resolveDataHome()
 
 try {
   // fd 0, not '/dev/stdin' — the Windows lesson (2026-08-04, six hooks did

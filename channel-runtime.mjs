@@ -21,6 +21,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
+import { resolveDataHome as resolveHome } from './data-home.cjs'
 
 // cadence/boot-announce.cjs is CommonJS on purpose (one decision module, two
 // callers — this file and onboarding/http-server.cjs, which cannot import ESM).
@@ -46,7 +47,10 @@ export function installStdoutHygiene() {
 // Resolved explicitly, never from process.cwd(): a differently-spawned
 // process must not silently write markers where no poller looks.
 export function resolveDataHome(agentName) {
-  return process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', agentName)
+  // Delegated to the one resolver (data-home.cjs, design-0023 P3) so the
+  // channel backends, the hooks, the supervisor and the memory DB can never
+  // disagree about where the agent lives. Same precedence, same default.
+  return resolveHome({ agentName })
 }
 
 // ── atomic JSON write (temp file + rename) ─────────────────────────────────

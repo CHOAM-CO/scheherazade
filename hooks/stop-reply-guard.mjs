@@ -17,8 +17,8 @@
 // on any internal error -- a buggy guard must never trap the agent.
 
 import fs from 'fs'
-import os from 'os'
 import path from 'path'
+import { resolveDataHome } from '../data-home.cjs' // one resolver: AGENT_DATA_HOME || MEM || ~/Documents/Scheherazade
 
 // Escalating scan windows (red-team 2026-08-05 item 5, "tail anchor"): a
 // single fixed tail (was 500KB/80 events) let one large tool output push
@@ -75,7 +75,7 @@ const SCAN_STEPS = [
 // by run.sh:49), and this hook runs inside that env -- so prefer it over
 // re-deriving the path. The literal fallback matches http-server.cjs's DATA_HOME
 // for the case where a hook is invoked outside a managed spawn.
-const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', 'Scheherazade')
+const DATA_HOME = resolveDataHome()
 const STRIKES_PATH = path.join(DATA_HOME, '.mute-strikes.json')
 const AGENT_CONFIG_PATH = path.join(DATA_HOME, '.agent-config')
 
