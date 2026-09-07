@@ -67,9 +67,13 @@ console.log('\n-- resolveOnPath: fake PATH + PATHEXT (win32 lane exercised from 
   })
   ok('posix resolves a bare name with no extension games', posix('claude') === POSIX_CLAUDE, String(posix('claude')))
   ok('posix miss -> null', posix('ollama') === null)
+  // Reads the SAME fixture set as the lookups above, so it has to ask with the
+  // same shape the set was built with -- a literal '/opt/bin/claude' is not in a
+  // path.join-built set on a Windows runner. (The 3eca41c fix rebuilt the set
+  // and missed this line, which is why it went red on Windows and nowhere else.)
   ok('an explicit path is checked as given, never PATH-walked',
-    resolveOnPath('/opt/bin/claude', { platform: 'linux', existsSync: (f) => posixFiles.has(f) }) === '/opt/bin/claude' &&
-    resolveOnPath('/opt/bin/nope', { platform: 'linux', existsSync: (f) => posixFiles.has(f) }) === null)
+    resolveOnPath(POSIX_CLAUDE, { platform: 'linux', existsSync: (f) => posixFiles.has(f) }) === POSIX_CLAUDE &&
+    resolveOnPath(path.join('/opt/bin', 'nope'), { platform: 'linux', existsSync: (f) => posixFiles.has(f) }) === null)
   ok('empty/undefined bin -> null', resolveOnPath('') === null && resolveOnPath(undefined) === null)
 }
 

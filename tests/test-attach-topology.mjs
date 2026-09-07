@@ -186,7 +186,18 @@ console.log('vendored portable tmux:')
   // Boot sync, functionally: scratch DATA_HOME, real vendor source.
   const { createHarnessRender } = require_(path.join(ROOT, 'onboarding', 'harness-render.cjs'))
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-tmuxsync-'))
-  const hr = createHarnessRender({
+  const { capabilities } = require_(path.join(ROOT, 'onboarding', 'platform.cjs'))
+  const mkHost = (platform) => capabilities({
+    platform,
+    arch: platform === 'darwin' ? 'arm64' : 'x64',
+    env: {},
+    home: platform === 'win32' ? 'C:\\Users\\t' : '/home/t',
+    dataHome: scratch,
+    existsSync: () => false,
+    accessSync: () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) },
+    hasTmux: () => false,
+  })
+  const mkRender = (host) => createHarnessRender({
     log: () => {},
     toUnpackedPath: (p) => p,
     readAgentConfig: () => ({}),
@@ -198,10 +209,23 @@ console.log('vendored portable tmux:')
     AGENT_CONFIG_PATH: path.join(scratch, '.agent-config'),
     ENV_PATH: path.join(scratch, '.env'),
     MCP_JSON_PATH: path.join(scratch, '.mcp.json'),
+    HOST: host,
   })
+  // The HOST is injected rather than inherited: syncTmuxPortable is gated on
+  // HOST.attachLane (design-0023 P4 -- the vendored tmux is a Mach-O and a
+  // useless copy of it on Windows or Linux would WIN the resolver's first
+  // probe over a real system tmux). Without injection this block asserted
+  // mac-only behaviour on every host and went red on the other two.
+  const hr = mkRender(mkHost('darwin'))
   const synced = hr.syncTmuxPortable()
   const dstBin = path.join(scratch, 'bin', 'tmux-portable', 'tmux')
   check('boot sync lands the tree in DATA_HOME/bin/tmux-portable', synced === true && fs.existsSync(dstBin))
+  // And the refusal, which is the actual P4 change and which nothing pinned.
+  for (const p of ['win32', 'linux']) {
+    const before = fs.existsSync(dstBin)
+    check(`${p}: no attach lane, so the Mach-O is NOT synced`,
+      mkRender(mkHost(p)).syncTmuxPortable() === false && fs.existsSync(dstBin) === before)
+  }
   // Executing the vendored tmux is darwin-only: it is a Mach-O, and the whole
   // attach lane it belongs to does not exist on Windows. The SYNC checks above
   // and below are plain file copies and stay on both platforms.

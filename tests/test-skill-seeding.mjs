@@ -55,6 +55,23 @@ try {
     check(/^description:\s*\S/m.test(m[1]), `${name}: frontmatter has a description`)
   }
 
+  // Every block below injects its own HOST. Leaving it to process.platform
+  // made the seeding blocks pass here and FAIL on Windows and Linux -- where
+  // the gate correctly withholds calendar/mail-briefing/reminders, so
+  // "every template seeds" stopped being true. The subject of those blocks is
+  // the WRITING (byte-identical copy, edits preserved, new templates arriving),
+  // not the gate, which has its own block further down; darwin is the host
+  // that withholds nothing, so it is the one that isolates the subject.
+  const caps = require(path.join(REPO_ROOT, 'onboarding', 'platform.cjs'))
+  const mkHost = (platform, arch) => caps.capabilities({
+    platform, arch, env: {},
+    home: platform === 'win32' ? 'C:\\Users\\t' : '/home/t',
+    dataHome: platform === 'win32' ? 'C:\\Users\\t\\Documents\\Scheherazade' : '/home/t/Documents/Scheherazade',
+    existsSync: () => false,
+    accessSync: () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) },
+    hasTmux: () => false,
+  })
+
   // --- fresh seed -------------------------------------------------------
   console.log('fresh seed')
   const configDir = path.join(tmpRoot, 'config')
@@ -62,6 +79,7 @@ try {
   const harness = createHarnessRender({
     log: () => {}, REPO_ROOT, CONFIG_DIR: configDir,
     DATA_HOME: path.join(tmpRoot, 'data'), AGENT_NAME: 'test',
+    HOST: mkHost('darwin', 'arm64'),
   })
   harness.seedSkillDefinitions()
   const seededDir = path.join(configDir, '.claude', 'skills')
@@ -93,6 +111,7 @@ try {
   const harness2 = createHarnessRender({
     log: () => {}, REPO_ROOT: fakeRepo, CONFIG_DIR: configDir,
     DATA_HOME: path.join(tmpRoot, 'data'), AGENT_NAME: 'test',
+    HOST: mkHost('darwin', 'arm64'),
   })
   harness2.seedSkillDefinitions()
   check(fs.readFileSync(editedPath, 'utf8') === 'USER EDIT — must survive\n',
@@ -107,15 +126,6 @@ try {
   // skillAllowed(): a derivation agrees with any bug in the table, and the
   // point of this block is the product decision, not the expression.
   console.log('capability gate: only what the host can run')
-  const caps = require(path.join(REPO_ROOT, 'onboarding', 'platform.cjs'))
-  const mkHost = (platform, arch) => caps.capabilities({
-    platform, arch, env: {},
-    home: platform === 'win32' ? 'C:\\Users\\t' : '/home/t',
-    dataHome: platform === 'win32' ? 'C:\\Users\\t\\Documents\\Scheherazade' : '/home/t/Documents/Scheherazade',
-    existsSync: () => false,
-    accessSync: () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) },
-    hasTmux: () => false,
-  })
   // Apple-app automation, unix find/mv, window capture -- one row each.
   const WITHHELD = {
     darwin: [],

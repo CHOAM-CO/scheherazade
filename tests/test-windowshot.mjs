@@ -304,7 +304,9 @@ console.log('6. capture: three implementations, one honest verdict')
     'under Wayland the same empty capture gets the Wayland explanation and no retry')
 
   const noOut = drive({ ...base, tools: ['wmctrl', 'import'], statSize: 50000, argv: ['shoot', '--app', 'discord'] })
-  assert(noOut.out.trim() === '/tmp/windowshot-STUB/windowshot_1700000000000_Discord.png',
+  // path.join is the runner's, so the expectation has to be built the same way
+  // -- a literal forward-slash path only matches when the runner is not Windows.
+  assert(noOut.out.trim() === path.join('/tmp/windowshot-STUB', 'windowshot_1700000000000_Discord.png'),
     `without --out the name is derived from the app (got ${noOut.out.trim()})`)
 }
 
