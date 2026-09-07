@@ -46,7 +46,7 @@ Eighteen hook commands across four lifecycle stages, wired in
 `onboarding/templates/claude-settings.local.json`). **Six of them can
 block.** This section used to say "three hooks, all advisory"; that was true
 of the original spec and stopped being true as hooks were added, which is the
-failure `scripts/test-hook-lifecycle-doc.mjs` now exists to prevent -- it
+failure `tests/test-hook-lifecycle-doc.mjs` now exists to prevent -- it
 fails when a registered hook is undocumented, when the stage disagrees, or
 when a hook's blocking status here disagrees with whether it can `exit(2)`.
 
@@ -193,7 +193,7 @@ topology); present but dead -> throw, so the backend's own retry path
 keeps the message instead of a silent black hole. `supervisor.mjs` (the
 node/Windows lane) spawns the same lane script with the same env
 contract, so the two lanes cannot drift apart argv-wise --
-`scripts/test-supervisor.mjs` pins the contract.
+`tests/test-supervisor.mjs` pins the contract.
 
 Backoff ladder: 5s / 10s / 20s / 40s / 120s (cap), resetting to the start
 of the ladder either when a run survives over 300s (healthy) or when the

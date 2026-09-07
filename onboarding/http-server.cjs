@@ -133,7 +133,7 @@ const AGENT_NAME = 'scheherazade'
 //
 // memory/service.mjs's DB_PATH resolves from this exact same fixed
 // directory now (not AGENT_NAME) -- see its DATA_HOME comment. Its
-// SCHEHERAZADE_MEMORY_DB env override (used by memory/smoke.mjs) still
+// SCHEHERAZADE_MEMORY_DB env override (used by tests/smoke.mjs) still
 // works unchanged.
 //
 // AGENT_DATA_HOME override: channel.mjs and run.sh (MEM=) have always
@@ -518,7 +518,7 @@ function ensureConfigDir() {
 // NOTE for source-text-pinned tests: the BASH_HOOK_PORT / DIET_REMOVED_HOOKS
 // migration regexes, the GAUGE_HOOK migration, and the attach-bootstrap.sh /
 // sudo-askpass.sh render lines now live in THAT file --
-// scripts/test-hooks-port.mjs, test-context-gauge.mjs, and
+// tests/test-hooks-port.mjs, test-context-gauge.mjs, and
 // test-attach-topology.mjs read its raw source.
 const harnessRender = require('./harness-render.cjs').createHarnessRender({
   log, toUnpackedPath, readAgentConfig, ensureConfigDir,
@@ -1430,7 +1430,7 @@ async function validateDiscordToken(token) {
 // to enumerate the candidates and let them pick. validateDiscordToken stays
 // verbatim for the onboarding path; this is a separate reader, not a rewrite.
 //
-// fetchImpl is injectable for tests (scripts/test-discord-reconnect.mjs
+// fetchImpl is injectable for tests (tests/test-discord-reconnect.mjs
 // drives every branch with fixture responses -- no live Discord API in CI).
 // Guild fan-out is capped; the cap is REPORTED (truncated flag), never
 // silent (no-silent-caps rule).
@@ -3297,7 +3297,7 @@ let ollamaUsageCache = null // { at, payload } -- last GOOD reading only
 // fetch. The chatgpt rows therefore stay a curated static catalog
 // (connectors.js), and the context caps stay hand-pinned (contextCapForModel
 // above). What keeps the hand-pin from rotting on the next bump is a live
-// drift guard, NOT a runtime scan: scripts/test-codex-proxy-model.mjs boots
+// drift guard, NOT a runtime scan: tests/test-codex-proxy-model.mjs boots
 // each catalog GPT model in-process and asserts the proxy's own /health
 // context_window still equals the pinned cap.)
 let ollamaCatalogCache = null // { at, names }
@@ -3576,7 +3576,7 @@ const API_ROUTES = [
 
 module.exports = {
   createOnboardingServer,
-  // Exported for scripts/test-agent-status-read.mjs (sleep/wake false-fail
+  // Exported for tests/test-agent-status-read.mjs (sleep/wake false-fail
   // fix, 2026-08-15): the READ side of liveness (marker freshness + timeout
   // backstop) finally gets its own unit test. Pure fs/Date logic, no
   // Electron dependency.
@@ -3612,25 +3612,25 @@ module.exports = {
   // readDiscordToken).
   readProviderKey,
   // Exported for main.cjs's pre-spawn gate and
-  // scripts/test-harness-refresh.mjs (pure, no Electron dependency): a
+  // tests/test-harness-refresh.mjs (pure, no Electron dependency): a
   // failed boot harness refresh must stop the spawn, not just print a line.
   // Kept here rather than in main.cjs because this file owns both
   // DATA_HOME and the render itself.
   readHarnessFailure: harnessRender.readHarnessFailure,
   HARNESS_FAILURE_PATH: harnessRender.HARNESS_FAILURE_PATH,
   refreshHarnessIfOnboarded: harnessRender.refreshHarnessIfOnboarded,
-  // Exported for scripts/test-identity-firewall.mjs (vector #2): the
+  // Exported for tests/test-identity-firewall.mjs (vector #2): the
   // settings.local.json seed + additive migration path, which boot runs via
   // startOnboardingServer rather than the harness refresh above.
   seedConfigFromTemplates: harnessRender.seedConfigFromTemplates,
-  // Exported for scripts/test-credential-store.mjs (pure, no Electron
+  // Exported for tests/test-credential-store.mjs (pure, no Electron
   // dependency): getElectron() requires 'electron' lazily precisely so
   // this file stays testable outside an Electron main process, so the
   // harness injects a safeStorage stub and drives the real code --
   // including the two refusal branches (encryption unavailable,
   // round-trip mismatch) that must never leave a key in plaintext.
   storeProviderKeyVerified,
-  // Exported for scripts/test-custom-provider-validate.mjs (pure, no
+  // Exported for tests/test-custom-provider-validate.mjs (pure, no
   // Electron dependency): the 'custom' branch returns before any network
   // call, so a plain-node harness can pin the ok:false-on-invalid-URL
   // contract without Electron or a live proxy.
@@ -3642,15 +3642,15 @@ module.exports = {
   isMarkerFresh,
   readLivenessMarker,
   computeAgentStatus,
-  // Exported for scripts/test-session-feed.mjs (pure function, no db): the
+  // Exported for tests/test-session-feed.mjs (pure function, no db): the
   // net-change collapse is attackable without spinning up Electron or a
   // memory db.
   collapseSessionEvents,
-  // Exported for scripts/test-discord-reconnect.mjs (fetchImpl-injectable):
+  // Exported for tests/test-discord-reconnect.mjs (fetchImpl-injectable):
   // every branch (3-check failures, truncation, channel filtering) runs
   // against fixtures, never the live Discord API.
   enumerateDiscordTargets,
-  // Exported for scripts/test-mcp-connector.mjs (pure functions, no spawn):
+  // Exported for tests/test-mcp-connector.mjs (pure functions, no spawn):
   // the list parser (against real captured output), the mandatory-query URL
   // regex, and the lane-capability gate.
   parseMcpConnectorList,
@@ -3673,9 +3673,9 @@ module.exports = {
   // Multichannel: backend resolution + per-backend credential readers for
   // main.cjs's spawn-time env injection (same seam as readDiscordToken
   // above), plus fetchImpl-injectable enumerators for
-  // scripts/test-channel-connect.mjs (pure, no Electron dependency).
+  // tests/test-channel-connect.mjs (pure, no Electron dependency).
   activeChannelBackend,
-  // Exported so scripts/test-packaging.mjs can DERIVE the list of channel
+  // Exported so tools/test-packaging.mjs can DERIVE the list of channel
   // backend scripts it must verify, instead of keeping its own copy. It kept
   // a hardcoded array of three until 2026-07-30 and a fourth backend shipped
   // unchecked by the very test that exists to catch an unpackaged channel

@@ -29,11 +29,11 @@ conventions live in its history — when in doubt, `git log` a similar change.
 ## Tests
 
 - Full regression before merging to master: **`npm test`**
-  (`scripts/run-tests.mjs`: every `scripts/test-*.{mjs,cjs}` plus
-  `memory/smoke.mjs`, one process each, per-file timeout, exit non-zero if
+  (`tools/run-tests.mjs`: every `tests/test-*.{mjs,cjs}` plus
+  `tests/smoke.mjs`, one process each, per-file timeout, exit non-zero if
   anything failed). Flags: `--live`, `--filter <substr>`, `--list`,
   `--timeout <s>`; per-test logs land in `release/test-logs/` (gitignored).
-  The old line here -- `node scripts/test-*.mjs` -- ran ONE file and passed
+  The old line here -- `node tests/test-*.mjs` -- ran ONE file and passed
   the other 84 paths to it as argv.
 - `npm test -- --live` adds the three lanes that need this machine's real
   state: `test-calendar` (the real Calendar, TCC), `test-attach-topology`
@@ -47,7 +47,7 @@ conventions live in its history — when in doubt, `git log` a similar change.
   counts both and lists them under the summary. If you add a skip, say what
   is missing and why the assertions could not hold here.
 - Anything touching agent lifecycle, tmux, or spawn paths must keep
-  `scripts/test-attach-topology.mjs` green. The one-line invariant it
+  `tests/test-attach-topology.mjs` green. The one-line invariant it
   protects: **the app must NEVER cause a tmux server to exist**
   (docs/design-0016-attach-topology.md §Invariant — read that doc first,
   it is the architecture's heart).

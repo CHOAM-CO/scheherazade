@@ -7,7 +7,7 @@
 // .agent-config fresh, read+parse schedules.json, call this function, inject
 // the due prompts on the SAME rail the autonomy cycle uses, write back
 // lastRunISO). This file owns the rule: what is due, what is not, and why --
-// and scripts/test-schedule-tick.mjs calls THIS function, not a copy of it.
+// and tests/test-schedule-tick.mjs calls THIS function, not a copy of it.
 //
 // Before this feature, every background behavior (autonomy cycle, note
 // cadence, routines) was its own hardcoded setInterval with its own bespoke

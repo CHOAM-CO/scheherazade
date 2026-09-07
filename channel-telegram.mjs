@@ -134,7 +134,7 @@ async function downloadImageToTmp(url, mime) {
 // Every call goes through `telegramApi()`, which takes an injectable
 // `requestFn` (default: the real https implementation below). This is the
 // same test-seam shape as channel.mjs's resolveOutboundChannel(opts.fetchFn)
-// -- scripts/test-telegram-channel.mjs swaps requestFn to attack getUpdates/
+// -- tests/test-telegram-channel.mjs swaps requestFn to attack getUpdates/
 // sendMessage/getChat/getMe logic with canned responses, no live network
 // anywhere in that file.
 const TELEGRAM_API_HOST = 'api.telegram.org'
@@ -428,7 +428,7 @@ function chunkText(text, size = 4000) {
   return chunks
 }
 
-// Extracted from the "reply" tool branch so scripts/test-telegram-channel.mjs
+// Extracted from the "reply" tool branch so tests/test-telegram-channel.mjs
 // can drive the real chunk/send/log path with an injected sendFn instead of
 // hitting live Telegram -- same DI shape as resolveOutboundChannel(opts).
 async function handleReplyCall({ channelId, text }, opts = {}) {
@@ -574,7 +574,7 @@ async function resolveTelegramFileUrl(fileId, opts = {}) {
 
 // Pure builder: raw Telegram message -> the exact {content, meta} shape
 // mcp.notification() sends on. Split out from handleUpdate() so
-// scripts/test-telegram-channel.mjs can assert the injected tag-format
+// tests/test-telegram-channel.mjs can assert the injected tag-format
 // payload without a live MCP transport or network call.
 function buildInboundMessage(message, localPaths = []) {
   let content = message.text || message.caption || ''
@@ -710,7 +710,7 @@ const muteAnnouncer = createMuteStrikeAnnouncer({
 // ── boot ─────────────────────────────────────────────────────────────────
 // Does NOT itself call process.exit() -- boot() does, after checking the
 // return value. Keeping the exit call out of this function is what makes it
-// testable: scripts/test-telegram-channel.mjs injects a rejecting requestFn
+// testable: tests/test-telegram-channel.mjs injects a rejecting requestFn
 // and asserts (return === false) + (failure marker written with
 // code 'telegram_token_bad'), with no subprocess and no live network.
 async function verifyTokenOrFail(opts = {}) {

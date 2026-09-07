@@ -17,7 +17,7 @@
 // TWO SURFACES, deliberately:
 //   1. Legacy (db, args) implementations — moved VERBATIM from server.mjs
 //      (their provenance comments kept). initDb() still opens a FRESH
-//      connection per call: scripts/test-journal-e2e.cjs opens one, writes
+//      connection per call: tests/test-journal-e2e.cjs opens one, writes
 //      fixtures, closes it, and only then boots the HTTP server — a shared
 //      singleton behind initDb() would hand the server a closed handle.
 //   2. The singleton-backed public API (write/query/confirm/remove/...) —
@@ -49,13 +49,13 @@ import * as entityIndex from './entity-index.mjs'
 // DATA_HOME: fixed, product-keyed data directory -- matches
 // onboarding/http-server.cjs's DATA_HOME exactly (PO correction,
 // 2026-07-03): the DB path must NOT be keyed on AGENT_NAME. AGENT_NAME can
-// legitimately vary per launch context (env override, memory/smoke.mjs sets
+// legitimately vary per launch context (env override, tests/smoke.mjs sets
 // it to 'smoketest') but the on-disk database location must never move just
 // because that string changes -- a rename in the onboarding wizard's
 // Settings page only ever edits a DISPLAY_NAME value, and even AGENT_NAME
 // drifting would otherwise silently orphan memory.db (total memory loss).
 // Only SCHEHERAZADE_MEMORY_DB -- an explicit, deliberate override -- may
-// redirect DB_PATH; that's exactly what memory/smoke.mjs still uses to
+// redirect DB_PATH; that's exactly what tests/smoke.mjs still uses to
 // point at a disposable temp db. Read ONCE, at import time — callers that
 // override it (smoke, tests) must set the env var BEFORE importing.
 // 0.2.9 unification: canonical home -- see onboarding/http-server.cjs DATA_HOME.
@@ -152,7 +152,7 @@ CREATE TABLE IF NOT EXISTS memory_events (
 --
 -- The topic column is the closest thing to content, and it is deliberately only a
 -- markdown heading (the file's table of contents, never its body — asserted in
--- scripts/test-pointer-scan.mjs). The agent that wants to know what a pointed-at
+-- tests/test-pointer-scan.mjs). The agent that wants to know what a pointed-at
 -- file SAYS has to open it, with a visible tool call, in front of the user.
 --
 -- CRITICALLY: this table is absent from WRITABLE_TABLES below, so memory_write
@@ -762,9 +762,9 @@ function memoryRecallMaterial(db, args) {
 // ── DB init ────────────────────────────────────────────────────────────
 // Opens a FRESH connection every call — deliberately NOT the singleton
 // below. This is the legacy contract every existing consumer relies on:
-// scripts/test-journal-e2e.cjs opens one, writes fixtures, CLOSES it, then
+// tests/test-journal-e2e.cjs opens one, writes fixtures, CLOSES it, then
 // boots the HTTP server (which must get a live connection of its own);
-// memory/smoke.mjs closes its connection at teardown. Folding this into the
+// tests/smoke.mjs closes its connection at teardown. Folding this into the
 // singleton would hand later callers a closed handle.
 // Owner-only, applied on EVERY open, not just on create (2026-08-04).
 //
@@ -859,7 +859,7 @@ function initDb() {
 // public API below exports the historical names journalWrite/journalRead with
 // the (args)-only signature; memory/server.mjs re-exports THESE under the
 // historical (db, args) names for the legacy test surface
-// (scripts/test-journal.mjs, scripts/test-journal-e2e.cjs).
+// (tests/test-journal.mjs, tests/test-journal-e2e.cjs).
 const MAX_JOURNAL_APPEND_CHARS = 20000
 const MAX_JOURNAL_DAY_CHARS = 200000
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -951,7 +951,7 @@ function journalWriteImpl(db, args) {
 
   // Zero-model-call entity index refresh (2026-08-16): FULL rebuild, not
   // incremental — measured at 21-30ms on a 790-row seeded corpus and
-  // 111-146ms on an extreme 3860-row corpus (scripts/test-entity-index.mjs
+  // 111-146ms on an extreme 3860-row corpus (tests/test-entity-index.mjs
   // and the ad hoc bench both under this cap), comfortably under the 200ms
   // budget for any corpus size this app's own BLOAT_THRESHOLDS would ever
   // let a user reach before nagging them to clean up. A full rebuild also

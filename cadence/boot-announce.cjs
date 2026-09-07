@@ -11,7 +11,7 @@
 // consume-on-read boot-event marker: the marker prevents double-announce
 // within one leaf's life; the throttle remembers "I announced recently"
 // ACROSS restarts. channel.mjs owns the IO (marker read/unlink, ts file,
-// sends); this file owns the rule; scripts/test-boot-announce.mjs calls it.
+// sends); this file owns the rule; tests/test-boot-announce.mjs calls it.
 
 const DEFAULT_MAX_AGE_MIN = 10 // marker older than this = leftover from a dead spawn
 const DEFAULT_THROTTLE_MIN = 15 // min gap between announces (Melchior rec 10~15, conservative end)

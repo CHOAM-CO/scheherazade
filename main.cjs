@@ -1173,7 +1173,7 @@ async function spawnRealAgentChildLocked() {
   // PROVIDERS values (claude, claude-subscription, chatgpt, ollama) now
   // route through buildProviderEnv() (provider-env.cjs) -- a pure,
   // Electron-free function so it can be unit-tested standalone (see
-  // scripts/test-provider-env.mjs). This function stays a flat if/else on
+  // tests/test-provider-env.mjs). This function stays a flat if/else on
   // buildProviderEnv()'s return shape; see provider-env.cjs's own doc
   // comment on `buildProviderEnv` for the full contract (env fields to
   // spread over the base env, and the 3 error.kind values below).

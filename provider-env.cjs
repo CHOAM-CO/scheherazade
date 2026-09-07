@@ -9,7 +9,7 @@
 // running Electron main process -- there is no way to unit-test main.cjs's
 // own code by requiring it directly. This file has zero Electron
 // dependency (readProviderKey is INJECTED via `deps`, never required
-// directly here), so scripts/test-provider-env.mjs can require it standalone
+// directly here), so tests/test-provider-env.mjs can require it standalone
 // and assert against every branch with a fake readProviderKey.
 //
 // Ground truth this mirrors (MAGI's OWN proven-live fleet wiring,

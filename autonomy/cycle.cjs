@@ -101,7 +101,7 @@ function anchorFor(st, now, forDayKey = null) {
   // The unit tests could not see this. They mocked the meter and reset the state
   // between cases, so every night they tested was the first night. It took
   // running two nights in a row against a real state file on disk.
-  // (scripts/test-autonomy-night.mjs, 2026-07-13.)
+  // (tests/test-autonomy-night.mjs, 2026-07-13.)
   if (forDayKey && st.cycleDay !== forDayKey) return { ok: true, ms: null }
   const ms = Date.parse(st.cycleStartedAt || '')
   if (!Number.isFinite(ms)) {

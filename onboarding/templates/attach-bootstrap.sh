@@ -57,7 +57,7 @@ if [ ! -f "$CONFIG" ]; then
 fi
 
 # Already bootstrapped? (has-session never spawns a server -- live-verified,
-# see scripts/test-attach-topology.mjs negative control). stderr is kept:
+# see tests/test-attach-topology.mjs negative control). stderr is kept:
 # after an app update the NEW client may meet a server still running the OLD
 # binary, and tmux refuses with "protocol version mismatch" -- which without
 # this branch would read as "no session" and drive new-session into the same

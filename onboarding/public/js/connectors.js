@@ -1188,7 +1188,7 @@
   // paired with. Pulled out as a PURE function on purpose: this predicate got
   // it wrong twice (once warning on the wrong comparison, once phrasing the
   // wrong key), and both times nothing could catch it because browser JS has
-  // no test harness here. scripts/test-custom-key-host.mjs extracts this
+  // no test harness here. tests/test-custom-key-host.mjs extracts this
   // function by name from this file's source and executes it -- so renaming it
   // breaks that test loudly, which is the intended trade.
   //

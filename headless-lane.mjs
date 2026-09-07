@@ -32,7 +32,7 @@
 // The injected message format is the <channel …> tag the interactive
 // dev-channels lane rendered. The LOAD-BEARING part of that contract is
 // stop-reply-guard.mjs's parser: `<channel … channelId="…">body</channel>`
-// (hooks/stop-reply-guard.mjs:135). scripts/test-headless-lane.mjs pins the
+// (hooks/stop-reply-guard.mjs:135). tests/test-headless-lane.mjs pins the
 // rendered shape against that exact regex.
 
 import { spawn } from 'node:child_process'

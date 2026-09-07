@@ -796,7 +796,7 @@ export async function startLocalChatSurface({ notify, log: slog = log } = {}) {
 
 // ── boot ──────────────────────────────────────────────────────────────────
 // Same "am I the entry point" guard as the other backends, for the same
-// reason: scripts/test-local-channel.mjs imports this file to exercise its
+// reason: tests/test-local-channel.mjs imports this file to exercise its
 // exported functions without connecting real stdio or binding a port.
 const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])
 

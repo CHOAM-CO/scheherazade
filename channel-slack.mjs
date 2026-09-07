@@ -315,7 +315,7 @@ function chunkText(text, size = REPLY_CHUNK_SIZE) {
 }
 
 // opts.postMessage / opts.fetchFn / opts.lastId / opts.homeId are test seams
-// (scripts/test-slack-channel.mjs) -- production call sites pass only the
+// (tests/test-slack-channel.mjs) -- production call sites pass only the
 // tool args and get live module state + the real WebClient.
 async function sendReply({ channelId, text, thread_ts: threadTs }, opts = {}) {
   const post = opts.postMessage || ((args) => slackWeb.chat.postMessage(args))
@@ -866,7 +866,7 @@ async function validateAppToken(opts = {}) {
 
 // ── boot ─────────────────────────────────────────────────────────────────
 // Same "am I the entry point" guard as channel.mjs, for the same reason:
-// scripts/test-slack-channel.mjs imports this file to exercise its exported
+// tests/test-slack-channel.mjs imports this file to exercise its exported
 // functions without connecting real stdio/Socket Mode transport.
 const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])
 

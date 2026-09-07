@@ -224,7 +224,7 @@ let lastActivityMs = Date.now()
 
 // Outbound target resolution (channel-runtime): resolve() returns
 // {target, note} where target is a Discord channel object. The ladder,
-// fail-closed semantics, and opts test seams (scripts/test-outbound-channel
+// fail-closed semantics, and opts test seams (tests/test-outbound-channel
 // .mjs) live in createOutboundResolver -- see channel-runtime.mjs.
 const GUIDANCE =
   'Do not invent channel ids -- omit channelId to target the current conversation, then call the tool again.'
@@ -623,7 +623,7 @@ async function writeAutonomyState(state) {
 
 function startAutonomyWatcher() {
   // The decision, the wording, the consent gate and the write ORDER all live in
-  // autonomy/tick.cjs, and scripts/test-autonomy-night.mjs calls that same
+  // autonomy/tick.cjs, and tests/test-autonomy-night.mjs calls that same
   // function. It used to live here, and the test carried its own copy of it --
   // which meant the test could go green against its copy while this drifted.
   // A copy of a rule is not the rule. What is left here is only the IO.
@@ -856,9 +856,9 @@ discord.on(Events.MessageCreate, async (message) => {
 // ── boot ─────────────────────────────────────────────────────────────────
 // Guarded behind an "am I the entry point" check (agent-lifecycle fix,
 // 2026-07-03) so this file can be `import`-ed by a test harness (see
-// scripts/test-liveness-marker.mjs) to exercise writeLivenessMarker()
+// tests/test-liveness-marker.mjs) to exercise writeLivenessMarker()
 // without also connecting real stdio/MCP transport or attempting a real
-// Discord login -- mirrors memory/smoke.mjs's existing convention of
+// Discord login -- mirrors tests/smoke.mjs's existing convention of
 // setting env vars before importing a script that has module-scope side
 // effects. When run directly (`node channel.mjs`, or as spawned by the
 // claude CLI per .mcp.json), this still boots exactly as before.

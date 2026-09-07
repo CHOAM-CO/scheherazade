@@ -54,7 +54,7 @@ function clip(v) {
 // DATA_HOME / DB_PATH resolution mirrors memory/server.mjs exactly, so this
 // hook always reads the SAME database the running memory MCP server writes
 // to. SCHEHERAZADE_MEMORY_DB is the one deliberate override point (also used
-// by memory/smoke.mjs against a disposable temp db).
+// by tests/smoke.mjs against a disposable temp db).
 const DATA_HOME = process.env.AGENT_DATA_HOME || path.join(os.homedir(), 'Documents', 'Scheherazade')
 const DB_PATH = process.env.SCHEHERAZADE_MEMORY_DB || path.join(DATA_HOME, 'memory.db')
 

@@ -15,7 +15,7 @@
 //   - every command here goes through tmuxIpc(), whose allowlist contains
 //     ONLY verbs that error out when no server is running (live-verified
 //     2026-07-16: `has-session`/`list-panes` on a dead socket exit 1 and
-//     leave no server/socket behind; see scripts/test-attach-topology.mjs).
+//     leave no server/socket behind; see tests/test-attach-topology.mjs).
 //   - `new-session` is BANNED app-side even though it would usually attach
 //     to the live server: in the server-just-died race it would START one,
 //     app-descended. Restart uses `respawn-pane` (cannot create a server,

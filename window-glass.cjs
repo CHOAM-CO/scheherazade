@@ -1,6 +1,6 @@
 // window-glass.cjs — BrowserWindow backdrop options for the frosted-glass
 // look. Lives outside main.cjs so plain node can require it (main.cjs pulls
-// in electron at import time); scripts/test-window-glass.mjs asserts the
+// in electron at import time); tests/test-window-glass.mjs asserts the
 // platform matrix below.
 //
 // History (대공사 2026-08-05, FIXED same day after Mino's "유리질감 렌더

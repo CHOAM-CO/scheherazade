@@ -87,7 +87,7 @@
 //
 // Codex's equivalent is a closed union the compiler enforces. We have no
 // compiler, so the enforcement is: this list, plus a test
-// (scripts/test-agent-status-codes.mjs) that reads every code literal out of
+// (tests/test-agent-status-codes.mjs) that reads every code literal out of
 // the source and every row out of copy.js and demands the three agree.
 //
 // Adding a code means: add it here, add a copy.js row, and the test passes.

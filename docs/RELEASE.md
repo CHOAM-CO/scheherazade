@@ -11,7 +11,7 @@ every installed Windows copy's update check — so it gets a checked-in runbook.
 - [ ] `onboarding/templates/user-changes.md` gained a `## <version>` section
       (one or two user-facing Korean lines — the agent briefs these in-chat
       after the update lands; a missing section briefs as a bare version bump).
-- [ ] Full suite green: `npm test` (`scripts/run-tests.mjs` — 86 programs,
+- [ ] Full suite green: `npm test` (`tools/run-tests.mjs` — 86 programs,
       exits non-zero if anything FAILed; per-test logs in `release/test-logs/`).
       The loop that used to live on this line echoed "FAIL <file>" and then
       exited 0, so a red suite read as a green one.
@@ -31,7 +31,7 @@ every installed Windows copy's update check — so it gets a checked-in runbook.
 npm run dist          # electron-builder --mac dmg --publish never
 ```
 
-- pre/postdist run `scripts/test-packaging.mjs`; postdist must be green now.
+- pre/postdist run `tools/test-packaging.mjs`; postdist must be green now.
 - Artifact: `release/Scheherazade-<version>-arm64.dmg`.
 
 ## 2. Build — Windows (magi-win over ssh)

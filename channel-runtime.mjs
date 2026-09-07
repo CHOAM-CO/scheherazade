@@ -5,7 +5,7 @@
 // contract, the DATA_HOME marker files, and the outbound-target ladder — none
 // of which belongs to Discord, Slack, or Telegram. Backends keep only
 // transport behavior: client/login, fetch-target and send implementations,
-// message normalization, event wiring. scripts/test-channel-runtime.mjs is
+// message normalization, event wiring. tests/test-channel-runtime.mjs is
 // the tripwire that keeps it that way.
 //
 // resolveDataHome() MUST stay formula-identical to run.sh's MEM resolution
@@ -568,7 +568,7 @@ export function routineInjectContent(r) {
 // Inspired by Gemini Spark's Tasks/Schedules split.
 //
 // Rule lives in cadence/schedule-tick.cjs (pure, tested by
-// scripts/test-schedule-tick.mjs); THIS is only the IO, shared by every
+// tests/test-schedule-tick.mjs); THIS is only the IO, shared by every
 // backend the same way startRoutineTicker is -- so a backend that forgets
 // to call it is missing a wiring line, not missing an implementation.
 //

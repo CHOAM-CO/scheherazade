@@ -13,7 +13,7 @@
  *   3. maps each tool call onto one service function (no db threading —
  *      the service owns its own singleton connection),
  *   4. re-exports the service's legacy (db, args) surface unchanged, so
- *      memory/smoke.mjs and scripts/test-*.mjs keep their import path and
+ *      tests/smoke.mjs and tests/test-*.mjs keep their import path and
  *      call signature (they predate the split and pin the module surface).
  *
  * Tools: memory_write, memory_query, memory_confirm, memory_delete,
@@ -264,7 +264,7 @@ if (isMain) {
 }
 
 // ── Legacy surface (pre-split import path + call signature, unchanged) ───
-// memory/smoke.mjs and scripts/test-{journal,journal-e2e,pointer-table}.*
+// tests/smoke.mjs and tests/test-{journal,journal-e2e,pointer-table}.*
 // import these names FROM THIS FILE and call the table operations with the
 // historical (db, args) signature. They are pass-throughs to service.mjs;
 // journalWrite/journalRead map onto the Impl pair because the service

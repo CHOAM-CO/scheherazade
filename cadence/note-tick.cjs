@@ -14,7 +14,7 @@
 // notice a session note going stale.
 //
 // channel.mjs owns the IO (fs.stat, config read, mcp.notification); this
-// file owns the rule, and scripts/test-note-cadence.mjs calls THIS function.
+// file owns the rule, and tests/test-note-cadence.mjs calls THIS function.
 // Same split as autonomy/tick.cjs, for the same reason: a copy of a rule
 // is not the rule.
 

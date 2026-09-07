@@ -18,7 +18,7 @@ const { spawn } = require('node:child_process')
 const agentIdentity = require('../agent-identity.cjs')
 
 // ── clean uninstall plan (v0.0.35, Task: 클린테스트 in-app) ────────────────
-// Exported separately so scripts/test-uninstall-plan.mjs can attack the plan
+// Exported separately so tests/test-uninstall-plan.mjs can attack the plan
 // without an Electron process: WHAT gets deleted is the security-sensitive
 // part, and it must be pinned as data, not read out of a shell string.
 //

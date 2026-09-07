@@ -11,7 +11,7 @@
 # this manifest could never be DM'd. read_only stays false (input allowed).
 # Nothing was removed or reordered. Everything else is verbatim.
 # Canonical copy: the fenced yaml block in SKILL.md must stay byte-identical
-# to this file below the marker — scripts/test-slack-manifest.mjs enforces it.
+# to this file below the marker — tests/test-slack-manifest.mjs enforces it.
 # --- manifest ---
 display_information:
   name: Scheherazade
