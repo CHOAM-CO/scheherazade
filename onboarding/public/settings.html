@@ -114,9 +114,12 @@
         </div>
 
         <!-- Permission checklist (P0, 2026-07-15 — docs/permission-visibility-
-             design.md). Shows the macOS wall map BEFORE the agent hits walls
-             mid-task. Rows render from /api/permissions/status; probes that
-             cannot measure say so (❓) instead of pretending ✅/❌. -->
+             design.md). Shows this host's wall map BEFORE the agent hits the
+             walls mid-task. Rows render from /api/permissions/status; probes
+             that cannot measure say so instead of pretending granted/denied.
+             design-0023 P4: which rows exist is per-platform (macOS TCC +
+             sudo + SIP; Linux sudo + keyring; Windows nothing), and the whole
+             block is gated on the server's permissionsPanel capability. -->
         <div class="category" id="set-perms">
           <div class="category-label" id="set-perms-label"></div>
           <p class="subtitle" id="set-perms-note"></p>

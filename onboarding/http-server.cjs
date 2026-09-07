@@ -115,7 +115,40 @@ let askpassToken = null
 // Electron safeStorage, so it cannot read the ollama key itself) can ask
 // THIS process for a vision stand-in caption -- the key never leaves here.
 let captionToken = null
-const permissionProbes = require('./permission-probes.cjs')
+// Permission probes, bound to THIS host (design-0023 P4). The route bodies in
+// routes/permissions.cjs are deliberately platform-blind -- they call
+// probeAll/probeAutomation and serve DEEP_LINKS -- so the platform selection
+// happens once, here, where HOST already is. Three bindings:
+//   platform     the probe TABLE row to run (darwin/win32/linux). Without it
+//                probeAll falls back to process.platform, which is the same
+//                answer in production but not in a test that injects a host.
+//   safeStorage  the Linux keyring probe's OFFICIAL tier. Electron is
+//                required lazily by getElectron() and this file must stay
+//                loadable outside it (tools/dev-serve-ui.mjs), so the handle
+//                is fetched per call and a failure degrades to the probe's
+//                gdbus heuristic tier rather than throwing into a 500.
+//   DEEP_LINKS   the host's row, not the darwin constant: a Linux status
+//                payload must not carry x-apple.systempreferences: URLs, and
+//                POST /api/permissions/open must 400 for a class this host
+//                has no pane for -- which off macOS is every class.
+const permissionProbesModule = require('./permission-probes.cjs')
+function hostElectronProbeDeps() {
+  try {
+    const { safeStorage } = getElectron()
+    return { safeStorage }
+  } catch {
+    // No Electron (dev server, tests): the probes have honest non-Electron
+    // tiers and an absent dep is 'indeterminate', never a fabricated reading.
+    return {}
+  }
+}
+const permissionProbes = {
+  ...permissionProbesModule,
+  DEEP_LINKS: permissionProbesModule.deepLinksFor(HOST.id),
+  probeAll: (deps) => permissionProbesModule.probeAll({ platform: HOST.id, ...hostElectronProbeDeps(), ...deps }),
+  probeAutomation: (target, deps) => permissionProbesModule.probeAutomation(target, { platform: HOST.id, ...deps }),
+  probeSudoVerified: (deps) => permissionProbesModule.probeSudoVerified({ platform: HOST.id, ...deps }),
+}
 // Fresh-Mac dependency bootstrap (2026-07-07): app-managed download/install
 // of the codex/ollama CLIs into DATA_HOME/bin + sha256 manifest. See
 // bootstrap.cjs's header for the full design (brew-free, 0 admin prompts).

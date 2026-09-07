@@ -1337,10 +1337,24 @@ window.COPY = {
     // pane (SIP/sudo) never grow an open button -- offering a toggle that
     // cannot fix the problem is the misroute this feature exists to kill.
     permsLabel: 'Permission status',
-    permsNote:
-      'What macOS currently allows. Granting always happens in System Settings — this page only checks and points.',
+    // design-0023 P4: this panel is no longer mac-only. permission-probes.cjs
+    // carries a real Linux row (sudo, and the keyring safeStorage encrypts
+    // against), so the note cannot tell a Linux user what "macOS currently
+    // allows". Selected per platform, same rule as PLATFORM_WORDS above — a
+    // row is chosen, never fallen into, and an unknown host gets the linux
+    // row because it is the one that names no OS. The win32 row is written
+    // for completeness; that platform's probe list is empty, so the panel
+    // itself never renders there.
+    permsNote: ({
+      darwin: 'What macOS currently allows. Granting always happens in System Settings — this page only checks and points.',
+      win32: 'What this PC currently allows. This page only checks — it never changes a setting for you.',
+      linux: 'What this computer currently allows. This page only checks — the fixes are outside the app.',
+    })[window.HOST_PLATFORM] || 'What this computer currently allows. This page only checks — the fixes are outside the app.',
     permsLoading: 'Checking…',
     permsLoadFailed: "Couldn't check permission status",
+    // Shown instead of an empty box. A blank panel reads as "everything is
+    // fine", which is the one lie this feature exists to kill.
+    permsNone: 'Nothing to check on this computer.',
     permsGranted: 'Granted',
     permsDenied: 'Denied',
     permsIndeterminate: "Can't determine",
@@ -1349,6 +1363,12 @@ window.COPY = {
     permsVerifiedMark: 'verified just now',
     permsOpenButton: 'Open Settings',
     permsProbeButton: 'Check',
+    // One label per probe class the SERVER can send. A row whose class is
+    // missing here is skipped by the renderer (nothing honest to call it),
+    // so this table and permission-probes.cjs's PROBE_TABLE have to stay in
+    // step -- tests/test-permission-probes.mjs pins that they do. Classes
+    // from a platform other than this one are harmless: the server sends
+    // only its own platform's rows.
     permsClassNames: {
       fda: 'Full Disk Access',
       screen: 'Screen Recording',
@@ -1356,12 +1376,16 @@ window.COPY = {
       automation: 'Automation (control other apps)',
       sudo: 'Admin commands (sudo)',
       sip: 'System Integrity Protection (SIP)',
+      keyring: 'Password store (keyring)',
     },
     permsClassNotes: {
       screen: 'Needed for 같이보기 — the agent taking a screenshot of one of your app windows when you ask it to look.',
       automation: 'Clicking Check may prompt a macOS permission dialog',
       sudo: 'Granted (stored key) means the admin password saved during setup arms sudo -A through the app. Check actually runs sudo with it — the one honest test of the stored password.',
       sip: 'A fixed system condition, unrelated to app permissions. Not something you change in Settings.',
+      // Linux only. Deliberately says what breaks rather than naming a fix
+      // this app cannot perform: starting a keyring is desktop-session work.
+      keyring: 'Where API keys and tokens are encrypted. Denied means no keyring service is running (gnome-keyring, kwallet), so the app will refuse to store new keys rather than write them unprotected.',
     },
     permsRelaunchNote: 'If you changed a permission in Settings, some changes need an app restart to show up here',
     permsRelaunchButton: 'Restart App',

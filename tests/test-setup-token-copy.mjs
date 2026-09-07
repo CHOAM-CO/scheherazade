@@ -370,9 +370,14 @@ console.log('\ncopy.js renders on all three platforms')
 {
   const APPLE_WORDS = /\b(Mac|Macs|macOS|Keychain|keychain|Homebrew|Trash|Finder|Apple)\b/
   const MAC_GATED = new Set([
-    'step0.fda.bodyMissing',        // wizard.js FDA card -- permissionsPanel only
+    'step0.fda.bodyMissing',        // wizard.js FDA card -- permissionsPanel === 'tcc' only
     'settings.topologyBootstrapWhy', // connectors.js topology card -- attachTopology only
-    'settings.permsNote',            // settings.js permissions panel -- permissionsPanel only
+    // settings.permsNote came OFF this list in design-0023 P4: the permissions
+    // panel is no longer mac-only (Linux probes sudo + the keyring), so the
+    // note is a per-platform row and has to pass the Apple-words check like
+    // any other string. permsClassNotes.automation stays -- automation is a
+    // darwin-only row in permission-probes.cjs, so that note only ever
+    // renders on a Mac.
     'settings.permsClassNotes.automation',
   ])
   const WINDOWS_WORDS = /\b(PowerShell|Windows|PC)\b/

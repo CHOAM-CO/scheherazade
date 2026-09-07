@@ -363,13 +363,15 @@
 
     // Engine cards (model/effort, custom proxy, topology) moved to the
     // Engine page (tab merge 2026-08-06) -- see connectors.js.
-    // macOS-only surface, hidden rather than rendered empty on Windows
-    // (the owner, first win install 2026-08-03): every permissions row is a
-    // TCC/macOS wall, and the buttons open x-apple.systempreferences:
-    // URLs that do nothing off macOS.
+    // Hidden rather than rendered empty where there is nothing to check (the
+    // owner, first win install 2026-08-03): every row used to be a TCC/macOS
+    // wall whose buttons opened x-apple.systempreferences: URLs that do
+    // nothing off macOS.
     // design-0023 P4: the SERVER's permissionsPanel capability, not the
-    // page's own read of the platform id. Same answer today; one gate style
-    // for every conditional surface, and false when the capability is unknown.
+    // page's own read of the platform id — and it is no longer a synonym for
+    // "is this a Mac". It is derived from permission-probes.cjs's per-platform
+    // probe list, so Linux (sudo + keyring) shows the panel and Windows (an
+    // explicitly empty list) does not. Unknown capability = false.
     if (window.can('permissionsPanel')) {
       renderPermissions().catch((err) => console.error(err))
     } else {
@@ -441,13 +443,28 @@
   // docs/permission-visibility-design.md. Render rules mirror the autonomy
   // meter's honesty contract: 'indeterminate' is its own visible state
   // ("확인 불가"), never coerced into granted/denied; heuristic rows carry a
-  // "추정" mark; SIP/sudo rows never grow an open-settings button. The
-  // automation row is synthesized client-side as indeterminate-until-probed:
-  // its probe SENDS an Apple event (may pop the consent dialog), so it only
-  // ever runs from its own [확인] button, never from the status load.
+  // "추정" mark; rows with no Settings pane never grow an open-settings button.
+  //
+  // design-0023 P4: WHICH rows exist is now entirely the server's answer.
+  // This renderer used to synthesize an automation row client-side on every
+  // host and decide the [확인] buttons from a hardcoded class list -- both of
+  // which assumed macOS, on a page that also renders on Linux now. The server
+  // sends its platform's rows and each row names its own explicit-probe lane.
   const PERMS_POLL_MS = 3000
   const PERMS_POLL_MAX = 20
   let permsPollTimer = null
+
+  // The explicit-trigger lanes, keyed by the token a row carries in
+  // `explicit`. A registry rather than a URL off the wire: the row decides
+  // WHETHER a check is offered, this table decides WHERE it posts, so a row
+  // can never aim the page at an arbitrary endpoint. Both lanes are
+  // user-click-only by server contract -- automation SENDS an Apple event
+  // (may pop the consent dialog), sudo RUNS `sudo -k -A true` with the
+  // stored password (a wrong one writes a PAM failure to the system log).
+  const EXPLICIT_PROBE_ROUTES = {
+    automation: '/api/permissions/probe-automation',
+    sudo: '/api/permissions/probe-sudo',
+  }
 
   // No emoji (product register, copy.js header) -- state is words + the
   // existing status-line success/failure colors; indeterminate stays the
@@ -473,13 +490,11 @@
   function renderPermRows(rows, deepLinks) {
     const box = $('set-perms-rows')
     box.innerHTML = ''
-    // Server rows are the prompt-free set; automation joins client-side.
-    const all = rows.slice()
-    if (!all.some((r) => r.class === 'automation')) {
-      all.push({ class: 'automation', granted: 'indeterminate', kind: 'heuristic' })
-    }
+    const all = Array.isArray(rows) ? rows : []
+    let shown = 0
     for (const r of all) {
       if (!C.permsClassNames[r.class]) continue // unknown probe row: nothing honest to label it with
+      shown += 1
       const rowEl = document.createElement('div')
       rowEl.className = 'agent-control-row'
       const label = document.createElement('label')
@@ -515,15 +530,13 @@
         right.appendChild(btn)
       }
 
-      // Explicit-trigger probes: automation SENDS an Apple event, sudo RUNS
-      // `sudo -k -A true` with the stored password. Both are user-click-only
-      // by server contract; sudo's button renders only when there is a
-      // stored key to verify (kind 'stored'/'verified') — offering a Check
-      // that can only fail is the misroute rule again.
-      const explicitProbe =
-        r.class === 'automation' ? '/api/permissions/probe-automation'
-        : r.class === 'sudo' && (r.kind === 'stored' || r.kind === 'verified') ? '/api/permissions/probe-sudo'
-        : null
+      // Explicit-trigger probes. The row carries WHICH lane can deepen it
+      // (`explicit`), decided server-side against the platform's probe table
+      // and against the row itself — sudo's Check appears only when there is
+      // a stored key to verify, because offering a Check that can only fail
+      // is the misroute rule again. The page no longer knows any of that; it
+      // looks the token up in the route registry and renders a button or not.
+      const explicitProbe = r.explicit ? EXPLICIT_PROBE_ROUTES[r.explicit] : null
       if (explicitProbe) {
         const btn = document.createElement('button')
         btn.textContent = C.permsProbeButton
@@ -564,6 +577,12 @@
         box.appendChild(note)
       }
     }
+    // Nothing rendered is a legitimate answer for a platform (Windows probes
+    // nothing on purpose) and it must SAY so — including when rows arrived
+    // but every one of them was skipped for want of a label. A silently blank
+    // panel is indistinguishable from "everything is granted", which is the
+    // one reading this feature exists to prevent.
+    if (shown === 0) box.textContent = C.permsNone
   }
 
   function showRelaunchBanner() {

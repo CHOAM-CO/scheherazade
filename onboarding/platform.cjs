@@ -259,11 +259,20 @@ function capabilities({
     inAppUninstall: isMac ? 'bundle-trash' : isWin ? 'nsis' : 'script',
 
     // ── OS surfaces ────────────────────────────────────────────────────
-    // The permissions checklist is macOS TCC end to end (FDA, Screen
-    // Recording, Accessibility, Automation, SIP). Windows and Linux have no
-    // equivalent wall map, so the panel is hidden rather than filled with
-    // 'indeterminate' rows nobody can act on.
-    permissionsPanel: isMac,
+    // Does this host have a permissions checklist, and of which kind? NOT a
+    // boolean and NOT hand-maintained: permission-probes.cjs owns one probe
+    // list per platform and this is derived from it, so a platform whose list
+    // is empty hides the panel automatically and one that grows a row cannot
+    // leave a stale `false` here. 'tcc' = macOS (FDA, Screen Recording,
+    // Accessibility, Automation, SIP + sudo; System Settings deep links, and
+    // the wizard's Full Disk Access card keys off this exact value). 'posix'
+    // = Linux (sudo + the Secret Service keyring safeStorage needs; no deep
+    // links, the fixes are outside the app). false = Windows, whose probe row
+    // is an explicit empty list with its reasons written down — there is no
+    // TCC analogue, no sudo lane, and DPAPI has no daemon to be missing.
+    // Required inline (not at the top of the file) so this stays a one-field
+    // change: the module has no side effects and require() is cached.
+    permissionsPanel: require('./permission-probes.cjs').panelModeFor(platform),
     // Does this platform have an attach lane AT ALL? Only mac: the vendored
     // Mach-O tmux ships via build.mac.extraResources and the bootstrap is a
     // bash script whose TCC-attribution reasoning is macOS-specific. This is

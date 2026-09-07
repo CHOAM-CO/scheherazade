@@ -56,7 +56,12 @@ const MATRIX = {
   managedInstall:         [true,             false,            false,       false],
   claudeCliInstall:       ['curl-bash',      'curl-bash',      false,       'curl-bash'],
   inAppUninstall:         ['bundle-trash',   'bundle-trash',   'nsis',      'script'],
-  permissionsPanel:       [true,             true,             false,       false],
+  // A MODE, not a boolean, and derived from permission-probes.cjs's
+  // per-platform probe list rather than hand-kept here: 'tcc' where the walls
+  // are macOS TCC, 'posix' where they are sudo + the desktop keyring, false
+  // where the probe list is deliberately empty. tests/test-permission-probes.mjs
+  // pins this column against that list from the other side.
+  permissionsPanel:       ['tcc',            'tcc',            false,       'posix'],
   attachLane:             [true,             true,             false,       false],
   attachTopology:         [true,             true,             false,       false],
   sudo:                   [true,             true,             false,       true],
@@ -266,7 +271,12 @@ console.log('11. the page gates on named capabilities, not on "is this a Mac?"')
 
   // Every conditional surface, and what it is gated on now.
   const GATES = [
-    ['wizard.js', "window.can('permissionsPanel')", 'the Full Disk Access card'],
+    // The FDA card gates on the VALUE, not the truthiness: Linux has a
+    // permissions panel now (sudo + keyring) and no TCC in it, so
+    // `can('permissionsPanel')` would put a Full Disk Access card on a
+    // machine with no such concept -- the 2026-08-03 Windows bug, one
+    // platform over.
+    ['wizard.js', "window.HOST_CAPS.permissionsPanel === 'tcc'", 'the Full Disk Access card'],
     ['settings.js', "window.can('permissionsPanel')", 'the permissions panel'],
     ['settings.js', "window.can('sudo')", 'the sudo card (it had NO gate at all -- Windows stored an admin password nothing could use)'],
     ['settings.js', "window.can('inAppUninstall')", 'the danger zone (it had no gate; the route answered 501 on two platforms)'],
