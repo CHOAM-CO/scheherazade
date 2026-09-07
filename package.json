@@ -7,6 +7,7 @@
   "engines": {
     "node": ">=24.0.0"
   },
+  "packageManager": "npm@11.19.0",
   "main": "main.cjs",
   "scripts": {
     "test": "node scripts/run-tests.mjs",
