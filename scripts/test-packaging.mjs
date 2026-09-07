@@ -287,7 +287,7 @@ function stagedWinAsarEntries() {
 }
 
 // Platform dispatch: the build runs ON its target platform (dist:win is hard-
-// gated by scripts/assert-win32.mjs), so process.platform picks the lane.
+// gated by scripts/assert-platform.mjs), so process.platform picks the lane.
 const WIN_LANE = process.platform === 'win32'
 console.log(`\n-- the required graph vs the shipped asar (${WIN_LANE ? 'staged win-unpacked' : 'mounted DMG'}; blocker-1 closure gate)`)
 // predist runs BEFORE the build -- there is no fresh artifact to verify yet, so
@@ -433,7 +433,7 @@ if (WIN_LANE) {
 }
 if (WIN_LANE) {
   // The mac rows above are what stands between us and "installs fine, dies at
-  // first PTY spawn" -- assert-win32.mjs exists for that exact class. Leaving
+  // first PTY spawn" -- assert-platform.mjs exists for that exact class. Leaving
   // the win lane with only an n/a would have left that hole open one layer
   // down: a green dist:win proving nothing about the natives it shipped.
   // Different natives, same question (conpty replaces spawn-helper; no exec

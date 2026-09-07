@@ -158,6 +158,12 @@ IS_WIN gates) stays the isolation mechanism — no physical code extraction
   scripts/assert-win32.mjs: asarUnpack ships the local node_modules verbatim,
   so a mac cross-build would package darwin natives (node-pty) into the win
   installer — install-fine, die-at-first-PTY-spawn class.
+  > **Amended 2026-09-07 (0.3 P2)**: `scripts/assert-win32.mjs` is gone,
+  > replaced by `scripts/assert-platform.mjs <mac|win|linux>` — same gate,
+  > three targets, and it checks ARCH too. The reason generalised the hard way:
+  > the published v0.2.20 "x86_64" AppImage was built on the arm64 Mac (aarch64
+  > ELF, darwin koffi/sharp/ripgrep inside) because only the win lane had an
+  > assert. `dist`/`dist:mac`, `dist:win` and the new `dist:linux` all run it.
 - **win closure gate**: postdist:win verifies `release/win-unpacked/resources/
   app.asar` (staged by the same electron-builder run; NSIS extraction would
   need 7z). Version illusion killed harder than the mac name-check: the gate

@@ -12,14 +12,19 @@
     "test": "node scripts/run-tests.mjs",
     "start": "node channel.mjs",
     "electron:dev": "electron .",
-    "dist": "electron-builder --mac dmg --publish never",
-    "dist:mac": "npm run dist",
-    "dist:win": "node scripts/assert-win32.mjs && electron-builder --win nsis --publish never",
+    "dist": "node scripts/assert-platform.mjs mac && electron-builder --mac dmg --publish never",
+    "dist:mac": "node scripts/assert-platform.mjs mac && electron-builder --mac dmg --publish never",
+    "dist:win": "node scripts/assert-platform.mjs win && electron-builder --win nsis --publish never",
+    "dist:linux": "node scripts/assert-platform.mjs linux && electron-builder --linux AppImage --x64 --publish never",
     "postinstall": "node scripts/fix-pty-helper.mjs",
     "predist": "node scripts/test-packaging.mjs",
     "postdist": "node scripts/test-packaging.mjs",
+    "predist:mac": "node scripts/test-packaging.mjs",
+    "postdist:mac": "node scripts/test-packaging.mjs",
     "predist:win": "node scripts/test-packaging.mjs",
-    "postdist:win": "node scripts/test-packaging.mjs"
+    "postdist:win": "node scripts/test-packaging.mjs",
+    "predist:linux": "node scripts/test-packaging.mjs",
+    "postdist:linux": "node scripts/test-packaging.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-code": "^2.1.199",
