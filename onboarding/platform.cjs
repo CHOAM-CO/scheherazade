@@ -264,6 +264,14 @@ function capabilities({
     // equivalent wall map, so the panel is hidden rather than filled with
     // 'indeterminate' rows nobody can act on.
     permissionsPanel: isMac,
+    // Does this platform have an attach lane AT ALL? Only mac: the vendored
+    // Mach-O tmux ships via build.mac.extraResources and the bootstrap is a
+    // bash script whose TCC-attribution reasoning is macOS-specific. This is
+    // the flag the harness ARTIFACT decision uses (render attach-bootstrap.sh
+    // or not) -- deliberately NOT the probe below, because renderHarnessFiles
+    // runs BEFORE syncTmuxPortable on every boot, so a probe here would skip
+    // the file for the whole of a fresh install's first session.
+    attachLane: isMac,
     // `sudo` exists on mac and Linux; Windows elevation is UAC and the
     // askpass helper is a bash script. Storing an "admin password" on
     // Windows stored a secret nothing could ever consume.
@@ -324,7 +332,7 @@ function capabilities({
   // and hide the topology card on the one platform that has it.
   Object.defineProperty(table, 'attachTopology', {
     enumerable: true,
-    get: () => isMac && tmuxProbe(),
+    get: () => table.attachLane && tmuxProbe(),
   })
 
   // Derived, so no caller re-derives it differently.

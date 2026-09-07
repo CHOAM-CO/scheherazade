@@ -56,6 +56,11 @@ function createHarnessRender(ctx) {
     REPO_ROOT, AGENT_NAME, DATA_HOME, CONFIG_DIR,
     AGENT_CONFIG_PATH, ENV_PATH, MCP_JSON_PATH,
   } = ctx
+  // The host capability table (design-0023 P4). Injectable so a test can
+  // render the Windows or Linux harness from a Mac -- which is the only way
+  // "no bash helpers on Windows" is ever actually verified, since nothing in
+  // this repo's suite runs on a Windows box on the way to a release.
+  const HOST = ctx.HOST || require('./platform.cjs').host()
 
   // Read-only TEMPLATES checked into the repo (and therefore inside app.asar
   // once packaged -- see package.json's build.files, which now explicitly
@@ -784,10 +789,21 @@ function createHarnessRender(ctx) {
     // CLAUDE.md in the agent's own directory, and is trigger-loaded from the
     // system prompt rather than inlined, so it costs nothing per turn.
     renderHarness(path.join('onboarding', 'templates', 'SCHEHERAZADE_MANUAL.md'), 'SCHEHERAZADE_MANUAL.md')
-    renderHarness(path.join('onboarding', 'templates', 'attach-bootstrap.sh'), 'attach-bootstrap.sh')
+    // design-0023 P4: both helpers below are bash, and both used to be
+    // written on EVERY platform. On Windows that meant two shell scripts the
+    // machine cannot execute, chmod'd 0700 by a call that is a no-op there --
+    // and the agent (and hooks/session-start.mjs) read file PRESENCE as
+    // capability, so an inert file is a false yes. Gated on the capability
+    // that makes each one runnable: the attach lane exists only on mac
+    // (vendored tmux + TCC attribution), and `sudo` only where sudo does.
+    if (HOST.attachLane) {
+      renderHarness(path.join('onboarding', 'templates', 'attach-bootstrap.sh'), 'attach-bootstrap.sh')
+    }
     // sudo askpass helper (0.1.0 prep): must be executable -- sudo -A execs it.
     // Content carries no secret (it fetches at run time); 0700 anyway.
-    renderHarness(path.join('onboarding', 'templates', 'sudo-askpass.sh'), 'sudo-askpass.sh', 0o700)
+    if (HOST.sudo) {
+      renderHarness(path.join('onboarding', 'templates', 'sudo-askpass.sh'), 'sudo-askpass.sh', 0o700)
+    }
 
     // Identity firewall + update self-awareness (2026-08-15, design doc:
     // docs/design-identity-firewall-and-selfops.md). Both are COURTESY
@@ -983,7 +999,41 @@ function createHarnessRender(ctx) {
   // old inode), and the swap is staged+renamed so a crash mid-copy never
   // leaves a half tree at the final path. Fail-loud non-fatal: attach is an
   // optional lane; a failed sync must not block the spawn-lane boot.
+  // ── one launcher writer (design-0023 P4) ────────────────────────────────
+  // syncChromuxPortable and syncAgentTools each carried their own copy of
+  // "write a .cmd AND a sh wrapper", unconditionally, on every platform. So
+  // every mac install got two dead .cmd files and every Windows install got
+  // two sh wrappers it cannot execute plus a chmod that is a no-op there --
+  // and the agent reads wrapper PRESENCE as "this tool is available".
+  // One writer, the platform's own form only. `extraArgs` are baked BEFORE
+  // the user's argv in both shapes (the .cmd copy used to append them after
+  // %*, so the two wrappers disagreed about argument order); a leading-dash
+  // element is a flag and stays bare, anything else is a value and is quoted.
+  function writeLauncher(binDir, name, entry, extraArgs = []) {
+    fs.mkdirSync(binDir, { recursive: true })
+    const baked = extraArgs.map((a) => (/^-/.test(String(a)) ? ` ${a}` : ` "${a}"`)).join('')
+    if (HOST.isWin) {
+      // CRLF: cmd.exe chokes on bare-LF labels and continuations.
+      const cmdPath = path.join(binDir, `${name}.cmd`)
+      fs.writeFileSync(cmdPath, `@echo off\r\nnode "${entry}"${baked} %*\r\n`)
+      return cmdPath
+    }
+    const shPath = path.join(binDir, name)
+    fs.writeFileSync(shPath, `#!/bin/sh\nexec node "${entry}"${baked} "$@"\n`)
+    fs.chmodSync(shPath, 0o755)
+    return shPath
+  }
+
   function syncTmuxPortable() {
+    // design-0023 P4: the vendored tmux is a Mach-O binary shipped through
+    // build.mac.extraResources, so on a PACKAGED win/linux build the source
+    // tree is simply absent and this returned false quietly. In a DEV
+    // checkout it happily copied a Mach-O into DATA_HOME/bin on Windows and
+    // Linux, where nothing can run it -- and attach-topology.cjs's resolver
+    // probes exactly that path first, so the useless copy would win over a
+    // real system tmux. The platform that has the lane is the platform that
+    // gets the binary.
+    if (!HOST.attachLane) return false
     try {
       const candidates = [
         path.join(REPO_ROOT, '..', 'tmux-portable'), // packaged: Resources/ sibling of app.asar
@@ -1051,11 +1101,7 @@ function createHarnessRender(ctx) {
       // already a harness-wide assumption -- every hook runs as `node
       // hooks/*.mjs` (run.sh's own comment).
       const entry = path.join(dst, 'chromux.mjs')
-      const binDir = path.join(DATA_HOME, 'bin')
-      fs.writeFileSync(path.join(binDir, 'chromux.cmd'), `@echo off\r\nnode "${entry}" %*\r\n`)
-      const shPath = path.join(binDir, 'chromux')
-      fs.writeFileSync(shPath, `#!/bin/sh\nexec node "${entry}" "$@"\n`)
-      fs.chmodSync(shPath, 0o755)
+      writeLauncher(path.join(DATA_HOME, 'bin'), 'chromux', entry)
       // Seed chromux's bundled skills (SKILL.md + topics/ — multi-file, so
       // the shipped file list is walked recursively). Same overwrite-if-
       // pristine tri-state as seedSkillDefinitions: pristine-but-stale files
@@ -1108,12 +1154,8 @@ function createHarnessRender(ctx) {
       fs.cpSync(src, tmp, { recursive: true })
       fs.rmSync(dst, { recursive: true, force: true })
       fs.renameSync(tmp, dst)
-      const binDir = path.join(DATA_HOME, 'bin')
       const entry = path.join(dst, 'windowshot.cjs')
-      fs.writeFileSync(path.join(binDir, 'windowshot.cmd'), `@echo off\r\nnode "${entry}" %* --data-home "${DATA_HOME}"\r\n`)
-      const shPath = path.join(binDir, 'windowshot')
-      fs.writeFileSync(shPath, `#!/bin/sh\nexec node "${entry}" --data-home "${DATA_HOME}" "$@"\n`)
-      fs.chmodSync(shPath, 0o755)
+      writeLauncher(path.join(DATA_HOME, 'bin'), 'windowshot', entry, ['--data-home', DATA_HOME])
       return true
     } catch (err) {
       console.error('[scheherazade/onboarding] agent-tools sync failed (windowshot skill may miss its CLI):', err.message)
@@ -1186,6 +1228,10 @@ function createHarnessRender(ctx) {
   return {
     seedConfigFromTemplates,
     seedSkillDefinitions,
+    // Exported for tests/test-agent-tools-sync.mjs + test-chromux-sync.mjs:
+    // the per-platform wrapper shape is only assertable by driving the writer
+    // with an injected HOST.
+    writeLauncher,
     ensureClaudeOnboardingDone,
     refreshHarnessIfOnboarded,
     renderAgentSubstrate,

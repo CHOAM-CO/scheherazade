@@ -57,6 +57,7 @@ const MATRIX = {
   claudeCliInstall:       ['curl-bash',      'curl-bash',      false,       'curl-bash'],
   inAppUninstall:         ['bundle-trash',   'bundle-trash',   'nsis',      'script'],
   permissionsPanel:       [true,             true,             false,       false],
+  attachLane:             [true,             true,             false,       false],
   attachTopology:         [true,             true,             false,       false],
   sudo:                   [true,             true,             false,       true],
   windowMaterial:         ['vibrancy',       'vibrancy',       'acrylic',   'none'],
@@ -89,6 +90,8 @@ assert(Object.keys(MATRIX).length >= 16, 'the matrix covers the whole product su
 console.log('2. attachTopology is a PROBE, not a constant (mac ships tmux; nobody else does)')
 assert(mk('darwin', 'arm64', { hasTmux: () => false }).attachTopology === false,
   'a Mac with no tmux anywhere reports attachTopology false -- the vendored copy is what makes it true')
+assert(mk('darwin', 'arm64', { hasTmux: () => false }).attachLane === true,
+  '...but attachLane stays true: the PLATFORM has the lane even in the moment before the vendored tmux is synced, which is when the harness render runs')
 assert(mk('linux', 'x64', { hasTmux: () => true }).attachTopology === false,
   'a Linux box WITH a system tmux still gets false: no vendored binary ships there and the lane is unverified (locked scope)')
 

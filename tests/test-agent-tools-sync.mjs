@@ -49,18 +49,24 @@ try {
   check(!fs.existsSync(`${dst}.tmp`), 'no stray .tmp dir left behind')
 
   console.log('wrappers')
+  // design-0023 P4: one wrapper, the platform's own (see test-chromux-sync
+  // for the writer driven across all three platforms from any host).
   const cmdPath = path.join(dataHome, 'bin', 'windowshot.cmd')
   const shPath = path.join(dataHome, 'bin', 'windowshot')
-  check(fs.existsSync(cmdPath), 'windowshot.cmd exists')
-  const cmdText = fs.readFileSync(cmdPath, 'utf8')
-  check(cmdText.includes(entry), 'windowshot.cmd points at the synced entry')
-  check(cmdText.includes('\r\n'), 'windowshot.cmd uses CRLF')
-  check(cmdText.includes(`--data-home "${dataHome}"`), 'windowshot.cmd bakes --data-home')
-  check(fs.existsSync(shPath), 'windowshot sh wrapper exists')
-  const shText = fs.readFileSync(shPath, 'utf8')
-  check(shText.includes(entry), 'sh wrapper points at the synced entry')
-  check(shText.includes(`--data-home "${dataHome}"`), 'sh wrapper bakes --data-home')
-  check((fs.statSync(shPath).mode & 0o111) !== 0, 'sh wrapper is executable')
+  const nativePath = process.platform === 'win32' ? cmdPath : shPath
+  const foreignPath = process.platform === 'win32' ? shPath : cmdPath
+  check(fs.existsSync(nativePath), "the platform's own wrapper exists")
+  check(!fs.existsSync(foreignPath), "the other platform's wrapper is NOT written")
+  const nativeText = fs.readFileSync(nativePath, 'utf8')
+  check(nativeText.includes(entry), 'the wrapper points at the synced entry')
+  check(nativeText.includes(`--data-home "${dataHome}"`), 'the wrapper bakes --data-home')
+  if (process.platform === 'win32') {
+    check(nativeText.includes('\r\n'), 'windowshot.cmd uses CRLF')
+  } else {
+    // The exec bit is meaningless on Windows (test-chromux-sync guarded this
+    // check; this file did not, and would have been red on a Windows run).
+    check((fs.statSync(shPath).mode & 0o111) !== 0, 'sh wrapper is executable')
+  }
 
   console.log('every-boot refresh')
   fs.writeFileSync(entry, '// user-local mutation that must NOT survive\n')

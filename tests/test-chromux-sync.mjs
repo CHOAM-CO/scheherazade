@@ -52,17 +52,41 @@ try {
 
   // --- wrappers ---------------------------------------------------------
   console.log('wrappers')
+  // design-0023 P4: ONE wrapper is written, the platform's own. A mac install
+  // used to get a dead .cmd and a Windows install a sh wrapper it cannot
+  // execute -- and the agent reads wrapper presence as tool availability.
   const cmdPath = path.join(dataHome, 'bin', 'chromux.cmd')
   const shPath = path.join(dataHome, 'bin', 'chromux')
-  check(fs.existsSync(cmdPath), 'chromux.cmd exists')
-  const cmdText = fs.readFileSync(cmdPath, 'utf8')
-  check(cmdText.includes(path.join(dst, 'chromux.mjs')), 'chromux.cmd points at the synced entry')
-  check(cmdText.includes('\r\n'), 'chromux.cmd uses CRLF (cmd.exe chokes on bare LF labels/continuations)')
-  check(fs.existsSync(shPath) && fs.statSync(shPath).isFile(), 'sh wrapper exists')
-  const shText = fs.readFileSync(shPath, 'utf8')
-  check(shText.startsWith('#!/bin/sh') && shText.includes(path.join(dst, 'chromux.mjs')), 'sh wrapper execs the synced entry')
+  const nativePath = process.platform === 'win32' ? cmdPath : shPath
+  const foreignPath = process.platform === 'win32' ? shPath : cmdPath
+  check(fs.existsSync(nativePath) && fs.statSync(nativePath).isFile(), 'the platform\'s own wrapper exists')
+  check(!fs.existsSync(foreignPath), 'the other platform\'s wrapper is NOT written')
+  const nativeText = fs.readFileSync(nativePath, 'utf8')
+  check(nativeText.includes(path.join(dst, 'chromux.mjs')), 'the wrapper points at the synced entry')
   if (process.platform !== 'win32') {
+    check(nativeText.startsWith('#!/bin/sh'), 'sh wrapper execs through /bin/sh')
     check((fs.statSync(shPath).mode & 0o111) !== 0, 'sh wrapper is executable')
+  } else {
+    check(nativeText.includes('\r\n'), 'chromux.cmd uses CRLF (cmd.exe chokes on bare LF labels/continuations)')
+  }
+  // Both shapes, from any host: the writer takes the capability table.
+  {
+    const caps = require(path.join(REPO_ROOT, 'onboarding', 'platform.cjs'))
+    const probe = path.join(dataHome, 'launcher-probe')
+    for (const platform of ['win32', 'linux']) {
+      const hr = createHarnessRender({
+        log: () => {}, REPO_ROOT, CONFIG_DIR: configDir, DATA_HOME: dataHome, AGENT_NAME: 'test',
+        HOST: caps.capabilities({ platform, arch: 'x64', env: {}, home: '/h', dataHome: '/h/d', existsSync: () => false, hasTmux: () => false }),
+      })
+      const written = hr.writeLauncher(probe, 'x', '/e/x.mjs', ['--data-home', '/d h'])
+      check(written.endsWith(platform === 'win32' ? 'x.cmd' : 'x'), `${platform}: writes ${platform === 'win32' ? 'a .cmd' : 'an extension-less sh wrapper'}`)
+      const t = fs.readFileSync(written, 'utf8')
+      check(t.includes('--data-home "/d h"'), `${platform}: baked args keep a bare flag and a quoted value`)
+      check(t.includes(platform === 'win32' ? '%*' : '"$@"'), `${platform}: the user's argv is forwarded in that shell's spelling`)
+      check(t.indexOf('--data-home') < t.indexOf(platform === 'win32' ? '%*' : '"$@"'),
+        `${platform}: baked args come BEFORE the user's argv (the two old copies disagreed)`)
+      fs.rmSync(written, { force: true })
+    }
   }
 
   // --- bundled skills ---------------------------------------------------
@@ -82,7 +106,7 @@ try {
   harness.syncChromuxPortable()
   check(fs.existsSync(sentinel), 'version-match short-circuit: synced dir not re-copied')
   check(fs.readFileSync(editedSkill, 'utf8') === 'user edited', 'user-edited skill survives re-run')
-  check(fs.existsSync(cmdPath), 'wrappers still present after re-run')
+  check(fs.existsSync(nativePath), "the platform's wrapper is still present after re-run")
 
   // --- missing vendor ---------------------------------------------------
   console.log('missing vendor')
