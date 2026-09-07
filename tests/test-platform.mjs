@@ -244,5 +244,35 @@ console.log('10. adoption: the spawn seam has exactly one owner, and no require 
   assert(/require\('\.\/platform\.cjs'\)/.test(daemon), '...it asks the capability table instead')
 }
 
+console.log('11. the page gates on named capabilities, not on "is this a Mac?"')
+{
+  const fs = await import('node:fs')
+  const read = (f) => fs.readFileSync(path.join(ROOT, 'onboarding', 'public', 'js', f), 'utf8')
+  const copy = read('copy.js')
+  assert(/window\.can = function can\(flag\)/.test(copy), 'copy.js defines the one gate reader')
+  assert(/window\.HOST_CAPS\[flag\] === true/.test(copy),
+    'an unknown capability is FALSE (the old IS_MAC gates defaulted to mac when the meta was missing)')
+  assert(/meta\[name="host-capabilities"\]/.test(copy), 'the capabilities come from the server, not from the platform id')
+
+  // Every conditional surface, and what it is gated on now.
+  const GATES = [
+    ['wizard.js', "window.can('permissionsPanel')", 'the Full Disk Access card'],
+    ['settings.js', "window.can('permissionsPanel')", 'the permissions panel'],
+    ['settings.js', "window.can('sudo')", 'the sudo card (it had NO gate at all -- Windows stored an admin password nothing could use)'],
+    ['settings.js', "window.can('inAppUninstall')", 'the danger zone (it had no gate; the route answered 501 on two platforms)'],
+    ['connectors.js', "window.can('attachTopology')", 'the attach-topology card'],
+  ]
+  for (const [file, gate, what] of GATES) {
+    assert(read(file).includes(gate), `${file}: ${what} is gated on ${gate}`)
+  }
+  // And no page decides a SURFACE from the platform id any more. IS_MAC still
+  // exists for word choice (copy.js's own table reads it), so this checks the
+  // three page scripts that used to gate rendering on it.
+  for (const file of ['wizard.js', 'settings.js', 'connectors.js', 'memory.js']) {
+    assert(!/window\.IS_MAC/.test(read(file)),
+      `${file}: no window.IS_MAC left -- capability gates and copy.js's word table replaced every use`)
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

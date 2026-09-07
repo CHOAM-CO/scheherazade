@@ -93,7 +93,10 @@
     // a button that opens an x-apple.systempreferences: URL -- i.e. nothing --
     // under a heading about "your Mac". the owner hit this on the first Windows
     // install (2026-08-03). No card at all is the honest state there.
-    if (window.IS_MAC) renderFdaCard()
+    // design-0023 P4: the gate is the SERVER's permissionsPanel capability
+    // rather than the page's own guess from the platform id. Same answer,
+    // reached the same way as every other gate, and false when unknown.
+    if (window.can('permissionsPanel')) renderFdaCard()
   }
 
   // ── Full Disk Access card (Step 0, 2026-07-07) ──────────────────────────

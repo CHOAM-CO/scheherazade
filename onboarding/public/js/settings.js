@@ -285,6 +285,18 @@
     }
 
     // ── danger zone: clean uninstall (v0.0.35) ─────────────────────────
+    // design-0023 P4: gated on the SERVER's inAppUninstall capability. The
+    // card used to render unconditionally against a route that answered 501
+    // on two platforms of three, so the button's only effect off macOS was an
+    // error toast. There are three plans now, so the gate passes everywhere --
+    // but it is a gate, so a platform that loses the capability loses the
+    // button instead of keeping a broken one.
+    const dangerCard = document.getElementById('set-danger')
+    if (!window.can('inAppUninstall')) {
+      if (dangerCard) dangerCard.classList.add('hidden')
+      const dangerHeading = document.getElementById('set-group-danger')
+      if (dangerHeading) dangerHeading.classList.add('hidden')
+    }
     $('set-group-danger').textContent = C.groupDanger || 'Danger zone'
     $('set-danger-label').textContent = C.dangerLabel
     $('set-danger-note').textContent = C.dangerNote
@@ -355,13 +367,26 @@
     // (the owner, first win install 2026-08-03): every permissions row is a
     // TCC/macOS wall, and the buttons open x-apple.systempreferences:
     // URLs that do nothing off macOS.
-    if (window.IS_MAC) {
+    // design-0023 P4: the SERVER's permissionsPanel capability, not the
+    // page's own read of the platform id. Same answer today; one gate style
+    // for every conditional surface, and false when the capability is unknown.
+    if (window.can('permissionsPanel')) {
       renderPermissions().catch((err) => console.error(err))
     } else {
       const el = document.getElementById('set-perms')
       if (el) el.classList.add('hidden')
     }
-    renderSudo().catch((err) => console.error(err))
+    // The sudo card was the one conditional surface with NO gate at all: on
+    // Windows it collected an "admin password", stored it in DPAPI, and
+    // nothing could ever consume it -- `sudo -A` and the askpass helper are
+    // both POSIX. Storing a secret a platform cannot use is worse than not
+    // offering the feature (read-C G7).
+    if (window.can('sudo')) {
+      renderSudo().catch((err) => console.error(err))
+    } else {
+      const el = document.getElementById('set-sudo')
+      if (el) el.classList.add('hidden')
+    }
   }
 
   // ── sudo askpass (0.1.0 prep, P4) ────────────────────────────────────────

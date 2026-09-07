@@ -55,6 +55,14 @@ window.HOST_CAPS = (function () {
   try { return JSON.parse(meta.getAttribute('content') || '{}') || {} } catch { return {} }
 })()
 
+// One reader for every capability gate on every page. Named so a grep for
+// `can(` finds all of them at once, and so an UNKNOWN capability is false --
+// the old `window.IS_MAC` gates defaulted the other way round on a page whose
+// meta was missing, which is how a Windows user got a Full Disk Access card.
+window.can = function can(flag) {
+  return window.HOST_CAPS[flag] === true || (typeof window.HOST_CAPS[flag] === 'string' && window.HOST_CAPS[flag] !== '')
+}
+
 // ── the three-way word table ──────────────────────────────────────────────
 // Before P4 there were two arms and an else: `IS_MAC ? 'this Mac' : 'this
 // computer'`, `IS_WIN ? 'PowerShell' : 'Terminal'`. Linux was never named, it

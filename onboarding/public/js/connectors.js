@@ -1637,7 +1637,12 @@
     renderAgentConfig(cfg)
     renderCustomProvider(cfg).catch((err) => console.error(err))
     renderDoctor().catch((err) => console.error(err))
-    if (window.IS_MAC) {
+    // design-0023 P4: attachTopology is the server's capability, and it is a
+    // PROBE (mac AND a tmux this machine can actually run) rather than the
+    // page's own `IS_MAC` guess. The card's entire content is a tmux attach
+    // command; offering it where no tmux exists is the same class of lie as
+    // the x-apple deep links on Windows.
+    if (window.can('attachTopology')) {
       renderTopology().catch((err) => console.error(err))
     } else {
       const el = document.getElementById('set-topology')

@@ -264,10 +264,6 @@ function capabilities({
     // equivalent wall map, so the panel is hidden rather than filled with
     // 'indeterminate' rows nobody can act on.
     permissionsPanel: isMac,
-    // The attach lane needs a tmux. Only mac ships one (vendored Mach-O via
-    // build.mac.extraResources); elsewhere it is true only if the host has
-    // its own -- which is why this row is a PROBE, not a constant.
-    attachTopology: isMac && tmuxProbe(),
     // `sudo` exists on mac and Linux; Windows elevation is UAC and the
     // askpass helper is a bash script. Storing an "admin password" on
     // Windows stored a secret nothing could ever consume.
@@ -319,6 +315,17 @@ function capabilities({
     // ── seeded skills ──────────────────────────────────────────────────
     SKILL_REQUIREMENTS,
   }
+
+  // The attach lane needs a tmux, so this row is a PROBE, not a constant --
+  // and a LAZY one. The vendored Mach-O tmux (build.mac.extraResources, mac
+  // only) is copied into DATA_HOME/bin by syncTmuxPortable at boot, which
+  // happens AFTER this module is first required; a value computed at require
+  // time would answer false for the whole of a fresh install's first session
+  // and hide the topology card on the one platform that has it.
+  Object.defineProperty(table, 'attachTopology', {
+    enumerable: true,
+    get: () => isMac && tmuxProbe(),
+  })
 
   // Derived, so no caller re-derives it differently.
   table.supportsBlur = table.windowMaterial !== 'none'
