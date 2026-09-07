@@ -297,5 +297,26 @@ console.log('11. the page gates on named capabilities, not on "is this a Mac?"')
   }
 }
 
+console.log('12. the BACKEND gates the attach lane too, not just the card that offers it')
+{
+  const fs = await import('node:fs')
+  const main = fs.readFileSync(path.join(ROOT, 'main.cjs'), 'utf8')
+  // connectors.js hides the attach card off mac, which is why this was easy to
+  // miss: the UI could not reach it. But .agent-config is a file the AGENT is
+  // told it may edit, and AGENT_TOPOLOGY=attach on a platform with no tmux
+  // walked into attachStartFromSession -> !tmuxPresent -> failed/bootstrap-
+  // needed, so the agent never started at all. A hidden card is not a gate.
+  assert(/attachLane/.test(main),
+    'main.cjs asks the capability table about the attach lane')
+  const gateIdx = main.indexOf('attachLane')
+  const callIdx = main.indexOf('attachStartFromSession(config)')
+  assert(gateIdx > 0 && callIdx > gateIdx,
+    'and it asks BEFORE it hands control to attachStartFromSession')
+  // Ignored-and-boot, not refuse-to-boot: asking for a lane this machine does
+  // not have must not be fatal, and the log has to say what was dropped.
+  assert(/AGENT_TOPOLOGY=attach ignored/.test(main),
+    'a platform without the lane logs what it ignored instead of failing to start')
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

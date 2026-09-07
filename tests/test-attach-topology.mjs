@@ -326,7 +326,17 @@ console.log('template + wiring tripwires:')
   check('sudo password stored via the verified vault path', permSrc.includes("storeProviderKeyVerified('sudo-pass'"))
 
   const mainSrc = fs.readFileSync(path.join(ROOT, 'main.cjs'), 'utf8')
-  check('spawn path branches to attachStartFromSession on attach topology', /=== 'attach'\)\s*{\s*return attachStartFromSession\(config\)/.test(mainSrc))
+  // The branch is still there; it is now behind the capability, because
+  // AGENT_TOPOLOGY=attach on a platform with no tmux walked into
+  // attachStartFromSession -> !tmuxPresent -> failed/bootstrap-needed and the
+  // agent never started. .agent-config is a file the agent is told it may
+  // edit, so the hidden Settings card was never the gate it looked like.
+  check('spawn path still branches to attachStartFromSession on attach topology',
+    /return attachStartFromSession\(config\)/.test(mainSrc))
+  check('...but only where the platform HAS the lane',
+    /attachLane/.test(mainSrc) && mainSrc.indexOf('attachLane') < mainSrc.indexOf('return attachStartFromSession(config)'))
+  check('...and a platform without it is told what was ignored, not failed to boot',
+    /AGENT_TOPOLOGY=attach ignored/.test(mainSrc))
   check('app quit leaves the external agent alive in attach mode', /agentTopologyIsAttach\(\)\)\s*{\s*log\('app quit: attach topology/.test(mainSrc))
   // No-acker fast path (0.1.17): the shutdown ack comes from a channel-
   // process-injected turn, so a stale/absent .agent-live means nothing can

@@ -1054,7 +1054,20 @@ async function spawnRealAgentChildLocked() {
   // reports that bootstrap is needed. It never falls through to the spawn
   // code below, and it never creates a tmux server (attach-topology.cjs's
   // allowlist enforces that invariant mechanically).
-  if ((config.AGENT_TOPOLOGY || 'spawn') === 'attach') {
+  // ...but only where the lane exists. attachStartFromSession walks straight
+  // into `!state.tmuxPresent` -> setAgentStatus('failed', 'bootstrap-needed')
+  // on a platform that ships no tmux, and the agent then never starts at all.
+  // The Settings card is hidden off mac so the UI cannot get here -- but the
+  // manual tells the agent it may edit .agent-config itself, which makes this
+  // a reachable self-brick, and "you asked for a lane this machine does not
+  // have" is not a reason to refuse to boot. Fall through to spawn, loudly:
+  // the app comes up, and the log says exactly what was ignored and why.
+  const attachAsked = (config.AGENT_TOPOLOGY || 'spawn') === 'attach'
+  if (attachAsked && !require('./onboarding/platform.cjs').host().attachLane) {
+    log(`AGENT_TOPOLOGY=attach ignored: this platform (${process.platform}) has no attach lane -- `
+      + 'the vendored tmux ships on macOS only. Starting in the spawn topology instead; '
+      + 'remove AGENT_TOPOLOGY from .agent-config to silence this.')
+  } else if (attachAsked) {
     return attachStartFromSession(config)
   }
 
