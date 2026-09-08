@@ -195,6 +195,101 @@ console.log('\n-- context-cap drift guard (proxy /health vs the hand-pinned cap)
   }
 }
 
+
+// ── explicit-port change rebuilds the proxy (gpt-6-astra review P2, 2026-09-08) ──
+// BEHAVIOURAL, not a source grep: the reuse branch used to compare only the
+// live port's liveness and the model, so with a proxy already up on port A a
+// user who set CHATGPT_PROXY_PORT=B (model unchanged) got {ok:true, port:A}
+// and the new agent was routed at the OLD port. ensureCodexProxy lives in
+// main.cjs (Electron main, not importable here), so the function is lifted
+// out of the source and run in a vm context whose require/fetch/bind seams
+// are stubs -- the control flow under test is the shipped one, character for
+// character.
+import vm from 'node:vm'
+console.log('\n-- ensureCodexProxy reuse: explicit port change rebuilds')
+{
+  const fnSrc = (name) => {
+    const start = mainSrc.indexOf(`function ${name}(`)
+    const from = mainSrc.lastIndexOf('async ', start) === start - 6 ? start - 6 : start
+    const tail = mainSrc.slice(from)
+    const end = tail.indexOf('\n}')
+    return end === -1 ? null : tail.slice(0, end + 2)
+  }
+  const ensureSrc = fnSrc('ensureCodexProxy')
+  const killSrc = fnSrc('killCodexProxy')
+  ok('ensureCodexProxy/killCodexProxy lift cleanly out of main.cjs', Boolean(ensureSrc && killSrc))
+
+  const { resolveChatgptProxyPort } = require_(path.join(ROOT, 'provider-env.cjs'))
+  const logs = []
+  const bound = new Set() // ports our fake proxies are "listening" on
+  let ephemeral = 45000
+  const ctx = {
+    console, AbortSignal, URL, Number, String, JSON,
+    log: (m) => logs.push(String(m)),
+    proc: { listenerPids: () => [] },
+    resolveChatgptProxyPort,
+    startShimmedProxy: async ({ port }) => {
+      const p = port === 0 ? ++ephemeral : port
+      if (bound.has(p)) { const e = new Error('EADDRINUSE'); e.code = 'EADDRINUSE'; throw e }
+      bound.add(p)
+      const srv = {
+        listening: true,
+        address: () => ({ port: p }),
+        on: () => {},
+        close: () => { srv.listening = false; bound.delete(p) },
+      }
+      return srv
+    },
+    // Any HTTP answer = alive, same contract as the real probe.
+    fetch: async (u) => {
+      const p = Number(new URL(u).port)
+      if (!bound.has(p)) throw new Error('connection refused')
+      // the /health receipt main.cjs gates on: report exactly the model the
+      // (stubbed) env injection asked for, so the gate passes honestly.
+      return { json: async () => ({ model: ctx.process.env.CODEX_AS_API_MODEL ?? null }) }
+    },
+    require: Object.assign(() => ({ createApp: () => ({}) }), { cache: {}, resolve: (id) => id }),
+    process: { env: {} },
+  }
+  vm.createContext(ctx)
+  vm.runInContext(
+    `let codexProxyServer = null\nlet codexProxyModel = null\nlet codexProxyPort = null\n${ensureSrc}\n${killSrc}\n` +
+    'globalThis.__ensure = ensureCodexProxy',
+    ctx,
+  )
+  const ensure = ctx.__ensure
+  const since = (n) => logs.slice(n).join('\n')
+
+  // 1. live proxy on explicit port A
+  let mark = logs.length
+  const a = await ensure({ CHATGPT_PROXY_PORT: '50123', MODEL: 'claude-sonnet-4-6' })
+  ok('explicit port A: proxy comes up on A', a.ok === true && a.port === 50123, JSON.stringify(a))
+
+  // 2. same model, explicit port B -> MUST rebuild on B (the review finding)
+  mark = logs.length
+  const b = await ensure({ CHATGPT_PROXY_PORT: '19999', MODEL: 'claude-sonnet-4-6' })
+  ok('explicit port change (A -> B) routes the agent at B, not the old A', b.ok === true && b.port === 19999, JSON.stringify(b))
+  ok('...and says so: "port changed (50123 -> 19999) -- rebuilding proxy"',
+    since(mark).includes('port changed (50123 -> 19999) -- rebuilding proxy'), since(mark))
+  ok('...by rebuilding, not by reusing the live proxy', !since(mark).includes('already serves'), since(mark))
+  ok('...and the old port A is no longer bound by us', !bound.has(50123))
+
+  // 3. same explicit port again, same model -> reuse (no needless rebuild)
+  mark = logs.length
+  const c = await ensure({ CHATGPT_PROXY_PORT: '19999', MODEL: 'claude-sonnet-4-6' })
+  ok('the same explicit port B reuses the live proxy', c.ok === true && c.port === 19999 && since(mark).includes('already serves'), `${JSON.stringify(c)} :: ${since(mark)}`)
+
+  // 4. no explicit port at all -> an ephemeral request accepts any live bind
+  mark = logs.length
+  const d = await ensure({ MODEL: 'claude-sonnet-4-6' })
+  ok('no explicit port: any live bind still satisfies the request (reuse)', d.ok === true && d.port === 19999 && since(mark).includes('already serves'), `${JSON.stringify(d)} :: ${since(mark)}`)
+
+  // 5. and the model check still rebuilds, port equal or not
+  mark = logs.length
+  const e = await ensure({ CHATGPT_PROXY_PORT: '19999', MODEL: 'gpt-test-sentinel-sol' })
+  ok('a model change on the SAME port still rebuilds', e.ok === true && since(mark).includes('model changed'), `${JSON.stringify(e)} :: ${since(mark)}`)
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 // NOT process.exit() -- exitCode, and let the loop drain (2026-08-04).
 //

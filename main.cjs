@@ -865,13 +865,21 @@ async function ensureCodexProxy(config) {
         return false
       }
     }
-    if (codexProxyServer.listening && codexProxyModel === desiredModel && (await liveAlive())) {
+    // ...and the REQUESTED port, not just the model (gpt-6-astra review, P2):
+    // an explicit CHATGPT_PROXY_PORT change with the model kept used to hit
+    // the reuse path and route the new agent at the OLD port. With no explicit
+    // port the request is 0/ephemeral and any live bind satisfies it, so only
+    // an explicit request can disagree with what we are actually bound to.
+    const portMatches = !explicitPort || requestedPort === livePort
+    if (codexProxyServer.listening && codexProxyModel === desiredModel && portMatches && (await liveAlive())) {
       log(`ensureCodexProxy: our in-process proxy already serves ${liveUrl} (model ${codexProxyModel || 'proxy default'})`)
       return { ok: true, port: livePort }
     }
     log(codexProxyServer.listening && codexProxyModel !== desiredModel
       ? `ensureCodexProxy: model changed (${codexProxyModel || 'default'} -> ${desiredModel || 'default'}) -- rebuilding proxy`
-      : 'ensureCodexProxy: stale in-process proxy server handle -- closing and re-creating')
+      : codexProxyServer.listening && !portMatches
+        ? `ensureCodexProxy: port changed (${livePort} -> ${requestedPort}) -- rebuilding proxy`
+        : 'ensureCodexProxy: stale in-process proxy server handle -- closing and re-creating')
     killCodexProxy()
   }
 
