@@ -132,6 +132,9 @@ const {
   bootPathFor,
 } = require('./onboarding/http-server.cjs')
 const { setAgentStatus } = require('./onboarding/agent-status.cjs')
+// The one bounded app-quit path (see quit-sequencer.cjs's header for the
+// unbounded event chain it replaced).
+const { createQuitSequencer } = require('./quit-sequencer.cjs')
 const { killOllamaDaemon } = require('./onboarding/ollama-daemon.cjs') // ensureOllamaDaemon unused since cloud key-mode (2026-08-04) -- kill stays for pre-cloud-session cleanup
 // Log viewer tap (v0.0.20): every line log()/fatal() and the agent child's
 // stdout/stderr emit is mirrored into this ring buffer + DATA_HOME/logs/
@@ -229,10 +232,10 @@ function fatal(msg, err) {
   // may or may not survive the immediate exit below, which is fine here --
   // it's the secondary/reliable path for the ORDINARY quit case, not this
   // crash-path's only line of defense. Wrapped in try/catch so a failure
-  // in cleanup can NEVER mask the original fatal error or block the exit;
-  // no-ops safely via killAgentSupervisor()'s own
-  // `if (agentSupervisorPid == null) return` guard when fatal() fires
-  // before any agent has ever spawned.
+  // in cleanup can NEVER mask the original fatal error or block the exit.
+  // When fatal() fires before any agent ever spawned there is no pid to
+  // signal; killAgentSupervisor() then only fires its identity-safe
+  // `supervisor stop` child, which no-ops on a missing/foreign PIDFILE.
   try {
     killAgentSupervisor('SIGTERM')
   } catch (cleanupErr) {
@@ -656,6 +659,11 @@ function readPidFromFile(filePath) {
 // The onboarding server is started ONCE and reused; app.on('activate') reads
 // this instead of starting a second one (see its comment).
 let onboardingServerUrl = null
+// The http.Server behind onboardingServerUrl. Kept so app-quit can actually
+// CLOSE it (quitTeardown) -- until 2026-09-08 the boot path destructured only
+// `url` off the resolve and the listener, its keep-alive sockets and its
+// per-launch cookie state were simply abandoned at quit.
+let onboardingServer = null
 let agentChild = null
 let failurePollTimer = null
 let lastFailureMtimeMs = 0
@@ -1765,7 +1773,14 @@ function agentTopologyIsAttach() {
 }
 
 function killAgentSupervisor(signal = 'SIGTERM') {
-  if (agentSupervisorPid == null) return
+  // NOTE (2026-09-08): a null agentSupervisorPid used to return here, which
+  // ALSO skipped the identity-safe `supervisor stop` cleanup below -- exactly
+  // the case where it is most needed. The supervisor dying (or being killed)
+  // during the quit's own grace window nulls this pid in the child 'exit'
+  // handler, and its lane/engine/MCP grandchildren then had nothing left to
+  // reap them. The direct signal needs a pid; the stop verb does not (it
+  // re-reads the PIDFILE and verifies by command line), so only the first half
+  // is now pid-gated.
   // Attach topology: the agent deliberately OUTLIVES the app (session
   // survival is one of the two differentiators in design-0016). App quit
   // must leave the external supervisor untouched -- the control panel's
@@ -1776,7 +1791,9 @@ function killAgentSupervisor(signal = 'SIGTERM') {
     return
   }
   try {
-    if (agentChild) {
+    if (agentSupervisorPid == null) {
+      log('app quit: no supervisor pid in hand (never spawned, or already exited) -- going straight to the identity-safe stop path')
+    } else if (agentChild) {
       // Our own live child -- Node's own bookkeeping guarantees this pid
       // hasn't been reaped/recycled since we still hold the ChildProcess
       // handle and haven't seen its 'exit' event, so it's safe to
@@ -2191,8 +2208,9 @@ app.whenReady().then(async () => {
       log(`tcc-probe summary: ${JSON.stringify(tccResults)}`)
     }
 
-    const { url } = await startOnboardingServer(onOnboardingComplete, agentControls)
+    const { url, server } = await startOnboardingServer(onOnboardingComplete, agentControls)
     onboardingServerUrl = url
+    onboardingServer = server
     // Load through /boot so the window acquires the UI session cookie that
     // HTML serving now requires (page-scrape fix, 2026-08-07). /boot 302s
     // to "/" which lands wizard or /memory as before.
@@ -2252,8 +2270,9 @@ app.whenReady().then(async () => {
       return
     }
     startOnboardingServer(onOnboardingComplete, agentControls)
-      .then(({ url }) => {
+      .then(({ url, server }) => {
         onboardingServerUrl = url
+        onboardingServer = server
         createMainWindow(new URL(bootPathFor('/'), url).href)
       })
       .catch((err) => fatal('reopen: failed to reopen window', err))
@@ -2294,7 +2313,20 @@ const SHUTDOWN_REQUEST_PATH = path.join(DATA_HOME, '.shutdown-request')
 const SHUTDOWN_ACK_PATH = path.join(DATA_HOME, '.shutdown-ack')
 const SHUTDOWN_GRACE_MS = 75 * 1000
 const SHUTDOWN_ACK_POLL_MS = 500
-let gracefulQuitDone = false
+
+// Which CHANNEL backends can actually write .shutdown-ack. The watcher that
+// turns a .shutdown-request into a [SYSTEM] flush turn exists in exactly ONE
+// transport, channel.mjs (Discord). channel-local / channel-slack /
+// channel-telegram have no such watcher -- but all four write the same
+// DATA_HOME/.agent-live heartbeat through channel-runtime's createMarkerStore,
+// which is what the no-acker fast path below reads. So on every non-Discord
+// backend the fast path saw a healthy "acker", waited the full 75s, and quit
+// only after a deadline that felt like a hang (2026-09-08 dev-run repro:
+// CHANNEL_BACKEND=local, SIGTERM -> exit measured at 76s). Liveness answers
+// "is a channel process alive", not "can it ack"; this set answers the second
+// question, and it is the ONLY thing that decides whether the wait is worth
+// anything. Add a backend here the moment it grows the watcher, not before.
+const ACK_CAPABLE_BACKENDS = new Set(['discord'])
 
 // Boot-time stale-marker sweep (red-team finding #1, 2026-07-13 spark pass):
 // a kill -9 / OS crash between the request write and the graceful path's
@@ -2306,6 +2338,20 @@ try { fs.unlinkSync(SHUTDOWN_REQUEST_PATH) } catch { /* absent = normal boot */ 
 try { fs.unlinkSync(SHUTDOWN_ACK_PATH) } catch { /* absent = normal boot */ }
 
 async function requestAgentShutdownGrace() {
+  // An ADOPTED supervisor (app reinstalled over a live agent) has agentChild
+  // == null: we did not spawn it, we take the immediate path, no grace. This
+  // check used to live in the before-quit handler; it belongs with the rest of
+  // the "can anything ack?" reasoning.
+  if (agentChild == null) {
+    log('graceful quit: no agent child of ours -- skipping grace window')
+    return 'skipped'
+  }
+  let backend = 'discord'
+  try { backend = String(readAgentConfig().CHANNEL_BACKEND || 'discord').toLowerCase() } catch { /* unreadable config: assume the default */ }
+  if (!ACK_CAPABLE_BACKENDS.has(backend)) {
+    log(`graceful quit: channel backend '${backend}' has no shutdown-ack watcher -- nothing can ack, skipping grace window`)
+    return 'skipped'
+  }
   // No-acker fast path (0.1.17, the Windows box live receipt 2026-08-18): the ack
   // comes from a [SYSTEM] turn the CHANNEL process injects after seeing
   // .shutdown-request — so when no channel process is alive (lane dead or
@@ -2320,55 +2366,172 @@ async function requestAgentShutdownGrace() {
     const live = JSON.parse(fs.readFileSync(path.join(DATA_HOME, '.agent-live'), 'utf8'))
     if (Date.now() - Date.parse(live.lastHeartbeat) > 150_000) {
       log('graceful quit: liveness marker stale -- no channel process to ack, skipping grace window')
-      return
+      return 'skipped'
     }
   } catch {
     log('graceful quit: no liveness marker -- no channel process to ack, skipping grace window')
-    return
+    return 'skipped'
   }
   // Stale ack from a previous cycle must not satisfy this cycle instantly.
   try { fs.unlinkSync(SHUTDOWN_ACK_PATH) } catch { /* absent = fine */ }
   fs.writeFileSync(SHUTDOWN_REQUEST_PATH, JSON.stringify({ requested_at: new Date().toISOString() }) + '\n')
   log(`graceful quit: shutdown-request written, waiting up to ${SHUTDOWN_GRACE_MS / 1000}s for agent ack`)
   const deadline = Date.now() + SHUTDOWN_GRACE_MS
+  let acked = false
   while (Date.now() < deadline) {
     if (fs.existsSync(SHUTDOWN_ACK_PATH)) {
       log('graceful quit: agent acked shutdown flush')
+      acked = true
       break
     }
     await new Promise((r) => setTimeout(r, SHUTDOWN_ACK_POLL_MS))
   }
-  if (!fs.existsSync(SHUTDOWN_ACK_PATH)) log('graceful quit: grace window expired without ack, proceeding with shutdown')
+  if (!acked) log('graceful quit: grace window expired without ack, proceeding with shutdown')
   // Always clean both markers so the next cycle starts fresh.
   try { fs.unlinkSync(SHUTDOWN_REQUEST_PATH) } catch { /* already gone */ }
   try { fs.unlinkSync(SHUTDOWN_ACK_PATH) } catch { /* already gone */ }
+  return acked ? 'acked' : 'expired'
+}
+
+// Everything this process owns, torn down in one place so the quit path is a
+// list you can read instead of an event chain you have to trace. Each step is
+// independently try/caught: a throw in one must not strand the ones after it
+// (that is how the codex proxy from ensureCodexProxy and the onboarding
+// listener stayed open across quit -- they were the last two statements of a
+// handler whose earlier statements could throw). Called EXACTLY once, by the
+// quit sequencer, which bounds it.
+async function quitTeardown() {
+  shuttingDown = true // stop any queued control action from respawning after this cleanup
+  const step = (name, fn) => {
+    try { fn() } catch (err) { console.error(`[scheherazade/main] quit teardown: ${name} failed (continuing):`, err) }
+  }
+  step('stopFailurePoll', () => stopFailurePoll())
+  step('attach log tail', () => {
+    if (attachLogTailTimer) { clearTimeout(attachLogTailTimer); attachLogTailTimer = null }
+  })
+  step('killAgentSupervisor', () => killAgentSupervisor('SIGTERM'))
+  step('killCodexProxy', () => killCodexProxy()) // OUR in-process proxy server only; external/reused proxies are untouchable by construction
+  step('killAllLoginChildren', () => killAllLoginChildren('SIGTERM')) // detached login children must not outlive the app (Codex finding #3)
+  step('killOllamaDaemon', () => killOllamaDaemon('SIGTERM')) // OUR managed daemon child only; a reused external daemon is never ours to touch
+  await closeOnboardingServer()
+  // The window is closed by US, with destroy() rather than close(). MEASURED
+  // (2026-09-08 dev repro, with will-quit/quit logging on): after a
+  // preventDefault'd before-quit, the re-entered app.quit() emitted before-quit
+  // again, was let through -- and then WILL-QUIT NEVER FIRED. Chromium's
+  // CloseAllWindows step never completed, so NotifyAndShutdown was never
+  // reached and the process sat there indefinitely. That is the actual "app
+  // never exits after the grace window" mechanism from the E2E, and no timeout
+  // on the ack could ever have fixed it. destroy() skips the close/unload
+  // handshake entirely (the renderer is being thrown away anyway; the page
+  // holds no unsaved state -- the chat transcript lives on disk), which leaves
+  // app.quit() with an empty window list and a straight path to shutdown.
+  step('destroy windows', () => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      try { win.destroy() } catch (err) { log(`quit teardown: window destroy failed (${err.message})`) }
+    }
+  })
+}
+
+// close() alone is not enough: the control panel holds keep-alive sockets to
+// this listener (status polling, the chat SSE-ish poll), and http.Server.close
+// waits for every one of them to go idle -- forever, in practice. Node 18.2+
+// closeAllConnections() is the half that actually ends them. Bounded by the
+// sequencer regardless; the 2s here is so the common case does not spend it.
+function closeOnboardingServer() {
+  const server = onboardingServer
+  onboardingServer = null
+  if (!server) return Promise.resolve()
+  return new Promise((resolve) => {
+    const done = () => { clearTimeout(timer); resolve() }
+    const timer = setTimeout(() => {
+      log('quit teardown: onboarding server did not close in 2s -- leaving it to process exit')
+      resolve()
+    }, 2000)
+    try {
+      server.close(() => { log('quit teardown: onboarding server closed'); done() })
+      if (typeof server.closeAllConnections === 'function') server.closeAllConnections()
+    } catch (err) {
+      log(`quit teardown: onboarding server close failed (${err.message}) -- proceeding`)
+      done()
+    }
+  })
+}
+
+// The ONE exit. Preferred route is still a normal app.quit() so that anything
+// hooked on 'will-quit'/'quit' runs -- electron-updater's autoInstallOnAppQuit
+// installer spawn is exactly that, and force-exiting past it would silently
+// break Windows self-update. The teardown has already happened by now, so the
+// only thing left for a natural quit to do is end the process; if it has not
+// done so in 5s, we stop asking. process.exit() is the last word after that.
+function finishQuit(code) {
+  quitFinalizing = true
+  if (code === 0) {
+    try { app.quit() } catch (err) { console.error('[scheherazade/main] finishQuit: app.quit() threw:', err) }
+  }
+  const forceTimer = setTimeout(() => {
+    log(`quit: process still alive ${code === 0 ? '5s after app.quit()' : 'after a forced quit'} -- app.exit(${code})`)
+    try { app.exit(code) } catch (err) { console.error('[scheherazade/main] finishQuit: app.exit() threw:', err) }
+    const lastResort = setTimeout(() => process.exit(code), 2000)
+    if (typeof lastResort.unref === 'function') lastResort.unref()
+  }, code === 0 ? 5000 : 0)
+  if (typeof forceTimer.unref === 'function') forceTimer.unref()
+}
+
+// Set once finishQuit() has handed the process to app.quit(): from that point
+// before-quit must get out of the way instead of re-entering the sequencer.
+let quitFinalizing = false
+
+const quitSequencer = createQuitSequencer({
+  log,
+  graceMs: SHUTDOWN_GRACE_MS,
+  teardownMs: 10_000,
+  waitForAck: requestAgentShutdownGrace,
+  teardown: quitTeardown,
+  exit: finishQuit,
+})
+
+// SIGTERM / SIGINT are now OURS. Until 2026-09-08 main.cjs registered no
+// signal handler at all: a `kill` on the app was handled by whatever Chromium
+// happened to do with the signal, which on the dev run turned into an
+// app.quit() and on the E2E box looked like nothing at all. Both signals now
+// enter the same bounded sequence as Cmd-Q, and the sequencer is idempotent,
+// so an impatient second SIGTERM joins the run instead of starting a second
+// teardown.
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.on(sig, () => {
+    log(`${sig} received -- starting bounded quit sequence`)
+    quitSequencer.run(sig)
+  })
 }
 
 // Fix C (agent-lifecycle model-divergent review, 2026-07-03): a real
 // Cmd+Q / Quit used to leave the agent supervisor running with no cleanup
 // at all -- it became an orphan (still alive, still holding the Discord
 // token, PIDFILE now stale from this process's perspective since the
-// in-memory `agentChild` reference is gone). before-quit fires once per
-// quit attempt, before windows close; the kill path stays synchronous
-// signal-and-continue (SIGTERM is fire-and-forget, and the supervisor's own
-// `trap ... TERM INT` handler removes the PIDFILE on its side). The
-// graceful branch above it defers the quit ONCE via preventDefault, then
-// re-enters with gracefulQuitDone set.
+// in-memory `agentChild` reference is gone). The kill itself still lives in
+// killAgentSupervisor() (synchronous signal-and-continue; SIGTERM is
+// fire-and-forget and the supervisor's own `trap ... TERM INT` removes the
+// PIDFILE on its side) -- what changed on 2026-09-08 is WHO calls it: the
+// quit sequencer's teardown, not this handler.
 app.on('before-quit', (event) => {
-  if (!gracefulQuitDone && agentChild != null) {
-    event.preventDefault()
-    gracefulQuitDone = true
-    requestAgentShutdownGrace()
-      .catch((err) => console.error('[scheherazade/main] graceful quit path threw (proceeding with quit):', err))
-      .finally(() => app.quit())
-    return
-  }
-  shuttingDown = true // stop any queued control action from respawning after this cleanup
-  killAgentSupervisor('SIGTERM')
-  killCodexProxy() // closes OUR in-process proxy server only; external/reused proxies are untouchable by construction
-  killAllLoginChildren('SIGTERM') // detached login children must not outlive the app (Codex finding #3)
-  killOllamaDaemon('SIGTERM') // OUR managed daemon child only; a reused external daemon is never ours to touch
+  // The sequencer owns the quit from here on. Two states:
+  //   - finalizing: teardown is DONE and finishQuit() called app.quit() -- let
+  //     it through, this is the quit that actually ends the process (and the
+  //     one electron-updater's install hook wants to see).
+  //   - anything else: defer, and run (or join) the sequence. Its last step
+  //     re-enters here with quitFinalizing set.
+  if (quitFinalizing) { log('quit: before-quit re-entered after teardown -- letting the quit through'); return }
+  event.preventDefault()
+  quitSequencer.run('before-quit')
 })
+
+// Diagnostics only. The quit sequencer no longer DEPENDS on these firing --
+// finishQuit()'s force path covers the case where they do not -- but which of
+// them is reached is exactly what you need in the log the next time a quit
+// looks slow, and it is the difference between "Chromium is still closing
+// windows" and "nothing is happening at all".
+app.on('will-quit', () => log('quit: will-quit'))
+app.on('quit', (_e, code) => log(`quit: quit event (code=${code})`))
 
 process.on('uncaughtException', (err) => {
   fatal('uncaughtException', err)

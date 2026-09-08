@@ -83,6 +83,7 @@
       "data-home.cjs",
       "local-date.cjs",
       "proc.cjs",
+      "quit-sequencer.cjs",
       "supervisor.mjs",
       "headless-lane.mjs",
       "dsh-client.cjs",
