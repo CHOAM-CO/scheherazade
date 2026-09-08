@@ -689,6 +689,11 @@ let codexProxyServer = null
 // silently serving the previous pick (see ensureCodexProxy's passthrough
 // comment).
 let codexProxyModel = null
+// The port the live in-process proxy is ACTUALLY bound to. Since 2026-08-04
+// the default bind is ephemeral, so this cannot be recomputed from config --
+// it is the only record of the answer the kernel gave, and both the reuse
+// check and GET /api/proxy/health read it. null when no proxy of ours is up.
+let codexProxyPort = null
 
 // Critical B: polls AGENT_FAILFILE (written by the supervisor's marker on
 // a quick-fail restart streak, or by channel.mjs's writeFailureMarker() on
@@ -759,21 +764,43 @@ function stopFailurePoll() {
 // package's createApp() (pinned dependency; it reads/refreshes
 // ~/.codex/auth.json on its own). Making "login once -> auto-setup"
 // actually true for chatgpt with ZERO new spawn surface. Rules:
-//   - BIND-FIRST FAIL-CLOSED (supersedes the round-2 lsof identity dance
-//     for our own proxy): we do not pre-check then bind (TOCTOU) -- we
-//     just bind. The kernel arbitrates atomically: EADDRINUSE means
-//     someone else owns the port, and ONLY an explicitly-configured
+//   - EPHEMERAL BY DEFAULT (2026-08-04, from the Codex read -- its
+//     responses-api-proxy takes --port as OPTIONAL and writes the chosen
+//     port to a server-info file the parent reads, so there is no default
+//     port and therefore no collision policy to get wrong).
+//
+//     Ours is IN-PROCESS, so nothing outside the app ever needs to know the
+//     port in advance: we bind 0, ask the kernel what we got, and hand that
+//     to the agent. There is no shared filename to invent because the reader
+//     is the same process that bound it.
+//
+//     What this DELETES is a whole failure class. The old default of 18080
+//     could be occupied by anything -- another Scheherazade, a dev's fleet
+//     proxy, an unrelated service -- and the only safe response was to
+//     refuse to spawn the agent at all, because routing the conversation
+//     stream at an unidentified local listener is worse than not starting.
+//     That refusal was correct and is now unreachable: an ephemeral port is
+//     free by construction.
+//
+//   - BIND-FIRST FAIL-CLOSED, still, for the EXPLICIT-PORT path (the only
+//     one left that can collide): we do not pre-check then bind (TOCTOU) --
+//     we just bind. The kernel arbitrates atomically: EADDRINUSE means
+//     someone else owns the port, and an explicitly-configured
 //     CHATGPT_PROXY_PORT (informed opt-in, same trust class as a BYOK
-//     base URL) may then be reused after a loopback liveness check;
-//     an occupied DEFAULT port blocks the agent spawn, loudly. lsof is
+//     base URL) may then be reused after a loopback liveness check. lsof is
 //     kept for the diagnostic message only, never for the decision.
 //     This keeps the co-located-fleet case working (dev opts in to the
 //     fleet proxy explicitly) without ever signaling that external proxy.
 //   - NO AUTO-RESTART in v1.1: if our in-process server errors, the
 //     agent's calls fail visibly and the next spawnRealAgentChild() pass
 //     re-runs this. Loud log, no silent loop.
-//   - AWAITED by spawnRealAgentChild(): returns true only when a proxy we
-//     trust is up; the agent does not spawn on false.
+//   - AWAITED by spawnRealAgentChild(): returns { ok, port } and the agent
+//     does not spawn unless ok. `port` is the port actually bound (or the
+//     explicit one being reused) -- the CALLER MUST use it rather than
+//     recomputing from config, because with an ephemeral bind the config
+//     does not know the answer. buildProviderEnv() runs before this and
+//     CLEARS DSH_ROUTE_BASE_URL for exactly that reason; see the caller for
+//     the fill-in.
 async function ensureCodexProxy(config) {
   const rawPort = config.CHATGPT_PROXY_PORT
   const explicitPort = rawPort != null && String(rawPort).trim() !== ''
@@ -782,10 +809,15 @@ async function ensureCodexProxy(config) {
     // buildProviderEnv() already rejected this config upstream; belt-and-
     // suspenders only.
     console.error(`[scheherazade/main] ensureCodexProxy: bad port config: ${portResult.error.reason}`)
-    return false
+    return { ok: false, port: null }
   }
-  const port = Number(portResult.port)
-  const url = `http://localhost:${port}`
+  // 0 = "kernel, pick one". Only reached when the user configured nothing;
+  // an explicit port is honoured exactly as before.
+  const requestedPort = explicitPort ? Number(portResult.port) : 0
+  // Provisional. Rewritten from srv.address() after listen, because with
+  // requestedPort 0 this string is a lie until the bind returns.
+  let port = requestedPort
+  let url = `http://localhost:${port}`
   // Model passthrough: codex-as-api's anthropic route sends its
   // MODULE-LEVEL default model and only ECHOES body.model back
   // (dist/index.js: `requestModel = MODEL; clientModel = body.model`) --
@@ -820,9 +852,22 @@ async function ensureCodexProxy(config) {
   }
 
   if (codexProxyServer) {
-    if (codexProxyServer.listening && codexProxyModel === desiredModel && (await alive())) {
-      log(`ensureCodexProxy: our in-process proxy already serves ${url} (model ${codexProxyModel || 'proxy default'})`)
-      return true
+    // Reuse checks the port we ACTUALLY bound last time, not the requested
+    // one -- with an ephemeral bind those differ on every launch, and probing
+    // `url` (still holding the provisional 0) would ask localhost:0.
+    const livePort = codexProxyPort || port
+    const liveUrl = `http://localhost:${livePort}`
+    const liveAlive = async () => {
+      try {
+        await fetch(liveUrl, { signal: AbortSignal.timeout(750) })
+        return true
+      } catch {
+        return false
+      }
+    }
+    if (codexProxyServer.listening && codexProxyModel === desiredModel && (await liveAlive())) {
+      log(`ensureCodexProxy: our in-process proxy already serves ${liveUrl} (model ${codexProxyModel || 'proxy default'})`)
+      return { ok: true, port: livePort }
     }
     log(codexProxyServer.listening && codexProxyModel !== desiredModel
       ? `ensureCodexProxy: model changed (${codexProxyModel || 'default'} -> ${desiredModel || 'default'}) -- rebuilding proxy`
@@ -840,7 +885,7 @@ async function ensureCodexProxy(config) {
     ;({ createApp } = require('codex-as-api'))
   } catch (err) {
     console.error('[scheherazade/main] ensureCodexProxy: codex-as-api package failed to load (bundling problem?):', err)
-    return false
+    return { ok: false, port: null }
   }
 
   try {
@@ -849,27 +894,46 @@ async function ensureCodexProxy(config) {
     // on every tool and codex-as-api 0.6.5 400s on it -- the shim strips the
     // hint fields in front of the real app. killCodexProxy's close() closes
     // both servers (the shim wraps close). 2026-08-20 cto field-test fix.
-    codexProxyServer = await startShimmedProxy({ app: createApp(), port, log: (m) => log(m) })
+    //
+    // requestedPort is 0 unless the user configured one; the shim's OUTER
+    // server is the one that takes it, so an ephemeral request lands on the
+    // server the agent actually talks to (the inner codex-as-api app has
+    // always bound its own ephemeral port).
+    codexProxyServer = await startShimmedProxy({ app: createApp(), port: requestedPort, log: (m) => log(m) })
+    // The kernel's answer, not our request. Everything downstream -- the
+    // /health receipt, the log line, the URL handed to the agent -- reads
+    // this, so an ephemeral bind can never be described by a number nobody
+    // is listening on.
+    const bound = codexProxyServer.address()
+    if (!bound || typeof bound.port !== 'number' || bound.port <= 0) {
+      console.error(`[scheherazade/main] ensureCodexProxy: bound but address() reports no usable port (${JSON.stringify(bound)}) -- refusing to route the agent at a guess`)
+      killCodexProxy()
+      return { ok: false, port: null }
+    }
+    port = bound.port
+    url = `http://localhost:${port}`
   } catch (err) {
     if (err && err.code === 'EADDRINUSE') {
+      // Only reachable with an explicit port now. An ephemeral bind cannot
+      // collide, so the old "default port is occupied, refuse to spawn"
+      // branch is gone rather than merely unlikely.
       if (explicitPort) {
         if (await alive()) {
           log(`ensureCodexProxy: port ${port} taken; reusing EXPLICITLY-CONFIGURED proxy at ${url} (user opt-in; owning nothing, never signaling it)`)
-          return true
+          return { ok: true, port }
         }
         console.error(`[scheherazade/main] ensureCodexProxy: explicit-port listener (pid(s) ${listenerPidsForLog()}) does not answer at ${url} -- not routing the agent at it`)
-        return false
+        return { ok: false, port: null }
       }
-      console.error(
-        `[scheherazade/main] ensureCodexProxy: BLOCKED -- pid(s) ${listenerPidsForLog()} already listen on the default proxy port (${url}) ` +
-          'and are not this app. Routing the agent at an unrecognized local service would hand it the whole conversation ' +
-          'stream. If that listener is YOUR codex-as-api, set the proxy port explicitly in settings to opt in; otherwise ' +
-          'quit the other process and relaunch.'
-      )
-      return false
+      // Kept as a loud impossibility rather than deleted: if the kernel ever
+      // hands back EADDRINUSE for port 0, the assumption this whole change
+      // rests on is wrong and we want to hear about it, not silently fall
+      // back to a fixed port.
+      console.error('[scheherazade/main] ensureCodexProxy: EADDRINUSE on an EPHEMERAL bind -- this should be impossible; not routing the agent anywhere')
+      return { ok: false, port: null }
     }
     console.error('[scheherazade/main] ensureCodexProxy: in-process proxy failed to start:', err)
-    return false
+    return { ok: false, port: null }
   }
 
   // Track post-listen errors loudly (NO AUTO-RESTART rule above).
@@ -893,13 +957,14 @@ async function ensureCodexProxy(config) {
     if (reported !== desiredModel) {
       console.error(`[scheherazade/main] ensureCodexProxy: model passthrough FAILED -- picked ${desiredModel}, proxy /health reports ${reported ?? 'unknown'}. Not spawning the agent on a silently different model.`)
       killCodexProxy()
-      return false
+      return { ok: false, port: null }
     }
   }
 
   codexProxyModel = desiredModel
-  log(`ensureCodexProxy: in-process proxy up at ${url} (model ${desiredModel || 'proxy default'}, /health-verified)`)
-  return true
+  codexProxyPort = port
+  log(`ensureCodexProxy: in-process proxy up at ${url} (model ${desiredModel || 'proxy default'}, ${explicitPort ? 'explicit port' : 'kernel-assigned port'}, /health-verified)`)
+  return { ok: true, port }
 }
 
 function killCodexProxy() {
@@ -912,6 +977,7 @@ function killCodexProxy() {
   }
   codexProxyServer = null
   codexProxyModel = null
+  codexProxyPort = null
 }
 
 // Reentrancy sentinel: the awaited chatgpt proxy gate inside the locked body
@@ -1173,16 +1239,33 @@ async function spawnRealAgentChildLocked() {
   // was 'unknown' when the enum had no row for it -- the enum was the thing
   // that needed changing).
   if (provider === 'chatgpt') {
-    let proxyOk = false
+    let proxy = { ok: false, port: null }
     try {
-      proxyOk = await ensureCodexProxy(config)
+      proxy = await ensureCodexProxy(config)
     } catch (err) {
       console.error('[scheherazade/main] ensureCodexProxy threw unexpectedly:', err)
     }
-    if (!proxyOk) {
+    if (!proxy || !proxy.ok) {
       setAgentStatus('failed', 'proxy_unavailable', 'no trusted codex-as-api proxy is available (see app log) -- agent not spawned')
       return null
     }
+    // THE PORT IS ONLY KNOWN NOW (2026-08-04). buildProviderEnv ran above and
+    // could not know it: with an ephemeral bind the config has no answer, so
+    // its chatgpt row CLEARS the route base URL and this line fills it in with
+    // the port the kernel actually gave us. The field is DSH_ROUTE_BASE_URL
+    // since the 0.2.2 dsh swap -- the chatgpt row is a declared
+    // anthropic-messages route now, not an ANTHROPIC_BASE_URL CLI override.
+    //
+    // Asserted rather than assumed. If a future edit reorders these two so
+    // the env is built after the proxy, or drops the placeholder, this catches
+    // it here instead of at the far end -- where the symptom is an agent
+    // quietly talking to nothing on a port nobody is listening on.
+    if (!Number.isInteger(proxy.port) || proxy.port <= 0) {
+      console.error(`[scheherazade/main] BLOCKER: proxy reported ok with an unusable port (${proxy.port}) -- not spawning`)
+      setAgentStatus('failed', 'proxy_unavailable', 'the local proxy started but did not report a usable port -- agent not spawned')
+      return null
+    }
+    providerEnvResult.env.DSH_ROUTE_BASE_URL = `http://localhost:${proxy.port}`
   }
 
   // ollama provider: NO local gate anymore (2026-08-04, the owner "ollama ->
@@ -2016,10 +2099,28 @@ const onOnboardingComplete = () => {
 // Covers the explicitly-configured EXTERNAL proxy too: whatever answers on
 // the resolved port IS the reality the agent's calls would hit.
 async function proxyHealth() {
-  const portResult = resolveChatgptProxyPort(readAgentConfig().CHATGPT_PROXY_PORT)
-  if (portResult.error) return { running: false }
+  // Port precedence, and the order is the whole point (2026-08-04):
+  //
+  //   1. codexProxyPort -- the port our in-process proxy is ACTUALLY bound
+  //      to. Since the default bind became ephemeral, this is the only place
+  //      the answer exists; recomputing it from config would report health
+  //      for a port nobody is listening on, which is the live-lie class this
+  //      function's own header was written against.
+  //   2. an EXPLICITLY-configured port -- covers the external/reused proxy,
+  //      where the config genuinely is the source of truth.
+  //   3. neither -> nothing of ours is up and nothing was configured, so
+  //      there is no proxy reality to report. Not an error, just `false`.
+  const raw = readAgentConfig().CHATGPT_PROXY_PORT
+  const explicit = raw != null && String(raw).trim() !== ''
+  let port = codexProxyPort
+  if (!port && explicit) {
+    const portResult = resolveChatgptProxyPort(raw)
+    if (portResult.error) return { running: false }
+    port = Number(portResult.port)
+  }
+  if (!port) return { running: false }
   try {
-    const res = await fetch(`http://localhost:${portResult.port}/health`, { signal: AbortSignal.timeout(1500) })
+    const res = await fetch(`http://localhost:${port}/health`, { signal: AbortSignal.timeout(1500) })
     const health = await res.json()
     return {
       running: true,

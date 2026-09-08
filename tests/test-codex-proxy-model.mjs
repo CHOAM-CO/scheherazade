@@ -103,6 +103,44 @@ ok('main.cjs evicts the require cache per rebuild', mainSrc.includes("delete req
 ok('main.cjs gates on the /health model receipt (fail closed on mismatch)', mainSrc.includes('model passthrough FAILED'))
 ok('a model swap rebuilds the live proxy (codexProxyModel compared on ensure)', mainSrc.includes('codexProxyModel === desiredModel') && mainSrc.includes('codexProxyModel = desiredModel'))
 
+// ── ephemeral port wiring (2026-08-04) ────────────────────────────────────
+// The proxy binds port 0 by default, so the port EXISTS ONLY AFTER THE BIND.
+// buildProviderEnv runs before that and clears DSH_ROUTE_BASE_URL (asserted in
+// test-provider-env.mjs); main.cjs is what fills it in. That handoff is the
+// whole risk of the change: if it is ever dropped, the agent spawns with no
+// route base URL at all.
+//
+// It fails LOUD in that case rather than misrouting -- the old hardcoded
+// localhost:18080 default would have handed the conversation stream to
+// whatever owned that port -- but loud is still broken, so the wiring is
+// pinned here.
+//
+// (The field is DSH_ROUTE_BASE_URL, not ANTHROPIC_BASE_URL, since the 0.2.2
+// dsh swap turned the chatgpt row into a declared anthropic-messages route;
+// and the bind goes through startShimmedProxy since 2026-08-20, whose OUTER
+// server is what takes the requested port.)
+ok('the default bind is ephemeral, not a fixed port', mainSrc.includes("const requestedPort = explicitPort ? Number(portResult.port) : 0"))
+ok('the ephemeral request reaches the shim\'s outer server', /startShimmedProxy\(\{ app: createApp\(\), port: requestedPort/.test(mainSrc))
+ok('the bound port is read back from the socket, never assumed', /const bound = codexProxyServer\.address\(\)/.test(mainSrc) && mainSrc.includes('port = bound.port'))
+ok('ensureCodexProxy hands the caller the port it actually bound', /return \{ ok: true, port \}/.test(mainSrc))
+ok('the caller fills DSH_ROUTE_BASE_URL with that port', mainSrc.includes('providerEnvResult.env.DSH_ROUTE_BASE_URL = `http://localhost:${proxy.port}`'))
+ok('the caller refuses to spawn on a port it cannot use', mainSrc.includes('Number.isInteger(proxy.port)'))
+// The reuse path and the health reporter both have to read the LIVE port, not
+// recompute one from config -- config does not know it any more.
+ok('the live bound port is remembered for reuse/health (codexProxyPort)', mainSrc.includes('let codexProxyPort = null') && mainSrc.includes('codexProxyPort = port'))
+ok('...and cleared when the proxy goes down', /codexProxyServer = null\s*\n\s*codexProxyModel = null\s*\n\s*codexProxyPort = null/.test(mainSrc))
+ok('proxyHealth prefers the live bound port over config', mainSrc.indexOf('let port = codexProxyPort') < mainSrc.indexOf('portResult = resolveChatgptProxyPort(raw)'))
+// The old "default port is occupied -> refuse to spawn" branch must be GONE,
+// not merely unreachable: an ephemeral bind cannot collide, and leaving the
+// branch would invite someone to reinstate a default to feed it.
+ok('the occupied-default-port blocker is gone with the default that caused it', !mainSrc.includes('already listen on the default proxy port'))
+// ...and provider-env must not quietly reinstate one either.
+{
+  const penvSrc = fs.readFileSync(path.join(ROOT, 'provider-env.cjs'), 'utf8')
+  ok('provider-env clears the route base URL rather than defaulting it',
+    penvSrc.includes('DSH_ROUTE_BASE_URL: values.port ? `http://localhost:${values.port}` : undefined'))
+}
+
 // ── context-cap drift guard (task #6, 2026-08-13) ───────────────────────────
 // codex-as-api ships no model-list export and no /v1/models route, so the
 // picker's GPT rows can't be fetched at runtime -- they stay a static catalog
