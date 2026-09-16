@@ -983,6 +983,15 @@ function requiredModel(config) {
 // llm-pi-ai ollama providers block). The 'dsh' row above honors config.MODEL
 // only when it is one of these; keep in sync with the lane's patch when a
 // model joins/leaves.
+//
+// Re-verified 2026-09-16 (the owner's "올라마 최신 리스트 다시 긁기" pass): both ids
+// are still live on ollama.com (glm-5.2 and qwen3.5 both present in the
+// cloud-model scrape that day) and both still tool-call, so this list is
+// UNCHANGED even though the picker's Ollama group moved
+// deepseek-v4-flash:0731 -> deepseek-v4.1-flash and gained glm-5.3. Those two
+// are picker rows for the ollama row's own lane, not ids the dsh patch layer
+// serves, so copying them here would re-open the silent-fallback trap this
+// allowlist exists to close.
 const DSH_LANE_MODELS = ['glm-5.2:cloud', 'qwen3.5:cloud']
 
 const PROVIDER_ROWS_BY_ID = new Map(PROVIDER_ROWS.map((row) => [row.id, row]))

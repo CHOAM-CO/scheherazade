@@ -44,6 +44,42 @@
 //   지원기념 K3 ㄱ"), tool-call-probed same day through the local ollama
 //   openai-compat surface (same protocol the lane speaks; lane auth path
 //   is OLLAMA_CLOUD_KEY, probe rode the signin proxy).
+// - 2026-09-16 Ollama catalog refresh (the owner ask: "올라마 최신 리스트 다시
+//   긁기"). Scraped live the same day with `aside repl`: ollama.com/search?c=cloud
+//   plus each candidate's /library/<name>/tags page. EVERY Ollama id below was
+//   re-found in that scrape AND tool-call-probed against
+//   https://ollama.com/v1/chat/completions (one get_weather function, key from
+//   the ollama credential in the reference fleet's env) — each returned a real
+//   tool_calls entry, not prose.
+//   REPLACED: deepseek-v4-flash:0731 -> deepseek-v4.1-flash. The 0731 tag still
+//   resolves and still calls tools, but its library page is a month stale
+//   (tags: :cloud and :0731-cloud, same digest) while deepseek-v4.1-flash
+//   landed 6 days ago (vision + tools + thinking, 1M context, single :cloud
+//   tag) and is the model the reference fleet runs on two agents right now.
+//   ADDED: glm-5.3 (2 weeks old, tools + thinking, 1M context, Z.ai's flagship
+//   coding / long-horizon-agentic model). glm-5.2 STAYS beside it: the DSH lane's
+//   patch pins glm-5.2:cloud, so dropping it would break a shipped lane.
+//   NOT ADDED, with grounds: glm-5.3-flash (probed fine, but 18B active is under
+//   the agent-duty bar this list set when it rejected gemma4:31b);
+//   deepseek-v4-pro, glm-5.1, kimi-k2.6, minimax-m2.7 (superseded in-family, the
+//   same rule that kept k2.6/m2.7/glm-5.1 out on 08-13); nemotron-3-ultra (the
+//   nemotron family failed this list's probe bar on 08-13 and nothing re-tested
+//   it); gemma4 and the small qwen3.5 tags (too small for agent duty).
+//   KEPT DELIBERATELY: `qwen3.5:397b` is published on ollama.com only as
+//   `qwen3.5:397b-cloud`, but the bare tag probes fine and must stay bare —
+//   provider-env.cjs's normalizeOllamaCloudModel() strips any tag containing
+//   'cloud', so `qwen3.5:397b-cloud` would collapse to a plain `qwen3.5` and
+//   silently pick a different (much smaller) model.
+// - GPT group, weekly-meter rule (2026-09-16, the owner ask). Source: the
+//   ChatGPT usage API read through the reference fleet's
+//   scripts/codex-usage-poll.sh, measured today:
+//   `CODEX pro weekly 100% reset 2026-09-19 17:48 KST limit_reached=True
+//   buckets[GPT-5.3-Codex-Spark=0%]`. gpt-5.6-sol / -terra / -luna AND
+//   gpt-6-astra all draw from ONE pro weekly meter — picking a different row in
+//   this group changes the model, never the quota. The only id with a bucket of
+//   its own is GPT-5.3-Codex-Spark, which no row here offers (see the astra row
+//   comment for why it is not added). This corrects the earlier assumption,
+//   carried in this file and in the fleet, that luna was a separate cheaper lane.
 // - DSH rows (0.2.1 harness swap): ids the lane's own patch layer serves.
 //   provider-env.cjs's DSH_LANE_MODELS is still a hand-typed copy of these
 //   two ids; it should read them from here (see the P4 report).
@@ -87,14 +123,35 @@
     // that matters is the one the thing we ship enforces, so 200000 it is —
     // re-raise when the proxy learns the family (same re-verify checklist
     // http-server.cjs's cap table carries).
+    // RE-CHECKED 2026-09-16 and 200000 STANDS. The reference fleet's live
+    // proxies report 372000 (/health on :18085 :18080 :18083 all return
+    // {"context_window":372000,"auto_compact_token_limit":334800}), which reads
+    // like the pin is stale — it is not. That box's ~/.codex*/config.toml files
+    // each carry a hand-written `model_context_window = 372000`, and
+    // codex-as-api 0.6.5's getContextWindow() returns the config value
+    // whenever capabilityForModel(model).maxContextWindow is null, which it is
+    // because gpt-6-astra is STILL absent from the package's
+    // model_capabilities_default (grep: the table ends at gpt-5.2 plus
+    // gpt-5.3-codex-spark). A user with no such config line gets
+    // DEFAULT_CONTEXT_WINDOW = 2e5. So 372000 is the fleet's own override
+    // leaking into /health, not a vendor number, and pinning it here would
+    // under-report compaction for every normal install.
     { id: 'gpt-6-astra', label: 'GPT 6 Astra', group: 'GPT', providers: ['chatgpt'], contextWindow: 200000, contextWindowSource: 'codex-as-api-table' },
+    // These three and gpt-6-astra above share ONE pro weekly meter (2026-09-16
+    // provenance note in the header): the pick is a model choice, not a quota
+    // choice. GPT-5.3-Codex-Spark is the only separately-metered id and is not
+    // offered here — no live proxy on the reference fleet serves it (checked
+    // 2026-09-16: /health on :18085 :18080 :18083 each advertise their ONE
+    // configured model, none of them a spark id), so there is no /health
+    // receipt to pin a contextWindow against and a row would be a guess.
     { id: 'gpt-5.6-sol', label: 'GPT 5.6 Sol', group: 'GPT', providers: ['chatgpt'], contextWindow: 272000, contextWindowSource: 'codex-as-api-table' },
     { id: 'gpt-5.6-terra', label: 'GPT 5.6 Terra', group: 'GPT', providers: ['chatgpt'], contextWindow: 272000, contextWindowSource: 'codex-as-api-table' },
     { id: 'gpt-5.6-luna', label: 'GPT 5.6 Luna', group: 'GPT', providers: ['chatgpt'], contextWindow: 272000, contextWindowSource: 'codex-as-api-table' },
     { id: 'kimi-k3', label: 'Kimi K3', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
     { id: 'kimi-k2.7-code', label: 'Kimi 2.7 Code', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
+    { id: 'glm-5.3', label: 'GLM 5.3', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
     { id: 'glm-5.2', label: 'GLM 5.2', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
-    { id: 'deepseek-v4-flash:0731', label: 'DeepSeek V4 Flash (0731)', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
+    { id: 'deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
     { id: 'qwen3.5:397b', label: 'Qwen 3.5 (397B)', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
     { id: 'minimax-m3', label: 'MiniMax M3', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
     { id: 'gpt-oss:120b', label: 'GPT-OSS (120B)', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },

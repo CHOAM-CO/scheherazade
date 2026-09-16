@@ -760,6 +760,9 @@
   // 57e4744, ran 07-05). GPT: gpt-5.6-terra ran live (a separate lane, 07-10);
   // sol/luna are the owner-named siblings -- live-verify on first swap, the
   // mute-strike ledger is the backstop either way.
+  // Quota note (2026-09-16): every GPT row draws on ONE pro weekly meter --
+  // picking sol vs terra vs luna vs astra changes the model, not the budget.
+  // Grounds and the usage-API receipt live in model-catalog.cjs's header.
   // The real model rows live in the SHARED static catalog
   // (js/model-catalog.cjs, loaded before this file) since the chat composer
   // grew its own quick-switch dropdown (0.2.6, the owner 08-20 19:09) — one list,
