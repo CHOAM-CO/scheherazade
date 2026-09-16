@@ -321,6 +321,11 @@ console.log('\n(b3) image attachments -> local-path marker')
   check('laneHasVision: gpt-oss -> false (open-weight, no vision -- default row 2026-08-13)', laneHasVision('gpt-oss:120b') === false)
   check('laneHasVision: YES-list model with tag -> true', laneHasVision('qwen3.5:latest') === true)
   check('laneHasVision: glm-5.2 -> false', laneHasVision('glm-5.2') === false)
+  // 2026-09-16 catalog refresh: the new deepseek tag IS vision-capable
+  // (ollama.com library vision pill), the older v4 flash tag is not -- the
+  // two must not be conflated by a loose prefix match.
+  check('laneHasVision: deepseek-v4.1-flash -> true (YES-list, 2026-09-16)', laneHasVision('deepseek-v4.1-flash') === true)
+  check('laneHasVision: deepseek-v4-flash:0731 -> false (older tag, text-only)', laneHasVision('deepseek-v4-flash:0731') === false)
   check('laneHasVision: unlisted/empty -> false (fail-safe)', laneHasVision('') === false && laneHasVision('brand-new') === false)
   check('imageMarker vision lane invites Read', imageMarker(['/tmp/a.png'], true).includes('open with Read tool'))
   const noVis = imageMarker(['/tmp/a.png'], false)

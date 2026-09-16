@@ -59,8 +59,13 @@
 //   ADDED: glm-5.3 (2 weeks old, tools + thinking, 1M context, Z.ai's flagship
 //   coding / long-horizon-agentic model). glm-5.2 STAYS beside it: the DSH lane's
 //   patch pins glm-5.2:cloud, so dropping it would break a shipped lane.
-//   NOT ADDED, with grounds: glm-5.3-flash (probed fine, but 18B active is under
-//   the agent-duty bar this list set when it rejected gemma4:31b);
+//   ADDED on owner override (2026-09-17 00:08, verbatim "GLM5.3 flash는 다시
+//   넣어줘"): glm-5.3-flash. This one goes IN over the 08-13 agent-duty size
+//   bar, not through it — 18B active params is below where gemma4:31b was
+//   rejected, and the owner picked it anyway. What IS verified: 3 weeks old,
+//   vision + tools + thinking pills, single :cloud tag, and it returned a real
+//   tool_calls entry on the same 2026-09-16 get_weather probe as the rest.
+//   NOT ADDED, with grounds:
 //   deepseek-v4-pro, glm-5.1, kimi-k2.6, minimax-m2.7 (superseded in-family, the
 //   same rule that kept k2.6/m2.7/glm-5.1 out on 08-13); nemotron-3-ultra (the
 //   nemotron family failed this list's probe bar on 08-13 and nothing re-tested
@@ -150,6 +155,7 @@
     { id: 'kimi-k3', label: 'Kimi K3', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
     { id: 'kimi-k2.7-code', label: 'Kimi 2.7 Code', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
     { id: 'glm-5.3', label: 'GLM 5.3', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
+    { id: 'glm-5.3-flash', label: 'GLM 5.3 Flash', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
     { id: 'glm-5.2', label: 'GLM 5.2', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
     { id: 'deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
     { id: 'qwen3.5:397b', label: 'Qwen 3.5 (397B)', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },

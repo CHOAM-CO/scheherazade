@@ -227,6 +227,7 @@ try {
     chk('ollama kimi-k2.7-code -> yes (library pill receipt)', laneVision({ provider: 'ollama', model: 'kimi-k2.7-code' }) === 'yes')
     chk('ollama glm-5.2 -> no', laneVision({ provider: 'ollama', model: 'glm-5.2' }) === 'no')
     chk('ollama deepseek-v4-flash:0731 -> no (tag stripped)', laneVision({ provider: 'ollama', model: 'deepseek-v4-flash:0731' }) === 'no')
+    chk('ollama deepseek-v4.1-flash -> yes (vision pill, 2026-09-16 refresh)', laneVision({ provider: 'ollama', model: 'deepseek-v4.1-flash' }) === 'yes')
     chk('ollama unlisted model -> no (fail-safe default, never unknown)', laneVision({ provider: 'ollama', model: 'brand-new-model' }) === 'no')
     chk('no spawn info -> no (fail-safe default)', laneVision(null) === 'no')
     chk('custom glm-5.2 -> no (capability is the model, not the server)', laneVision({ provider: 'custom', model: 'glm-5.2' }) === 'no')

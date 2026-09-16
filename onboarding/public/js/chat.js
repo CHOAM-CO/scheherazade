@@ -795,6 +795,9 @@
   // The ollama rows are bound from live ollama.com/library scrapes
   // (2026-08-04): kimi-k2.7-code carries the vision capability pill
   // ("image and video input via MoonViT"); glm-5.2 and deepseek-v4-flash
+  // are text-only. deepseek-v4.1-flash (added 2026-09-16) IS vision-capable --
+  // ollama.com library `vision` pill, input "Text, Image" -- and is on the
+  // YES list below; the older deepseek-v4-flash line above still stands.
   // have no vision badge. Attaching is never BLOCKED -- the model table
   // could be stale, and a false block is worse than a soft warning.
   let visionState = 'unknown'
@@ -831,7 +834,7 @@
         // http-server.cjs laneVision, change both together.
         visionState = 'yes'
       } else {
-        const VISION_YES = new Set(['kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'gemma4', 'qwen3.5', 'minimax-m3', 'mistral-large-3'])
+        const VISION_YES = new Set(['kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'gemma4', 'qwen3.5', 'minimax-m3', 'mistral-large-3', 'deepseek-v4.1-flash'])
         visionState = VISION_YES.has(model) ? 'yes' : 'no'
       }
     } catch { visionState = 'unknown' }

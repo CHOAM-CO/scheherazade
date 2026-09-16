@@ -3475,6 +3475,13 @@ async function fetchOllamaUsage(opts = {}) {
 // (2026-08-04 scrape receipts, session notes idea/2026-08-04):
 //   vision: kimi-k2.7-code, kimi-k3, kimi-k2.6, gemma4, qwen3.5,
 //           minimax-m3, mistral-large-3
+// 2026-09-16 catalog refresh addition: deepseek-v4.1-flash. ollama.com's
+// library page for it carries the `vision` pill (tags page: input "Text,
+// Image", 1M context, single :cloud tag, 6 days old at the scrape), and the
+// id tool-call-probed clean against ollama.com/v1/chat/completions the same
+// day. Without this row the lane took the Gemma caption fallback for images
+// a model that can actually see would have read. Mirrored in
+// onboarding/public/js/chat.js and channel-slack.mjs -- change all three.
 // chat.js keeps a mirror of this list for its pre-send toast; change both.
 // 0.1.4 policy rewrite (the owner 2026-08-11 13:54): first-party providers are
 // vision-'yes'; EVERYTHING else defaults to 'no' (Gemma caption stand-in)
@@ -3483,7 +3490,7 @@ async function fetchOllamaUsage(opts = {}) {
 // AND invited a Read-tool image read that poisoned non-vision transcripts.
 // A default-'no' worst case is an unnecessary caption for a vision-capable
 // unlisted model; the old worst case was a bricked conversation.
-const VISION_YES_MODELS = new Set(['kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'gemma4', 'qwen3.5', 'minimax-m3', 'mistral-large-3'])
+const VISION_YES_MODELS = new Set(['kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'gemma4', 'qwen3.5', 'minimax-m3', 'mistral-large-3', 'deepseek-v4.1-flash'])
 // Smallest vision model in the cloud catalog (31b, vs 397b/675b upward) --
 // caption latency and quota cost scale with this pick.
 const OLLAMA_CAPTION_MODEL = 'gemma4:31b'
