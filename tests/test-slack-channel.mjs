@@ -326,6 +326,11 @@ console.log('\n(b3) image attachments -> local-path marker')
   // two must not be conflated by a loose prefix match.
   check('laneHasVision: deepseek-v4.1-flash -> true (YES-list, 2026-09-16)', laneHasVision('deepseek-v4.1-flash') === true)
   check('laneHasVision: deepseek-v4-flash:0731 -> false (older tag, text-only)', laneHasVision('deepseek-v4-flash:0731') === false)
+  // Same shape for the glm family (2026-09-17): only the -flash sibling is
+  // multimodal, so a prefix match on 'glm-5.3' would wrongly light up the
+  // text-only flagship.
+  check('laneHasVision: glm-5.3-flash -> true (vision pill, 2026-09-17)', laneHasVision('glm-5.3-flash') === true)
+  check('laneHasVision: glm-5.3 -> false (flagship is text-only)', laneHasVision('glm-5.3') === false)
   check('laneHasVision: unlisted/empty -> false (fail-safe)', laneHasVision('') === false && laneHasVision('brand-new') === false)
   check('imageMarker vision lane invites Read', imageMarker(['/tmp/a.png'], true).includes('open with Read tool'))
   const noVis = imageMarker(['/tmp/a.png'], false)

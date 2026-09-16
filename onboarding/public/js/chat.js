@@ -834,7 +834,7 @@
         // http-server.cjs laneVision, change both together.
         visionState = 'yes'
       } else {
-        const VISION_YES = new Set(['kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'gemma4', 'qwen3.5', 'minimax-m3', 'mistral-large-3', 'deepseek-v4.1-flash'])
+        const VISION_YES = new Set(['kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'gemma4', 'qwen3.5', 'minimax-m3', 'mistral-large-3', 'deepseek-v4.1-flash', 'glm-5.3-flash'])
         visionState = VISION_YES.has(model) ? 'yes' : 'no'
       }
     } catch { visionState = 'unknown' }
