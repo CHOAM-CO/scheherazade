@@ -789,6 +789,55 @@ export function createInboundNotifier({ dataHome, mcpNotify, log = console.log, 
   }
 }
 
+// ── lane interrupter (0.3.1, turn-level STOP) ───────────────────────────────
+// The outbound twin of createInboundNotifier, and deliberately NOT part of it:
+// a stop has no MCP fallback. The notification is a black hole in -p mode
+// (probe 5), so on the attach topology -- where there is no lane process and
+// no endpoint file -- there is simply nothing that can end a turn, and saying
+// so honestly ('not_running') beats posting into the void and reporting
+// success. Endpoint file re-read per call, same as the notifier, so a lane
+// recycle needs no restart here.
+//
+// Never throws: the caller is a user pressing a button, and every outcome is
+// a fixed reason string it can render. 'no_turn' is the lane's own 409 -- the
+// turn finished while the click was in flight, which is a non-event, not a
+// failure.
+export function createLaneInterrupter({ dataHome, log = console.log, fetchFn = fetch }) {
+  const endpointPath = path.join(dataHome, '.ingest-endpoint.json')
+  return async function interruptTurn() {
+    let ep
+    try {
+      ep = JSON.parse(await fs.readFile(endpointPath, 'utf8'))
+    } catch {
+      return { ok: false, reason: 'not_running' }
+    }
+    if (!ep || !ep.port || !ep.token) return { ok: false, reason: 'not_running' }
+    // Same liveness gate as postToLane: the lane unlinks this file on exit,
+    // but a SIGKILL skips that handler and a stale file would make every Stop
+    // press report 'unreachable' forever instead of the truth.
+    if (ep.pid) {
+      try { process.kill(ep.pid, 0) } catch { return { ok: false, reason: 'not_running' } }
+    }
+    let res
+    try {
+      res = await fetchFn(`http://127.0.0.1:${ep.port}/interrupt`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-ingest-token': ep.token },
+        body: '{}',
+      })
+    } catch (err) {
+      log(`[lane-interrupter] stop POST failed: ${err.message}`)
+      return { ok: false, reason: 'unreachable' }
+    }
+    if (res.status === 409) return { ok: false, reason: 'no_turn' }
+    if (!res.ok) {
+      log(`[lane-interrupter] lane refused the stop: HTTP ${res.status}`)
+      return { ok: false, reason: 'upstream_refused' }
+    }
+    return { ok: true }
+  }
+}
+
 // ── mute-strike announcer ──────────────────────────────────────────────────
 // The messenger-side half of the mute net (2026-08-13, the owner field case: kimi
 // turn ends success turns=5 dur=765s, no reply ever reaches the messenger,

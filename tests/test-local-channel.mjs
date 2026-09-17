@@ -226,6 +226,43 @@ console.log('\n7. HTTP: posting a message')
   assert((await call(handler, { method: 'GET', url: '/nope' })).code === 404, 'unknown path -> 404')
 }
 
+console.log('\n7a. HTTP: POST /interrupt (turn-level STOP, 0.3.1)')
+// The stop seam's contract at the channel edge: the interrupter's fixed
+// reason enum is passed through UNCHANGED (the proxy above maps one
+// vocabulary, and lane prose must never enter it), a 'no_turn' becomes a
+// 409 rather than an error, and NOTHING is written to the transcript -- a
+// user cancelling their own question is not a message to the agent.
+{
+  resetQueueForTest()
+  const calls = []
+  const ok = createRequestHandler({ notify: async () => {}, token: TOKEN, interrupt: async () => { calls.push(1); return { ok: true } } })
+  const r = await call(ok, { method: 'POST', url: '/interrupt', body: '{}' })
+  assert(r.code === 200, 'a stop with a turn in flight -> 200')
+  assert(calls.length === 1, '...and reaches the lane interrupter exactly once')
+  assert(readOutbound(0).items.length === 0, '...and writes NOTHING to the transcript')
+
+  const noTurn = createRequestHandler({ notify: async () => {}, token: TOKEN, interrupt: async () => ({ ok: false, reason: 'no_turn' }) })
+  const r2 = await call(noTurn, { method: 'POST', url: '/interrupt', body: '{}' })
+  assert(r2.code === 409, "'no_turn' -> 409 (the turn ended while the click was in flight)")
+  assert(r2.json.reason === 'no_turn', '...with the reason passed through unchanged')
+
+  const dead = createRequestHandler({ notify: async () => {}, token: TOKEN, interrupt: async () => ({ ok: false, reason: 'unreachable' }) })
+  const r3 = await call(dead, { method: 'POST', url: '/interrupt', body: '{}' })
+  assert(r3.code === 502 && r3.json.reason === 'unreachable', 'a failed stop -> 502 with its own reason')
+
+  // A host that wired no lane seam (attach topology) must read as
+  // 'not_running', not as a 404 the page cannot interpret.
+  const unwired = createRequestHandler({ notify: async () => {}, token: TOKEN })
+  const r4 = await call(unwired, { method: 'POST', url: '/interrupt', body: '{}' })
+  assert(r4.code === 503 && r4.json.reason === 'not_running',
+    'no interrupt seam wired -> 503 not_running (never a bare 404)')
+
+  // same gates as every other mutating route
+  assert((await call(ok, { method: 'POST', url: '/interrupt', body: '{}', token: null })).code === 401, 'tokenless stop -> 401')
+  assert((await call(ok, { method: 'POST', url: '/interrupt', body: '{}', host: 'evil.example.com' })).code === 403, 'foreign Host stop -> 403')
+  assert((await call(ok, { method: 'GET', url: '/interrupt' })).code === 404, 'GET /interrupt -> 404 (stop is mutating)')
+}
+
 console.log('\n7b. a failed delivery never fakes a transcript entry')
 // enqueueInbound runs only after deliverInbound resolves: if the notify
 // throws, the client gets its error (and keeps the input text), and the

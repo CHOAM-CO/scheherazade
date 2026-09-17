@@ -51,9 +51,19 @@
       <div class="chat-input-row">
         <input type="file" id="ct-file" accept="image/png,image/jpeg,image/gif,image/webp,.pdf,.txt,.md,.csv,.tsv,.json,.log,.xml,.yaml,.yml" multiple hidden />
         <textarea id="ct-input" rows="1" autocomplete="off"></textarea>
+        <!-- steering hint: only visible while a turn is running -->
+        <p class="chat-steer-hint" id="ct-steer-hint" hidden></p>
         <div class="chat-composer-bar">
           <button class="secondary" id="ct-attach" title="Attach image">+</button>
           <span class="chat-composer-spacer"></span>
+          <!-- Stop / steer (0.3.1). While a turn is in flight the composer
+               swaps Send for Stop (claude.ai pattern the card already
+               imitates) and the textarea keeps working: what it sends then
+               MERGES into the running turn rather than starting a new one
+               (design-0020 probe 6), which is the steering half. The hint
+               below says which of the two the box is about to do, because
+               those are genuinely different acts. -->
+          <button id="ct-stop" class="secondary" hidden></button>
           <button id="ct-send"></button>
         </div>
       </div>

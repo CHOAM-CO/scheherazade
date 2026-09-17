@@ -71,6 +71,12 @@ const sessionFile = () => path.join(MEM, '.headless-session.json')
 const endpointFile = () => path.join(MEM, '.ingest-endpoint.json')
 const strikesFile = () => path.join(MEM, '.headless-resume-strikes.json')
 const pendingFile = () => path.join(MEM, '.headless-pending.json')
+// User STOP receipt (0.3.1 steering/stop). The hard interrupt path kills the
+// claude child, so the explanation cannot be written into the dying session:
+// it is left on disk and consumed by the NEXT boot (same pattern as
+// rotateFile()), then folded into the next real user message so the resumed
+// transcript explains its own gap instead of looking like the agent went mute.
+const stoppedFile = () => path.join(MEM, '.stopped-by-user')
 
 // Conversation rotation. v1 (UX red-team 2026-08-04 F3) cut purely by AGE;
 // v2 (the owner 2026-08-04 19:44 "시간으로 끊지말고 더 좋은 방법 있나?") cuts by
@@ -497,6 +503,16 @@ async function main() {
   // not a wedged one).
   let openTurn = false
   let lastActivityTs = Date.now()
+  // Consumed-at-boot STOP receipt (see stoppedFile). Not injected as a turn of
+  // its own -- a spontaneous [SYSTEM] turn at boot is exactly the moment-bound
+  // replay that bit the quit path on 2026-08-05 02:01. It rides on the next
+  // real user message instead, where it is actually useful context.
+  let stoppedNoticePending = false
+  if (fs.existsSync(stoppedFile())) {
+    stoppedNoticePending = true
+    try { fs.unlinkSync(stoppedFile()) } catch { /* consumed best-effort */ }
+    log('previous run was stopped by the user -- the next message carries that note; the cancelled message was dropped, not redelivered')
+  }
   // Consecutive is_error results (poisoned-transcript breaker, 0.1.4).
   // Reset by any healthy turn; at 3 the lane abandons the session id and
   // recycles -- see the result handler.
@@ -795,7 +811,56 @@ async function main() {
     if (!/^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(host)) {
       return send(403, { error: 'bad host' })
     }
-    if (req.method !== 'POST' || req.url !== '/inbound') return send(404, { error: 'not found' })
+    if (req.method !== 'POST') return send(404, { error: 'not found' })
+    // ── POST /interrupt: turn-level STOP (0.3.1) ────────────────────────────
+    // The user pressed Stop in the chat composer. Same host + token gate as
+    // /inbound, empty body, no request data used at all -- so there is no
+    // caller-controlled value in this path.
+    //
+    // ORDER MATTERS. The FIFO is cleared BEFORE anything is killed: the
+    // redelivery machinery above exists to re-ask an unanswered question
+    // after a mid-turn recycle, and a STOP is the one case where the user
+    // has explicitly withdrawn it. Skipping this makes every Stop press
+    // hand the cancelled message straight back on the --resume boot.
+    //
+    // openTurn drops before the kill for the same reason the watchdog does
+    // it (see stallTimer): a slow SIGTERM would otherwise let the watchdog
+    // fire into the same dying child and log a second, false diagnosis.
+    //
+    // Only the HARD path ships. `control_request {subtype:'interrupt'}` (the
+    // soft, no-reboot path design-0020 parks as "later-if-ever") is NOT
+    // implemented: it has never been probed against the shipped claude, and
+    // on win32 -- where no signal is deliverable at all (proc.cjs:112) -- it
+    // would be the only graceful option, so it needs its own probe pass.
+    // Cost of the hard path: the lane exits with the child, the supervisor
+    // respawns it with --resume, and the conversation survives while the
+    // turn does. Seconds, and visible to the user -- the button copy says so.
+    if (req.url === '/interrupt') {
+      if (!tokenOk(req.headers['x-ingest-token'])) return send(403, { error: 'bad token' })
+      if (childExited) return send(503, { error: 'agent not running' })
+      if (!openTurn) return send(409, { error: 'no turn in flight' })
+      openTurn = false
+      const cleared = writePending([])
+      if (!cleared) log('WARNING: pending FIFO clear failed -- the cancelled message may redeliver on the next boot')
+      try {
+        writeJsonAtomic(stoppedFile(), { ts: Date.now() }, 0o600)
+      } catch (err) {
+        // Cosmetic only (the next turn just loses its explanation); never a
+        // reason to refuse a stop the user asked for.
+        log(`stop receipt write failed: ${err.message}`)
+      }
+      log('user STOP: ending the in-flight turn (pending FIFO cleared -- the cancelled message will NOT redeliver); the supervisor respawns this lane with --resume')
+      // The watchdog's own two lines, deliberately verbatim. NOT killTree from
+      // proc.cjs: this child is spawned NON-detached, so it shares the lane's
+      // process group and a negative-pid group signal would kill the lane
+      // itself before its exit handler could clean up the endpoint file.
+      // claude reaps its own MCP children on SIGTERM; the supervisor's
+      // gracefulStop + orphan sweep remain the backstop, unchanged.
+      try { child.kill('SIGTERM') } catch { /* already gone */ }
+      setTimeout(() => { if (!childExited) { try { child.kill('SIGKILL') } catch { /* gone */ } } }, 10_000).unref()
+      return send(200, { ok: true, stopped: true })
+    }
+    if (req.url !== '/inbound') return send(404, { error: 'not found' })
     if (!tokenOk(req.headers['x-ingest-token'])) return send(403, { error: 'bad token' })
     let body = ''
     let tooLarge = false
@@ -827,8 +892,16 @@ async function main() {
       if (!writePending([...readPending(), { content, meta: payload.meta || {}, ts: Date.now() }])) {
         return send(500, { error: 'pending persist failed' })
       }
+      // Stop receipt rides on the first message after a user-stopped run (see
+      // stoppedFile). The FIFO entry above keeps the ORIGINAL content: the
+      // note is about a moment, and a redelivery of it later would be a lie.
+      let outContent = content
+      if (stoppedNoticePending) {
+        stoppedNoticePending = false
+        outContent = '[SYSTEM] The user pressed Stop during your previous run, so that turn was cancelled mid-work and the message it was answering was withdrawn. Do not resume or apologize for it; just answer what follows.\n\n' + content
+      }
       try {
-        child.stdin.write(renderUserEvent({ content, meta: payload.meta || {} }))
+        child.stdin.write(renderUserEvent({ content: outContent, meta: payload.meta || {} }))
         noteStdinWrite()
         // A real user question (or an autonomy/routine turn on a real channel)
         // opens the mute-recovery gate; only the lane's own channelId 'system'

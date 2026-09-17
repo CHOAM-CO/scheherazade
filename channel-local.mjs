@@ -55,7 +55,7 @@ import {
   createMarkerStore, createBootAnnouncer,
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
   startScheduleTicker, scheduleInjectContent,
-  createInboundNotifier, createOutboundDedup,
+  createInboundNotifier, createLaneInterrupter, createOutboundDedup,
 } from './channel-runtime.mjs'
 
 const log = installStdoutHygiene()
@@ -435,6 +435,11 @@ const notifyInbound = createInboundNotifier({
   log,
 })
 
+// Turn-level STOP (0.3.1): the /interrupt route below forwards through this.
+// Separate seam from notifyInbound because a stop has no MCP fallback -- see
+// createLaneInterrupter.
+const interruptLane = createLaneInterrupter({ dataHome: DATA_HOME, log })
+
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
 
 // Exported so tests exercise the real tool logic without connecting a
@@ -590,7 +595,7 @@ export const USER_REACTIONS = ['👍', '❤️']
 // access control on a shared machine -- any local process could otherwise
 // post messages as the user, and the agent has tools. The token is written
 // next to the port in DATA_HOME, which only this user can read.
-export function createRequestHandler({ notify, token, onInbound = () => {} }) {
+export function createRequestHandler({ notify, token, onInbound = () => {}, interrupt = null }) {
   return async function handle(req, res) {
     const send = (code, obj) => {
       res.writeHead(code, { 'content-type': 'application/json' })
@@ -734,6 +739,20 @@ export function createRequestHandler({ notify, token, onInbound = () => {} }) {
         enqueueReaction('user', emoji, target.seq)
         return send(202, { ok: true })
       }
+      // POST /interrupt (0.3.1, turn-level STOP): end the turn that is in
+      // flight right now. No body, and nothing is written to the transcript --
+      // the user cancelling their own question is not a message to the agent,
+      // and the lane writes its own stop receipt for the next turn's context.
+      // The reason string is passed through UNCHANGED from the interrupter's
+      // fixed enum (never lane prose) so the proxy above it can map one
+      // vocabulary; `interrupt` absent = a host that wired no lane seam, which
+      // reads as 'not_running' rather than a 404 the page cannot interpret.
+      if (url.pathname === '/interrupt' && req.method === 'POST') {
+        if (typeof interrupt !== 'function') return send(503, { error: 'stop unavailable', reason: 'not_running' })
+        const r = await interrupt()
+        if (r && r.ok) return send(200, { ok: true })
+        return send(r && r.reason === 'no_turn' ? 409 : 502, { error: 'stop failed', reason: (r && r.reason) || 'unreachable' })
+      }
       if (url.pathname === '/clear' && req.method === 'POST') {
         // "New conversation" clean break (2026-08-18): empty the transcript
         // and persist the empty state (seq stays monotonic -- see
@@ -776,11 +795,11 @@ export async function writePortFile(dataHome, payload) {
 // (stdin EOF guard) so the port file dies with the process. Fail-soft at the
 // call site — a surface that cannot bind must cost the platform channel
 // nothing but a log line.
-export async function startLocalChatSurface({ notify, log: slog = log } = {}) {
+export async function startLocalChatSurface({ notify, interrupt = null, log: slog = log } = {}) {
   const { restored } = await enableTranscriptPersistence()
   slog(`in-app transcript restored: ${restored} item(s)`)
   const token = crypto.randomBytes(32).toString('hex')
-  const handler = createRequestHandler({ notify, token })
+  const handler = createRequestHandler({ notify, token, interrupt })
   const server = http.createServer((req, res) => { handler(req, res) })
   await new Promise((resolve, reject) => {
     server.once('error', reject)
@@ -809,7 +828,7 @@ async function boot() {
   // messages, not instead of them), binds the loopback listener (port 0 =
   // OS-picked: the app spawns claude which spawns this, so a fixed port
   // would collide across two installs), and writes the port file.
-  const surface = await startLocalChatSurface({ notify: (n) => notifyInbound(n.params) })
+  const surface = await startLocalChatSurface({ notify: (n) => notifyInbound(n.params), interrupt: interruptLane })
 
   // Parent-death guard (found live, 2026-07-30: a killed parent left this
   // process orphaned and the chat page said "listening" while notifications

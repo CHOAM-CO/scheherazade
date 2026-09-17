@@ -50,6 +50,7 @@ const chk = (n, c, d) => {
 // ── fake channel: records what the proxy actually sends ────────────────────
 const CHANNEL_TOKEN = 'a'.repeat(64)
 let lastChannelReq = null
+let interruptReply = { status: 200, body: { ok: true } }
 const fakeChannel = http.createServer(async (req, res) => {
   let body = ''
   for await (const chunk of req) body += chunk
@@ -60,6 +61,9 @@ const fakeChannel = http.createServer(async (req, res) => {
   if (url.pathname === '/health') return send(200, { ok: true, agent: 'fake-agent' })
   if (url.pathname === '/out') return send(200, { items: [{ seq: 4, role: 'agent', text: 'hi from agent', ts: 1 }], latest: 4, missed: false })
   if (url.pathname === '/in' && req.method === 'POST') return send(202, { ok: true })
+  // /interrupt (0.3.1 STOP): reply is test-controlled, because the whole
+  // point of this route is how it TRANSLATES the channel's answers.
+  if (url.pathname === '/interrupt' && req.method === 'POST') return send(interruptReply.status, interruptReply.body)
   return send(404, { error: 'not found' })
 })
 await new Promise((r) => fakeChannel.listen(0, '127.0.0.1', r))
@@ -118,6 +122,51 @@ try {
     chk('the channel received the text verbatim', lastChannelReq && JSON.parse(lastChannelReq.body).text === 'hello from the page', JSON.stringify(lastChannelReq))
     chk('the channel received the bearer token from the port file', lastChannelReq && lastChannelReq.auth === `Bearer ${CHANNEL_TOKEN}`)
   }
+  // ── STOP proxy (0.3.1): POST /api/chat/interrupt ──────────────────────────
+  // Three things to prove: the hop carries the bearer token and an empty
+  // body (there is nothing caller-supplied in this route at all); 409 comes
+  // back as 409 with 'no_turn', because "the turn finished while your click
+  // was in flight" is a different sentence to the user than "could not
+  // stop"; and an unfamiliar upstream reason collapses to the local enum
+  // instead of passing lane prose to the browser.
+  {
+    lastChannelReq = null
+    interruptReply = { status: 200, body: { ok: true } }
+    const r = await fetch(`${base}/api/chat/interrupt`, { method: 'POST', headers: auth, body: '{}' })
+    const b = await r.json()
+    chk('interrupt forwards and 200s', r.status === 200 && b.ok === true, JSON.stringify(b))
+    chk('interrupt hits the channel /interrupt with the port-file bearer token',
+      lastChannelReq && lastChannelReq.url === '/interrupt' && lastChannelReq.method === 'POST'
+      && lastChannelReq.auth === `Bearer ${CHANNEL_TOKEN}`, JSON.stringify(lastChannelReq))
+    chk('interrupt sends an empty object body (no caller input on this route)',
+      lastChannelReq && JSON.stringify(JSON.parse(lastChannelReq.body)) === '{}', lastChannelReq && lastChannelReq.body)
+  }
+  {
+    interruptReply = { status: 409, body: { error: 'stop failed', reason: 'no_turn' } }
+    const r = await fetch(`${base}/api/chat/interrupt`, { method: 'POST', headers: auth, body: '{}' })
+    chk('interrupt with no turn in flight: 409 no_turn (a non-event, not a failure)',
+      r.status === 409 && (await r.json()).reason === 'no_turn')
+  }
+  {
+    interruptReply = { status: 503, body: { error: 'stop unavailable', reason: 'not_running' } }
+    const r = await fetch(`${base}/api/chat/interrupt`, { method: 'POST', headers: auth, body: '{}' })
+    chk('interrupt against a lane-less channel: 502 not_running (enum passes through)',
+      r.status === 502 && (await r.json()).reason === 'not_running')
+  }
+  {
+    const prose = 'ENOENT: /Users/someone/secret/path exploded'
+    interruptReply = { status: 500, body: { error: prose, reason: prose } }
+    const r = await fetch(`${base}/api/chat/interrupt`, { method: 'POST', headers: auth, body: '{}' })
+    const body = await r.text()
+    chk('an unknown upstream reason collapses to upstream_refused',
+      r.status === 502 && JSON.parse(body).reason === 'upstream_refused', body)
+    chk('upstream prose never reaches the browser', !body.includes('secret/path'), body)
+  }
+  {
+    const r = await fetch(`${base}/api/chat/interrupt`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+    chk('interrupt without the onboard token is refused (403, gate before route)', r.status === 403, r.status)
+  }
+  interruptReply = { status: 200, body: { ok: true } }
   {
     lastChannelReq = null
     const r = await fetch(`${base}/api/chat/out?since=3`, { headers: auth })

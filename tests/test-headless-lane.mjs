@@ -701,6 +701,29 @@ process.on('SIGTERM', () => process.exit(0))
   assert(!fs.existsSync(pendPath),
     'result pays off ALL entries written before it (merge semantics, probe 6)')
 
+  // STEERING (0.3.1): the same merge, driven the way the UI now drives it --
+  // a second message typed WHILE a turn is open. Both reach stdin, and ONE
+  // result pays for both. This is the whole steering feature: it lives in the
+  // transport, so the only thing that can regress it is this contract.
+  await post('첫번째 질문')            // opens a turn, no result yet
+  await waitSinkLines(3)
+  {
+    const d = Date.now() + 4000
+    while (Date.now() < d) { if (fs.existsSync(pendPath)) break; await new Promise((r) => setTimeout(r, 50)) }
+    assert(fs.existsSync(pendPath) && JSON.parse(fs.readFileSync(pendPath, 'utf8')).length === 1,
+      'steering: an unanswered message leaves exactly one entry open')
+  }
+  await post('실은 이렇게 해줘 emit-result')  // mid-turn steer, then the turn ends
+  const steerLines = await waitSinkLines(4)
+  assert(steerLines.length >= 4 && JSON.parse(steerLines[3]).message.content[0].text.includes('이렇게 해줘'),
+    'steering: a mid-turn message reaches the live stdin unchanged (no queueing, no new lane)')
+  {
+    const d = Date.now() + 4000
+    while (Date.now() < d) { if (!fs.existsSync(pendPath)) break; await new Promise((r) => setTimeout(r, 50)) }
+    assert(!fs.existsSync(pendPath),
+      'steering: ONE result pays for both the original and the mid-turn steer (probe 6 merge)')
+  }
+
   // an ERROR result pays for NOTHING (2026-08-13, the silent-death tail):
   // a message that merged into a doomed turn stays in the FIFO for the
   // recycle redelivery instead of vanishing unanswered.
@@ -788,6 +811,218 @@ console.log('\n7. notifier pid-liveness (stale endpoint file after SIGKILL)')
   let threwLive = false
   try { await notifier({ content: 'hiccup', meta: {} }) } catch { threwLive = true }
   assert(threwLive && mcpCalls.length === 1, 'live-pid + failed POST -> still throws (no silent fallback)')
+}
+
+// ── 8. turn-level STOP: POST /interrupt (0.3.1) ─────────────────────────────
+// The contract, in order: the pending FIFO is cleared BEFORE the child is
+// killed, so a cancelled message never comes back on the --resume boot; the
+// child gets SIGTERM; the lane exits (supervisor respawns it with --resume);
+// and a .stopped-by-user receipt is left for the next boot to fold into its
+// first real message. 409 when nothing is in flight, 403 on a bad token and
+// on a foreign Host -- same posture as /inbound, asserted rather than assumed.
+console.log('\n8. turn-level STOP (POST /interrupt)')
+if (WIN) skipWin('turn-level STOP E2E')
+else {
+  const MEM = path.join(TMP, 'mem-stop')
+  fs.mkdirSync(MEM, { recursive: true })
+  // fake claude: init, echo stdin, and record the signal it dies to. It does
+  // NOT exit on SIGTERM immediately -- it writes the receipt first, which is
+  // what lets the test prove a SIGTERM (not a SIGKILL) arrived.
+  const fake = path.join(TMP, 'fake-stop.mjs')
+  fs.writeFileSync(fake, `
+import fs from 'node:fs'
+import { createInterface } from 'node:readline'
+process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'stop-sess', model: 'fake', mcp_servers: [] }) + '\\n')
+const rl = createInterface({ input: process.stdin })
+rl.on('line', (l) => fs.appendFileSync(process.env.FAKE_SINK, l + '\\n'))
+process.on('SIGTERM', () => { fs.writeFileSync(process.env.FAKE_SIGFILE, 'SIGTERM'); process.exit(0) })
+setInterval(() => {}, 1000)
+`)
+  const shim = path.join(TMP, 'stop-shim.sh')
+  fs.writeFileSync(shim, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fake)} "$@"\n`, { mode: 0o755 })
+  const sink = path.join(TMP, 'stop-sink.jsonl')
+  const sigfile = path.join(TMP, 'stop-signal.txt')
+  const pendPath = path.join(MEM, '.headless-pending.json')
+  const stopMarker = path.join(MEM, '.stopped-by-user')
+  const epPath = path.join(MEM, '.ingest-endpoint.json')
+
+  const lane = spawn(process.execPath, [path.join(ROOT, 'headless-lane.mjs')], {
+    env: { ...process.env, MEM, MODEL: 'fake-model', CLAUDE_BIN: shim, FAKE_SINK: sink, FAKE_SIGFILE: sigfile },
+    stdio: ['ignore', 'ignore', 'pipe'],
+  })
+  let laneErr = ''
+  lane.stderr.on('data', (d) => { laneErr += d })
+  // Exit promise registered BEFORE anything can stop the lane: 'exit' fires
+  // once, and a listener attached after the fact never hears it.
+  const laneExited = new Promise((r) => lane.on('exit', () => r(true)))
+  const dl = Date.now() + 8000
+  while (!fs.existsSync(epPath) && Date.now() < dl) await new Promise((r) => setTimeout(r, 50))
+  const ep = JSON.parse(fs.readFileSync(epPath, 'utf8'))
+  // Wait for the CHILD to be ready, not just the lane. The endpoint file is
+  // written as soon as the lane binds, which is well before a freshly spawned
+  // node child has finished booting -- and a SIGTERM that arrives before the
+  // child installs its handler kills it on the default disposition, so the
+  // test would be measuring node's startup latency instead of the stop path.
+  // The session file is the child's own "I emitted init" receipt.
+  const sessPath = path.join(MEM, '.headless-session.json')
+  const readyDl = Date.now() + 8000
+  while (!fs.existsSync(sessPath) && Date.now() < readyDl) await new Promise((r) => setTimeout(r, 50))
+  assert(fs.existsSync(sessPath), 'stop lane: child booted and emitted init')
+  const base = `http://127.0.0.1:${ep.port}`
+  const stop = (headers = {}) => fetch(`${base}/interrupt`, {
+    method: 'POST',
+    headers: { 'x-ingest-token': ep.token, 'content-type': 'application/json', ...headers },
+    body: '{}',
+  })
+
+  // no turn open yet -> 409, and NOTHING is killed or cleared by a 409
+  const idle = await stop()
+  assert(idle.status === 409, `/interrupt with no turn in flight -> 409 (got ${idle.status})`)
+  assert(!fs.existsSync(stopMarker), 'a 409 writes no stop receipt (nothing was stopped)')
+  assert(!fs.existsSync(sigfile), 'a 409 kills nothing')
+
+  // auth posture parity with /inbound, checked BEFORE the state gate matters
+  const noTok = await fetch(`${base}/interrupt`, { method: 'POST', body: '{}' })
+  assert(noTok.status === 403, `tokenless /interrupt -> 403 (got ${noTok.status})`)
+  {
+    const http = await import('node:http')
+    const status = await new Promise((resolve) => {
+      const rq = http.request({ host: '127.0.0.1', port: ep.port, method: 'POST', path: '/interrupt',
+        headers: { host: 'evil.example.com', 'x-ingest-token': ep.token } }, (rs) => resolve(rs.statusCode))
+      rq.on('error', () => resolve(-1))
+      rq.end('{}')
+    })
+    assert(status === 403, `foreign Host header on /interrupt -> 403 (got ${status})`)
+  }
+  assert(!fs.existsSync(sigfile), 'a rejected /interrupt never reaches the child')
+
+  // open a turn, then stop it
+  await fetch(`${base}/inbound`, {
+    method: 'POST',
+    headers: { 'x-ingest-token': ep.token, 'content-type': 'application/json' },
+    body: JSON.stringify({ content: '취소될 질문', meta: { channelId: 'in-app' } }),
+  })
+  {
+    const d = Date.now() + 4000
+    while (!fs.existsSync(pendPath) && Date.now() < d) await new Promise((r) => setTimeout(r, 50))
+    assert(fs.existsSync(pendPath), 'the doomed message is in the pending FIFO before the stop')
+  }
+  const stopped = await stop()
+  assert(stopped.status === 200, `/interrupt with a turn in flight -> 200 (got ${stopped.status})`)
+  // THE load-bearing assertion. Skip the clear and every Stop press hands the
+  // cancelled message back on the next boot (the 2026-08-05 02:01 bug class).
+  assert(!fs.existsSync(pendPath),
+    'pending FIFO is EMPTY after a stop -- the cancelled message will not redeliver')
+  assert(fs.existsSync(stopMarker), 'stop receipt written for the next boot to explain the gap')
+  {
+    const d = Date.now() + 5000
+    while (!fs.existsSync(sigfile) && Date.now() < d) await new Promise((r) => setTimeout(r, 50))
+    assert(fs.existsSync(sigfile) && fs.readFileSync(sigfile, 'utf8') === 'SIGTERM',
+      'the child got SIGTERM (watchdog path), not a bare SIGKILL')
+  }
+  // the lane follows the child out, which is what makes the supervisor respawn
+  // it with --resume: the conversation survives, the turn does not
+  const exited = await Promise.race([
+    laneExited,
+    new Promise((r) => setTimeout(() => r(false), 8000)),
+  ])
+  assert(exited, 'the lane exits with the stopped child (supervisor respawns it with --resume)')
+  assert(!fs.existsSync(epPath), 'endpoint file removed on the stop-driven exit')
+
+  // the lane comes back, and its first real message carries the stop receipt
+  fs.rmSync(sink, { force: true })
+  const lane2 = spawn(process.execPath, [path.join(ROOT, 'headless-lane.mjs')], {
+    env: { ...process.env, MEM, MODEL: 'fake-model', CLAUDE_BIN: shim, FAKE_SINK: sink, FAKE_SIGFILE: sigfile + '.2' },
+    stdio: ['ignore', 'ignore', 'pipe'],
+  })
+  const dl2 = Date.now() + 8000
+  while (!fs.existsSync(epPath) && Date.now() < dl2) await new Promise((r) => setTimeout(r, 50))
+  assert(fs.existsSync(epPath), 'the lane comes back up after a stop')
+  assert(!fs.existsSync(stopMarker), 'stop receipt consumed at boot (never replayed twice)')
+  await new Promise((r) => setTimeout(r, 300)) // a wrong redelivery would land here
+  assert(!fs.existsSync(sink) || !fs.readFileSync(sink, 'utf8').includes('취소될 질문'),
+    'the cancelled message is NOT redelivered on the resume boot')
+  const ep2 = JSON.parse(fs.readFileSync(epPath, 'utf8'))
+  await fetch(`http://127.0.0.1:${ep2.port}/inbound`, {
+    method: 'POST',
+    headers: { 'x-ingest-token': ep2.token, 'content-type': 'application/json' },
+    body: JSON.stringify({ content: '다음 질문', meta: { channelId: 'in-app' } }),
+  })
+  {
+    const d = Date.now() + 4000
+    while (Date.now() < d) {
+      if (fs.existsSync(sink) && fs.readFileSync(sink, 'utf8').includes('다음 질문')) break
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    const text = fs.existsSync(sink)
+      ? JSON.parse(fs.readFileSync(sink, 'utf8').trim().split('\n').filter(Boolean)[0]).message.content[0].text
+      : ''
+    assert(text.includes('다음 질문') && text.includes('pressed Stop'),
+      'the first message after a stop carries the receipt (the transcript explains its own gap)')
+  }
+  // and only the first one: the note is about a moment, not a standing state
+  await fetch(`http://127.0.0.1:${ep2.port}/inbound`, {
+    method: 'POST',
+    headers: { 'x-ingest-token': ep2.token, 'content-type': 'application/json' },
+    body: JSON.stringify({ content: '그 다음 질문', meta: { channelId: 'in-app' } }),
+  })
+  {
+    const d = Date.now() + 4000
+    while (Date.now() < d) {
+      if (fs.existsSync(sink) && fs.readFileSync(sink, 'utf8').includes('그 다음 질문')) break
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    const lines = fs.readFileSync(sink, 'utf8').trim().split('\n').filter(Boolean)
+    const later = lines.map((l) => JSON.parse(l).message.content[0].text).find((t) => t.includes('그 다음 질문'))
+    assert(later && !later.includes('pressed Stop'), 'the stop note rides exactly one message, not every later one')
+  }
+  lane2.kill('SIGTERM')
+  await new Promise((r) => lane2.on('exit', r))
+  if (fail > 0) console.log(`  lane stderr for context:\n${laneErr.split('\n').map((l) => `    ${l}`).join('\n')}`)
+}
+
+// ── 9. lane interrupter routing (fixed reason enum, no MCP fallback) ────────
+// The stop seam's whole job is to answer a BUTTON, so it must never throw and
+// must never invent vocabulary. Unlike createInboundNotifier there is no MCP
+// fallback at all: on the attach topology nothing can end a turn, and saying
+// 'not_running' is the honest answer.
+console.log('\n9. lane interrupter routing')
+{
+  const { createLaneInterrupter } = await import(pathToFileURL(path.join(ROOT, 'channel-runtime.mjs')).href)
+  const dataHome = path.join(TMP, 'interrupter')
+  fs.mkdirSync(dataHome, { recursive: true })
+  const epFile = path.join(dataHome, '.ingest-endpoint.json')
+
+  const mk = (fetchFn) => createLaneInterrupter({ dataHome, log: () => {}, fetchFn })
+
+  assert((await mk(() => { throw new Error('should not be called') })()).reason === 'not_running',
+    'no endpoint file -> not_running (attach topology: nothing can be stopped)')
+
+  const deadProc = spawn(process.execPath, ['-e', ''])
+  await new Promise((r) => deadProc.on('exit', r))
+  fs.writeFileSync(epFile, JSON.stringify({ port: 1, token: 't', pid: deadProc.pid }))
+  assert((await mk(() => { throw new Error('should not be called') })()).reason === 'not_running',
+    'dead-pid endpoint file -> not_running (a SIGKILLed lane leaves this file behind)')
+
+  fs.writeFileSync(epFile, JSON.stringify({ port: 1, token: 'tok123', pid: process.pid }))
+  const calls = []
+  const ok = await mk(async (url, opts) => {
+    calls.push({ url, token: opts.headers['x-ingest-token'], method: opts.method })
+    return { ok: true, status: 200 }
+  })()
+  assert(ok.ok === true, 'live lane + 200 -> ok')
+  assert(calls.length === 1 && calls[0].url.endsWith('/interrupt') && calls[0].method === 'POST'
+    && calls[0].token === 'tok123', 'posts to /interrupt with the lane token')
+
+  assert((await mk(async () => ({ ok: false, status: 409 }))()).reason === 'no_turn',
+    "lane 409 -> 'no_turn' (the turn ended while the click was in flight)")
+  assert((await mk(async () => ({ ok: false, status: 503 }))()).reason === 'upstream_refused',
+    'any other lane refusal -> upstream_refused')
+  let threw = false
+  let res = null
+  try { res = await mk(async () => { throw new Error('ECONNREFUSED') })() } catch { threw = true }
+  assert(!threw && res && res.reason === 'unreachable',
+    'a failed POST reports unreachable and NEVER throws (the caller is a button)')
 }
 
 fs.rmSync(TMP, { recursive: true, force: true })
