@@ -971,6 +971,23 @@ window.COPY = {
     bgPillAria: 'Background tasks the agent has running',
     thinkAria: "The model's reasoning for this turn (click to expand)",
     sendFailed: "Couldn't send. Your message is still in the box — try again.",
+    // Stop + steer (0.3.1). Register rule that applies hard here: no false
+    // promises. Stopping a claude-lane turn kills and respawns the agent
+    // process, which takes seconds and is visible — so the button says
+    // "Stopping…" and the hint names the cost instead of pretending the
+    // turn just evaporates. The conversation itself survives (--resume);
+    // only the unfinished turn is lost, and that is what the copy claims.
+    stop: 'Stop',
+    stopAria: 'Stop the run that is in progress',
+    stopping: 'Stopping…',
+    stopped: 'Stopped. The agent takes a few seconds to come back; the conversation is kept.',
+    stopNoTurn: 'That run had already finished.',
+    stopFailed: "Couldn't stop the run. If the agent is restarting, try again in a moment.",
+    // Steering: the composer stays live mid-run, and what it sends joins the
+    // turn already in progress instead of queueing behind it.
+    steerHint: 'The agent is working. A message sent now joins the run in progress.',
+    steerPlaceholder: 'Add to the run in progress…',
+    steerMarker: 'sent mid-run',
     // DM interaction states (v0.0.34). `read` is honest by construction:
     // a user message only enters the transcript after it was delivered
     // into the agent process, so the label never claims more than that.

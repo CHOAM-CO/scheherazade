@@ -23,7 +23,7 @@
 // (spawnRealAgentChild), and resolveDataHome honors it first.
 //
 // Failure vocabulary is FIXED ENUMS ('not_running' | 'unreachable' |
-// 'upstream_refused' | ...), never upstream prose and never caller input --
+// 'upstream_refused' | 'no_turn' | ...), never upstream prose and never caller input --
 // the unbounded-echo rule, same as setup-token.cjs. The channel token
 // appears in exactly one place: the Authorization header of the loopback
 // fetch. It is never in a response, an error, or a log line here.
@@ -157,6 +157,46 @@ function createRoutes(staticCtx) {
           return
         }
         sendJson(res, 202, { ok: true })
+        return
+      },
+    },
+    // POST interrupt: the Stop button (0.3.1). No body at all -- the only
+    // thing this route carries is the fact that it was called, so there is
+    // nothing caller-supplied to validate or echo. Mutating, so the Host +
+    // Origin + X-Onboard-Token gate has already run.
+    //
+    // 409 is a first-class answer, not an error: the turn finished while the
+    // click was in flight. The page treats it as "already done" and just
+    // re-renders. Reason strings stay in this file's fixed vocabulary; the
+    // channel's own enum is already the same words, and anything unfamiliar
+    // collapses to 'upstream_refused' rather than passing lane prose through.
+    {
+      method: 'POST',
+      match: (pathname) => pathname === '/api/chat/interrupt',
+      handler: async (req, res) => {
+        const ep = readChannelEndpoint()
+        if (!ep) {
+          sendJson(res, 503, { error: 'chat channel is not running', reason: 'not_running' })
+          return
+        }
+        const r = await proxyToChannel(ep, '/interrupt', { method: 'POST', body: {} })
+        if (r.status === 0) {
+          sendJson(res, 502, { error: 'chat channel did not answer', reason: 'unreachable' })
+          return
+        }
+        if (r.status === 200) {
+          sendJson(res, 200, { ok: true })
+          return
+        }
+        const upstream = r.body && r.body.reason
+        const reason = ['not_running', 'unreachable', 'no_turn', 'upstream_refused'].includes(upstream)
+          ? upstream
+          : 'upstream_refused'
+        if (r.status === 409 || reason === 'no_turn') {
+          sendJson(res, 409, { error: 'no turn is running', reason: 'no_turn' })
+          return
+        }
+        sendJson(res, 502, { error: 'chat channel refused the stop', reason })
         return
       },
     },

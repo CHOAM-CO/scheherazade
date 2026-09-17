@@ -1669,6 +1669,16 @@ html {
 }
 .chat-effort-select { max-width: 9rem; }
 .chat-composer-spacer { flex: 1; }
+/* steering hint (0.3.1): one quiet line inside the composer card, visible
+   ONLY while a turn is in flight, saying that the box now adds to the run
+   instead of starting one. Same dim register as the agent-control chips —
+   it is an explanation, not an alert. */
+.chat-steer-hint {
+  margin: 0 4px 6px;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: var(--fg-dim);
+}
 /* model quick-switch chip (the owner 08-20 19:09): native select dressed as a
    quiet pill — present but not shouting, claude.ai composer-corner pattern */
 .chat-model-select {

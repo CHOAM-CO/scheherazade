@@ -45,6 +45,11 @@
   const pane = $('ct-pane')
   const input = $('ct-input')
   const sendBtn = $('ct-send')
+  // Stop + steer (0.3.1). stopBtn only exists while a turn is in flight;
+  // steerHint says what the (still live) textarea will do while it is.
+  const stopBtn = $('ct-stop')
+  const steerHint = $('ct-steer-hint')
+  let stopping = false // one press per run: the second click has nothing to kill
 
   let nextSeq = null // null = cursor not seeded yet (first poll renders nothing)
   let msgCount = 0
@@ -98,6 +103,12 @@
     $('ct-subtitle').textContent = C.subtitle
     sendBtn.textContent = C.send
     input.placeholder = C.placeholder
+    if (stopBtn) {
+      stopBtn.textContent = C.stop
+      stopBtn.setAttribute('aria-label', C.stopAria)
+      stopBtn.onclick = requestStop
+    }
+    if (steerHint) steerHint.textContent = C.steerHint
     $('ct-status').textContent = C.statusChecking
     const newConvoBtn = $('ct-new-convo')
     if (newConvoBtn) newConvoBtn.textContent = C.newConversation
@@ -570,6 +581,16 @@
   // dots when the channel dies mid-wait.
   function updatePresence() {
     const waiting = awaitingSince !== null && channelUp
+    // Stop + steer surface (0.3.1) rides the SAME `waiting` signal the typing
+    // dots and the run fold already trust -- one source of truth for "work is
+    // owed", so the button cannot offer to stop a turn that is not running.
+    // Send deliberately stays visible beside Stop rather than being swapped
+    // out: mid-turn sends MERGE into the running turn (probe 6), and that
+    // steering is a feature here, not an accident to be disabled away.
+    // .hidden, not style.display -- [hidden] is the page's convention.
+    if (stopBtn) stopBtn.hidden = !waiting
+    if (steerHint) steerHint.hidden = !waiting
+    input.placeholder = waiting ? C.steerPlaceholder : C.placeholder
     // A live run only makes sense while work is owed. If the wait died
     // (channel down, no reply ever) the open timeline would sit there as
     // dressed-up silence — close it into its honest summary once the
@@ -916,6 +937,47 @@
       console.error('attachment upload failed:', err)
       window.showToast(C.attachFailed(err.message))
     }
+  }
+
+  // ── STOP (0.3.1) ──────────────────────────────────────────────────────────
+  // Raw fetch, not window.api: 409 ("the turn finished while your click was in
+  // flight") is a normal outcome here, and api() throws on every non-2xx with
+  // only a message string to go on. Reading res.status directly is the way to
+  // tell "already done" from "could not stop", which are different sentences
+  // to a user. Token header mirrors nav.js's api() exactly -- this is a POST,
+  // so the server's per-launch gate applies.
+  async function requestStop() {
+    if (stopping) return
+    stopping = true
+    if (stopBtn) { stopBtn.disabled = true; stopBtn.textContent = C.stopping }
+    let status = 0
+    try {
+      const res = await fetch('/api/chat/interrupt', {
+        method: 'POST',
+        headers: { 'X-Onboard-Token': window.getOnboardToken() || '', 'content-type': 'application/json' },
+        body: '{}',
+      })
+      status = res.status
+    } catch (err) {
+      console.error('chat stop failed:', err)
+    }
+    if (status === 200 || status === 409) {
+      // The run is over either way, so the live timeline must stop pretending.
+      // discardRun, not closeRun: a cancelled turn has no honest "Worked for
+      // Ns" summary to collapse into -- the work was thrown away.
+      discardRun()
+      $('ct-status').textContent = status === 200 ? C.stopped : C.stopNoTurn
+      // The lane reboot takes the endpoint file down with it; refreshStatus
+      // is what repaints the bar when it comes back up.
+      refreshStatus()
+    } else {
+      window.showToast(C.stopFailed)
+      refreshStatus()
+    }
+    if (stopBtn) { stopBtn.disabled = false; stopBtn.textContent = C.stop }
+    // Released only after the request settled: until then a second press
+    // would race a kill that is already under way.
+    stopping = false
   }
 
   async function send() {
