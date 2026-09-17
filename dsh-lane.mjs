@@ -835,6 +835,12 @@ async function main () {
   let sawReplyThisTurn = false
   let sawTextThisTurn = false
   let muteNudgeCount = 0
+  // Turn-level STOP state (0.3.1, contract-parity with headless-lane's
+  // /interrupt). Unlike the claude lane there is no child stdin to kill a turn
+  // on: the dsh gateway exposes session.cancel, so this lane's stop is the
+  // SOFT path -- no engine kill, no lane reboot, no --resume. openTurn is the
+  // 409 gate: set when a prompt goes out, cleared at turn/end.
+  let openTurn = false
   // Deliver a mute turn's composed text as the real chat message. Unlike
   // postPresence this is DELIVERY, not presence -- so it verifies the POST
   // landed and falls back to the nudge when it did not (channel down, port
@@ -951,6 +957,7 @@ async function main () {
         turnHadUserInbound = false
         sawReplyThisTurn = false
         sawTextThisTurn = false
+        openTurn = false // /interrupt's 409 gate: nothing is in flight now
         const now = Date.now()
         writePending(readPending().filter((p) => p.ts > now))
         {
@@ -1182,6 +1189,7 @@ async function main () {
       try {
         if (opensMuteGate({ channelId: (p.meta || {}).channelId, content: p.content })) turnHadUserInbound = true
         await client.prompt(sessionId, await renderInbound(p.content, p.meta))
+        openTurn = true
       } catch (e) { errLog(`redelivery failed: ${e.message}`) }
     }
   }
@@ -1201,7 +1209,24 @@ async function main () {
     }
     const host = String(req.headers.host || '')
     if (!/^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(host)) return send(403, { error: 'bad host' })
-    if (req.method !== 'POST' || req.url !== '/inbound') return send(404, { error: 'not found' })
+    if (req.method !== 'POST') return send(404, { error: 'not found' })
+    // POST /interrupt (0.3.1): contract-parity with headless-lane. Same gate,
+    // empty body, 409 when no turn is open. The FIFO is cleared BEFORE the
+    // cancel for the identical reason (a withdrawn message must not come back
+    // as a redelivery). The gateway's session.cancel ends the turn in place,
+    // so unlike the claude lane there is no kill and no lane reboot here --
+    // the session, and the turn's partial work, stay exactly where they are.
+    if (req.url === '/interrupt') {
+      if (!tokenOk(req.headers['x-ingest-token'])) return send(403, { error: 'bad token' })
+      if (childExited) return send(503, { error: 'agent not running' })
+      if (!openTurn) return send(409, { error: 'no turn in flight' })
+      openTurn = false
+      if (!writePending([])) log('WARNING: pending FIFO clear failed -- the cancelled message may redeliver')
+      log('user STOP: cancelling the in-flight turn via session.cancel (pending FIFO cleared)')
+      client.cancel(sessionId).catch((e) => errLog(`session.cancel failed: ${e.message}`))
+      return send(200, { ok: true, stopped: true })
+    }
+    if (req.url !== '/inbound') return send(404, { error: 'not found' })
     if (!tokenOk(req.headers['x-ingest-token'])) return send(403, { error: 'bad token' })
     let body = ''
     let tooLarge = false
@@ -1228,6 +1253,7 @@ async function main () {
       // surface's notifier sends no channelId (renderChannelTag defaults it
       // to 'in-app'); platform backends send their real channel id.
       lastInboundChannelId = String((payload.meta || {}).channelId || 'in-app')
+      openTurn = true // /interrupt is answerable from here until turn/end
       renderInbound(content, payload.meta)
         .then((parts) => client.prompt(sessionId, parts))
         .then(() => log(`inbound -> session (${content.length} chars, sender=${(payload.meta && payload.meta.sender) || '?'})`))
