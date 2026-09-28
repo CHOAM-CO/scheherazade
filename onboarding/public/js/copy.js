@@ -1240,6 +1240,17 @@ window.COPY = {
     avatarRemoved: 'Picture removed.',
     avatarBadType: 'Pick a PNG, JPG, or WebP image.',
     avatarTooLarge: 'That image is over 2MB — too big for a profile picture.',
+    // The crop step (2026-09-28). Until now the upload was take-it-or-leave
+    // -it: whatever framing the file arrived with was the framing the agent
+    // got, because the only crop happened at display time and always took the
+    // centre. These strings are the square, the slider and the two ways out
+    // of it -- "Cancel" is deliberately the same word the rest of the app
+    // uses for leaving a dialog without a change.
+    avatarCropTitle: 'Position your picture',
+    avatarCropHint: 'Drag to reposition, or zoom.',
+    avatarCropZoom: 'Zoom',
+    avatarCropCancel: 'Cancel',
+    avatarCropSave: 'Save',
     // AUTHORED -- apply-state line under the model/effort selects (IA
     // v0.0.9, red-team fold #1): the shell shows reality, this line explains
     // the GAP. Its highest-value state is the failure one -- a spawn refused

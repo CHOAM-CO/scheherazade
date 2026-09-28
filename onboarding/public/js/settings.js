@@ -87,6 +87,213 @@
     }
   }
 
+  // ── avatar crop dialog (2026-09-28) ─────────────────────────────────────
+  // The upload used to be take-it-or-leave-it: the raw file was stored as-is
+  // and the only crop happened at display time, where it always takes the
+  // centre. A wide photo lost both ends, a tall one lost the face, and the
+  // owner had no say ("크기가 너무 작고 조절할 수가 없다"). This is the say: a
+  // FIXED 1:1 viewport they drag and zoom, and what is inside it is exactly
+  // what gets stored.
+  //
+  // Built with createElement/textContent like the rest of this page. nav.js's
+  // dialog uses innerHTML because it only ever writes its own literal markup;
+  // nothing here is interpolated at all -- not the picked filename, nothing
+  // from the file -- so the injection posture is trivially kept.
+  //
+  // Geometry, kept in ONE place because the canvas draw has to agree with the
+  // screen: the image is drawn at
+  //   w = natW * cover * zoom,  h = natH * cover * zoom
+  // where cover = viewport / min(natW, natH) is the "fill the square" fit. So
+  // zoom >= 1 (the range's min) keeps it >= the viewport on BOTH axes, and the
+  // only way to bare a corner would be an offset clamp bug -- which is why the
+  // offsets are clamped to [viewport - w, 0] on every open, move and zoom.
+  const CROP_VIEWPORT = 240 // must match .avatar-crop-viewport in app.css
+  const CROP_OUT = 256 // stored picture is 256x256 (the shipped icon's size)
+
+  // Resolves the stored blob (image/png) or null if the user cancelled or the
+  // picture could not be decoded. `onDecodeFail` is the caller's way to show
+  // its own status line -- this helper owns no status element.
+  function openAvatarCrop(file, onDecodeFail) {
+    return new Promise((resolve) => {
+      // The picked file is shown from an OBJECT URL, never a data URL: it is
+      // revoked the moment the dialog closes, so the photo is not held in
+      // memory as a base64 string we keep around.
+      const url = URL.createObjectURL(file)
+      const backdrop = document.createElement('div')
+      backdrop.className = 'dialog-backdrop hidden'
+      const box = document.createElement('div')
+      box.className = 'dialog-box'
+      const title = document.createElement('p')
+      title.textContent = C.avatarCropTitle
+      const viewport = document.createElement('div')
+      viewport.className = 'avatar-crop-viewport'
+      const img = document.createElement('img')
+      img.className = 'avatar-crop-image'
+      img.alt = ''
+      img.draggable = false
+      img.src = url
+      viewport.appendChild(img)
+      const zoomRow = document.createElement('div')
+      zoomRow.className = 'avatar-crop-zoom'
+      const zoomLabel = document.createElement('label')
+      zoomLabel.className = 'avatar-crop-zoom-label'
+      zoomLabel.setAttribute('for', 'avatar-crop-zoom')
+      zoomLabel.textContent = C.avatarCropZoom
+      const zoomInput = document.createElement('input')
+      zoomInput.type = 'range'
+      zoomInput.id = 'avatar-crop-zoom'
+      zoomInput.min = '1'
+      zoomInput.max = '4'
+      zoomInput.step = '0.01'
+      zoomInput.value = '1'
+      zoomRow.appendChild(zoomLabel)
+      zoomRow.appendChild(zoomInput)
+      const hint = document.createElement('p')
+      hint.className = 'avatar-crop-hint'
+      hint.textContent = C.avatarCropHint
+      const actions = document.createElement('div')
+      actions.className = 'dialog-actions'
+      const cancelBtn = document.createElement('button')
+      cancelBtn.className = 'secondary'
+      cancelBtn.textContent = C.avatarCropCancel
+      const saveBtn = document.createElement('button')
+      saveBtn.textContent = C.avatarCropSave
+      actions.appendChild(cancelBtn)
+      actions.appendChild(saveBtn)
+      box.appendChild(title)
+      box.appendChild(viewport)
+      box.appendChild(zoomRow)
+      box.appendChild(hint)
+      box.appendChild(actions)
+      backdrop.appendChild(box)
+      document.body.appendChild(backdrop)
+
+      // natW/natH in source pixels; z is the user's zoom on top of the cover
+      // fit; offX/offY are the image's top-left inside the viewport, in CSS px
+      // (the units the pointer events speak and the units the canvas draw
+      // divides back out of source pixels).
+      let natW = 1
+      let natH = 1
+      let cover = 1
+      let z = 1
+      let offX = 0
+      let offY = 0
+      let drag = null
+      let closed = false
+
+      const clampOffsets = () => {
+        const w = natW * cover * z
+        const h = natH * cover * z
+        offX = Math.min(0, Math.max(CROP_VIEWPORT - w, offX))
+        offY = Math.min(0, Math.max(CROP_VIEWPORT - h, offY))
+      }
+      const render = () => {
+        clampOffsets()
+        img.style.width = `${natW * cover * z}px`
+        img.style.height = `${natH * cover * z}px`
+        img.style.left = `${offX}px`
+        img.style.top = `${offY}px`
+      }
+      const close = (result) => {
+        if (closed) return
+        closed = true
+        document.removeEventListener('keydown', onKey)
+        // The bytes are already read (or the dialog was abandoned), so the
+        // object URL has no further reader and must not outlive the dialog.
+        URL.revokeObjectURL(url)
+        backdrop.remove()
+        resolve(result)
+      }
+      const onKey = (e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          close(null)
+        }
+      }
+
+      // Zoom keeps the point that is at the viewport's CENTRE at the centre,
+      // so the picture grows around what the user is looking at instead of
+      // sliding out from under the pointer.
+      zoomInput.oninput = () => {
+        const next = Number(zoomInput.value) || 1
+        const cx = (CROP_VIEWPORT / 2 - offX) / (cover * z)
+        const cy = (CROP_VIEWPORT / 2 - offY) / (cover * z)
+        z = next
+        offX = CROP_VIEWPORT / 2 - cx * cover * z
+        offY = CROP_VIEWPORT / 2 - cy * cover * z
+        render()
+      }
+
+      // Pointer events, not mouse events: one code path for mouse, touch and
+      // pen. setPointerCapture keeps the drag alive when the pointer leaves
+      // the square, which is otherwise a dropped picture mid-gesture.
+      viewport.addEventListener('pointerdown', (e) => {
+        if (e.pointerType === 'mouse' && e.button !== 0) return
+        drag = { id: e.pointerId, x: e.clientX, y: e.clientY }
+        viewport.classList.add('dragging')
+        viewport.setPointerCapture(e.pointerId)
+        e.preventDefault()
+      })
+      viewport.addEventListener('pointermove', (e) => {
+        if (!drag || e.pointerId !== drag.id) return
+        offX += e.clientX - drag.x
+        offY += e.clientY - drag.y
+        drag.x = e.clientX
+        drag.y = e.clientY
+        render()
+      })
+      const endDrag = (e) => {
+        if (!drag || e.pointerId !== drag.id) return
+        drag = null
+        viewport.classList.remove('dragging')
+        if (viewport.hasPointerCapture(e.pointerId)) viewport.releasePointerCapture(e.pointerId)
+      }
+      viewport.addEventListener('pointerup', endDrag)
+      viewport.addEventListener('pointercancel', endDrag)
+
+      img.onload = () => {
+        natW = img.naturalWidth || 1
+        natH = img.naturalHeight || 1
+        // "cover": the SHORTER side exactly fills the square, the longer one
+        // overhangs; start centred and let the user move from there.
+        cover = CROP_VIEWPORT / Math.min(natW, natH)
+        z = 1
+        zoomInput.value = '1'
+        offX = (CROP_VIEWPORT - natW * cover) / 2
+        offY = (CROP_VIEWPORT - natH * cover) / 2
+        render()
+        document.addEventListener('keydown', onKey)
+        backdrop.classList.remove('hidden')
+      }
+      img.onerror = () => {
+        close(null)
+        if (onDecodeFail) onDecodeFail()
+      }
+
+      cancelBtn.onclick = () => close(null)
+      saveBtn.onclick = () => {
+        const canvas = document.createElement('canvas')
+        canvas.width = CROP_OUT
+        canvas.height = CROP_OUT
+        const ctx = canvas.getContext('2d')
+        // What is on screen inside the square, at full source resolution: the
+        // viewport rect divided by the drawn scale (cover * z) gives the source
+        // rect, and the square is drawn out at CROP_OUT. The canvas is what
+        // makes the stored file square -- the server never crops.
+        const scale = cover * z
+        ctx.drawImage(
+          img,
+          -offX / scale, -offY / scale,
+          CROP_VIEWPORT / scale, CROP_VIEWPORT / scale,
+          0, 0, CROP_OUT, CROP_OUT,
+        )
+        // drawImage is synchronous (the pixels are in the canvas already), so
+        // closing here -- which revokes the source object URL -- is safe.
+        canvas.toBlob((blob) => close(blob || null), 'image/png')
+      }
+    })
+  }
+
   async function init() {
     $('set-title').textContent = C.title
     // Three group headings (IA pass 2026-07-25) -- see settings.html.
@@ -369,13 +576,23 @@
       // posted just to be refused.
       if (file.size > 2_000_000) { avatarFail(C.avatarTooLarge); return }
       if (!/^image\/(png|jpe?g|webp)$/.test(file.type || '')) { avatarFail(C.avatarBadType); return }
+      // The CHOICE happens before anything is uploaded: the crop step shows
+      // the picked file and hands back a fresh 256x256 PNG of the square the
+      // user framed. Cancel and Escape come back null with the stored picture
+      // (and the old status line, cleared just above) untouched.
+      avatarClear()
+      const blob = await openAvatarCrop(file, () => avatarFail(C.avatarBadType))
+      if (!blob) return
+      // Read the CANVAS blob, not the picked file -- this is the whole point
+      // of the step. The data URL is a means of transport only: only the part
+      // after the comma is kept, the string itself is dropped here.
       let dataBase64 = ''
       try {
         dataBase64 = await new Promise((resolve, reject) => {
           const r = new FileReader()
           r.onload = () => resolve(String(r.result || '').split(',')[1] || '')
           r.onerror = () => reject(new Error('read failed'))
-          r.readAsDataURL(file)
+          r.readAsDataURL(blob)
         })
       } catch {
         avatarFail(C.avatarBadType)
@@ -383,10 +600,12 @@
       }
       if (!dataBase64) { avatarFail(C.avatarBadType); return }
       try {
+        // The stored file is always PNG out of the canvas, so the name the
+        // picked file arrived with is not the name of what is being sent.
         await api('/api/settings/avatar', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filename: file.name || 'avatar.png', dataBase64 }),
+          body: JSON.stringify({ filename: 'avatar.png', dataBase64 }),
         })
         avatarClear()
         showToast(C.avatarSaved)

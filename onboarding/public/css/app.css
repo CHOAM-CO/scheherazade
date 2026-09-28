@@ -552,8 +552,8 @@ button.nav-ctl.is-busy::after {
    fallback ships at 256px and the user's upload can be any size, and both
    must occupy the same small square inside the control row. */
 .agent-avatar-preview {
-  width: 48px;
-  height: 48px;
+  width: 96px;
+  height: 96px;
   border-radius: 50%;
   object-fit: cover;
   border: 1px solid var(--border);
@@ -778,6 +778,47 @@ button.nav-ctl.is-busy::after {
 }
 .dialog-box p { color: var(--fg); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 1.1rem; }
+
+/* Profile picture crop step (2026-09-28). Reuses .dialog-backdrop /
+   .dialog-box; only the viewport, the slider row and the image's positioning
+   inside the viewport are new here. The square is FIXED (the crop is always
+   1:1, so the stored picture is square whatever the file was), and the image
+   is absolutely positioned inside it -- settings.js owns its width/height and
+   its left/top, which is the same geometry the 256x256 canvas draw uses. */
+.avatar-crop-viewport {
+  position: relative;
+  width: 240px;
+  height: 240px;
+  margin: 0 auto;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--panel-raised);
+  cursor: grab;
+  /* The drag is ours: without this a touch drag scrolls the page instead of
+     moving the picture, and the pointerup lands on nothing we can hear. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.avatar-crop-viewport.dragging { cursor: grabbing; }
+/* The crop image's size is set by settings.js, in px, from the cover fit and
+   the zoom. Any max-width clamp (a future img rule, a UA default) would pull
+   a zoomed-in photo back under the viewport and bare the corners, so both
+   axes are pinned open here rather than left to inheritance. */
+.avatar-crop-image {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: none;
+  max-height: none;
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
+.avatar-crop-hint { font-size: 0.78rem; color: var(--fg-faint); margin: 0.6rem 0 0; text-align: center; }
+.avatar-crop-zoom { display: flex; align-items: center; gap: 0.6rem; margin-top: 1rem; }
+.avatar-crop-zoom-label { font-size: 0.8rem; color: var(--fg-dim); flex: 0 0 auto; }
+.avatar-crop-zoom input[type="range"] { flex: 1; margin: 0; }
 
 .toast {
   position: fixed;
@@ -1653,8 +1694,8 @@ html {
    line instead of lifting it clear of the name. flex 0 0 auto stops the
    flex line from squeezing a square into an oval. */
 .chat-meta-avatar {
-  width: 20px;
-  height: 20px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   object-fit: cover;
   align-self: center;
@@ -1671,7 +1712,7 @@ html {
    air. A tell, not a label — no background, no border, no second identity, so
    it cannot read as a role label beside a name that already carries identity
    (P1 v2, 2026-08-05). Fourth item at the tail of the sender row, on the row's
-   own baseline: the row's height is the 20px avatar's, so a 0.68rem glyph
+   own baseline: the row's height is the 32px avatar's, so a 0.68rem glyph
    cannot change it, and living in the row rather than in the bubble is what
    keeps the message's text line exactly where it was. Colour is the existing
    faint token; no new colour enters the palette. */

@@ -69,10 +69,10 @@ assert(js.includes('window.avatarUrl()') && js.includes('AVATAR_FALLBACK_URL'),
   'src comes from nav.js\'s shared resolver and starts on the static fallback (no 403, no broken-image frame)')
 assert(js.includes('.onerror') && /onerror[\s\S]{0,200}?AVATAR_FALLBACK_URL/.test(js),
   'a failed load resets to the fallback instead of leaving a broken image')
-assert(/\.chat-meta-avatar \{[^}]*width: 20px/s.test(css) && /\.chat-meta-avatar \{[^}]*height: 20px/s.test(css)
+assert(/\.chat-meta-avatar \{[^}]*width: 32px/s.test(css) && /\.chat-meta-avatar \{[^}]*height: 32px/s.test(css)
   && /\.chat-meta-avatar \{[^}]*border-radius: 50%/s.test(css) && /\.chat-meta-avatar \{[^}]*object-fit: cover/s.test(css)
   && /\.chat-meta-avatar \{[^}]*align-self: center/s.test(css) && /\.chat-meta-avatar \{[^}]*flex: 0 0 auto/s.test(css),
-  'avatar styled: a 20px round cover-fit square that cannot be squeezed by the flex line')
+  'avatar styled: a 32px round cover-fit square that cannot be squeezed by the flex line')
 assert(/\.chat-meta \{[^}]*align-items: baseline/s.test(css),
   'the meta row KEEPS align-items: baseline — align-self: center on the img is what keeps it off its own bottom edge')
 assert(!/\.chat-meta \{[^}]*align-items: center/s.test(css),
@@ -109,6 +109,20 @@ assert(!/\.chat-memory-mark[^{]*\{[^}]*position: (static|relative)/s.test(css),
   'neither placement puts a mark back into the text flow')
 assert(/\.chat-meta \{[^}]*gap: 8px/s.test(css),
   'the row it rides keeps its own spacing contract (the mark is one more item on the baseline, not a new row)')
+
+console.log('\n3e. sender-row name (2026-09-28) — the probe\'s name reaches every row')
+// The name span starts empty and is filled from the status probe, which can
+// answer AFTER the retained transcript has painted. Source-level pins, same
+// convention as the sections above: the three failure modes are all visible
+// in the text — a placeholder shipped instead of a blank span, a re-label
+// that never reaches the rows already on screen, and a trim that leaks.
+assert(!js.includes("|| 'Agent'"),
+  'no invented placeholder: the name fallback is a blank span, never a made-up \'Agent\' label shipped as if it were the real name')
+assert(/const nameNodes = \[\]/.test(js) && js.includes('nameNodes.push(nm)')
+  && /for \(const node of nameNodes\) node\.textContent = agentName/.test(js),
+  'arrival re-labels rows already painted: every sender row\'s span is pushed into nameNodes and setStatus\'s up branch loops it to assign agentName')
+assert(/gone\.remove\(\)[\s\S]{0,300}?nameNodes[\s\S]{0,300}?splice\(i, 1\)/.test(js) && js.includes('!nameNodes[i].isConnected'),
+  'the row trim drops the detached spans it just removed — without this the array (and every dead node in it) grows for the whole session; splice, not shift(), because spans are not 1:1 with messages')
 
 console.log('\n4. error left-rail (dormant until the feed carries an error kind)')
 assert(css.includes('.chat-msg.chat-error'), 'error rail CSS present')

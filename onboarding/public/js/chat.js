@@ -74,6 +74,10 @@
   let lastUserBubble = null
   let lastRenderedRole = null // 0.2.6 UI pass: agent-run grouping for the sender row
   let agentName = '' // filled from the status probe (setStatus detail)
+  // Every sender row's name span, held so a probe that answers AFTER the
+  // retained transcript has painted can re-label rows already on screen
+  // (0.3.4: a row rendered pre-probe kept its pre-name text forever).
+  const nameNodes = []
   // Profile picture (2026-09-28, the owner "프로필 사진"): one value for every
   // sender row. It starts on the STATIC fallback so a row rendered before
   // nav.js's token-bearing fetch resolves is already complete -- a picture
@@ -376,7 +380,8 @@
       meta.appendChild(av)
       const nm = document.createElement('span')
       nm.className = 'chat-meta-name'
-      nm.textContent = agentName || 'Agent'
+      nm.textContent = agentName // unknown name = empty span, never a placeholder
+      nameNodes.push(nm)
       meta.appendChild(nm)
       if (m.ts) {
         const tm = document.createElement('span')
@@ -421,6 +426,12 @@
       if (gone.dataset && gone.dataset.seq) bubbles.delete(Number(gone.dataset.seq))
       if (gone === lastUserBubble) lastUserBubble = null
       gone.remove()
+      // A trimmed row's name span left the DOM with it — drop those entries
+      // too, or the array keeps every detached node alive for the session.
+      // Backwards so the splice cannot skip the next entry.
+      for (let i = nameNodes.length - 1; i >= 0; i--) {
+        if (!nameNodes[i].isConnected) nameNodes.splice(i, 1)
+      }
       msgCount--
     }
     if (stick || role === 'user') pane.scrollTop = pane.scrollHeight
@@ -897,7 +908,13 @@
     const el = $('ct-status')
     el.classList.remove('chat-status-up', 'chat-status-down')
     if (kind === 'up') {
-      if (detail) agentName = String(detail) // sender-row name rides the same probe
+      // Sender-row name rides the same probe. Rows painted before this answer
+      // are re-labeled here rather than staying blank.
+      const incoming = detail ? String(detail) : ''
+      if (incoming && incoming !== agentName) {
+        agentName = incoming
+        for (const node of nameNodes) node.textContent = agentName
+      }
       // Healthy = SILENT (the owner 08-20 21:22): the standing "X is listening."
       // line carried zero information the header dot doesn't — the row now
       // renders only for abnormal states (CSS collapses it when empty).
