@@ -178,6 +178,16 @@ Traps:
   bundle` file, fetched from `/mnt/c/Users/magi/<bundle>`, never cloned.
 - **`git checkout -- package-lock.json` first.** `npm install` there leaves the
   lockfile dirty and a dirty lockfile blocks the next checkout.
+- **Detach before the fetch.** The run ends with that tree checked out ON the
+  tag branch, and git refuses to fetch into a branch that is checked out. The
+  second release of a tag this tree already carried died there — one exit-128,
+  `fatal: refusing to fetch into branch 'refs/heads/v0.3.2' checked out at
+  '/root/schz'`, which aborted the linux lane and blocked `--publish`; it was
+  cured by a hand `git checkout --detach HEAD` on the box. The script now
+  detaches itself, immediately before the fetch (`git checkout --detach HEAD
+  2>/dev/null || true`), so what meets the fetch is a detached HEAD, which is
+  not a branch at all. A fresh tree has no commit to detach from — hence the
+  `|| true`: a first run on a tree with no branch yet still starts.
 - **scp cannot reach into the WSL filesystem.** Artifacts are `cp`'d to
   `/mnt/c/Users/magi/` and scp'd from the Windows side.
 
