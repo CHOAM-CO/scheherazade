@@ -43,7 +43,7 @@ const skipWin = (label) => console.log(`  SKIP ${label} -- win32: /bin/sh shim c
 // pathToFileURL, not the raw join: a bare absolute path works on POSIX by
 // accident but Windows ESM refuses it (ERR_UNSUPPORTED_ESM_URL_SCHEME 'c:'
 // -- caught by the win suite on magi-win, 2026-08-04 evening exe gate).
-const { renderChannelTag, renderUserEvent, contextTokensOf } = await import(pathToFileURL(path.join(ROOT, 'headless-lane.mjs')).href)
+const { renderChannelTag, renderUserEvent, contextTokensOf, writeTurnAbortRecord } = await import(pathToFileURL(path.join(ROOT, 'headless-lane.mjs')).href)
 const { createInboundNotifier } = await import(pathToFileURL(path.join(ROOT, 'channel-runtime.mjs')).href)
 
 // ── 1. tag byte-contract vs stop-reply-guard ────────────────────────────────
@@ -1023,6 +1023,24 @@ console.log('\n9. lane interrupter routing')
   try { res = await mk(async () => { throw new Error('ECONNREFUSED') })() } catch { threw = true }
   assert(!threw && res && res.reason === 'unreachable',
     'a failed POST reports unreachable and NEVER throws (the caller is a button)')
+}
+
+// ── the lane's turn-abort producer (design-0025) ────────────────────────────
+// The stall watchdog recycles a wedged turn; if the answer never lands, the app
+// would show a live-looking run fold over nothing. This record is the fact the
+// kill already knows. Shape is shared with the supervisor's writer and
+// channel-local's consumer, so pin it here rather than only in the reader.
+console.log('\nN. turn-abort record: the lane\'s stall producer')
+{
+  const dir = fs.mkdtempSync(path.join(TMP, 'abort-'))
+  writeTurnAbortRecord('stall', { dir })
+  const rec = JSON.parse(fs.readFileSync(path.join(dir, '.last-turn-abort.json'), 'utf8'))
+  assert(rec.reason === 'stall', 'reason is stall')
+  assert(rec.tail === null && rec.elapsedMs === null, 'no transcript tail and no awaiting wall time are available here: both null')
+  assert(Number.isFinite(rec.at), 'carries a numeric abort time')
+  let threw = false
+  try { writeTurnAbortRecord('stall', { dir: path.join(dir, 'nope', 'sub') }) } catch { threw = true }
+  assert(!threw, 'a failed record write never throws into the kill path')
 }
 
 fs.rmSync(TMP, { recursive: true, force: true })

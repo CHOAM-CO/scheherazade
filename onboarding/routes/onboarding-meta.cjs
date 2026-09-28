@@ -363,6 +363,20 @@ function createRoutes(staticCtx) {
         // first paint and its first fetch cannot disagree about what this
         // machine can do (design-0023 P4). Every render gate that used to
         // ask `window.IS_MAC` reads a named capability from here instead.
+        // avatar rides along camelCase like the computed fields above: it is
+        // read off the disk (mtime included), never a stored config value.
+        // Settings renders "is there a picture, and is it stale?" from this
+        // instead of probing GET /api/settings/avatar on every page load --
+        // and updatedAt is what lets the chat bubble's <img> be cache-busted
+        // after a replacement (same URL, new bytes, max-age=86400).
+        // The three slot names mirror routes/settings.cjs's AVATAR_EXTS.
+        let avatar = { present: false, updatedAt: null }
+        for (const ext of ['png', 'jpg', 'webp']) {
+          try {
+            const st = fs.statSync(path.join(DATA_HOME, `avatar.${ext}`))
+            if (st.isFile()) { avatar = { present: true, updatedAt: st.mtime.toISOString() }; break }
+          } catch { /* that slot is empty -- try the next */ }
+        }
         sendJson(res, 200, {
           ...readAgentConfig(),
           homeChannelId: readHomeChannelId(),
@@ -371,6 +385,7 @@ function createRoutes(staticCtx) {
           hasCustomApiKey: hasStoredCustomApiKey(),
           hostPlatform: HOST.id,
           hostCapabilities: HOST.clientView(),
+          avatar,
         })
         return
       },

@@ -787,6 +787,21 @@ console.log('\n-- payload: the dev harness is NOT in the bundle (config half)')
       shipsUnderBuildFiles(`scripts/${f}`, pkg.build.files),
       'either it is runtime -- add it to build.files -- or it is a dev tool and belongs in tools/')
   }
+
+  // The avatar fallback (2026-09-28). routes/settings.cjs's GET reads it from
+  // the PUBLIC_DIR tree and nav.js uses it as the src of last resort, so a
+  // packaged build without it renders a broken-image icon in the chat sender
+  // row on every install -- a failure that only appears AFTER packaging,
+  // which is why build/icon_1024.png (the file it was downscaled from, and
+  // NOT in build.files) could never have served as the fallback. It rides
+  // `onboarding/**/*` today; this row is what makes a future refactor of that
+  // glob say so out loud instead of silently dropping it.
+  ok('the avatar fallback is named in build.files',
+    shipsUnderBuildFiles('onboarding/public/img/agent-avatar.png', pkg.build.files),
+    'onboarding/**/* no longer covers onboarding/public/img/ -- the chat avatar has no fallback in a packaged build')
+  ok('...and the file it names is really on disk to ship',
+    fs.existsSync(path.join(ROOT, 'onboarding', 'public', 'img', 'agent-avatar.png')),
+    'build.files names it but the source file is missing')
 }
 
 console.log(`\n-- payload: the dev harness is NOT in the bundle (artifact half, ${LANE} lane)`)

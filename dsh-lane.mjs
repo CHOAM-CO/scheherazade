@@ -663,16 +663,35 @@ async function main () {
     const port = Number(ep && ep.port)
     const token = String((ep && ep.token) || '')
     if (!Number.isInteger(port) || port < 1 || port > 65535 || !token) return
-    fetch(`http://127.0.0.1:${port}/activity`, {
+    // kind 'memory-read' (2026-09-28, the memory mark) is the one post here
+    // that is NOT presence: it goes to /memory-read, carries no body, and
+    // renders nothing -- it arms the flag channel-local hands to the next
+    // reply (the same signal hooks/pre-tool-activity.mjs sends on the claude
+    // lane, so both lanes mark the same way). Every other kind is a status
+    // line for the page.
+    const memoryRead = kind === 'memory-read'
+    fetch(`http://127.0.0.1:${port}/${memoryRead ? 'memory-read' : 'activity'}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify(kind ? { label, kind, ...(extra || {}) } : { label }),
+      headers: memoryRead
+        ? { authorization: `Bearer ${token}` }
+        : { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: memoryRead ? undefined : JSON.stringify(kind ? { label, kind, ...(extra || {}) } : { label }),
       signal: AbortSignal.timeout(800)
     }).catch(() => {})
   }
   // Activity labels mirror pre-tool-activity.mjs's per-tool convention:
   // bash rides its bare command/description, the rest get a short prefix.
   const truncLabel = (s, n = 140) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, n)
+  // The memory READ tools, by the harness's MCP name (server key `memory` in
+  // .mcp.json; names from memory/server.mjs's TOOLS). Kept in step with the
+  // same list in hooks/pre-tool-activity.mjs -- the lane cannot import from
+  // that file (it is a hook script, not a module), so the two live copies are
+  // pinned against each other by tests/test-dsh-lane-stream.mjs.
+  const MEMORY_READ_TOOLS = new Set([
+    'mcp__memory__memory_query',
+    'mcp__memory__journal_read',
+    'mcp__memory__memory_recall_material'
+  ])
   function activityLabelFor (name, args) {
     const a = args || {}
     if (name === 'bash' || name === 'shell') return truncLabel(a.description || a.command || a.cmd)
@@ -1025,6 +1044,10 @@ async function main () {
         flushThink(true) // reasoning that led to this call belongs above it
         try {
           const argsForLabel = typeof d.arguments === 'string' ? JSON.parse(d.arguments) : (d.arguments || {})
+          // Memory read: no label (activityLabelFor returns '' for every
+          // mcp__ name), but the channel still has to hear about it -- this
+          // is the lane's half of the memory mark.
+          if (MEMORY_READ_TOOLS.has(String(d.name))) postPresence('', 'memory-read')
           const label = activityLabelFor(d.name, argsForLabel)
           if (label) postPresence(label)
           // Background roster bookkeeping: remember the subagent call's

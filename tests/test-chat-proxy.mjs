@@ -284,6 +284,103 @@ try {
     chk('custom glm-5.2 -> no (capability is the model, not the server)', laneVision({ provider: 'custom', model: 'glm-5.2' }) === 'no')
     chk('custom qwen3.5 -> yes (YES-list works for any provider)', laneVision({ provider: 'custom', model: 'qwen3.5' }) === 'yes')
   }
+
+  // ── profile picture (2026-09-28): POST/GET/DELETE /api/settings/avatar ────
+  // The app's SECOND upload path, and the one that is not a chat attachment.
+  // It copies the chat upload's body shape exactly (JSON {filename,
+  // dataBase64} through readJsonBody -- there is still no multipart reader in
+  // this server), with three differences that each get a pin here: a smaller
+  // cap that the ROUTE enforces, ONE slot on disk instead of a timestamped
+  // directory, and magic-byte sniffing, because this file is later handed to
+  // a browser as image/* under the extension it claimed.
+  {
+    const png1 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
+    const fallbackBytes = fs.readFileSync(path.join(ROOT, 'onboarding', 'public', 'img', 'agent-avatar.png'))
+    const post = (body, headers = auth) => fetch(`${base}/api/settings/avatar`, { method: 'POST', headers, body: JSON.stringify(body) })
+
+    // GET with nothing uploaded: the SHIPPED fallback, as image/png. Never a
+    // 404 -- both consumers (<img src> in the chat meta row, the Settings
+    // preview) must always have bytes, and "no picture yet" is a legitimate
+    // state with a defined answer.
+    const before = await fetch(`${base}/api/settings/avatar`, { headers: auth })
+    chk('avatar GET before any upload serves the fallback bytes as image/png',
+      before.status === 200 && before.headers.get('content-type') === 'image/png'
+      && Buffer.from(await before.arrayBuffer()).equals(fallbackBytes),
+      `${before.status} ${before.headers.get('content-type')} ${before.headers.get('content-length')}`)
+
+    // Gates, in the route's own order.
+    const svg = await post({ filename: 'evil.svg', dataBase64: png1.toString('base64') })
+    chk('avatar upload of an .svg: 400 bad_type (svg is a script carrier)', svg.status === 400 && (await svg.json()).reason === 'bad_type')
+    // The header is the file; the extension is only the client's claim. A
+    // renamed script must not land in a slot served as image/png -- a
+    // browser talked into sniffing is how an upload becomes markup.
+    const lying = await post({ filename: 'honest.png', dataBase64: Buffer.from('<svg onload="alert(1)"></svg>').toString('base64') })
+    chk('non-image bytes claiming .png: 400 bad_type (magic bytes decide, not the name)', lying.status === 400 && (await lying.json()).reason === 'bad_type')
+    // 2,000,001 bytes: over the route's own 2MB cap (413) but still under
+    // readJsonBody's 4MB read cap, so the ROUTE's answer is what is measured
+    // rather than the body reader's.
+    const big = await post({ filename: 'big.png', dataBase64: Buffer.alloc(2_000_001).toString('base64') })
+    chk('an over-2MB avatar: 413 too_large', big.status === 413 && (await big.json()).reason === 'too_large')
+    chk('...and the refused upload wrote nothing', !fs.existsSync(path.join(process.env.AGENT_DATA_HOME, 'avatar.png')))
+
+    // The happy path: 200, and the BYTES on disk are the decoded image
+    // (mode 0600 -- this is the user's own picture).
+    const up = await post({ filename: 'me.png', dataBase64: png1.toString('base64') })
+    const upBody = await up.json()
+    chk('avatar upload saves and answers {ok, present:true}', up.status === 200 && upBody.ok === true && upBody.present === true, JSON.stringify(upBody))
+    const onDisk = path.join(process.env.AGENT_DATA_HOME, 'avatar.png')
+    chk('the stored bytes are the decoded image, verbatim', fs.readFileSync(onDisk).equals(png1))
+    chk('...and are not world-readable', (fs.statSync(onDisk).mode & 0o077) === 0, `mode ${(fs.statSync(onDisk).mode & 0o777).toString(8)}`)
+
+    const after = await fetch(`${base}/api/settings/avatar`, { headers: auth })
+    chk('avatar GET after the upload serves the uploaded bytes with its content-type',
+      after.status === 200 && after.headers.get('content-type') === 'image/png'
+      && Buffer.from(await after.arrayBuffer()).equals(png1))
+
+    // ONE slot: a jpg replacing the png must not leave two files that both
+    // answer "is there an avatar" -- and it must be the NEW one that serves.
+    const jpg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46])
+    const upJpg = await post({ filename: 'me.jpg', dataBase64: jpg.toString('base64') })
+    chk('a .jpg upload replaces the slot', upJpg.status === 200 && (await upJpg.json()).present === true)
+    chk('the png sibling is gone (one slot, not a set)',
+      !fs.existsSync(onDisk) && fs.readFileSync(path.join(process.env.AGENT_DATA_HOME, 'avatar.jpg')).equals(jpg))
+    const afterJpg = await fetch(`${base}/api/settings/avatar`, { headers: auth })
+    chk('the served content-type follows the replacement (image/jpeg)',
+      afterJpg.headers.get('content-type') === 'image/jpeg' && Buffer.from(await afterJpg.arrayBuffer()).equals(jpg))
+
+    // DELETE: back to the app icon. Unlinking a missing file is the desired
+    // end state, not an error -- twice in a row must answer the same.
+    const del = await fetch(`${base}/api/settings/avatar`, { method: 'DELETE', headers: auth })
+    chk('avatar DELETE answers {ok, present:false}', del.status === 200 && (await del.json()).present === false)
+    const delAgain = await fetch(`${base}/api/settings/avatar`, { method: 'DELETE', headers: auth })
+    chk('...and a second DELETE is not an error', delAgain.status === 200 && (await delAgain.json()).present === false)
+    chk('every slot is empty after the delete', ['png', 'jpg', 'webp'].every((e) => !fs.existsSync(path.join(process.env.AGENT_DATA_HOME, `avatar.${e}`))))
+    const back = await fetch(`${base}/api/settings/avatar`, { headers: auth })
+    chk('GET after the delete is the fallback again', Buffer.from(await back.arrayBuffer()).equals(fallbackBytes))
+
+    // Gates: GET is a read but still behind the onboard token (every /api
+    // request is); POST and DELETE are mutations and must be too.
+    const noTokGet = await fetch(`${base}/api/settings/avatar`)
+    chk('avatar GET without the onboard token is refused', noTokGet.status === 403, noTokGet.status)
+    const noTokPost = await fetch(`${base}/api/settings/avatar`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ filename: 'x.png', dataBase64: png1.toString('base64') }) })
+    chk('avatar POST without the onboard token is refused (gate before route)', noTokPost.status === 403, noTokPost.status)
+    const noTokDel = await fetch(`${base}/api/settings/avatar`, { method: 'DELETE' })
+    chk('avatar DELETE without the onboard token is refused', noTokDel.status === 403, noTokDel.status)
+    chk('...and the refused calls left no avatar on disk',
+      ['png', 'jpg', 'webp'].every((e) => !fs.existsSync(path.join(process.env.AGENT_DATA_HOME, `avatar.${e}`))))
+
+    // /api/config carries the state so Settings can render it without probing
+    // (routes/onboarding-meta.cjs). present flips with the slot.
+    const cfg0 = await (await fetch(`${base}/api/config`, { headers: auth })).json()
+    chk('/api/config reports avatar.present:false and updatedAt:null with no picture',
+      cfg0.avatar && cfg0.avatar.present === false && cfg0.avatar.updatedAt === null, JSON.stringify(cfg0.avatar))
+    await post({ filename: 'me.png', dataBase64: png1.toString('base64') })
+    const cfg1 = await (await fetch(`${base}/api/config`, { headers: auth })).json()
+    chk('/api/config reports avatar.present:true with a real updatedAt after an upload',
+      cfg1.avatar && cfg1.avatar.present === true && typeof cfg1.avatar.updatedAt === 'string' && !Number.isNaN(Date.parse(cfg1.avatar.updatedAt)),
+      JSON.stringify(cfg1.avatar))
+    await fetch(`${base}/api/settings/avatar`, { method: 'DELETE', headers: auth })
+  }
 } finally {
   srv.server.close()
   await new Promise((r) => fakeChannel.close(r))

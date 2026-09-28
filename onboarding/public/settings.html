@@ -47,6 +47,25 @@
           <div class="step-actions">
             <button id="set-rename-save"></button>
           </div>
+
+          <!-- Profile picture (2026-09-28, the owner "프로필 사진"). One
+               upload path, the same JSON {filename, dataBase64} body the
+               chat attachments already use. The preview is NOT a bare
+               <img src="/api/settings/avatar"> — every /api GET sits behind
+               the X-Onboard-Token gate and that src would 403, so nav.js's
+               shared resolver fetches the bytes with the token and hands
+               back a blob object URL. With nothing uploaded it shows the
+               app icon at 256px. -->
+          <div class="agent-control-row">
+            <label for="set-avatar-input" id="set-avatar-label"></label>
+            <img id="set-avatar-preview" class="agent-avatar-preview" alt="" />
+            <input type="file" id="set-avatar-input" accept="image/png,image/jpeg,image/webp" hidden />
+          </div>
+          <div class="step-actions">
+            <span class="field-hint hidden" id="set-avatar-status"></span>
+            <button id="set-avatar-choose"></button>
+            <button class="secondary" id="set-avatar-remove"></button>
+          </div>
         </div>
 
         <!-- Autonomous cycle (v0.0.6). The only setting on this page that

@@ -83,6 +83,15 @@
         ]
       },
       {
+        "matcher": "mcp__memory__memory_query|mcp__memory__journal_read|mcp__memory__memory_recall_material",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node {AGENT_DIR}/hooks/pre-tool-activity.mjs"
+          }
+        ]
+      },
+      {
         "matcher": "Bash",
         "hooks": [
           {

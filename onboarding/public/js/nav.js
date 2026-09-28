@@ -20,6 +20,52 @@
 
   function $(id) { return document.getElementById(id) }
 
+  // ── window.avatarUrl (2026-09-28, profile picture) ──────────────────────
+  // ONE resolver, two consumers: chat.js's sender row and settings.js's
+  // preview. Both need the agent's picture as something an <img src> can
+  // hold, and neither can point src at the API directly: every /api GET is
+  // X-Onboard-Token-gated, so a bare `<img src="/api/settings/avatar">` is a
+  // 403, not a picture. The token therefore has to ride a fetch, and the
+  // bytes come back as a blob object URL -- the same shape (and the same
+  // reason) as chat.js's appendAttachmentImage.
+  //
+  // The fallback is the STATIC file, which carries no secret and is
+  // Host-gated only, so it IS loadable as a plain src. A failed fetch (an
+  // older server, a page opened outside the app) degrades to it rather than
+  // to a broken-image icon -- there is no state in which this avatar has
+  // nothing to show.
+  //
+  // Memoized per page: a chat with fifty agent runs fetches the picture
+  // once, and every row shares one object URL.
+  const AVATAR_FALLBACK_URL = '/img/agent-avatar.png'
+  window.AVATAR_FALLBACK_URL = AVATAR_FALLBACK_URL
+  let avatarUrlPromise = null
+  window.avatarUrl = function avatarUrl() {
+    if (avatarUrlPromise) return avatarUrlPromise
+    avatarUrlPromise = (async () => {
+      try {
+        const res = await fetch('/api/settings/avatar', {
+          headers: { 'X-Onboard-Token': window.getOnboardToken() || '' },
+          // The route answers max-age=86400 and a REPLACEMENT avatar reuses
+          // the same URL, so without this a browser could show yesterday's
+          // picture for a day. The file is one small square; revalidating
+          // costs less than being wrong.
+          cache: 'no-cache',
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return URL.createObjectURL(await res.blob())
+      } catch {
+        return AVATAR_FALLBACK_URL
+      }
+    })()
+    return avatarUrlPromise
+  }
+  // Drop the memo so the next avatarUrl() re-reads the disk. Called by
+  // settings.js after an upload or a removal -- the consumers re-point their
+  // src at the new value, which is why the old object URL is deliberately
+  // NOT revoked here (an already-painted chat row still holds it).
+  window.avatarUrlForget = function avatarUrlForget() { avatarUrlPromise = null }
+
   // ── window.api (consolidated; was duplicated in memory.js + settings.js) ──
   window.api = async function api(path, options) {
     const opts = options ? { ...options } : {}

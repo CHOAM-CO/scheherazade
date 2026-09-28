@@ -1502,7 +1502,10 @@ async function spawnRealAgentChildLocked() {
     provider: config.PROVIDER || null,
     // 0.2.6 UI pass: the shell header shows the agent's NAME instead of the
     // generic "AGENT" label when a spawn has one (nav.js reads this).
-    name: config.AGENT_NAME || null,
+    // 2026-09-28: DISPLAY_NAME first. The name the user typed in Settings is
+    // the name of the agent; AGENT_NAME is the build's default and only wins
+    // when nothing was ever set.
+    name: config.DISPLAY_NAME || config.AGENT_NAME || null,
     at: new Date().toISOString(),
   }
   // Timeout backstop (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 2):
@@ -1663,6 +1666,11 @@ function stampAttachSpawnInfo(config, lane = 'attach') {
     model: cfg.MODEL || null,
     effort: cfg.EFFORT_LEVEL || null,
     provider: cfg.PROVIDER || null,
+    // name was omitted here while the spawn path carried it, so an
+    // attach/adopted run left the shell header on the generic "AGENT" label
+    // even though the user had named the agent (2026-09-28). Same
+    // DISPLAY_NAME-first rule as the spawn path above.
+    name: cfg.DISPLAY_NAME || cfg.AGENT_NAME || null,
     at: new Date().toISOString(),
     lane,
   }

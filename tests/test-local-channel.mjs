@@ -38,6 +38,7 @@ const {
   deliverInbound, deliverReaction, transcriptState, handleToolCall,
   createRequestHandler, LOCAL_CHANNEL_ID, MAX_QUEUE, USER_REACTIONS,
   enableTranscriptPersistence, flushTranscript, clearTranscript,
+  enqueueTurnEnd, enqueueAbort,
   upsertBgTask, retireBgTask, listBgTasks,
 } = await import('../channel-local.mjs')
 
@@ -194,6 +195,18 @@ console.log('\n5. HTTP: the auth gate')
   assert((await call(handler, { url: '/out', token: 'short' })).code === 401, 'wrong-length token is rejected (no timingSafeEqual throw)')
   assert((await call(handler, { url: '/out', token: null })).code === 401, 'missing Authorization is rejected')
   assert((await call(handler, { url: '/health', token: null })).code === 200, '/health stays open (liveness probe, leaks nothing)')
+  // /health answers with the name the USER set (2026-09-28): the shell header
+  // and the chat sender row render DISPLAY_NAME, and a probe that answered
+  // AGENT_NAME made the same agent have two names depending on who asked.
+  // The source is DATA_HOME/.agent-config -- the KEY="value" file the
+  // supervisor parses; AGENT_NAME is the build default and the fallback.
+  const cfgPath = pathBoot.join(TEST_DATA_HOME, '.agent-config')
+  fsBoot.writeFileSync(cfgPath, 'DISPLAY_NAME="밤의도시"\n')
+  assert((await call(handler, { url: '/health', token: null })).json.agent === '밤의도시',
+    '/health answers DISPLAY_NAME when .agent-config has one')
+  fsBoot.rmSync(cfgPath, { force: true })
+  assert((await call(handler, { url: '/health', token: null })).json.agent === 'local-channel-test',
+    '/health falls back to AGENT_NAME with no .agent-config (the build default, never an error)')
 }
 
 console.log('\n6. HTTP: the Host gate (DNS rebinding resolves to 127.0.0.1 too)')
@@ -480,6 +493,51 @@ console.log('\n10. boot announce: the greeting is the first thing the chat pane 
   fs.rmSync(hookTmp, { recursive: true, force: true })
 }
 
+// ── memory reads: the same hook, the OTHER destination (2026-09-28) ─────────
+// A memory read has to reach the channel (it arms the mark the next reply
+// carries) and must NOT become an activity label: that feed is a status line,
+// and a recall happens at nearly every boot — one row saying nothing, forever.
+// Asserted over a real server, so the ROUTE is what is pinned, not a string in
+// the source: a read that quietly started posting labels again would still
+// pass a source grep.
+{
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const fs = await import('node:fs')
+  const { spawnSync } = await import('node:child_process')
+  const { fileURLToPath } = await import('node:url')
+  const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+  const hookTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-memmark-hook-'))
+  const hits = []
+  const { createServer } = await import('node:http')
+  const srv = createServer((req, res) => {
+    let b = ''
+    req.on('data', (c) => { b += c })
+    req.on('end', () => { hits.push({ url: req.url, auth: req.headers.authorization, body: b }); res.end('{}') })
+  })
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r))
+  fs.writeFileSync(path.join(hookTmp, 'local-channel.json'), JSON.stringify({ port: srv.address().port, token: 'tok' }))
+  const fire = (tool_name, tool_input) => spawnSync(process.execPath, [path.join(ROOT, 'hooks', 'pre-tool-activity.mjs')], {
+    input: JSON.stringify({ tool_name, tool_input }),
+    env: { ...process.env, AGENT_DATA_HOME: hookTmp },
+    timeout: 5000,
+  })
+  const readStatus = fire('mcp__memory__memory_query', { table: 'user_facts' })
+  fire('mcp__memory__journal_read', { limit: 3 })
+  fire('mcp__memory__memory_recall_material', {})
+  fire('mcp__memory__memory_write', { table: 'user_facts', data: { subject: 'a', predicate: 'b', value: 'c' } })
+  await new Promise((r) => setTimeout(r, 200))
+  srv.close()
+  assert(readStatus.status === 0 && !readStatus.stderr.toString().trim(),
+    'the memory branch stays fail-open and silent (exit 0, nothing on stderr)')
+  assert(hits.length === 3, `only the three READ-class calls post, got ${hits.length}`)
+  assert(hits.every((h) => h.url === '/memory-read'),
+    '...and they post to /memory-read, never to /activity (a read is not a status line)')
+  assert(hits.every((h) => h.auth === 'Bearer tok'), 'the memory post carries the same bearer token as the feed')
+  assert(hits.every((h) => h.body === ''), 'no body: the signal is the call itself, so no label can be invented from it')
+  fs.rmSync(hookTmp, { recursive: true, force: true })
+}
+
 // ── activity items: presence of WORK, not an answer (Codex §7 steal) ───────
 {
   resetQueueForTest()
@@ -518,6 +576,82 @@ console.log('\n10. boot announce: the greeting is the first thing the chat pane 
     const tail = readOutbound(0).items.at(-1)
     assert(tail.kind === 'activity' && tail.text.length === 160, 'oversized labels are truncated to 160, not rejected')
   }
+}
+
+// ── memory mark: the flag one memory read arms for the NEXT reply (2026-09-28) ─
+// The agent's memory is a separate MCP process, so the only witness to a read
+// is the hook's POST /memory-read. What that post does is ARM A FLAG; the next
+// outbound agent message carries it as `fromMemory` and the flag is consumed.
+// Pinned here: the gate, the one-shot, the field surviving the outbound read
+// and the durable transcript, and the false-mark guard (a read whose turn never
+// produced a reply must not stamp the next turn).
+{
+  resetQueueForTest()
+  const handler = createRequestHandler({ notify: async () => {}, token: TOKEN })
+
+  assert((await call(handler, { method: 'POST', url: '/memory-read', token: null })).code === 401,
+    'POST /memory-read without the bearer token is refused')
+  assert((await call(handler, { method: 'POST', url: '/memory-read', token: 'b'.repeat(64) })).code === 401,
+    'POST /memory-read refuses a wrong token of the SAME length (the shared timingSafeEqual gate)')
+  assert((await call(handler, { method: 'POST', url: '/memory-read', host: 'evil.example.com' })).code === 403,
+    'POST /memory-read keeps the Host gate (no second auth path was invented)')
+
+  assert((await call(handler, { method: 'POST', url: '/memory-read' })).code === 202, 'a memory read lands as 202')
+  assert(readOutbound(0).items.length === 0,
+    'the read itself enqueues NOTHING -- it is a flag, not an activity item or a draft')
+  assert(readOutbound(0).draft === null && transcriptState().awaitingReplySince === null,
+    'the read adds no presence either -- no draft, no awaiting state')
+
+  enqueueOutbound('the reply that came out of memory')
+  assert(readOutbound(0).items.at(-1).fromMemory === true, 'the NEXT agent message carries fromMemory: true')
+  enqueueOutbound('the reply after that')
+  assert(readOutbound(0).items.at(-1).fromMemory === undefined,
+    '...and the message after it does NOT inherit the mark (consumed in the same breath)')
+  assert(readOutbound(0).items.filter((m) => m.fromMemory === true).length === 1,
+    'exactly one item in the drained transcript is marked')
+
+  // The flag is turn-scoped: a read that never got a reply (a mute turn, a
+  // background turn) must not stamp an answer written from thin air later.
+  assert((await call(handler, { method: 'POST', url: '/memory-read' })).code === 202, 'a second read arms again')
+  enqueueInbound('a new question')
+  assert(readOutbound(0).items.at(-1).fromMemory === undefined, 'the inbound message is never marked')
+  enqueueOutbound('answered from thin air')
+  assert(readOutbound(0).items.at(-1).fromMemory === undefined,
+    'a read left unspent by its own turn does not mark the next turn (new inbound closes the window)')
+
+  // The user's own bubbles can never carry it (the flag only rides agent
+  // messages -- enqueueInbound has no path to it at all).
+  assert(!readOutbound(0).items.some((m) => m.role === 'user' && m.fromMemory !== undefined),
+    'no user message can be marked as coming from memory')
+}
+
+// ── memory mark survives the restart: it rides the persisted message item ────
+{
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-localchan-memmark-'))
+  resetQueueForTest()
+  await enableTranscriptPersistence({ dataHome: tmp })
+  enqueueInbound('what do you remember about me?')
+  enqueueOutbound('you prefer short answers') // unflagged
+  const handler = createRequestHandler({ notify: async () => {}, token: TOKEN })
+  await call(handler, { method: 'POST', url: '/memory-read' })
+  enqueueOutbound('and you keep a night journal') // flagged
+  await flushTranscript()
+
+  resetQueueForTest()
+  const { restored } = await enableTranscriptPersistence({ dataHome: tmp })
+  assert(restored === 3, `the flagged transcript restores whole, got ${restored}`)
+  const replay = readOutbound(0)
+  assert(replay.items[2].fromMemory === true,
+    'fromMemory is a field of the kind:\'message\' item, so it survives into the durable transcript')
+  assert(replay.items[1].fromMemory === undefined, 'and the unflagged reply in the same file stays unflagged')
+  assert(replay.items[0].fromMemory === undefined, 'the restored user message is unflagged')
+
+  await flushTranscript()
+  resetQueueForTest()
+  fs.rmSync(tmp, { recursive: true, force: true })
 }
 
 // ── answer-stream draft (0.2.4 두두두둑): grows BESIDE the queue, never in it ──
@@ -749,6 +883,173 @@ console.log('\n10c. HTTP /clear: token-gated, empties the transcript, keeps seq'
 
   resetQueueForTest()
   fs.rmSync(base, { recursive: true, force: true })
+}
+
+console.log('\n11b. turn-abort: the honest end of a turn that never got an answer (design-0025)')
+// The pane derives BOTH the run fold and Stop/Read from awaitingReplySince. A
+// Stop that does not clear it, or a mid-turn death that leaves the transcript
+// ending on the unanswered question, shows a live-looking turn over no work.
+// One persisted, non-skipped item kind settles it -- these sections pin that
+// item, its durability and the record that produces it on the next boot.
+{
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+
+  // (a) the derivation: a turn-abort clears awaiting; its siblings do not.
+  resetQueueForTest()
+  enqueueInbound('did you finish?', { now: () => 1000 })
+  assert(transcriptState().awaitingReplySince === 1000, 'a user message arms the awaiting state')
+  enqueueTurnEnd() // ephemeral presence: must NOT clear it
+  assert(transcriptState().awaitingReplySince === 1000, 'turn-end is skipped by the derivation (still awaiting)')
+  enqueueAbort('death', 60_000, { now: () => 61_000, at: 61_500 })
+  assert(transcriptState().awaitingReplySince === null,
+    'a turn-abort CLEARS the awaiting state -- Stop and Read stop being re-derived from the stale user message')
+  const item = readOutbound(0).items.find((m) => m.kind === 'turn-abort')
+  assert(!!item, 'the item is in the transcript /out drains')
+  assert(item.role === 'agent' && item.text === '', 'role agent, text empty (the sentence is client-side)')
+  assert(item.reason === 'death' && item.elapsedMs === 60_000 && item.at === 61_500,
+    'carries {reason, elapsedMs, at} from the contract shape')
+  assert(item.ts === 61_000 && Number.isFinite(item.seq), 'still a normal queue item: ts and seq')
+
+  // (b) durability: it survives a reload; its ephemeral siblings do not.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-localchan-abort-'))
+  const transcriptFile = path.join(tmp, 'chat-transcript.json')
+  resetQueueForTest()
+  await enableTranscriptPersistence({ dataHome: tmp })
+  enqueueInbound('stuck question', { now: () => 5 })
+  enqueueTurnEnd() // must be dropped by the durable filter
+  enqueueAbort('stop', 1234, { now: () => 6 })
+  await flushTranscript()
+  resetQueueForTest()
+  const { restored } = await enableTranscriptPersistence({ dataHome: tmp })
+  assert(restored === 2, `restore keeps the user message AND the turn-abort, drops turn-end (got ${restored})`)
+  const replay = readOutbound(0)
+  assert(replay.items.some((m) => m.kind === 'turn-abort'), 'turn-abort survives the reload (a reload must not resurrect the stuck state)')
+  assert(!replay.items.some((m) => m.kind === 'turn-end'), 'turn-end stays ephemeral')
+  assert(transcriptState().awaitingReplySince === null, 'the reloaded transcript is settled, not awaiting')
+
+  // (c) the record consumer: exactly-once, and only when it should fire.
+  const recordFile = path.join(tmp, '.last-turn-abort.json')
+  const writeRecord = (o) => fs.writeFileSync(recordFile, JSON.stringify(o))
+  // boot(): restore like boot() does, then DRAIN the fire-and-forget flush the
+  // consumer's push may have kicked -- a pending write landing after the next
+  // hand-written fixture would clobber it and make these assertions flaky.
+  const boot = async () => { await enableTranscriptPersistence({ dataHome: tmp }); await flushTranscript() }
+
+  // clean start: no record on disk -> nothing appended (no phantom line).
+  resetQueueForTest()
+  fs.writeFileSync(transcriptFile, JSON.stringify({ seq: 1, queue: [{ seq: 1, kind: 'message', role: 'user', text: 'q', ts: 111 }] }))
+  await boot() // no record file yet
+  assert(readOutbound(0).items.filter((m) => m.kind === 'turn-abort').length === 0,
+    'no record -> no phantom turn-abort on a clean start')
+  assert(transcriptState().awaitingReplySince === 111, 'and the transcript honestly stays awaiting')
+
+  // the record lands once, and is stamped (not deleted).
+  writeRecord({ at: 5000, reason: 'death', tail: 'tool_result', elapsedMs: null })
+  resetQueueForTest()
+  await boot()
+  let aborts = readOutbound(0).items.filter((m) => m.kind === 'turn-abort')
+  assert(aborts.length === 1 && aborts[aborts.length - 1].reason === 'death',
+    'a record newer than the tail, with an unanswered message, becomes exactly one turn-abort')
+  assert(aborts[aborts.length - 1].elapsedMs === 5000 - 111,
+    'the elapsed is at - awaitingReplySince: how long HER TURN ran, so it stops at `at` (never the dead time since the kill)')
+  const stamped = JSON.parse(fs.readFileSync(recordFile, 'utf8'))
+  assert(stamped.consumedAt, 'the record is STAMPED consumed')
+  assert(stamped.at === 5000 && stamped.reason === 'death', '...without losing the fact it recorded')
+
+  // second boot: no duplicate (the transcript is settled anyway), and even a
+  // hand-reverted awaiting transcript cannot re-consume a stamped record.
+  resetQueueForTest()
+  await boot()
+  assert(readOutbound(0).items.filter((m) => m.kind === 'turn-abort').length === 1,
+    'a second boot does not duplicate the line')
+  fs.writeFileSync(transcriptFile, JSON.stringify({ seq: 1, queue: [{ seq: 1, kind: 'message', role: 'user', text: 'q', ts: 111 }] }))
+  resetQueueForTest()
+  await boot()
+  assert(readOutbound(0).items.filter((m) => m.kind === 'turn-abort').length === 0,
+    'an already-consumed record is NOT re-consumed even when the transcript still looks awaiting')
+  assert(transcriptState().awaitingReplySince === 111, '...so the transcript stays awaiting: the stamp, not the transcript, is what stops the second line')
+
+  // the elapsed's two fallbacks. The record's own elapsedMs is null by
+  // construction (both producers live in another process from this transcript),
+  // so when the arithmetic has no usable pair the line must say so rather than
+  // print a number nobody measured.
+  fs.rmSync(recordFile, { force: true })
+  // A restored transcript whose ts is not a number: enableTranscriptPersistence
+  // filters on seq, not ts, so this shape reaches transcriptState() intact and
+  // there is nothing finite to subtract.
+  fs.writeFileSync(transcriptFile, JSON.stringify({ seq: 1, queue: [{ seq: 1, kind: 'message', role: 'user', text: 'q', ts: '111' }] }))
+  writeRecord({ at: 5000, reason: 'stall', tail: null, elapsedMs: 777 })
+  resetQueueForTest()
+  await boot()
+  aborts = readOutbound(0).items.filter((m) => m.kind === 'turn-abort')
+  assert(aborts.length === 1 && aborts[aborts.length - 1].elapsedMs === 777,
+    'no usable awaiting ts -> the record\'s own elapsedMs rides the line instead')
+  fs.rmSync(recordFile, { force: true })
+  fs.writeFileSync(transcriptFile, JSON.stringify({ seq: 1, queue: [{ seq: 1, kind: 'message', role: 'user', text: 'q', ts: '111' }] }))
+  writeRecord({ at: 5000, reason: 'stall', tail: null, elapsedMs: null })
+  resetQueueForTest()
+  await boot()
+  aborts = readOutbound(0).items.filter((m) => m.kind === 'turn-abort')
+  assert(aborts.length === 1 && aborts[aborts.length - 1].elapsedMs === null,
+    'neither number usable -> null, never a fabricated duration (the line renders without the clause)')
+
+  // an abort OLDER than the newest item is yesterday's news.
+  fs.rmSync(recordFile, { force: true })
+  fs.writeFileSync(transcriptFile, JSON.stringify({ seq: 1, queue: [{ seq: 1, kind: 'message', role: 'user', text: 'newer question', ts: 9000 }] }))
+  writeRecord({ at: 1000, reason: 'death', tail: 'tool_result', elapsedMs: null })
+  resetQueueForTest()
+  await boot()
+  assert(readOutbound(0).items.filter((m) => m.kind === 'turn-abort').length === 0,
+    'a record older than the newest retained item is not replayed')
+
+  // a settled transcript consumes nothing.
+  fs.rmSync(recordFile, { force: true })
+  fs.writeFileSync(transcriptFile, JSON.stringify({ seq: 2, queue: [
+    { seq: 1, kind: 'message', role: 'user', text: 'q', ts: 1000 },
+    { seq: 2, kind: 'message', role: 'agent', text: 'a', ts: 2000 },
+  ] }))
+  writeRecord({ at: 5000, reason: 'stall', tail: null, elapsedMs: null })
+  resetQueueForTest()
+  await boot()
+  assert(readOutbound(0).items.filter((m) => m.kind === 'turn-abort').length === 0,
+    'a settled transcript (agent already answered) consumes nothing')
+
+  await flushTranscript()
+  resetQueueForTest()
+  fs.rmSync(tmp, { recursive: true, force: true })
+}
+
+console.log('\n11c. HTTP /interrupt writes exactly one turn-abort, and only with a turn in flight')
+{
+  const mkHandler = (interrupt) => createRequestHandler({ notify: async () => {}, token: TOKEN, interrupt })
+  const abortCount = () => readOutbound(0).items.filter((m) => m.kind === 'turn-abort').length
+
+  resetQueueForTest()
+  enqueueInbound('stop me', { now: () => 2000 })
+  const handler = mkHandler(async () => ({ ok: true }))
+  const r1 = await call(handler, { method: 'POST', url: '/interrupt' })
+  assert(r1.code === 200 && r1.json.ok === true, 'a successful stop still answers 200 ok')
+  assert(abortCount() === 1, 'a successful stop pushes EXACTLY one turn-abort')
+  const stop = readOutbound(0).items.find((m) => m.kind === 'turn-abort')
+  assert(stop.reason === 'stop', 'reason is stop')
+  assert(Number.isFinite(stop.elapsedMs) && stop.elapsedMs > 0, 'elapsedMs is wall time from the awaiting user message')
+  assert(transcriptState().awaitingReplySince === null, 'the awaiting state is cleared by the stop')
+  // a second press with nothing in flight pushes nothing new.
+  await call(handler, { method: 'POST', url: '/interrupt' })
+  assert(abortCount() === 1, 'a second stop with no awaiting turn pushes none')
+
+  // no awaiting turn at all -> no item, even on a 200.
+  resetQueueForTest()
+  const r2 = await call(mkHandler(async () => ({ ok: true })), { method: 'POST', url: '/interrupt' })
+  assert(r2.code === 200 && readOutbound(0).items.length === 0, 'a stop with no in-flight turn pushes nothing')
+
+  // a refused stop (lane says no_turn) -> 409 and no item.
+  resetQueueForTest()
+  enqueueInbound('still waiting', { now: () => 7 })
+  const r3 = await call(mkHandler(async () => ({ ok: false, reason: 'no_turn' })), { method: 'POST', url: '/interrupt' })
+  assert(r3.code === 409 && abortCount() === 0, 'a refused stop records nothing')
 }
 
 console.log('\n12. send_file_to_discord: copies into chat_uploads, marker the page can render (0.1.18)')

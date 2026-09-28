@@ -38,6 +38,19 @@ check('main.cjs records the child birth config at the spawn moment',
   /agentSupervisorPid = child\.pid[\s\S]{0,900}lastSpawnInfo = \{/.test(main))
 check('...and spawn-info rides agentControls', main.includes('spawnInfo: () => lastSpawnInfo'))
 check('route table serves GET /api/agent/spawn-info (routes/agent-lifecycle.cjs)', server.includes("'/api/agent/spawn-info'"))
+// 2026-09-28: the shell's name slot must show what the USER named the agent,
+// not the build's default. AGENT_NAME is a constant the installer never
+// touches; DISPLAY_NAME is what Settings writes. Preferring the default made
+// a rename invisible in the shell header (the exact class this file exists
+// for: a slot the user reads as identity, fed from the wrong source).
+check('main.cjs records the spawn moment with DISPLAY_NAME first',
+  main.includes('name: config.DISPLAY_NAME || config.AGENT_NAME || null'),
+  'the shell name slot would fall back to the un-renamable build default')
+// ...and the attach/adopted lane stamped the SAME record MINUS the name, so a
+// renamed agent showed the generic "AGENT" label on every attach-mode run.
+check('stampAttachSpawnInfo carries the same name (it used to omit the field)',
+  /function stampAttachSpawnInfo\([\s\S]{0,700}?name: cfg\.DISPLAY_NAME \|\| cfg\.AGENT_NAME \|\| null/.test(main),
+  'attach-mode runs leave the shell header on the generic AGENT label')
 
 // ── the shell reads reality, never config ───────────────────────────────────
 check('nav.js fills model/effort from spawn-info', nav.includes("api('/api/agent/spawn-info')") && nav.includes('renderRealityDetails'))

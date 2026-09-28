@@ -31,6 +31,8 @@ import {
   createStallLane,
   createLaneHeartbeatLane,
   createBounceBudget,
+  writeTurnAbortRecord,
+  MID_TURN_DEATH_VERDICT,
   runLoop,
 } from '../supervisor.mjs'
 
@@ -987,6 +989,69 @@ console.log('\n-- stall lane: era guard + poll closure')
   }
 
   fs.rmSync(dir, { recursive: true, force: true })
+}
+
+// ── turn-abort record: the mid-turn death the watchdog already knows ────────
+// design-0025. The verdict string 'mid-turn death (tool_result tail)' used to
+// die in a log; now it also lands on disk as one record the channel's restore
+// consumes, so a respawned pane cannot show a live-looking turn over nothing.
+console.log('\n-- turn-abort record: written at the mid-turn-death verdict')
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'suptest-abort-'))
+  const recordFile = path.join(dir, '.last-turn-abort.json')
+
+  // (1) the writer: shape, atomicity, and NEVER throwing into the kill path.
+  writeTurnAbortRecord(dir, { reason: 'death', tail: 'tool_result' }, { now: () => 4_000_000 })
+  const rec = JSON.parse(fs.readFileSync(recordFile, 'utf8'))
+  ok('record shape is {at, reason, tail, elapsedMs}',
+    rec.at === 4_000_000 && rec.reason === 'death' && rec.tail === 'tool_result' && rec.elapsedMs === null, JSON.stringify(rec))
+  let threw = false
+  try { writeTurnAbortRecord(path.join(dir, 'nope', 'sub'), { reason: 'death', tail: 'tool_result' }) } catch { threw = true }
+  ok('an unwritable data dir is swallowed (a record must never block the kill)', !threw)
+  ok('the failed write left no stray tmp beside the real record',
+    !fs.readdirSync(dir).some((n) => n.includes('.tmp')))
+
+  // (2) the lane fires it ONLY on the mid-turn-death verdict.
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'suptest-abort-tx-'))
+  const T0 = Date.parse('2026-07-15T00:00:00Z')
+  const STALL_MS = 900_000
+  const line = (type, atMs, toolResult) => JSON.stringify({
+    type,
+    timestamp: new Date(atMs).toISOString(),
+    message: toolResult ? { content: [{ type: 'tool_result', content: 'ok' }] } : undefined,
+  })
+  let fired = []
+  const lane = (nowMs) => createStallLane({
+    transcriptDir: tdir, stallMs: STALL_MS, spawnedAt: T0 - 1000, now: () => nowMs, log: () => {},
+    onMidTurnDeath: (info) => fired.push(info),
+  })
+
+  fs.writeFileSync(path.join(tdir, 's.jsonl'), line('user', T0, true) + '\n')
+  const death = lane(T0 + 2 * STALL_MS + 60_000)()
+  ok('a tool_result tail is still the mid-turn-death verdict', String(death).includes(MID_TURN_DEATH_VERDICT), String(death))
+  ok('...and the death verdict fires the producer with the tail kind',
+    fired.length === 1 && fired[0].tail === 'tool_result', JSON.stringify(fired))
+
+  // a plain user tail (turn never in flight) must NOT write a record.
+  fired = []
+  fs.writeFileSync(path.join(tdir, 's.jsonl'), line('user', T0, false) + '\n')
+  const pending = lane(T0 + 2 * STALL_MS + 60_000)()
+  ok('a pending-inbound tail (no tool_result) is NOT a death and writes nothing',
+    String(pending).includes('pending inbound') && fired.length === 0, String(pending))
+
+  // a recorder that throws must not break the poll.
+  fs.writeFileSync(path.join(tdir, 's.jsonl'), line('user', T0, true) + '\n')
+  const throwing = createStallLane({
+    transcriptDir: tdir, stallMs: STALL_MS, spawnedAt: T0 - 1000, now: () => T0 + 2 * STALL_MS + 60_000, log: () => {},
+    onMidTurnDeath: () => { throw new Error('boom') },
+  })
+  let pollThrew = false
+  let verdict = null
+  try { verdict = throwing() } catch { pollThrew = true }
+  ok('a producer that throws never sinks the poll (the kill still happens)', !pollThrew && String(verdict).includes(MID_TURN_DEATH_VERDICT))
+
+  fs.rmSync(dir, { recursive: true, force: true })
+  fs.rmSync(tdir, { recursive: true, force: true })
 }
 
 // ── dsh heartbeat lane (design-0023 P3 #7) ─────────────────────────────────

@@ -202,6 +202,31 @@ function writeJsonAtomic(file, value, mode) {
   fs.renameSync(tmp, file)
 }
 
+// The turn-abort record's producer -- lane side (design-0025, 2026-09-28). Same
+// record shape the supervisor writes and channel-local consumes; the reason here
+// is 'stall' -- the upstream call went quiet past TURN_STALL_MS, so the turn is
+// dead even though this process is still alive. tail is null: this watchdog
+// reads no transcript, so it has no tail kind to name. elapsedMs is null for the
+// same reason the supervisor leaves it null (see supervisor.mjs's writer): the
+// true "from awaitingSince" number lives in the channel, not here.
+//
+// NEVER throws and NEVER blocks the recycle: a record that cannot be written
+// costs one honest line on the next boot, not the kill. tmp+rename with a
+// pid-suffixed tmp -- the supervisor writes this same file (the $MEM it passes
+// to us IS its cfg.mem), and a shared tmp name would let the two writers
+// truncate each other's bytes. Exported so the contract is testable against a
+// temp dir without spawning the lane.
+export function writeTurnAbortRecord(reason, { dir = MEM } = {}) {
+  try {
+    const file = path.join(dir, '.last-turn-abort.json')
+    const tmp = `${file}.${process.pid}.tmp`
+    fs.writeFileSync(tmp, JSON.stringify({ at: Date.now(), reason, tail: null, elapsedMs: null }), { mode: 0o600 })
+    fs.renameSync(tmp, file)
+  } catch (err) {
+    log(`turn-abort record write failed (non-fatal -- the recycle proceeds): ${err.message}`)
+  }
+}
+
 function readPriorSession() {
   try {
     const v = JSON.parse(fs.readFileSync(sessionFile(), 'utf8'))
@@ -954,6 +979,9 @@ async function main() {
       `(ceiling ${Math.round(TURN_STALL_MS / 60_000)}m, SCHEHERAZADE_TURN_STALL_MINUTES to tune) -- the upstream call is wedged. ` +
       'Recycling; the unanswered message redelivers once on the next boot. If this repeats on the same model, the model/provider lane is the problem.'
     )
+    // design-0025: leave the record BEFORE the kill so the app can settle the
+    // pane to an honest "gone" line if the answer never lands (see the writer).
+    writeTurnAbortRecord('stall')
     child.kill('SIGTERM')
     setTimeout(() => { if (!childExited) child.kill('SIGKILL') }, 10_000).unref()
   }, 30_000)

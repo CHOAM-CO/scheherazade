@@ -8,6 +8,14 @@
      a section here per release; missing versions simply brief as a bare
      version bump. -->
 
+## 0.3.4
+세라 얼굴이 생겼어요 — 설정에서 사진을 올리면 채팅창에 그 사진이 뜨고, 정해준 이름도
+그대로 보여요. 답이 기억에서 나온 턴에는 작은 표시가 붙어요.
+채팅창에서 지금 뭐가 돌아가는지 훨씬 잘 보여요. 걸린 시간이 계속 뜨고, 연결이 끊기면
+끊긴 상태로 넘어가고, 하던 턴이 죽으면 어디서 끊겼는지 한 줄로 남아요. Stop을 누르면
+정말 멈췄다는 게 화면에 남아서, 멈춘 뒤에 다시 돌아가는 것처럼 보이던 문제도 없어졌어요.
+모델 목록은 설정 화면과 채팅창이 같은 한 벌을 봐요.
+
 ## 0.3.3
 모델 목록이 지금 쓰는 것만 남게 정리됐어요. 클로드는 Opus 5.5·Fable 5.1·Opus 4.6·
 Sonnet 5, ChatGPT는 Astra·Sol 6·Luna 6·Daybreak, 올라마는 Kimi K3·DeepSeek V4.1 Flash·

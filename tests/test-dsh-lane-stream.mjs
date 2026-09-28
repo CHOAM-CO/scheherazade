@@ -50,7 +50,14 @@ assert(src.includes("if (streamedThisTurn) postPresence('', 'stream', { done: tr
 }
 assert(/const STREAM_FLUSH_AT = \d+/.test(src) && /const STREAM_TURN_CAP = \d+/.test(src),
   'flush threshold and per-turn cap are named constants (runaway turns stay bounded)')
-assert(src.includes('body: JSON.stringify(kind ? { label, kind, ...(extra || {}) } : { label })'),
+// CHANGED 2026-09-28 (memory mark): this pin used to match the bare
+// `body: JSON.stringify(kind ? ...)` line. postPresence now branches on the
+// memory kind before the body, so the substring moved without the wire shape
+// it pins moving an inch — think/activity still send exactly this payload.
+// Same intent, matched against the new line; the body-less memory kind is
+// pinned separately in 5b.
+assert(src.includes('JSON.stringify(kind ? { label, kind, ...(extra || {}) } : { label })') &&
+  /body: memoryRead \? undefined : JSON\.stringify\(kind \? \{ label, kind/.test(src),
   'postPresence generalizes to kind+extra without changing the think/activity wire shape')
 
 console.log('\n1b. reply-arg streaming — the answer rides the reply TOOL, not body text')
@@ -146,6 +153,32 @@ assert(src.includes("src.kind === 'subagent-settled' && src.senderSessionId") &&
   'the settlement notice (source.kind subagent-settled) retires the child by senderSessionId')
 assert(src.includes("d.name === 'job_kill' && argsForLabel.jobId"),
   'job_kill retires its target id immediately (one-shot background jobs get no settlement notice)')
+
+console.log('\n5b. memory mark (2026-09-28) — the lane half, kept in step with the hook')
+// The claude lane reports a memory read from the PreToolUse hook; dsh has no
+// shell hooks, so the lane reports it from its own tool/call events. Two call
+// sites, ONE protocol (POST /memory-read, no body) and one list of tool names
+// that they cannot share (dsh-lane cannot import a hook script), so the list is
+// pinned against the hook's copy here rather than trusted.
+assert(src.includes("postPresence('', 'memory-read')"),
+  'a memory read is reported from the tool/call branch (it builds no label, so this is the only post)')
+assert(/const memoryRead = kind === 'memory-read'/.test(src) &&
+  /\$\{memoryRead \? 'memory-read' : 'activity'\}/.test(src),
+  'the same presence path routes it to /memory-read instead of /activity')
+assert(/body: memoryRead \? undefined : JSON\.stringify/.test(src),
+  'the memory post carries NO body (the call is the signal) — every other kind keeps its label payload')
+{
+  const hook = fs.readFileSync(path.join(ROOT, 'hooks', 'pre-tool-activity.mjs'), 'utf8')
+  const namesIn = (text, start, end) =>
+    [...text.slice(text.indexOf(start), text.indexOf(end)).matchAll(/'(mcp__memory__[a-z_]+)'/g)]
+      .map((m) => m[1]).sort()
+  const lane = namesIn(src, 'const MEMORY_READ_TOOLS', 'function activityLabelFor')
+  const hookSide = namesIn(hook, 'const MEMORY_READ_TOOLS', 'const memoryRead')
+  assert(lane.length === 3 && JSON.stringify(lane) === JSON.stringify(hookSide),
+    `both lanes name the same three read-class tools (${lane.join(', ')} vs ${hookSide.join(', ')})`)
+  assert(!lane.some((n) => /write|confirm|delete|_events$/.test(n)),
+    'the WRITE-class memory tools stay out of both lists — changing what it knows is not "this came out of memory"')
+}
 
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)

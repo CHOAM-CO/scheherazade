@@ -356,6 +356,26 @@ function createHarnessRender(ctx) {
       }
     }
 
+    // 2026-09-28: the memory mark's registration -- the SAME hook file on a
+    // SECOND matcher. The memory-read tools post POST /memory-read (a flag the
+    // next reply carries) and build no activity label, so they must never ride
+    // the activity matcher pinned above: that would put a memory read in the
+    // user's fold as a row saying nothing, on every boot. ADDITIVE (its own
+    // group is a new trigger, never a neighbor's), and pinned by matcher
+    // equality rather than by hook file -- the `find` above would otherwise
+    // pick the activity group and wrongly conclude this registration exists.
+    const MEMORY_READ_MATCHER = 'mcp__memory__memory_query|mcp__memory__journal_read|mcp__memory__memory_recall_material'
+    const hasMemoryReadMatcher = settings.hooks.PreToolUse.some((g) => g && g.matcher === MEMORY_READ_MATCHER)
+    if (!hasMemoryReadMatcher) {
+      settings.hooks.PreToolUse.push({
+        matcher: MEMORY_READ_MATCHER,
+        hooks: [{
+          type: 'command',
+          command: `node ${path.join(toUnpackedPath(REPO_ROOT), 'hooks', ACTIVITY_HOOK)}`,
+        }],
+      })
+    }
+
     // v0.0.41: AskUserQuestion redirect (the owner live repro 2026-08-04) -- the
     // interactive picker renders in a terminal the person never sees, so the
     // agent stalls silently mid-task waiting for an Enter that never comes.

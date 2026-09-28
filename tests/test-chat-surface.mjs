@@ -53,6 +53,63 @@ console.log('\n3b. --accent-rgb derives from the accent seed (consistency contra
 const model = readFileSync(path.join(root, 'onboarding', 'public', 'js', 'appearance-model.cjs'), 'utf8')
 assert(model.includes("'--accent-rgb': triplet(c.accent)"), 'model emits the raw accent triplet for alpha-composed surfaces')
 
+console.log('\n3c. sender-row avatar (2026-09-28) — the picture beside the name')
+// The agent's profile picture opens the run's sender row. Pinned here rather
+// than in a browser test because the two failure modes worth catching are
+// both source-level: a hand-built innerHTML node (section 1 above is the
+// general invariant) and a src pointed straight at the token-gated /api
+// route, which renders a 403 instead of a face.
+assert(/createElement\('img'\)[\s\S]{0,400}?chat-meta-avatar/.test(js),
+  'the avatar is an <img> built with createElement (never innerHTML)')
+assert(/createElement\('img'\)[\s\S]{0,400}?chat-meta-avatar[\s\S]{0,400}?\.alt = ''/.test(js),
+  '...and it is decorative: alt = "" (the name span beside it is the label)')
+assert(js.indexOf('chat-meta-avatar') !== -1 && js.indexOf('chat-meta-avatar') < js.indexOf('chat-meta-name'),
+  'the avatar is created BEFORE the name span — the picture leads the row')
+assert(js.includes('window.avatarUrl()') && js.includes('AVATAR_FALLBACK_URL'),
+  'src comes from nav.js\'s shared resolver and starts on the static fallback (no 403, no broken-image frame)')
+assert(js.includes('.onerror') && /onerror[\s\S]{0,200}?AVATAR_FALLBACK_URL/.test(js),
+  'a failed load resets to the fallback instead of leaving a broken image')
+assert(/\.chat-meta-avatar \{[^}]*width: 20px/s.test(css) && /\.chat-meta-avatar \{[^}]*height: 20px/s.test(css)
+  && /\.chat-meta-avatar \{[^}]*border-radius: 50%/s.test(css) && /\.chat-meta-avatar \{[^}]*object-fit: cover/s.test(css)
+  && /\.chat-meta-avatar \{[^}]*align-self: center/s.test(css) && /\.chat-meta-avatar \{[^}]*flex: 0 0 auto/s.test(css),
+  'avatar styled: a 20px round cover-fit square that cannot be squeezed by the flex line')
+assert(/\.chat-meta \{[^}]*align-items: baseline/s.test(css),
+  'the meta row KEEPS align-items: baseline — align-self: center on the img is what keeps it off its own bottom edge')
+assert(!/\.chat-meta \{[^}]*align-items: center/s.test(css),
+  '...and was not "fixed" to center, which would move the name off the time line instead')
+
+console.log('\n3d. memory mark (2026-09-28) — a quiet tell on a reply that came out of memory')
+// The owner's "기억을 꺼낸 티 내기" → "완전 굿". The flagged item is the ONLY
+// input (channel-local's POST /memory-read arms it; the next agent message
+// carries it), so these pins are about the three ways this could go wrong on
+// the page: rendering for the wrong items, building the node by hand, and
+// shouting. Source-level because the page is DOM-in-browser, same convention
+// as the sections above.
+assert(js.includes('m.fromMemory === true'),
+  'the mark is gated on the item\'s own flag — an item without it changes nothing (strict === true, no truthy accident)')
+assert(js.includes('role === \'agent\' && m.fromMemory === true'),
+  '...and only on agent turns: a user bubble can never be marked as coming from the agent\'s memory')
+assert(/function memoryMarkNode\(\)[\s\S]{0,300}?createElement\('span'\)[\s\S]{0,300}?chat-memory-mark[\s\S]{0,300}?textContent = C\.memoryMarkGlyph/.test(js),
+  'the node is a createElement span whose text is the copy glyph (innerHTML stays absent — section 1)')
+assert(/memoryMarkNode\(\)[\s\S]{0,400}?setAttribute\('aria-label'/.test(js),
+  'the glyph carries its meaning in words (aria-label), so it is not a symbol only a sighted reader can read')
+assert(js.includes('meta.appendChild(memoryMarkNode())'),
+  'the mark rides the sender row when the flagged reply opens a run — beside the name and time, not inside the text')
+assert(js.includes('if (memoryMark && !placedMemoryMark)') && js.includes("cornerMark.dataset.place = 'corner'"),
+  'a flagged reply that continues a run has no row to ride, so it falls back to the bubble corner instead of dropping the mark')
+assert(copy.includes('memoryMarkGlyph') && copy.includes('memoryMarkAria'),
+  'both the glyph and its label live in copy.js like every other string on this surface')
+assert(/\.chat-memory-mark \{[^}]*font-size: 0\.68rem/s.test(css) && /\.chat-memory-mark \{[^}]*color: var\(--fg-faint\)/s.test(css),
+  'the mark is smaller than both the name (0.8rem) and the time (0.72rem) and uses the existing faint token — no new colour')
+assert(!/\.chat-memory-mark[^{]*\{[^}]*(background|border):/s.test(css),
+  'no fill and no border: it is a tell, not a badge (a badge would be the thing that changes the message)')
+assert(/\.chat-memory-mark\[data-place='corner'\] \{[^}]*position: absolute/s.test(css),
+  'the corner placement is absolutely positioned, so it can never add a line to the bubble or shift the text it marks')
+assert(!/\.chat-memory-mark[^{]*\{[^}]*position: (static|relative)/s.test(css),
+  'neither placement puts a mark back into the text flow')
+assert(/\.chat-meta \{[^}]*gap: 8px/s.test(css),
+  'the row it rides keeps its own spacing contract (the mark is one more item on the baseline, not a new row)')
+
 console.log('\n4. error left-rail (dormant until the feed carries an error kind)')
 assert(css.includes('.chat-msg.chat-error'), 'error rail CSS present')
 assert(/border-left: 2px solid transparent/.test(css), 'every turn reserves the rail slot (no layout shift when it colors)')
@@ -68,11 +125,33 @@ assert(js.includes('runEl.open = false'), 'the reply that ends the wait closes t
 assert(js.includes('finalizeActivityFold') && js.includes("document.createElement('details')"), 'reply finalizes the timeline into its resting summary')
 assert(js.includes('TYPING_SHOW_MAX_MS) { discardRun(); return }'), 'stale-wait guard kept: a dead run cannot mislabel a later reply')
 assert(js.includes('activityLog.push') && js.includes('MAX_FOLD_LINES'), 'steps accumulate with a cap (DOM rows shift with the log)')
-assert(js.includes('waiting && !runEl'), 'typing dots yield once the live timeline is the liveness signal')
+assert(js.includes("st.state === 'working' && !runEl && !draftEl"), 'typing dots yield once the live timeline is the liveness signal (design-0025: the dots read the derived state, not a re-derived `waiting`)')
 assert(copy.includes('Worked for'), 'resting summary uses the Worked-for wording')
 assert(copy.includes('activityRunning'), 'live summary copy present')
 assert(/\.fold-line::before \{[^}]*border-radius: 50%/s.test(css), 'timeline nodes: a dot per step (aside process-row anatomy)')
 assert(/\.fold-line::after \{[^}]*width: 1px/s.test(css) && css.includes('.fold-line:last-child::after { display: none; }'), 'per-row connector segments thread node to node, suppressed on the last row')
+
+console.log('\n7. one catalog, one list (Engine picker adds nothing — the owner 2026-09-28)')
+// The Engine page (connectors.js) used to splice live-discovered ids (the
+// installed CLI's own claude model table, live ollama.com tags) onto the
+// shared static catalog, so its picker could offer rows the chat composer's
+// dropdown did not show. The owner chose one catalog ("이거 한쪽으로 통합해줘,
+// 카탈로그 하나로"). These pins hold that: the splicer is gone, and the
+// load-bearing survivors it must NOT have taken with it stay. Same
+// source-pin convention as the sections above (the page is DOM-in-browser).
+const connectors = readFileSync(path.join(root, 'onboarding', 'public', 'js', 'connectors.js'), 'utf8')
+assert(!connectors.includes('mergeDynamicClaudeModels') && !connectors.includes('claudeLabelOf'),
+  'connectors.js no longer carries the dynamic splicer (mergeDynamicClaudeModels / claudeLabelOf deleted, not just unreferenced)')
+assert(!/api\('\/api\/model-catalog\//.test(connectors),
+  'connectors.js no longer fetches /api/model-catalog/claude or /api/model-catalog/ollama — the Engine list is the static catalog alone')
+assert(connectors.includes('(current)') && /MODEL_CATALOG\.some\(\(m\) => m\.id === model\)/.test(connectors),
+  'the "(current)" passthrough survives — a stored non-catalog id still surfaces (reality, never a pickable option)')
+assert(connectors.includes('__custom__') && connectors.includes('__ollama_url__') && connectors.includes('custom: true'),
+  'both action sentinels and their custom:true provider-gate opt-out survive the merge removal')
+assert(connectors.includes('!m.custom && !m.providers.some(') && connectors.includes('if (m.disabled) opt.disabled = true'),
+  'the provider-gate disabled logic and the m.disabled withdrawal survive')
+assert(!js.includes('Engine-page nicety'),
+  'chat.js no longer claims the Engine page merges extras the chat dropdown lacks — both surfaces read the one catalog')
 
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)

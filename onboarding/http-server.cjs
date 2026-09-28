@@ -1855,6 +1855,15 @@ const MIME = {
   // font kills the Malgun vs Apple SD Gothic cross-platform mismatch).
   '.woff2': 'font/woff2',
   '.txt': 'text/plain; charset=utf-8', // OFL license file beside the font
+  // Images (agent-avatar fallback, 2026-09-28): public/ held none until the
+  // avatar landed, so this map had no image entry and a .png served as
+  // application/octet-stream. The fallback avatar is the ONLY static image
+  // today, but the whole set is here because a browser <img> must not be
+  // left to content-sniff.
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
 }
 
 function serveStatic(req, res, urlPath) {

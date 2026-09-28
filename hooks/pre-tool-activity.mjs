@@ -20,6 +20,14 @@
 // ADVISORY, FAIL-OPEN, FAST: pack convention — only the rumination gate
 // blocks. Any error (no port file, dead server, bad JSON, timeout) exits 0
 // silently. Budget: one 500ms-capped loopback POST per Bash call.
+//
+// SECOND JOB (2026-09-28, the owner's "기억을 꺼낸 티 내기" → "완전 굿"): the
+// MEMORY MARK. When the agent CALLS a memory read tool (memory_query /
+// journal_read / memory_recall_material) this hook posts POST /memory-read,
+// which arms a per-turn flag in the local channel; the reply that follows
+// carries it to the chat page. Nothing renders at the read — no label, no
+// fold row (see the branch below for why it is not an activity item). The
+// same matcher file registers this hook for both jobs.
 
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -49,6 +57,17 @@ try {
     try { const p = new URL(String(u)); return p.hostname + (p.pathname === '/' ? '' : p.pathname) } catch { return String(u || '') }
   }
   let label = ''
+  // Memory reads: the OTHER job, and the reason it is not an activity label.
+  // The tool names are the harness's MCP form — server key `memory` from
+  // .mcp.json, tool names from memory/server.mjs's TOOLS. Only the READ-class
+  // three: memory_write / memory_confirm / memory_delete are the agent
+  // changing what it knows, which is not "this came out of memory".
+  const MEMORY_READ_TOOLS = new Set([
+    'mcp__memory__memory_query',
+    'mcp__memory__journal_read',
+    'mcp__memory__memory_recall_material',
+  ])
+  const memoryRead = MEMORY_READ_TOOLS.has(String(payload.tool_name || ''))
   if (payload.tool_name === 'Bash' || payload.tool_name === 'PowerShell') {
     // PowerShell is what the shell tool is CALLED on native Windows (the Windows box
     // live repro 2026-08-14: matcher "Bash" meant the feed never fired there
@@ -63,7 +82,9 @@ try {
     // Agent current) -- the settings matcher names both, and so does this.
     label = `Subagent: ${trunc(input.description || input.subagent_type || 'working')}`
   }
-  if (!label) process.exit(0)
+  // A memory read builds no label and must still reach the channel (below),
+  // so it exits on neither count.
+  if (!label && !memoryRead) process.exit(0)
 
   const portFile = JSON.parse(readFileSync(path.join(DATA_HOME, 'local-channel.json'), 'utf8'))
   const port = Number(portFile.port)
@@ -72,10 +93,18 @@ try {
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 500)
-  await fetch(`http://127.0.0.1:${port}/activity`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-    body: JSON.stringify({ label }),
+  // Same budget, same posture, two destinations: the label feed (a status
+  // line for the fold) or the memory mark (a flag, no body — the call IS the
+  // signal). The memory post carries no content-type because it has no body.
+  const init = memoryRead
+    ? { method: 'POST', headers: { authorization: `Bearer ${token}` } }
+    : {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+        body: JSON.stringify({ label }),
+      }
+  await fetch(`http://127.0.0.1:${port}/${memoryRead ? 'memory-read' : 'activity'}`, {
+    ...init,
     signal: controller.signal,
   }).catch(() => {})
   clearTimeout(timer)

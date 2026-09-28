@@ -777,7 +777,6 @@
   // Ollama by-URL picker sentinel (2026-08-04) -- same action-not-state
   // contract as CUSTOM_MODEL_SENTINEL; never sent to the server.
   const OLLAMA_URL_SENTINEL = '__ollama_url__'
-  const CLAUDE_PROVIDERS = ['claude', 'claude-cli', 'claude-subscription'] // for dynamic-merge rows below; static rows carry their own copy
   const MODEL_CATALOG = window.SCHZ_MODEL_CATALOG.map((row) => ({ ...row }))
   // By-URL action row sits at the END of the Ollama group (after the last
   // Ollama model, before the DSH rows), exactly where the inline literal
@@ -841,56 +840,20 @@
     }
   }
 
-  // Dynamic Claude rows (2026-08-13, the owner: "모델 리스트 하드코딩 말고
-  // 다이나믹하게"). The server scans the installed CLI binary's own model
-  // table; ids the static catalog does not know are spliced into the Claude
-  // group, so a model that ships in a CLI update appears here without an app
-  // release. Static rows keep their curated labels and order; dynamic rows
-  // get a generated label. One fetch per page load; every failure path
-  // leaves the static catalog exactly as it was.
-  let dynamicClaudeMerged = false
-  function claudeLabelOf(id) {
-    // claude-opus-4-8 -> "Claude Opus 4.8"; claude-haiku-4-5 -> "Claude Haiku 4.5"
-    const parts = id.replace(/^claude-/, '').split('-')
-    const words = []
-    for (let i = 0; i < parts.length; i++) {
-      if (/^\d/.test(parts[i])) { words.push(parts.slice(i).join('.')); break }
-      words.push(parts[i].charAt(0).toUpperCase() + parts[i].slice(1))
-    }
-    return `Claude ${words.join(' ')}`
-  }
-  async function mergeDynamicClaudeModels() {
-    if (dynamicClaudeMerged) return
-    dynamicClaudeMerged = true // one attempt per page load, success or not
-    try {
-      const r = await api('/api/model-catalog/claude')
-      const models = Array.isArray(r && r.models) ? r.models : []
-      const fresh = models.filter((m) => m && typeof m.id === 'string' && !MODEL_CATALOG.some((row) => row.id === m.id))
-      if (fresh.length) {
-        // Splice after the last static Claude row so the group stays
-        // contiguous for the <optgroup> builder.
-        const lastClaudeIdx = MODEL_CATALOG.reduce((acc, row, i) => (row.group === 'Claude' ? i : acc), -1)
-        MODEL_CATALOG.splice(lastClaudeIdx + 1, 0,
-          ...fresh.map((m) => ({ id: m.id, label: claudeLabelOf(m.id), group: 'Claude', providers: CLAUDE_PROVIDERS })))
-      }
-    } catch (err) { /* route down = static catalog stands */ }
-    // Ollama half (2026-08-13): the live ollama.com catalog rides the same
-    // merge -- curated rows keep their labels/order, everything else the
-    // catalog carries lands after them (before the by-URL sentinel, which
-    // stays the group's last row). Tags ARE the identity for ollama models,
-    // so dynamic rows use the raw tag as label.
-    try {
-      const r = await api('/api/model-catalog/ollama')
-      const names = Array.isArray(r && r.models) ? r.models : []
-      const fresh = names.filter((n) => typeof n === 'string' && n && !MODEL_CATALOG.some((row) => row.id === n))
-      if (fresh.length) {
-        const sentinelIdx = MODEL_CATALOG.findIndex((row) => row.id === OLLAMA_URL_SENTINEL)
-        const at = sentinelIdx === -1 ? MODEL_CATALOG.length : sentinelIdx
-        MODEL_CATALOG.splice(at, 0,
-          ...fresh.map((n) => ({ id: n, label: n, group: 'Ollama', providers: ['ollama'] })))
-      }
-    } catch (err) { /* route down = static catalog stands */ }
-  }
+  // One catalog, one list (2026-09-28, the owner: "이거 한쪽으로 통합해줘,
+  // 카탈로그 하나로"). This page used to splice live-discovered ids -- the
+  // installed CLI binary's own claude model table and the live ollama.com
+  // tags -- into the Claude and Ollama groups on top of the shared static
+  // catalog, so the Engine picker could offer rows the chat composer's
+  // dropdown (which reads js/model-catalog.cjs alone) did not show. The owner
+  // chose one catalog over that: the two surfaces now present exactly the
+  // same rows, and this page adds nothing. The cost he accepted is that a
+  // model which ships in a CLI update now waits for an app release before it
+  // is pickable here. The /api/model-catalog/claude and /api/model-catalog/ollama
+  // routes still exist server-side (server capability, not this page's); this
+  // page no longer calls them. The "(current)" passthrough in
+  // populateModelSelect below is NOT a merge -- it surfaces a stored id the
+  // catalog lacks, it never adds a pickable option.
 
   function populateModelSelect(model) {
     const sel = $('set-model-select')
@@ -1031,7 +994,6 @@
     currentEffort = EFFORT_LEVELS.includes(cfg.EFFORT_LEVEL) ? cfg.EFFORT_LEVEL : EFFORT_DEFAULT
     availableProviders = Array.isArray(cfg.availableProviders) ? cfg.availableProviders.slice() : []
     if (currentProvider && !availableProviders.includes(currentProvider)) availableProviders.push(currentProvider)
-    await mergeDynamicClaudeModels() // no-op after the first call; static catalog stands on any failure
     populateModelSelect(currentModel)
     populateEffortSelect(currentEffort)
 

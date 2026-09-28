@@ -325,6 +325,89 @@
     $('set-rename-label').textContent = C.renameLabel
     $('set-rename-save').textContent = C.renameButton
 
+    // ── profile picture (2026-09-28, the owner "프로필 사진") ──────────────
+    // The preview is fed by nav.js's shared resolver (token-bearing fetch ->
+    // blob object URL) because a bare <img src="/api/settings/avatar"> is a
+    // 403: every /api GET sits behind the per-launch onboard token. The
+    // resolver's memo is dropped on every (re)load so a picture replaced in
+    // this session is the one on screen -- the route answers max-age=86400
+    // and a replacement reuses the same URL.
+    const previewEl = $('set-avatar-preview')
+    const avatarStatus = $('set-avatar-status')
+    const avatarFail = (msg) => {
+      avatarStatus.classList.remove('hidden')
+      avatarStatus.textContent = msg
+    }
+    const avatarClear = () => avatarStatus.classList.add('hidden')
+    // A stale src (the file was removed, the blob URL went bad) falls back to
+    // the shipped app icon rather than a broken-image icon. onerror is
+    // cleared first so a fallback that ALSO fails cannot loop.
+    const loadAvatarPreview = async () => {
+      window.avatarUrlForget()
+      previewEl.onerror = () => {
+        previewEl.onerror = null
+        previewEl.src = window.AVATAR_FALLBACK_URL || '/img/agent-avatar.png'
+      }
+      previewEl.src = await window.avatarUrl()
+    }
+
+    $('set-avatar-label').textContent = C.avatarLabel
+    $('set-avatar-choose').textContent = C.avatarChoose
+    $('set-avatar-remove').textContent = C.avatarRemove
+    $('set-avatar-choose').onclick = () => $('set-avatar-input').click()
+    $('set-avatar-input').onchange = async () => {
+      const input = $('set-avatar-input')
+      const file = input.files && input.files[0]
+      // Clear the input FIRST: choosing the same file twice in a row fires no
+      // change event while the old value is still in it, and "it worked the
+      // first time and then stopped" is the bug that produces.
+      input.value = ''
+      if (!file) return
+      // Size and type BEFORE reading, same ordering as chat.js's
+      // uploadImageFile: the server re-checks both (it must -- the page is
+      // not the authority), but an 8MB photo must not be read into memory and
+      // posted just to be refused.
+      if (file.size > 2_000_000) { avatarFail(C.avatarTooLarge); return }
+      if (!/^image\/(png|jpe?g|webp)$/.test(file.type || '')) { avatarFail(C.avatarBadType); return }
+      let dataBase64 = ''
+      try {
+        dataBase64 = await new Promise((resolve, reject) => {
+          const r = new FileReader()
+          r.onload = () => resolve(String(r.result || '').split(',')[1] || '')
+          r.onerror = () => reject(new Error('read failed'))
+          r.readAsDataURL(file)
+        })
+      } catch {
+        avatarFail(C.avatarBadType)
+        return
+      }
+      if (!dataBase64) { avatarFail(C.avatarBadType); return }
+      try {
+        await api('/api/settings/avatar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename: file.name || 'avatar.png', dataBase64 }),
+        })
+        avatarClear()
+        showToast(C.avatarSaved)
+        $('set-avatar-remove').disabled = false
+        await loadAvatarPreview()
+      } catch (err) {
+        avatarFail(GEN(err.message))
+      }
+    }
+    $('set-avatar-remove').onclick = async () => {
+      try {
+        await api('/api/settings/avatar', { method: 'DELETE' })
+        avatarClear()
+        showToast(C.avatarRemoved)
+        $('set-avatar-remove').disabled = true
+        await loadAvatarPreview()
+      } catch (err) {
+        avatarFail(GEN(err.message))
+      }
+    }
+
     $('set-autonomy-label').textContent = C.autonomyLabel
     $('set-autonomy-note').textContent = C.autonomyNote
     $('set-autonomy-enabled-label').textContent = C.autonomyEnableLabel
@@ -339,9 +422,16 @@
     try {
       const cfg = await api('/api/config')
       $('set-rename-input').value = cfg.DISPLAY_NAME || ''
+      // /api/config carries avatar {present, updatedAt} (routes/onboarding-
+      // meta.cjs) so the control can render its CURRENT state without the
+      // page probing for it. Remove is disabled while there is nothing to
+      // remove -- and left ENABLED when that read failed, because a broken
+      // read must not take away the only way back to the app icon.
+      if (cfg.avatar) $('set-avatar-remove').disabled = cfg.avatar.present !== true
     } catch (err) {
       console.error(err)
     }
+    loadAvatarPreview().catch((err) => console.error(err))
 
     $('set-rename-save').onclick = async () => {
       const name = $('set-rename-input').value.trim()

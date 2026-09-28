@@ -278,6 +278,23 @@ try {
   const rnBody = await rn.json()
   chk('G9 rename echoes the merged config (DISPLAY_NAME landed in the fixture)', rnBody.ok === true && rnBody.config.DISPLAY_NAME === 'e2e-디스패치', JSON.stringify(rnBody).slice(0, 200))
 
+  // G9 avatar slot (2026-09-28): the binding-level hits, GET first. Both
+  // verbs are here because an unbound `fs`/`path` in this route's file is a
+  // ReferenceError 500 -- runtime-only, invisible to node --check and to
+  // require() -- and only the GET and POST handlers touch them.
+  const av0 = await hit('G9 GET /api/settings/avatar (no upload yet)', '/api/settings/avatar', 200)
+  chk('G9 avatar GET serves the shipped fallback as image/png when nothing is uploaded',
+    av0.headers.get('content-type') === 'image/png' && Number(av0.headers.get('content-length')) > 0,
+    `${av0.headers.get('content-type')} ${av0.headers.get('content-length')}`)
+  const av1x1 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
+  const avUp = await hit('G9 POST /api/settings/avatar', '/api/settings/avatar', 200,
+    { method: 'POST', headers: auth, body: JSON.stringify({ filename: 'e2e.png', dataBase64: av1x1.toString('base64') }) })
+  chk('G9 avatar POST answers {ok, present:true}', (await avUp.json()).present === true)
+  const av2 = await hit('G9 GET /api/settings/avatar (after the upload)', '/api/settings/avatar', 200)
+  chk('G9 avatar GET then serves the uploaded bytes, still image/png',
+    av2.headers.get('content-type') === 'image/png' && Buffer.from(await av2.arrayBuffer()).equals(av1x1))
+  await hit('G9 DELETE /api/settings/avatar', '/api/settings/avatar', 200, { method: 'DELETE', headers: auth })
+
   // ── G10 setup-token (in-app `claude setup-token` capture) ────────────────
   // POST /api/setup-token/start is SKIPPED for the same reason G4's login
   // POST is: it spawns a real claude CLI child. The other three routes have

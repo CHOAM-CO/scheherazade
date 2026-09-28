@@ -30,14 +30,27 @@
 //  - Reactions are transcript items (kind:'reaction') replayed like
 //    messages: a tap POSTs /api/chat/react and the badge renders from the
 //    transcript echo via pollNow(), same one-source-of-truth as sends.
+//
+// Live turn state (design-0025, 2026-09-28, the owner "얘가 툴콜중인지 세션이
+// 끊긴건지 ... 인디케이팅좀 예쁘게"): the in-flight signals above each used to
+// re-derive "is a turn running" from their own slice of the facts (the dots
+// from `waiting`, the fold from its own staleness guard, Stop from `hidden`)
+// and they disagreed the moment the lane died mid-turn -- the poll failed, the
+// dots/Stop/Read retired, and the run fold, Think fold and draft bubble stayed
+// up over a turn that no longer existed. They now all read ONE derived state:
+// js/turn-state.cjs (loaded before this file, the same dual-environment
+// contract model-catalog.cjs holds, so the derivation is testable without a
+// DOM). This file only paints what it returns.
 
 ;(function () {
   const C = window.COPY.chat
 
+  const TURN = window.SCHZ_TURN_STATE // js/turn-state.cjs (see the header)
   const POLL_MS = 1000
   const STATUS_EVERY_TICKS = 5 // /status is a live /health probe upstream; 5s is fresh enough
+  const LANE_STATUS_MS = 2000 // /api/agent/status, fetched only while a turn is in flight
   const MAX_CLIENT_MSGS = 500 // mirror of the channel's MAX_QUEUE
-  const TYPING_SHOW_MAX_MS = 3 * 60 * 1000
+  const TYPING_SHOW_MAX_MS = TURN ? TURN.TYPING_SHOW_MAX_MS : 3 * 60 * 1000
   const REACTIONS = ['👍', '❤️'] // mirror of the channel's USER_REACTIONS
 
   function $(id) { return document.getElementById(id) }
@@ -49,7 +62,7 @@
   // steerHint says what the (still live) textarea will do while it is.
   const stopBtn = $('ct-stop')
   const steerHint = $('ct-steer-hint')
-  let stopping = false // one press per run: the second click has nothing to kill
+  let stopBusy = false // one press per run: the second click has nothing to kill
 
   let nextSeq = null // null = cursor not seeded yet (first poll renders nothing)
   let msgCount = 0
@@ -61,10 +74,37 @@
   let lastUserBubble = null
   let lastRenderedRole = null // 0.2.6 UI pass: agent-run grouping for the sender row
   let agentName = '' // filled from the status probe (setStatus detail)
+  // Profile picture (2026-09-28, the owner "프로필 사진"): one value for every
+  // sender row. It starts on the STATIC fallback so a row rendered before
+  // nav.js's token-bearing fetch resolves is already complete -- a picture
+  // that appears a beat after the name is a visible jump in the feed.
+  let avatarSrc = window.AVATAR_FALLBACK_URL || '/img/agent-avatar.png'
+  window.avatarUrl().then((u) => { avatarSrc = u })
   let awaitingSince = null // state.awaitingReplySince from the last /out
   let channelUp = false // freshest signal: did the last /out poll succeed
-  let typingEl = null
   let readEl = null
+  // ── live turn state (design-0025) ────────────────────────────────────────
+  // The derivation's inputs, and its one output. `turnState` is what every
+  // render site reads; nothing below re-derives "is a turn running".
+  let turnState = 'idle'
+  let lastAbort = null // {reason, elapsedMs, at} -- the newest turn-abort item of THIS turn
+  let stoppingAt = null // ms epoch the Stop press landed (holds until the abort lands)
+  let restartingAt = null // ms epoch the restart action was fired
+  let diedInFlight = false // this turn was watched dying; a live poll does not un-die it
+  let sawWorkSinceWait = false // any activity/think/draft since the unanswered message
+  let lastStepLabel = '' // the last activity item's label (the run fold's live summary text)
+  let laneStatus = null // GET /api/agent/status, fetched only while a turn is in flight
+  let lanePolledAt = 0
+  // The rail: one line for the states where a turn is NOT being worked on
+  // (다시 붙는 중 / 세션 끊김 / Stopping…) and the elapsed chip's home when no
+  // run fold is on screen. The dots ride inside it -- same element and same
+  // class as before, so the CSS contract is untouched.
+  let turnEl = null
+  let turnDotsEl = null
+  let turnLabelEl = null
+  let turnChipEl = null
+  let runLabelEl = null // the live run fold's step label (its own summary span)
+  let runChipEl = null // the elapsed chip while the live run fold holds the step label
   // P1 v2 live run fold (aside port, the owner 2026-08-05 19:49 "어사이드 렌더링
   // 잘 베끼셈"): while the agent works, steps render LIVE into an open
   // <details> timeline; the reply that ends the wait collapses the SAME
@@ -264,6 +304,21 @@
     return label
   }
 
+  // The memory mark's node (2026-09-28). One builder, two homes: the sender
+  // row's tail when the flagged reply opens a run, the bubble's corner when it
+  // continues one. textContent, never innerHTML — the injection-posture pin
+  // that every node type on this surface keeps. The glyph is decorative to a
+  // sighted reader's eye but the mark is not: aria-label + title carry the
+  // meaning in words, so it is announced once and hover-explained.
+  function memoryMarkNode() {
+    const mark = document.createElement('span')
+    mark.className = 'chat-memory-mark'
+    mark.textContent = C.memoryMarkGlyph
+    mark.setAttribute('aria-label', C.memoryMarkAria)
+    mark.title = C.memoryMarkAria
+    return mark
+  }
+
   function appendMsg(m) {
     clearEmpty()
     const stick = atBottom()
@@ -292,9 +347,33 @@
     // parties but left runs undated and the agent nameless on screen.
     // Only the first bubble of a run gets the row; consecutive agent
     // bubbles stay unlabeled (iMessage grouping).
+    //
+    // memoryMark (2026-09-28, the owner's "기억을 꺼낸 티 내기" → "완전 굿"):
+    // a reply whose item carries `fromMemory` (the channel's per-turn flag for
+    // a memory read; see POST /memory-read in channel-local.mjs) gets one
+    // small glyph. It is built here, before the row is appended, so the mark
+    // rides the sender row when there is one and the bubble itself when there
+    // is not — a flagged reply mid-run (step commentary, then a read, then
+    // the answer) still gets marked instead of silently dropping it. Either
+    // way it is createElement + textContent, never innerHTML.
+    const memoryMark = role === 'agent' && m.fromMemory === true
+    let placedMemoryMark = false
     if (role === 'agent' && lastRenderedRole !== 'agent') {
       const meta = document.createElement('div')
       meta.className = 'chat-meta'
+      // The picture leads the row (2026-09-28, profile picture): identity is
+      // carried by the asymmetry alone since P1 v2, and this is the one
+      // per-run mark that names WHO without a second role label.
+      // createElement, never innerHTML -- the injection-posture pin.
+      const av = document.createElement('img')
+      av.className = 'chat-meta-avatar'
+      av.alt = '' // decorative: the name span beside it IS the label
+      av.src = avatarSrc
+      // A stale avatar path (the file was removed, the fetch lost a race)
+      // degrades to the shipped fallback instead of a broken-image icon.
+      // onerror is cleared first so a fallback that ALSO fails cannot loop.
+      av.onerror = () => { av.onerror = null; av.src = window.AVATAR_FALLBACK_URL || '/img/agent-avatar.png' }
+      meta.appendChild(av)
       const nm = document.createElement('span')
       nm.className = 'chat-meta-name'
       nm.textContent = agentName || 'Agent'
@@ -306,6 +385,7 @@
         tm.textContent = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
         meta.appendChild(tm)
       }
+      if (memoryMark) { meta.appendChild(memoryMarkNode()); placedMemoryMark = true }
       pane.appendChild(meta)
     }
     lastRenderedRole = role
@@ -322,6 +402,17 @@
     for (const name of files) appendAttachmentFile(el, name)
     if (role === 'agent') attachReactBar(el, m.seq, shown)
     else { lastUserBubble = el; attachCopyBar(el, shown) }
+    if (memoryMark && !placedMemoryMark) {
+      // No sender row to sit beside (this bubble continues a run), so the
+      // mark falls back to the bubble's own trailing corner — the other
+      // corner from the hover react bar. Absolutely positioned there, so it
+      // cannot add a line to the bubble or move the text it marks; in the
+      // sender row the same is true for a different reason (the row's height
+      // is the 20px avatar's, which a 0.68rem glyph cannot change).
+      const cornerMark = memoryMarkNode()
+      cornerMark.dataset.place = 'corner'
+      el.appendChild(cornerMark)
+    }
     pane.appendChild(el)
     bubbles.set(m.seq, el)
     msgCount++
@@ -420,6 +511,18 @@
       runEl.open = true
       runEl.setAttribute('aria-label', C.activityAria)
       runSummary = document.createElement('summary')
+      // Two spans, not one textContent: the LABEL is the current step (rewritten
+      // per event) and the CHIP is the turn's elapsed clock (rewritten per
+      // tick, design-0025) -- one string would have to be rebuilt by both.
+      runLabelEl = document.createElement('span')
+      runLabelEl.className = 'chat-run-label'
+      runChipEl = document.createElement('span')
+      runChipEl.className = 'chat-turn-elapsed'
+      // The chip ticks every second and the pane is aria-live="polite": an
+      // announced clock is noise a screen reader cannot escape from, so the
+      // clock is hidden from the a11y tree while the label beside it is not.
+      runChipEl.setAttribute('aria-hidden', 'true')
+      runSummary.append(runLabelEl, runChipEl)
       runEl.appendChild(runSummary)
       activityStart = Date.now()
     }
@@ -436,7 +539,9 @@
     runEl.appendChild(row)
     // storyteller status (0.2.11): per-event verb, falls back to the old
     // counter copy if the key is missing (stale cached copy.js)
-    runSummary.textContent = C.statusLive ? C.statusLive(m.text, activityLog.length) : C.activityRunning(activityLog.length)
+    lastStepLabel = String(m.text || '')
+    sawWorkSinceWait = true // a tool call is on screen: a death now landed on a tool result
+    runLabelEl.textContent = C.statusLive ? C.statusLive(lastStepLabel, activityLog.length) : C.activityRunning(activityLog.length)
     pane.appendChild(runEl) // appendChild moves it back to the end
     if (stick) pane.scrollTop = pane.scrollHeight
   }
@@ -459,6 +564,8 @@
     runEl.classList.remove('chat-run-live')
     runEl = null
     runSummary = null
+    runLabelEl = null // the resting summary has no chip: the work is over
+    runChipEl = null
     activityLog = []
   }
 
@@ -466,6 +573,8 @@
     if (runEl) runEl.remove()
     runEl = null
     runSummary = null
+    runLabelEl = null
+    runChipEl = null
     activityLog = []
   }
 
@@ -498,6 +607,7 @@
     }
     pane.appendChild(thinkEl) // moves back to the end if bubbles landed above
     lastActivityAt = Date.now() // thinking IS liveness for the run staleness guard
+    sawWorkSinceWait = true // reasoning on screen is work on screen (design-0025 tail)
     if (stick) pane.scrollTop = pane.scrollHeight
   }
 
@@ -516,9 +626,48 @@
   function renderItem(m) {
     if (m.kind === 'reaction') applyReaction(m)
     else if (m.kind === 'turn-end') { finalizeActivityFold(); finalizeThinkFold() } // background turns end with no bubble (0.2.11 stuck-Thinking fix)
+    else if (m.kind === 'turn-abort') showTurnAbort(m) // a turn that ended with no answer (design-0025)
     else if (m.kind === 'activity') showActivity(m)
     else if (m.kind === 'think') showThink(m)
     else appendMsg(m)
+  }
+
+  // The turn-abort line (design-0025, 2026-09-28). The server item is facts
+  // only -- { reason: 'stop'|'death'|'stall', elapsedMs, at }, text deliberately
+  // empty -- and copy.js composes the sentence, the same split every other
+  // string on this surface keeps. It is a SETTLE, not a message: it closes
+  // whatever the turn was drawing with the EXISTING close (the same three calls
+  // appendMsg runs for an agent reply), then leaves one quiet line behind.
+  // Because the item is persisted and clears awaitingReplySince server-side, a
+  // reload can no longer resurrect the stuck folds it exists to end.
+  function showTurnAbort(m) {
+    closeTurnFolds()
+    lastAbort = {
+      reason: typeof m.reason === 'string' ? m.reason : null,
+      elapsedMs: Number.isFinite(m.elapsedMs) ? m.elapsedMs : null,
+      at: Number.isFinite(m.at) ? m.at : Date.now(),
+    }
+    const stick = atBottom()
+    const el = document.createElement('div')
+    el.className = 'chat-turn-abort'
+    el.dataset.seq = m.seq
+    el.textContent = C.turnAbort ? C.turnAbort(lastAbort.reason, lastAbort.elapsedMs, turnTail()) : ''
+    pane.appendChild(el)
+    msgCount++
+    // A turn boundary breaks the bubble run, exactly like a session line: the
+    // next agent message opens with its sender row again instead of inheriting
+    // the group of a turn that is over.
+    lastRenderedRole = null
+    if (stick) pane.scrollTop = pane.scrollHeight
+  }
+
+  // The existing close, not a new one: the same three calls appendMsg runs when
+  // an agent turn ends. Used by the abort item above and by the render path
+  // when the derived state says nothing is running (design-0025 §linking/gone).
+  function closeTurnFolds() {
+    finalizeActivityFold()
+    finalizeThinkFold()
+    discardDraft()
   }
 
   // Background pill: one line above the controls row, present only while
@@ -553,6 +702,7 @@
     renderMarkdown(draftEl, text)
     pane.appendChild(draftEl) // keep it below think/activity folds
     lastActivityAt = Date.now() // streaming IS liveness
+    sawWorkSinceWait = true // a streaming answer is work on screen (design-0025 tail)
     if (stick) pane.scrollTop = pane.scrollHeight
   }
 
@@ -576,46 +726,151 @@
     }
   }
 
-  // Both DM affordances from the one server value (see header). Runs every
-  // poll tick, success or failure -- the failure path is what retires the
-  // dots when the channel dies mid-wait.
-  function updatePresence() {
-    const waiting = awaitingSince !== null && channelUp
-    // Stop + steer surface (0.3.1) rides the SAME `waiting` signal the typing
-    // dots and the run fold already trust -- one source of truth for "work is
-    // owed", so the button cannot offer to stop a turn that is not running.
-    // Send deliberately stays visible beside Stop rather than being swapped
-    // out: mid-turn sends MERGE into the running turn (probe 6), and that
-    // steering is a feature here, not an accident to be disabled away.
-    // .hidden, not style.display -- [hidden] is the page's convention.
-    if (stopBtn) stopBtn.hidden = !waiting
-    if (steerHint) steerHint.hidden = !waiting
-    input.placeholder = waiting ? C.steerPlaceholder : C.placeholder
-    // A live run only makes sense while work is owed. If the wait died
-    // (channel down, no reply ever) the open timeline would sit there as
-    // dressed-up silence — close it into its honest summary once the
-    // typing cap has passed. (A reply landing finalizes it earlier via
-    // finalizeActivityFold; this is the no-reply path only.)
-    if (!waiting && runEl && Date.now() - lastActivityAt > TYPING_SHOW_MAX_MS) closeRun()
-    // Typing dots only before the first step lands — once the live
-    // timeline is on screen, the run itself is the liveness signal
-    // (aside shows the working steps, not dots beside them).
-    const typing = waiting && !runEl && !draftEl && (Date.now() - awaitingSince) < TYPING_SHOW_MAX_MS
-    if (typing) {
-      if (!typingEl) {
-        typingEl = document.createElement('div')
-        typingEl.className = 'chat-typing chat-msg chat-agent'
-        typingEl.setAttribute('aria-label', C.typingAria)
-        for (let i = 0; i < 3; i++) typingEl.appendChild(document.createElement('span'))
+  // ── the live turn: one derivation, one paint (design-0025) ───────────────
+  // Everything the pane shows about a turn in flight is painted here, from the
+  // state js/turn-state.cjs derives. Runs every poll tick, success or failure --
+  // the failure path is exactly the one that used to leave the pane dressed up
+  // as working over a turn that was already dead.
+
+  // Where a death landed, from what THIS pane has seen: work was on screen (a
+  // tool call was running and its result never came back) or nothing was (the
+  // agent died before it wrote a word). The same discriminator the supervisor's
+  // own record uses; computed here so the pane can say it even when the abort
+  // record never reaches this page.
+  function turnTail() { return sawWorkSinceWait ? 'tool_result' : 'user' }
+
+  function deriveTurn() {
+    if (!TURN) {
+      // A page whose turn-state.cjs failed to load (torn cache) degrades to the
+      // pre-0025 reading rather than going blank: dots while a turn is owed.
+      const up = awaitingSince !== null && channelUp
+      return {
+        state: up ? 'working' : 'idle',
+        inFlight: up,
+        elapsedMs: awaitingSince === null ? null : Date.now() - awaitingSince,
+        reason: null, tail: null, agentOff: false,
       }
-      const stick = atBottom()
-      pane.appendChild(typingEl) // appendChild moves it back to the end if new bubbles landed above
-      if (stick) pane.scrollTop = pane.scrollHeight
-    } else if (typingEl) {
-      typingEl.remove()
-      typingEl = null
     }
-    if (waiting && lastUserBubble) {
+    return TURN.deriveTurnState({
+      now: Date.now(),
+      awaitingSince,
+      pollUp: channelUp,
+      abortAt: lastAbort ? lastAbort.at : null,
+      abortReason: lastAbort ? lastAbort.reason : null,
+      stoppingAt,
+      restartingAt,
+      died: diedInFlight,
+      lane: laneStatus,
+      tail: turnTail(),
+    })
+  }
+
+  // The rail's one line per non-working state. `state` is the derivation's
+  // answer; every string is copy.js's (the server sends facts, not voice).
+  function turnLine(st) {
+    if (st.state === 'stopping') return C.stopping
+    if (st.state === 'linking') return C.turnReconnecting || ''
+    if (st.state === 'gone') {
+      if (st.agentOff) return C.turnGoneOff || ''
+      return C.turnGone ? C.turnGone(st.tail) : ''
+    }
+    return ''
+  }
+
+  function ensureTurnRail() {
+    if (turnEl) return turnEl
+    turnEl = document.createElement('div')
+    turnEl.className = 'chat-turn-rail'
+    turnDotsEl = document.createElement('span')
+    turnDotsEl.className = 'chat-typing'
+    turnDotsEl.setAttribute('aria-label', C.typingAria)
+    for (let i = 0; i < 3; i++) turnDotsEl.appendChild(document.createElement('span'))
+    turnLabelEl = document.createElement('span')
+    turnLabelEl.className = 'chat-turn-label'
+    turnChipEl = document.createElement('span')
+    turnChipEl.className = 'chat-turn-elapsed'
+    turnChipEl.setAttribute('aria-hidden', 'true') // see showActivity: a ticking clock must not be read out
+    turnEl.append(turnDotsEl, turnLabelEl, turnChipEl)
+    return turnEl
+  }
+
+  function renderTurn() {
+    const prevState = turnState
+    const st = deriveTurn()
+    turnState = st.state
+    const running = st.state === 'working' || st.state === 'stalled'
+
+    // Stop + steer ride the derived state the dots and the folds trust -- one
+    // source of truth for "work is owed", so the button cannot offer to stop a
+    // turn that is not running. Send deliberately stays visible beside Stop
+    // rather than being swapped out: mid-turn sends MERGE into the running turn
+    // (probe 6), and that steering is a feature, not an accident to disable
+    // away. (.hidden, not style.display -- [hidden] is the page's convention.)
+    if (stopBtn) {
+      stopBtn.hidden = !st.inFlight
+      // The gone state's composer action is a RESTART, not a Stop (design-0025
+      // §gone): there is nothing left to kill. It fires the app's own lifecycle
+      // route (POST /api/agent/restart) -- the same one the shell's restart
+      // button uses, with the same word. No spawn path is invented here.
+      const mode = st.state === 'gone' ? 'restart' : 'stop'
+      if (stopBtn.dataset.mode !== mode) {
+        stopBtn.dataset.mode = mode
+        stopBtn.textContent = mode === 'restart' ? window.COPY.nav.restart : C.stop
+        stopBtn.setAttribute('aria-label', mode === 'restart' ? window.COPY.nav.restart : C.stopAria)
+        stopBtn.onclick = mode === 'restart' ? restartLane : requestStop
+      }
+    }
+    if (steerHint) steerHint.hidden = !running
+    input.placeholder = running ? C.steerPlaceholder : C.placeholder
+
+    // A run fold only makes sense while work is owed. If the wait died (the
+    // channel went down, no reply ever) an open timeline would sit there as
+    // dressed-up silence -- close it into its honest summary once the typing cap
+    // has passed. (A reply landing finalizes it earlier via appendMsg; a
+    // turn-abort item finalizes it via showTurnAbort. This is the no-reply
+    // path only.)
+    if (!st.inFlight && runEl && Date.now() - lastActivityAt > TYPING_SHOW_MAX_MS) closeRun()
+    // Linking / gone / stopping all mean nothing is running behind the folds
+    // (design-0025). Closed on the transition, not every tick: the close is
+    // idempotent, but a state that keeps re-closing would drop a draft the
+    // server is still streaming on the tick the poll came back.
+    if (st.inFlight && !running && prevState !== st.state) closeTurnFolds()
+    // From the first gone tick on, this turn is known dead -- a poll that comes
+    // back does not resurrect it (the derivation's `died` latch).
+    if (st.state === 'gone') diedInFlight = true
+
+    const chip = st.inFlight && C.turnElapsed ? C.turnElapsed(st.elapsedMs) : ''
+    const rail = ensureTurnRail()
+    let label = turnLine(st)
+    let dots = false
+    if (running) {
+      // The current step label (design-0025 §2): the last activity item's
+      // label, which the run fold already receives. Falls back to the working
+      // phrase only while nothing else on screen is saying it -- the draft
+      // bubble and the Think fold carry their own words.
+      const fallback = (draftEl || thinkEl) ? '' : (C.thinkLive || C.thinkSummary)
+      label = lastStepLabel || fallback
+      dots = st.state === 'working' && !runEl && !draftEl
+    }
+    // While the live run fold is on screen it owns the step label, so the chip
+    // rides ITS summary and the rail stays out of the way (one label on screen,
+    // never two). Every other in-flight state is the rail's.
+    const railWanted = st.inFlight && !runEl
+    if (runChipEl) runChipEl.textContent = chip
+    if (railWanted) {
+      turnDotsEl.classList.toggle('hidden', !dots)
+      turnLabelEl.textContent = label
+      turnLabelEl.classList.toggle('hidden', !label)
+      turnChipEl.textContent = chip
+      turnChipEl.classList.toggle('hidden', !chip)
+      const stick = atBottom()
+      pane.appendChild(rail) // appendChild moves it back to the end if new bubbles landed above
+      if (stick) pane.scrollTop = pane.scrollHeight
+    } else if (turnEl) {
+      turnEl.remove()
+    }
+
+    if (st.inFlight && lastUserBubble) {
       if (!readEl) {
         readEl = document.createElement('div')
         readEl.className = 'chat-read-label'
@@ -681,6 +936,54 @@
   let polling = false
   let pollAgain = false
 
+  // ── the derivation's inputs, kept current ────────────────────────────────
+  // A turn BEGINS on the tick the server first reports an unanswered message
+  // (awaitingReplySince null -> non-null). Everything the previous turn left on
+  // the pane -- its step label, its abort record, its death latch, a Stop press
+  // that never got its item -- belongs to that turn and goes now. Called BEFORE
+  // the items render, so the seed branch can build this turn's knowledge
+  // (sawWorkSinceWait) on a clean slate.
+  function beginTurnLatches() {
+    sawWorkSinceWait = false
+    lastStepLabel = ''
+    lastAbort = null
+    diedInFlight = false
+    stoppingAt = null
+  }
+
+  // The one writer of `awaitingSince`. A turn ENDS by the server nulling it
+  // (the turn-abort item landing is what does that), and nothing here clears a
+  // latch on the way out: the latches are read once more by the derivation
+  // before the idle answer is painted, which is how the settled line keeps its
+  // reason.
+  function applyAwaiting(next) {
+    const prev = awaitingSince
+    if (prev === null && next !== null) beginTurnLatches()
+    awaitingSince = next
+  }
+
+  // GET /api/agent/status, the design's one extra fetch (its §"no new polling
+  // rail": this endpoint is already served). Only while a turn is in flight --
+  // an idle pane has no turn to have a verdict about -- and throttled, because
+  // the /out poll runs at 250ms while a draft paints and this probe is a live
+  // upstream /health, not a cheap read.
+  async function pollLaneStatus() {
+    if (awaitingSince === null) { laneStatus = null; return }
+    const now = Date.now()
+    if (now - lanePolledAt < LANE_STATUS_MS) return
+    lanePolledAt = now
+    try {
+      const s = await window.api('/api/agent/status')
+      laneStatus = s && typeof s.state === 'string' ? s : null
+    } catch {
+      // A failed /api/agent/status is not evidence about the lane: this probe
+      // is one more call to the same supervisor the /out poll already reported
+      // on, so a throw here adds no fact. Drop the stale verdict; the poll's own
+      // channelUp is what carries a death.
+      laneStatus = null
+    }
+  }
+
   async function pollOnce() {
     // Re-entrancy guard: pollNow() can fire while a poll is awaiting its
     // fetch. Two concurrent drains would both read the same cursor and
@@ -694,9 +997,9 @@
         // (both roles -- see header). The cursor lands on `latest`, so the
         // steady-state branch below only ever renders what's new.
         const seed = await window.api('/api/chat/out?since=0')
+        applyAwaiting((seed.state && seed.state.awaitingReplySince) || null)
         for (const m of seed.items) renderItem(m)
         nextSeq = seed.latest
-        awaitingSince = (seed.state && seed.state.awaitingReplySince) || null
         if (typeof seed.draft === 'string' && seed.draft) renderDraft(seed.draft)
         else discardDraft()
         renderBg(seed.bg)
@@ -705,9 +1008,9 @@
       } else {
         const result = await window.api(`/api/chat/out?since=${nextSeq}`)
         if (result.missed) appendGap()
+        applyAwaiting((result.state && result.state.awaitingReplySince) || null)
         for (const m of result.items) renderItem(m)
         nextSeq = result.latest
-        awaitingSince = (result.state && result.state.awaitingReplySince) || null
         if (typeof result.draft === 'string' && result.draft) renderDraft(result.draft)
         else discardDraft()
         renderBg(result.bg)
@@ -722,7 +1025,8 @@
     } finally {
       polling = false
     }
-    updatePresence()
+    await pollLaneStatus()
+    renderTurn()
     if (tick % STATUS_EVERY_TICKS === 0) await refreshStatus()
     tick++
     if (pollTimer) clearTimeout(pollTimer)
@@ -743,7 +1047,7 @@
   // ── new conversation (clean break, 2026-08-18) ────────────────────────────
   // Blow away everything the pane drew for the OLD thread so the next poll
   // re-seeds from the (server-cleared) transcript at cursor 0. Mirrors every
-  // render variable init/pollOnce/appendMsg/showActivity/updatePresence keep --
+  // render variable init/pollOnce/appendMsg/showActivity/renderTurn keep --
   // leaving any of them pointing at a removed node would strand a badge, a
   // typing dot, or a run fold on top of the fresh conversation. nextSeq=null
   // forces the seed branch (since=0) on the next poll, which now returns an
@@ -754,7 +1058,6 @@
     msgCount = 0
     emptyEl = null
     lastUserBubble = null
-    typingEl = null
     readEl = null
     runEl = null
     runSummary = null
@@ -765,6 +1068,25 @@
     draftEl = null
     awaitingSince = null
     nextSeq = null
+    // design-0025: the turn state and its latches are per-thread too. The pane
+    // wipe above already dropped the rail node; null the handles so the next
+    // render rebuilds it, and reset the derivation to a clean idle.
+    turnEl = null
+    turnDotsEl = null
+    turnLabelEl = null
+    turnChipEl = null
+    runLabelEl = null
+    runChipEl = null
+    turnState = 'idle'
+    lastAbort = null
+    stoppingAt = null
+    restartingAt = null
+    diedInFlight = false
+    sawWorkSinceWait = false
+    lastStepLabel = ''
+    laneStatus = null
+    lanePolledAt = 0
+    channelUp = false
     hideJump()
   }
 
@@ -939,7 +1261,13 @@
     }
   }
 
-  // ── STOP (0.3.1) ──────────────────────────────────────────────────────────
+  // ── STOP / RESTART (0.3.1, design-0025) ───────────────────────────────────
+  // The press lands in the `stopping` state IMMEDIATELY (design-0025 §stopping):
+  // the derivation holds it from `stoppingAt` until the turn-abort item lands
+  // (which nulls awaitingSince and settles the pane) or the hold's own bound
+  // runs out, at which point the same facts read as linking/gone rather than
+  // leaving the pane pinned on a Stop that never came back.
+  //
   // Raw fetch, not window.api: 409 ("the turn finished while your click was in
   // flight") is a normal outcome here, and api() throws on every non-2xx with
   // only a message string to go on. Reading res.status directly is the way to
@@ -947,9 +1275,13 @@
   // to a user. Token header mirrors nav.js's api() exactly -- this is a POST,
   // so the server's per-launch gate applies.
   async function requestStop() {
-    if (stopping) return
-    stopping = true
-    if (stopBtn) { stopBtn.disabled = true; stopBtn.textContent = C.stopping }
+    if (stopBusy) return
+    stopBusy = true
+    // Enter the held state before the request leaves: the button must read as
+    // pressed on the SAME tick, and the transition is what closes the folds.
+    stoppingAt = Date.now()
+    if (stopBtn) stopBtn.disabled = true
+    renderTurn()
     let status = 0
     try {
       const res = await fetch('/api/chat/interrupt', {
@@ -961,23 +1293,58 @@
     } catch (err) {
       console.error('chat stop failed:', err)
     }
-    if (status === 200 || status === 409) {
-      // The run is over either way, so the live timeline must stop pretending.
-      // discardRun, not closeRun: a cancelled turn has no honest "Worked for
-      // Ns" summary to collapse into -- the work was thrown away.
-      discardRun()
-      $('ct-status').textContent = status === 200 ? C.stopped : C.stopNoTurn
-      // The lane reboot takes the endpoint file down with it; refreshStatus
-      // is what repaints the bar when it comes back up.
+    if (status === 200) {
+      // Kill in flight. The hold is released by the turn-abort item the server
+      // pushes (reason 'stop'), which is exactly what the `stopping` state is
+      // waiting on; nothing to do here but let it land. The folds are already
+      // closed -- entering `stopping` closed them on the transition, and the
+      // elapsed they collapse to is the work that really did happen, with the
+      // settled "멈췄음" line right below saying how it ended.
       refreshStatus()
+    } else if (status === 409) {
+      // There was no turn to stop by the time the click arrived: settle now
+      // rather than hold a state whose item will never come.
+      stoppingAt = null
+      discardRun()
+      $('ct-status').textContent = C.stopNoTurn
+      refreshStatus()
+      renderTurn()
     } else {
+      stoppingAt = null
       window.showToast(C.stopFailed)
       refreshStatus()
+      renderTurn()
     }
-    if (stopBtn) { stopBtn.disabled = false; stopBtn.textContent = C.stop }
-    // Released only after the request settled: until then a second press
-    // would race a kill that is already under way.
-    stopping = false
+    if (stopBtn) stopBtn.disabled = false
+    stopBusy = false
+  }
+
+  // The `gone` state's composer action (design-0025 §gone): the turn is dead,
+  // so there is nothing to Stop. This fires the app's OWN lifecycle route --
+  // POST /api/agent/restart, the same one nav.js's Restart button uses (202,
+  // fire-and-forget) -- and invents no spawn path of its own. Between the fire
+  // and the lane's return the derivation reads `linking` (its restart hold), so
+  // the button does not flip back to Stop while the respawn is in flight.
+  async function restartLane() {
+    if (stopBusy) return
+    stopBusy = true
+    restartingAt = Date.now()
+    laneStatus = null // the old verdict is about the lane being replaced
+    diedInFlight = false
+    if (stopBtn) stopBtn.disabled = true
+    renderTurn()
+    try {
+      await window.api('/api/agent/restart', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+      refreshStatus() // narrate the respawn (Connecting… / isn't answering)
+    } catch (err) {
+      console.error('lane restart failed:', err)
+      window.showToast(window.COPY.genericError(err.message))
+      restartingAt = null // no respawn is coming; fall back to the honest reading
+    } finally {
+      if (stopBtn) stopBtn.disabled = false
+      stopBusy = false
+    }
+    pollNow()
   }
 
   async function send() {
@@ -997,6 +1364,12 @@
       })
       // No local append: the 202 means the message is already in the
       // transcript, and pollNow() renders it from there (see header).
+      // design-0025: the 202 is also proof the lane took the message, so a
+      // death latch left by an earlier turn cannot outlive it. If no turn was
+      // owed, the whole previous turn's latches go (a fresh begin); a mid-turn
+      // send MERGES into the running turn, whose latches are still its own.
+      diedInFlight = false
+      if (awaitingSince === null) beginTurnLatches()
       input.value = ''
       input.style.height = 'auto'
       pendingAttachments = []
@@ -1023,9 +1396,12 @@
   // /api/agent/model the Engine page fires -- one server contract, two
   // surfaces. Engine keeps the full picker (Custom proxy / Ollama-by-URL
   // action rows, effort, apply-state line); this is the quick lane only.
-  // Dynamic catalog extras (CLI-scanned claude ids, ollama account models)
-  // are an Engine-page nicety and are NOT merged here -- a running
-  // non-catalog model still shows via the "(current)" passthrough.
+  // Dynamic catalog extras are gone from both surfaces (2026-09-28, the owner:
+  // "이거 한쪽으로 통합해줘, 카탈로그 하나로") -- the Engine page used to splice
+  // CLI-scanned claude ids and live ollama tags onto this same catalog, and no
+  // longer does. Both dropdowns now present exactly js/model-catalog.cjs's
+  // rows; a running non-catalog model still shows via the "(current)"
+  // passthrough on either side.
   const modelSel = $('ct-model-select')
   const effortSel = $('ct-effort-select') // 0.2.12: effort beside the model chip
   const SET = window.COPY.settings // switchConfirm/switchOk/cancel live there

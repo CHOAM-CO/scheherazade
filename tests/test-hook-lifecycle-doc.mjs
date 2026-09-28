@@ -129,7 +129,12 @@ for (const file of [...registered.keys()].sort()) {
 }
 
 console.log('\n5. the prose count matches reality')
-const countWord = { 1: 'One', 2: 'Two', 3: 'Three', 4: 'Four', 5: 'Five', 6: 'Six', 7: 'Seven', 8: 'Eight', 9: 'Nine', 10: 'Ten', 11: 'Eleven', 12: 'Twelve', 13: 'Thirteen', 14: 'Fourteen', 15: 'Fifteen', 16: 'Sixteen', 17: 'Seventeen', 18: 'Eighteen' }
+// CHANGED 2026-09-28: 'Nineteen' added. The memory mark gave
+// pre-tool-activity.mjs a second PreToolUse registration (the memory-read
+// tools, which get no activity label), which is a 19th command in the
+// shipped template. The table is a word lookup, not a cap -- extending it
+// keeps the same check, and the doc had to say Nineteen to stay true.
+const countWord = { 1: 'One', 2: 'Two', 3: 'Three', 4: 'Four', 5: 'Five', 6: 'Six', 7: 'Seven', 8: 'Eight', 9: 'Nine', 10: 'Ten', 11: 'Eleven', 12: 'Twelve', 13: 'Thirteen', 14: 'Fourteen', 15: 'Fifteen', 16: 'Sixteen', 17: 'Seventeen', 18: 'Eighteen', 19: 'Nineteen' }
 const expectCommands = countWord[commandCount]
 const expectBlocking = (countWord[canBlock.size] || String(canBlock.size)).toLowerCase()
 // Label says WORD (n registered), not WORD (actual: n) -- the old form printed

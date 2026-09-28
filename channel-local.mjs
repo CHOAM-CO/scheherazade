@@ -114,6 +114,10 @@ let queue = []
 // failed write logs and keeps the chat alive. Losing persistence must never
 // cost the user the live conversation.
 const TRANSCRIPT_BASENAME = 'chat-transcript.json'
+// design-0025: the supervisor/lane write this when they kill a turn mid-flight
+// (see consumeTurnAbortRecord). Kept beside the transcript: one boot reads
+// both, and both live in DATA_HOME, which only this user can read.
+const ABORT_RECORD_BASENAME = '.last-turn-abort.json'
 let transcriptFile = null
 let transcriptWritePromise = null
 let transcriptDirty = false
@@ -133,6 +137,12 @@ async function writeTranscriptOnce() {
   // conversation -- replaying yesterday's command chatter into a fresh boot
   // would be noise wearing a transcript costume. seq stays as-is; the
   // cursor contract already tolerates gaps.
+  //
+  // This is a DENYLIST, not a "keep kind:'message'" allowlist: message,
+  // reaction and (design-0025) turn-abort all survive a reload precisely
+  // because none of them is named here. turn-abort is the one that must:
+  // dropping it would let a reload resurrect the stuck awaiting state it
+  // exists to clear (see enqueueAbort).
   const durable = queue.filter((m) => m.kind !== 'activity' && m.kind !== 'think' && m.kind !== 'turn-end')
   await fs.writeFile(tmp, JSON.stringify({ seq, queue: durable }, null, 1), { mode: 0o600 })
   await fs.rename(tmp, file)
@@ -172,6 +182,7 @@ export function flushTranscript() {
 
 export async function enableTranscriptPersistence({ dataHome = DATA_HOME } = {}) {
   transcriptFile = path.join(dataHome, TRANSCRIPT_BASENAME)
+  let restored = 0
   try {
     const raw = JSON.parse(await fs.readFile(transcriptFile, 'utf8'))
     if (Number.isFinite(raw.seq) && Array.isArray(raw.queue)) {
@@ -179,10 +190,71 @@ export async function enableTranscriptPersistence({ dataHome = DATA_HOME } = {})
       // max() over both: raw.seq is the truth, but a file from a crashed
       // mid-write generation may carry seq older than its own tail item.
       seq = Math.max(raw.seq, ...queue.map((m) => m.seq), 0)
-      return { restored: queue.length }
+      restored = queue.length
     }
   } catch { /* first run, or corrupt: empty transcript beats a dead channel */ }
-  return { restored: 0 }
+  // design-0025: the mid-flight kill the previous life never got to record in
+  // the transcript is settled here, on the way back up.
+  await consumeTurnAbortRecord(dataHome)
+  return { restored }
+}
+
+// The turn-abort record's consumer (design-0025, 2026-09-28). The supervisor
+// and the lane write $DATA_HOME/.last-turn-abort.json when they kill a turn
+// that was mid-flight; if the app then restarts before any answer lands, the
+// restored transcript still ends on the unanswered user message and the pane
+// would draw a live-looking run fold, Stop and Read over nothing (the owner's
+// "얘가 툴콜중인지 세션이 끊긴건지"). One turn-abort item settles it -- but only
+// when ALL THREE hold:
+//   (1) the record exists and has not already been consumed;
+//   (2) its `at` is newer than the newest retained queue item -- an abort older
+//       than the tail is yesterday's news, and the user has spoken since;
+//   (3) transcriptState() still reports an unanswered user message -- a settled
+//       transcript has nothing to settle (the no-phantom-line case).
+//
+// Marking is a STAMP, not a delete: a blind unlink here could race the
+// supervisor writing a fresh record for a NEWER death and erase a fact we
+// never read, and a consumed record left in place stays auditable. The stamp
+// also makes a second boot idempotent even if this boot's transcript write
+// never reached disk.
+async function consumeTurnAbortRecord(dataHome) {
+  const file = path.join(dataHome, ABORT_RECORD_BASENAME)
+  let record
+  try { record = JSON.parse(await fs.readFile(file, 'utf8')) } catch { return 0 }
+  if (!record || typeof record !== 'object') return 0
+  if (record.consumedAt) return 0 // an earlier boot already settled this one
+  if (!Number.isFinite(record.at)) return 0
+  const tailTs = queue.length ? Number(queue[queue.length - 1].ts) : null
+  if (tailTs === null || !(record.at > tailTs)) return 0
+  const awaitingSince = transcriptState().awaitingReplySince
+  if (awaitingSince === null) return 0
+  // The record's own elapsedMs is null by construction -- both producers run
+  // in a different process from this transcript and say so -- but the two
+  // numbers the elapsed is made of are BOTH in hand here: the record's `at` is
+  // when the turn was killed, and awaitingSince is when the user's unanswered
+  // message landed. Their difference is how long her turn ran, so it stops at
+  // `at`: the dead time between the kill and this boot is not part of it. Fall
+  // back to the record's own value only when that arithmetic has no usable
+  // pair, and null when neither is usable -- never a fabricated number.
+  const elapsedMs = Number.isFinite(awaitingSince) && record.at > awaitingSince
+    ? record.at - awaitingSince
+    : (Number.isFinite(record.elapsedMs) ? record.elapsedMs : null)
+  enqueueAbort(record.reason, elapsedMs, { at: record.at })
+  // Stamp, don't delete (see above). Re-read first: a concurrent writer may
+  // have replaced the file since our read, and stamping THAT record would mark
+  // a death we never consumed. If it changed, leave it alone -- the item is
+  // already in the queue and the awaiting state is now settled, so the next
+  // boot cannot duplicate it anyway.
+  try {
+    const cur = JSON.parse(await fs.readFile(file, 'utf8'))
+    if (cur && !cur.consumedAt && cur.at === record.at && cur.reason === record.reason) {
+      cur.consumedAt = new Date().toISOString()
+      const tmp = `${file}.${process.pid}.tmp`
+      await fs.writeFile(tmp, JSON.stringify(cur), { mode: 0o600 })
+      await fs.rename(tmp, file)
+    }
+  } catch { /* best-effort: the item is queued, the stamp is only belt */ }
+  return 1
 }
 
 function push(item) {
@@ -195,8 +267,11 @@ function push(item) {
   return seq
 }
 
-function enqueue(role, text, now) {
-  return push({ kind: 'message', role, text: String(text), ts: now() })
+// `extra` carries per-message marks (today: fromMemory) onto the item. Spread
+// LAST so a caller's own fields read as fields of the message, in the same
+// JSON the page and the transcript file both consume.
+function enqueue(role, text, now, extra) {
+  return push({ kind: 'message', role, text: String(text), ts: now(), ...(extra || {}) })
 }
 
 // Answer-stream draft (0.2.4): the dsh lane mirrors visible text-deltas
@@ -228,14 +303,39 @@ export function retireBgTask(id) { return bgTasks.delete(String(id)) }
 
 export function listBgTasks() { return [...bgTasks.values()] }
 
+// The memory mark's flag (2026-09-28, the owner's "기억을 꺼낸 티 내기" →
+// "완전 굿"). The agent's memory is a SEPARATE MCP PROCESS (memory/server.mjs),
+// so a read is invisible from in here — nothing in this module sees the call.
+// What CAN see it is the PreToolUse hook, which reports one on POST
+// /memory-read; that post sets this flag, and the next outbound agent message
+// takes it as `fromMemory: true` (below). It is not a queue item of its own:
+// there is nothing to render when the read happens, no seq, no presence
+// semantics, no notification.
+//
+// Consumed, never sticky: the flag belongs to the FIRST reply after the read
+// and is cleared in the same breath, so the reply after that one cannot
+// inherit a mark for a read it never did. It rides the message item itself
+// (kind:'message'), which is exactly the class writeTranscriptOnce persists,
+// so a restored transcript still knows which turns came out of memory.
+let memoryReadPending = false
+
 export function enqueueOutbound(text, { now = () => Date.now() } = {}) {
   draftText = null // the authoritative message supersedes its own draft
-  return enqueue('agent', text, now)
+  const fromMemory = memoryReadPending
+  memoryReadPending = false
+  return enqueue('agent', text, now, fromMemory ? { fromMemory: true } : null)
 }
 
 // Called ONLY after deliverInbound resolves: a message the agent never
 // received must not appear in the transcript as if it had been.
 export function enqueueInbound(text, { now = () => Date.now() } = {}) {
+  // A new question closes the window the flag lives in. A read that never got
+  // its reply (a mute turn, a background turn that ended silently) would
+  // otherwise sit armed and stamp a mark on an answer written from thin air
+  // the next time the agent speaks — the one thing this mark must never do.
+  // The read happens after the inbound is enqueued, so the turn that did the
+  // reading is untouched by this.
+  memoryReadPending = false
   return enqueue('user', text, now)
 }
 
@@ -273,6 +373,30 @@ export function enqueueThink(text, { now = () => Date.now() } = {}) {
 // notifies.
 export function enqueueTurnEnd({ now = () => Date.now() } = {}) {
   return push({ kind: 'turn-end', role: 'agent', text: '', ts: now() })
+}
+
+// Turn-abort marker (design-0025, 2026-09-28). The honest record that a turn
+// ended WITHOUT an answer -- Stop pressed, the lane died mid-flight, or the
+// lane's own stall watchdog recycled it. Where turn-end above is ephemeral
+// presence, this item is PERSISTED and, unlike activity/think/turn-end, it is
+// deliberately ABSENT from transcriptState's skip list: a non-user, non-noise
+// item is exactly what breaks the awaiting walk and clears awaitingReplySince,
+// so a reload cannot resurrect a stuck "Weaving the tale..." with Stop and
+// Read lit over no work at all.
+//
+// `text` stays empty on purpose: the sentence is composed client-side (copy.js
+// owns every chat string), the server carries facts, not voice. `at` is the
+// abort's own wall time, which differs from the queue `ts` after a restore:
+// the abort happened in a previous life, the ts is where it lands in this one.
+export function enqueueAbort(reason, elapsedMs, { now = () => Date.now(), at = null } = {}) {
+  const t = now()
+  return push({
+    kind: 'turn-abort', role: 'agent', text: '',
+    reason,
+    elapsedMs: Number.isFinite(elapsedMs) ? elapsedMs : null,
+    at: Number.isFinite(at) ? at : t,
+    ts: t,
+  })
 }
 
 // The one presence value (see header). Asymmetric on purpose (live catch,
@@ -326,7 +450,7 @@ export function readOutbound(since = 0) {
   return { items, latest: seq, missed: from > 0 && from < oldestRetained - 1, state: transcriptState(), draft: draftText, bg: listBgTasks() }
 }
 
-export function resetQueueForTest() { seq = 0; queue = []; transcriptFile = null; draftText = null; bgTasks.clear() }
+export function resetQueueForTest() { seq = 0; queue = []; transcriptFile = null; draftText = null; bgTasks.clear(); memoryReadPending = false }
 
 // Deliberate transcript clear -- the "New conversation" clean break (2026-08-18).
 // Empties the queue but keeps `seq` MONOTONIC on purpose: a page holding a
@@ -340,6 +464,7 @@ export function resetQueueForTest() { seq = 0; queue = []; transcriptFile = null
 export function clearTranscript() {
   queue = []
   draftText = null
+  memoryReadPending = false // an armed flag belongs to the thread being forgotten
   return flushTranscript()
 }
 
@@ -609,7 +734,16 @@ export function createRequestHandler({ notify, token, onInbound = () => {}, inte
       if (!/^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(host)) {
         return send(403, { error: 'bad host' })
       }
-      if (url.pathname === '/health') return send(200, { ok: true, agent: AGENT_NAME })
+      // /health answers with the name the USER set, not the build's default
+      // (2026-09-28, the owner's "이름이 왜 안 보이지"): the shell and the chat
+      // sender row render DISPLAY_NAME, and a health probe answering
+      // AGENT_NAME made the same agent have two names depending on who asked.
+      // readAgentConfig never throws -- a missing/unreadable .agent-config
+      // returns {} and this falls back to the build default.
+      if (url.pathname === '/health') {
+        const cfg = await readAgentConfig(DATA_HOME)
+        return send(200, { ok: true, agent: cfg.DISPLAY_NAME || AGENT_NAME })
+      }
 
       const auth = String(req.headers.authorization || '')
       const presented = auth.startsWith('Bearer ') ? auth.slice(7) : ''
@@ -717,6 +851,22 @@ export function createRequestHandler({ notify, token, onInbound = () => {}, inte
         // knows what it is doing.
         return send(202, { ok: true })
       }
+      if (url.pathname === '/memory-read' && req.method === 'POST') {
+        // The memory mark's one signal (2026-09-28). hooks/pre-tool-activity.mjs
+        // posts here when the agent calls a memory READ tool (memory_query /
+        // journal_read / memory_recall_material); the next outbound agent
+        // message carries it as `fromMemory` (see the flag's comment above).
+        //
+        // Deliberately NOT a kind of POST /activity: that feed is a status line
+        // and a memory read has no label to show — the fold would gain a row
+        // saying nothing, on every boot and every recall. Nothing is enqueued
+        // and nothing is rendered when the read happens; only a flag is armed.
+        // No body either — the signal is the CALL, not anything about it, so
+        // this has the same shape as /interrupt. Auth and the Host check are
+        // the shared gates above; there is no second auth path here.
+        memoryReadPending = true
+        return send(202, { ok: true })
+      }
       if (url.pathname === '/react' && req.method === 'POST') {
         let body = ''
         for await (const chunk of req) {
@@ -750,7 +900,18 @@ export function createRequestHandler({ notify, token, onInbound = () => {}, inte
       if (url.pathname === '/interrupt' && req.method === 'POST') {
         if (typeof interrupt !== 'function') return send(503, { error: 'stop unavailable', reason: 'not_running' })
         const r = await interrupt()
-        if (r && r.ok) return send(200, { ok: true })
+        if (r && r.ok) {
+          // design-0025: a stop that WORKED must leave a durable mark. The lane
+          // writes no transcript record of its own (see the comment above), so
+          // without this the derivation re-arms Stop and Read the moment the
+          // next poll returns -- "Stop으로 아예 멈추기가 잘 안됨". Exactly one
+          // item, and only when a turn was actually in flight; elapsed is the
+          // wall time from the unanswered user message. No awaiting turn = no
+          // item (nothing to settle).
+          const st = transcriptState()
+          if (st.awaitingReplySince !== null) enqueueAbort('stop', Date.now() - st.awaitingReplySince)
+          return send(200, { ok: true })
+        }
         return send(r && r.reason === 'no_turn' ? 409 : 502, { error: 'stop failed', reason: (r && r.reason) || 'unreachable' })
       }
       if (url.pathname === '/clear' && req.method === 'POST') {

@@ -168,10 +168,40 @@ function buildUninstallPlan(dataHome, home = os.homedir(), opts = {}) {
   return { platform, mode: 'bundle-trash', dirs, script, runner: { cmd: '/bin/bash', args: ['-c', script] } }
 }
 
+// ── avatar slot (2026-09-28, the owner "프로필 사진") ─────────────────────
+// ONE picture per agent, in DATA_HOME beside .agent-config. The extension is
+// carried in the filename so the serve path sends the right content-type
+// without sniffing again, and so "which slot is occupied" is answerable with
+// one existsSync per candidate. The magic bytes are checked BEFORE the write
+// (see the POST handler): the extension is the client's claim, the header is
+// the file's own, and only the second one is allowed to decide what gets
+// stored under a name the server will later hand a browser as image/*.
+//
+// The fallback is the app icon downscaled to 256px, served from the static
+// tree (onboarding/public/img/agent-avatar.png). It exists so that a GET
+// ALWAYS has bytes to answer with -- Settings renders the current state
+// without probing, and chat's meta row never renders a broken image.
+const AVATAR_EXTS = ['png', 'jpg', 'webp']
+const AVATAR_MIME = { png: 'image/png', jpg: 'image/jpeg', webp: 'image/webp' }
+const AVATAR_FALLBACK = nodePath.join(__dirname, '..', 'public', 'img', 'agent-avatar.png')
+
 function createRoutes(staticCtx) {
   const {
-    sendJson, readJsonBody, writeAgentConfig, DATA_HOME, getElectron,
+    sendJson, readJsonBody, writeAgentConfig, DATA_HOME, getElectron, fs, path,
   } = staticCtx
+
+  // Which slot, if any, is occupied. Returns null when none is (never throws:
+  // a stat that races a DELETE is the same answer as no file).
+  function readAvatar() {
+    for (const ext of AVATAR_EXTS) {
+      const full = path.join(DATA_HOME, `avatar.${ext}`)
+      try {
+        if (fs.statSync(full).isFile()) return { ext, full }
+      } catch { /* that slot is empty -- try the next */ }
+    }
+    return null
+  }
+
   return [
     {
       method: 'POST',
@@ -194,6 +224,120 @@ function createRoutes(staticCtx) {
         }
         const merged = writeAgentConfig({ DISPLAY_NAME: displayName.trim() })
         sendJson(res, 200, { ok: true, config: merged })
+        return
+      },
+    },
+    // ── POST /api/settings/avatar: upload the profile picture ──────────────
+    // Same body shape as the ONE upload path this server already has
+    // (routes/chat.cjs's /api/chat/upload): JSON {filename, dataBase64}
+    // through readJsonBody, never multipart -- readJsonBody is the only body
+    // reader here, and inventing a second one is how a server ends up with
+    // two different size-cap bugs. The cap is smaller (4MB of base64 for a
+    // 2MB image) because this file is one small square, not a screenshot.
+    // Mutating -> token-gated automatically.
+    {
+      method: 'POST',
+      match: (pathname) => pathname === '/api/settings/avatar',
+      handler: async (req, res, callCtx) => {
+        let parsed
+        try {
+          parsed = await readJsonBody(req, 4_000_000)
+        } catch (err) {
+          sendJson(res, 413, { error: 'avatar image too large (2MB max)', reason: 'too_large' })
+          return
+        }
+        const { filename, dataBase64 } = parsed || {}
+        const ext = String(filename || '').toLowerCase().match(/\.(png|jpe?g|webp)$/)
+        if (!ext) {
+          sendJson(res, 400, { error: 'unsupported type -- png, jpg or webp', reason: 'bad_type' })
+          return
+        }
+        const kind = ext[0] === '.png' ? 'png' : ext[0] === '.webp' ? 'webp' : 'jpg'
+        if (typeof dataBase64 !== 'string' || !dataBase64) {
+          sendJson(res, 400, { error: 'dataBase64 is required', reason: 'no_data' })
+          return
+        }
+        let buf
+        try { buf = Buffer.from(dataBase64, 'base64') } catch { buf = null }
+        if (!buf || buf.length === 0) {
+          sendJson(res, 400, { error: 'could not decode the image data', reason: 'bad_data' })
+          return
+        }
+        if (buf.length > 2_000_000) {
+          sendJson(res, 413, { error: 'avatar image too large (2MB max)', reason: 'too_large' })
+          return
+        }
+        // The extension is the CLAIM; the header is the file. An .svg renamed
+        // to .png, or a random blob with a .png name, must not land in a slot
+        // the server later serves to a browser as image/png -- a wrong
+        // content-type is how a browser gets talked into sniffing, and
+        // sniffing is how an uploaded file becomes markup.
+        const magic = kind === 'png'
+          ? (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47)
+          : kind === 'jpg'
+            ? (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff)
+            : (buf.subarray(0, 4).toString('latin1') === 'RIFF' && buf.subarray(8, 12).toString('latin1') === 'WEBP')
+        if (!magic) {
+          sendJson(res, 400, { error: 'the file is not the image type its name claims', reason: 'bad_type' })
+          return
+        }
+        try {
+          fs.mkdirSync(DATA_HOME, { recursive: true })
+          // ONE slot: drop every other-extension sibling FIRST, so a png
+          // replacing a jpg cannot leave two files that both answer "is
+          // there an avatar". Deleting before writing means a crash in
+          // between leaves NO picture (the fallback serves) rather than a
+          // stale one wearing the new name's extension.
+          for (const other of AVATAR_EXTS) {
+            if (other === kind) continue
+            try { fs.unlinkSync(path.join(DATA_HOME, `avatar.${other}`)) } catch { /* was not there */ }
+          }
+          fs.writeFileSync(path.join(DATA_HOME, `avatar.${kind}`), buf, { mode: 0o600 })
+          sendJson(res, 200, { ok: true, present: true })
+        } catch (err) {
+          sendJson(res, 500, { error: `could not save the avatar: ${err.message}`, reason: 'write_failed' })
+        }
+        return
+      },
+    },
+    // ── GET /api/settings/avatar: the bytes, always ───────────────────────
+    // NEVER 404s on a missing avatar: the caller is an <img>/blob consumer
+    // that must be able to render SOMETHING, and "no picture yet" is a
+    // legitimate state with a defined answer (the app icon at 256px). The
+    // static fallback could not be used directly by the page either -- an
+    // <img src="/api/..."> 403s on the onboard-token gate, and the static
+    // path is fetched with a token by nav.js's shared resolver.
+    {
+      method: 'GET',
+      match: (pathname) => pathname === '/api/settings/avatar',
+      handler: async (req, res) => {
+        const found = readAvatar()
+        const full = found ? found.full : AVATAR_FALLBACK
+        const type = found ? AVATAR_MIME[found.ext] : 'image/png'
+        let buf
+        try { buf = fs.readFileSync(full) } catch {
+          // The fallback is a shipped file; if it is missing the build is
+          // broken and saying so is more useful than an empty 200.
+          sendJson(res, 500, { error: 'the avatar fallback is missing from this build', reason: 'fallback_missing' })
+          return
+        }
+        res.writeHead(200, { 'content-type': type, 'content-length': buf.length, 'cache-control': 'private, max-age=86400' })
+        res.end(buf)
+        return
+      },
+    },
+    // ── DELETE /api/settings/avatar: back to the app icon ─────────────────
+    // Removing a picture that is not there is the desired end state, not an
+    // error -- a user who clicks Remove twice, or on a fresh install, must
+    // get the same answer both times.
+    {
+      method: 'DELETE',
+      match: (pathname) => pathname === '/api/settings/avatar',
+      handler: async (req, res) => {
+        for (const ext of AVATAR_EXTS) {
+          try { fs.unlinkSync(path.join(DATA_HOME, `avatar.${ext}`)) } catch { /* already gone */ }
+        }
+        sendJson(res, 200, { ok: true, present: false })
         return
       },
     },

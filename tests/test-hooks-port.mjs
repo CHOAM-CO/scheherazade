@@ -81,6 +81,40 @@ console.log('\n-- wiring: the .sh originals are gone and nothing still points at
   }
 }
 
+// ── memory mark: the second registration, and why it is not the first one ───
+// (2026-09-28) The memory-read tools report a READ, not work in progress: the
+// hook posts /memory-read and builds no label. That registration must
+// therefore be its own PreToolUse group -- if those tool names ever land in
+// the activity matcher, every recall puts a row saying nothing into the user's
+// fold. Pinned at source+template level because the migration only ever runs
+// against an install's own settings file.
+console.log('\n-- memory mark: the memory-read registration is separate from the activity feed')
+{
+  const template = JSON.parse(fs.readFileSync(path.join(ROOT, 'onboarding', 'templates', 'claude-settings.local.json'), 'utf8'))
+  const MEMORY_MATCHER = 'mcp__memory__memory_query|mcp__memory__journal_read|mcp__memory__memory_recall_material'
+  const groups = template.hooks.PreToolUse || []
+  const memoryGroup = groups.find((g) => g.matcher === MEMORY_MATCHER)
+  ok('template registers the memory-read matcher', Boolean(memoryGroup))
+  ok('...and it runs the same hook file as the activity feed',
+    Boolean(memoryGroup) && (memoryGroup.hooks || []).some((h) => String(h.command).includes('pre-tool-activity.mjs')))
+  const activityGroup = groups.find((g) => g.matcher === 'Bash|PowerShell|WebSearch|WebFetch|Agent|Task')
+  ok('the activity matcher does NOT carry the memory tools (a read must never become a fold row)',
+    Boolean(activityGroup) && !String(activityGroup.matcher).includes('mcp__memory__'))
+  const renderSrc = fs.readFileSync(path.join(ROOT, 'onboarding', 'harness-render.cjs'), 'utf8')
+  ok('harness-render carries the additive migration (existing installs get the registration)',
+    renderSrc.includes("const MEMORY_READ_MATCHER = 'mcp__memory__memory_query|mcp__memory__journal_read|mcp__memory__memory_recall_material'"))
+  ok('...matched by MATCHER, not by hook file — the activity group would satisfy a file search and hide the gap',
+    /hasMemoryReadMatcher = settings\.hooks\.PreToolUse\.some\(\(g\) => g && g\.matcher === MEMORY_READ_MATCHER\)/.test(renderSrc) &&
+    /if \(!hasMemoryReadMatcher\)/.test(renderSrc))
+  // The one copy of the tool list the migration can drift from: the template.
+  const hookSrc = fs.readFileSync(path.join(ROOT, 'hooks', 'pre-tool-activity.mjs'), 'utf8')
+  const listed = [...hookSrc.slice(hookSrc.indexOf('const MEMORY_READ_TOOLS'))
+    .slice(0, hookSrc.slice(hookSrc.indexOf('const MEMORY_READ_TOOLS')).indexOf(']'))
+    .matchAll(/'(mcp__memory__[a-z_]+)'/g)].map((x) => x[1]).sort()
+  ok('the hook, the template and the migration all name the same tools',
+    JSON.stringify(listed) === JSON.stringify(MEMORY_MATCHER.split('|').sort()))
+}
+
 // ── detection-only deps gate (win-port Phase 3, Mino LOCKED 07-13 18:35) ───
 console.log('\n-- detection-only deps: the win gate exists and mac keeps managed installs')
 {

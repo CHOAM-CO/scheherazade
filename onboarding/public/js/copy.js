@@ -131,6 +131,20 @@ const CRED_STORE_THE = P.credStoreThe
 window.PLATFORM_WORDS = P
 window.THIS_MACHINE = THIS_MACHINE
 
+// design-0025 turn state (2026-09-28): the elapsed chip's one formatter.
+// Milliseconds in, one short English figure out, in the same shape as the run
+// fold's own "Worked for 12s": `${secs}s` under a minute, `${mins}m` at or
+// above it. The chip and the settled abort line read the SAME string, so two
+// render sites cannot disagree about how long a turn ran. Empty string for an
+// unknown/negative elapsed: the caller omits the whole clause rather than print
+// a made-up number.
+function turnElapsedText(ms) {
+  const n = Number(ms)
+  if (!Number.isFinite(n) || n <= 0) return ''
+  const secs = Math.max(1, Math.round(n / 1000))
+  return secs < 60 ? `${secs}s` : `${Math.round(secs / 60)}m`
+}
+
 window.COPY = {
   step0: {
     title: 'Start setup',
@@ -988,12 +1002,62 @@ window.COPY = {
     steerHint: 'The agent is working. A message sent now joins the run in progress.',
     steerPlaceholder: 'Add to the run in progress…',
     steerMarker: 'sent mid-run',
+    // ── turn state (design-0025, 2026-09-28) ────────────────────────────────
+    // The owner's "얘가 툴콜중인지 세션이 끊긴건지" -- one derived state now says
+    // which, and these are its words. They follow the English set around them
+    // (stopping, steerHint, statusUnreachable) rather than the design's own
+    // Korean samples: this pane is English, and a status line is no place for a
+    // second language. Dry, quiet, no emoji, no exclamation, no bold. Every
+    // fact printed here (the reason, the elapsed, whether work was on screen)
+    // comes from the server or from the transcript -- the copy only says it out
+    // loud.
+    turnElapsed: (ms) => turnElapsedText(ms),
+    // The reconnecting line: one quiet sentence, not a spinner. Dots belong to
+    // a turn being worked on; while the poll is failing they would be a claim
+    // nothing behind them supports.
+    turnReconnecting: 'Reconnecting…',
+    // The death line. `tail` is where it landed, as far as this pane can see:
+    // work was on screen (a tool was running, its result never came back) vs
+    // nothing was (the agent died before it wrote a thing). The third arm is
+    // the honest "cannot tell" -- never one of the two dressed as the other.
+    turnGone: (tail) => tail === 'tool_result'
+      ? 'The session ended while waiting on a tool result.'
+      : tail === 'user'
+        ? 'The session ended before the reply was written.'
+        : 'The session ended mid-run.',
+    // A lane the user stopped from the shell is not a crash, and does not get
+    // the crash's sentence.
+    turnGoneOff: 'The agent is off.',
+    // The settled line the turn-abort item leaves in the transcript. Same head
+    // as the live death line (one event, one wording) plus the elapsed the item
+    // carries -- the one fact the pane could not have computed itself when the
+    // abort happened in a previous life. No trailing period on any head: the
+    // duration clause follows it.
+    turnAbort: (reason, elapsedMs, tail) => {
+      let head
+      if (reason === 'stop') head = 'Stopped'
+      else if (reason === 'stall') head = 'Cut off after going quiet'
+      else if (reason === 'death') {
+        head = tail === 'tool_result'
+          ? 'Session ended while waiting on a tool result'
+          : tail === 'user' ? 'Session ended before the reply was written' : 'Session ended mid-run'
+      } else head = 'The turn ended' // an unknown reason: say the one true thing
+      const t = turnElapsedText(elapsedMs)
+      return t ? `${head} · ${t}` : head
+    },
     // DM interaction states (v0.0.34). `read` is honest by construction:
     // a user message only enters the transcript after it was delivered
     // into the agent process, so the label never claims more than that.
     read: 'Read',
     typingAria: 'The agent is typing…',
     activityAria: 'What the agent is working on right now',
+    // Memory mark (2026-09-28, the owner's "기억을 꺼낸 티 내기" → "완전 굿"):
+    // the small glyph beside the sender row on a reply that came out of the
+    // agent's own memory. The glyph is decoration; this string is what it
+    // MEANS, and it is the whole of what the mark claims — a read happened
+    // this turn, not that the reply is correct or that memory had the answer.
+    memoryMarkGlyph: '↺',
+    memoryMarkAria: 'Drawn from memory',
     reactAria: (emoji) => `React with ${emoji}`,
     reactFailed: "Couldn't react — try again.",
     // Message copy button (2026-08-05, colleague feedback via the owner).
@@ -1165,6 +1229,17 @@ window.COPY = {
     renameLabel: 'Name',
     renameButton: 'Save',
     renameSaved: 'Saved.',
+    // Profile picture (2026-09-28, the owner "프로필 사진"). Two gates the
+    // client enforces BEFORE it reads the file (byte size and type), because
+    // the server's own refusals (too_large / bad_type) can only arrive after
+    // a pointless upload of something the page already knew was wrong.
+    avatarLabel: 'Picture',
+    avatarChoose: 'Choose an image…',
+    avatarRemove: 'Remove',
+    avatarSaved: 'Picture saved.',
+    avatarRemoved: 'Picture removed.',
+    avatarBadType: 'Pick a PNG, JPG, or WebP image.',
+    avatarTooLarge: 'That image is over 2MB — too big for a profile picture.',
     // AUTHORED -- apply-state line under the model/effort selects (IA
     // v0.0.9, red-team fold #1): the shell shows reality, this line explains
     // the GAP. Its highest-value state is the failure one -- a spawn refused

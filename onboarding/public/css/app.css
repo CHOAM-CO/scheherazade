@@ -548,6 +548,17 @@ button.nav-ctl.is-busy::after {
 }
 .agent-control-row select:focus { outline: none; border-color: var(--accent); }
 .agent-control-row select:disabled { opacity: 0.5; cursor: default; }
+/* Profile picture preview (2026-09-28). Sized here, not by the file: the
+   fallback ships at 256px and the user's upload can be any size, and both
+   must occupy the same small square inside the control row. */
+.agent-avatar-preview {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  background: var(--panel-raised);
+}
 /* A checkbox must NOT stretch to the control column's full width -- it sits
    at the column's left edge, same x as every text control's left edge. */
 .agent-control-row input[type="checkbox"] {
@@ -1293,6 +1304,39 @@ button.nav-ctl.is-busy::after {
 .chat-react-bar .chat-copy-btn { color: var(--fg); }
 /* (.chat-activity status line removed in P1 v2 — the live run timeline in
    .chat-activity-fold.chat-run-live replaced it.) */
+/* design-0025 live-turn rail. One quiet line for the states where a turn is
+   NOT being worked on (다시 붙는 중 / 세션 끊김 / Stopping…) and the elapsed
+   chip's home when no run fold holds the step label. Its dots are the SAME
+   .chat-typing element and class the pane used before, so the bounce contract
+   above is untouched -- this only gives them a row to sit in. */
+.chat-turn-rail {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  align-self: stretch;
+  padding: 0.2rem var(--s4);
+  font-size: 0.8rem;
+  color: var(--fg-faint);
+}
+.chat-turn-label { color: var(--fg-faint); }
+/* the elapsed clock (design-0025 §2): one rule for both homes -- inside the
+   live run fold's summary pill and in the rail. Tabular figures so the ticking
+   number does not jitter its neighbours. */
+.chat-turn-elapsed {
+  margin-left: 0.5rem;
+  color: var(--fg-faint);
+  font-variant-numeric: tabular-nums;
+}
+.chat-turn-rail .chat-turn-elapsed { margin-left: auto; }
+/* the settled turn-abort line: the transcript's own record that a turn ended
+   without a reply. Quiet, monochrome, no fill and no border -- the register of
+   the gap marker, a fact in the feed rather than a bubble. */
+.chat-turn-abort {
+  align-self: center;
+  color: var(--fg-faint);
+  font-size: 0.78rem;
+  padding: 0.25rem 0;
+}
 .chat-typing {
   display: inline-flex;
   gap: 0.28rem;
@@ -1603,11 +1647,49 @@ html {
   gap: 8px;
   margin: 16px 16px 0;
 }
+/* Profile picture on the sender row (2026-09-28). `align-items: baseline`
+   above stays untouched on purpose: a replaced element's baseline is its
+   BOTTOM edge, so align-self: center is what keeps the picture on the text
+   line instead of lifting it clear of the name. flex 0 0 auto stops the
+   flex line from squeezing a square into an oval. */
+.chat-meta-avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  object-fit: cover;
+  align-self: center;
+  flex: 0 0 auto;
+}
 .chat-meta-name { font-size: 0.8rem; font-weight: 600; color: rgb(var(--accent-rgb) / 0.95); }
 .chat-meta-time {
   font-size: 0.72rem;
   color: var(--fg-faint);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+/* memory mark (2026-09-28, the owner's "기억을 꺼낸 티 내기" → "완전 굿"): one
+   small glyph saying this reply came out of the agent's memory instead of thin
+   air. A tell, not a label — no background, no border, no second identity, so
+   it cannot read as a role label beside a name that already carries identity
+   (P1 v2, 2026-08-05). Fourth item at the tail of the sender row, on the row's
+   own baseline: the row's height is the 20px avatar's, so a 0.68rem glyph
+   cannot change it, and living in the row rather than in the bubble is what
+   keeps the message's text line exactly where it was. Colour is the existing
+   faint token; no new colour enters the palette. */
+.chat-memory-mark {
+  font-size: 0.68rem;
+  line-height: 1;
+  color: var(--fg-faint);
+  flex: 0 0 auto;
+  cursor: default;
+}
+/* A flagged reply that CONTINUES a run has no sender row to sit beside, so its
+   mark takes the bubble's trailing corner instead (the top corner is the hover
+   react bar's). Absolutely positioned either way — the mark can never add a
+   line to the bubble or shift the text it marks. */
+.chat-memory-mark[data-place='corner'] {
+  position: absolute;
+  right: var(--s2);
+  bottom: 0.15rem;
 }
 
 /* system line: hairline divider with a centered micro label — session

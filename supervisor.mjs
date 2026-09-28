@@ -484,15 +484,46 @@ export function readTranscriptTail(file, { now = () => Date.now(), tailBytes = 2
 // -- so the user/attachment lane waits 2x as long as the synthetic lane
 // before calling it a stall. The reason string names which shape it was:
 // a tool_result tail is a turn that died mid-flight, not an ignored human.
+// Named as a const because design-0025's turn-abort producer keys on exactly
+// this verdict (the mid-flight death) and a second literal would drift.
+export const MID_TURN_DEATH_VERDICT = 'mid-turn death (tool_result tail)'
 export function stallVerdict(tail, { userStallMs, syntheticStallMs } = {}) {
   if (!tail || tail.ageMs === null) return null
   if ((tail.type === 'user' || tail.type === 'attachment') && userStallMs && tail.ageMs >= userStallMs) {
-    return tail.toolResult ? 'mid-turn death (tool_result tail)' : 'pending inbound with no turn'
+    return tail.toolResult ? MID_TURN_DEATH_VERDICT : 'pending inbound with no turn'
   }
   if (tail.synthetic && syntheticStallMs && tail.ageMs >= syntheticStallMs) {
     return 'terminal synthetic error (autocompact thrash shape)'
   }
   return null // old assistant/system tail = idle, not stalled
+}
+
+// The turn-abort record's producer -- supervisor side (design-0025, 2026-09-28).
+// When the watchdog's verdict is a mid-turn DEATH the user's question will never
+// be answered, and after the respawn the pane would show a live-looking run
+// fold, Stop and Read over nothing (the owner's "얘가 툴콜중인지 세션이
+// 끊긴건지"). The record is the fact the kill already knows; channel-local's
+// restore consumes it and writes one turn-abort transcript item.
+//
+// Shape (shared with the lane's stall producer and channel-local's consumer):
+//   { at, reason, tail, elapsedMs }
+// elapsedMs stays null here ON PURPOSE: it means "wall time from awaitingSince",
+// and that value lives in the CHANNEL's transcript, a different process. The
+// tail age is not that number and writing it here would mislabel it.
+//
+// NEVER throws and NEVER blocks the kill: a record that cannot be written costs
+// one honest line on the next boot, not the bounce. tmp+rename with a
+// pid-suffixed tmp -- the lane writes this same file concurrently, and a shared
+// tmp name would let the two writers truncate each other's bytes.
+export function writeTurnAbortRecord(mem, { reason, tail = null }, { now = () => Date.now(), log = () => {} } = {}) {
+  try {
+    const file = path.join(mem, '.last-turn-abort.json')
+    const tmp = `${file}.${process.pid}.tmp`
+    fs.writeFileSync(tmp, JSON.stringify({ at: now(), reason, tail, elapsedMs: null }), { mode: 0o600 })
+    fs.renameSync(tmp, file)
+  } catch (err) {
+    log(`turn-abort record write failed (non-fatal -- the kill proceeds): ${err.message}`)
+  }
 }
 
 // The whole transcript-lane poll as ONE testable closure -- extracted from
@@ -508,6 +539,13 @@ export function createStallLane({
   now = () => Date.now(), log = () => {},
   userStallMs = stallMs * 2,
   thrashWindowMs = 1_800_000, thrashThreshold = 3,
+  // design-0025: called with the tail kind when -- and only when -- the verdict
+  // is a mid-turn DEATH (a tool_result tail = the turn died in flight). NOT for
+  // 'pending inbound with no turn' (the turn was never in flight) or the thrash
+  // lane. The caller binds it to the data dir; this closure stays testable and
+  // data-dir-free. A recorder that throws must not become a bounce, so it is
+  // wrapped (the writer below cannot throw either -- belt).
+  onMidTurnDeath = null,
   // Reads the CURRENTLY-live resumed session id (or null). Called every poll,
   // not captured once: the id changes when the lane mints a fresh session
   // mid-life (rotation/poison recovery updates .headless-session.json). The
@@ -540,6 +578,9 @@ export function createStallLane({
       return `autocompact thrash: ${tail.syntheticCount} synthetic errors within ${Math.round(thrashWindowMs / 60000)}min`
     }
     const verdict = stallVerdict(tail, { userStallMs, syntheticStallMs: stallMs })
+    if (verdict === MID_TURN_DEATH_VERDICT && typeof onMidTurnDeath === 'function') {
+      try { onMidTurnDeath({ tail: 'tool_result' }) } catch { /* never let the record block the kill */ }
+    }
     return verdict ? `transcript stalled ${Math.round(tail.ageMs / 60000)}min: ${verdict}` : null
   }
 }
@@ -756,6 +797,12 @@ function spawnHeadlessChild(cfg, { now = () => Date.now(), log, watchdogBounces 
         transcriptDir: transcriptDirFor(cfg.mem),
         stallMs: cfg.stallTimeoutSec * 1000,
         spawnedAt, now, log, readSessionId,
+        // design-0025: a mid-turn death is the one verdict whose unanswered
+        // question must leave a record behind (see writeTurnAbortRecord). A
+        // budget-refused bounce writes too: the diagnosis is true whether or
+        // not the kill lands, and if the lane later answers, the record is
+        // simply never consumed (awaiting settles).
+        onMidTurnDeath: ({ tail }) => writeTurnAbortRecord(cfg.mem, { reason: 'death', tail }, { log }),
       })
     stallTimer = setInterval(() => {
       const reason = poll()
