@@ -24,86 +24,46 @@
 // table. tests/test-context-gauge.mjs cross-checks the two, so a number that
 // moves in one and not the other goes red instead of quiet.
 //
-// Row provenance (compressed from the connectors.js comment block; full
-// history in git blame of that file before the 0.2.6 extraction):
-// - claude-opus-5 added 08-13 (the owner ask), id verified against the installed
-//   CLI binary's model table + runs live in the the reference fleet daily.
-// - claude-opus-5-5 added 2026-09-28 (the owner ask: the picker must offer the
-//   model the reference fleet already runs — run-agent.sh:405 has pinned
-//   CLAUDE_CODE_SUBAGENT_MODEL=claude-opus-5-5 since 09-23, so a picker without
-//   it offers strictly less than the fleet's own workers). contextWindow
-//   1000000 verified TWO ways, both agreeing: (1) GET
-//   https://api.anthropic.com/v1/models/claude-opus-5-5 with this account's own
-//   OAuth credential -> {display_name:"Claude Opus 5.5",
-//   max_input_tokens:1000000, max_tokens:128000, created_at:2026-09-21}; (2) the
-//   installed CLI binary's own table — extractClaudeModelsFromBin() over
-//   ~/.local/share/claude/versions/2.1.283 -> claude-opus-5-5 = 1000000. Hence
-//   claude-cli-table, like its opus neighbours.
-//   ⚠️ An `ANTHROPIC_API_KEY=`-less `claude -p` probe is NOT a usable receipt on
-//   this box and was not used as one: the shell carries
-//   ANTHROPIC_BASE_URL=http://localhost:11434 (a local ollama), whose
-//   404 model_not_found for any claude-* id is a property of that lane, not
-//   evidence of absence; and pointed at the real endpoint the probe returns 429
-//   "You've hit your weekly limit" for EVERY model, claude-haiku-4-5 included,
-//   so it cannot discriminate one id from another. /v1/models does not consume
-//   inference quota, which is why it is the receipt here.
-// - GPT group: versioned 5.6 ids over the old single 'gpt' Codex entry.
-// - Kimi provider-wide drop 07-14 (mute incident, raw <|tool_call|> leakage
-//   on the local lane); kimi-k2.7-code is a DIFFERENT lane (ollama.com
-//   cloud, Anthropic-compat) and returned on the owner's explicit ask 08-04.
-//   The mute-strike ledger (hooks/stop-reply-guard.mjs) stays as backstop.
-// - Ollama defaults picked by the owner 08-04 19:17 (kimi/glm/deepseek) and
-//   expanded 08-13 ("5개~7개까지 기본지원 모델로") — every id verified
-//   against the live ollama.com catalog + tool-call-probed through the
-//   Anthropic-compat lane the same day. NOT picked, with grounds:
-//   nemotron-3-super (72s first token), nemotron-3-nano:30b (never called
-//   the tool), k2.6/m2.7/glm-5.1 (superseded in-family), gemma4:31b (too
-//   small for agent duty). kimi-k3 sat here too (paywalled, 08-13) until
-//   ollama.com opened it — added 08-21 on the owner's ask ("올라마 키미K3
-//   지원기념 K3 ㄱ"), tool-call-probed same day through the local ollama
-//   openai-compat surface (same protocol the lane speaks; lane auth path
-//   is OLLAMA_CLOUD_KEY, probe rode the signin proxy).
-// - 2026-09-16 Ollama catalog refresh (the owner ask: "올라마 최신 리스트 다시
-//   긁기"). Scraped live the same day with `aside repl`: ollama.com/search?c=cloud
-//   plus each candidate's /library/<name>/tags page. EVERY Ollama id below was
-//   re-found in that scrape AND tool-call-probed against
-//   https://ollama.com/v1/chat/completions (one get_weather function, key from
-//   the ollama credential in the reference fleet's env) — each returned a real
-//   tool_calls entry, not prose.
-//   REPLACED: deepseek-v4-flash:0731 -> deepseek-v4.1-flash. The 0731 tag still
-//   resolves and still calls tools, but its library page is a month stale
-//   (tags: :cloud and :0731-cloud, same digest) while deepseek-v4.1-flash
-//   landed 6 days ago (vision + tools + thinking, 1M context, single :cloud
-//   tag) and is the model the reference fleet runs on two agents right now.
-//   ADDED: glm-5.3 (2 weeks old, tools + thinking, 1M context, Z.ai's flagship
-//   coding / long-horizon-agentic model). glm-5.2 STAYS beside it: the DSH lane's
-//   patch pins glm-5.2:cloud, so dropping it would break a shipped lane.
-//   ADDED on owner override (2026-09-17 00:08, verbatim "GLM5.3 flash는 다시
-//   넣어줘"): glm-5.3-flash. This one goes IN over the 08-13 agent-duty size
-//   bar, not through it — 18B active params is below where gemma4:31b was
-//   rejected, and the owner picked it anyway. What IS verified: 3 weeks old,
-//   vision + tools + thinking pills, single :cloud tag, and it returned a real
-//   tool_calls entry on the same 2026-09-16 get_weather probe as the rest.
-//   NOT ADDED, with grounds:
-//   deepseek-v4-pro, glm-5.1, kimi-k2.6, minimax-m2.7 (superseded in-family, the
-//   same rule that kept k2.6/m2.7/glm-5.1 out on 08-13); nemotron-3-ultra (the
-//   nemotron family failed this list's probe bar on 08-13 and nothing re-tested
-//   it); gemma4 and the small qwen3.5 tags (too small for agent duty).
-//   KEPT DELIBERATELY: `qwen3.5:397b` is published on ollama.com only as
-//   `qwen3.5:397b-cloud`, but the bare tag probes fine and must stay bare —
-//   provider-env.cjs's normalizeOllamaCloudModel() strips any tag containing
-//   'cloud', so `qwen3.5:397b-cloud` would collapse to a plain `qwen3.5` and
-//   silently pick a different (much smaller) model.
-// - GPT group, weekly-meter rule (2026-09-16, the owner ask). Source: the
-//   ChatGPT usage API read through the reference fleet's
-//   scripts/codex-usage-poll.sh, measured today:
-//   `CODEX pro weekly 100% reset 2026-09-19 17:48 KST limit_reached=True
-//   buckets[GPT-5.3-Codex-Spark=0%]`. gpt-5.6-sol / -terra / -luna AND
-//   gpt-6-astra all draw from ONE pro weekly meter — picking a different row in
-//   this group changes the model, never the quota. The only id with a bucket of
-//   its own is GPT-5.3-Codex-Spark, which no row here offers (see the astra row
-//   comment for why it is not added). This corrects the earlier assumption,
-//   carried in this file and in the fleet, that luna was a separate cheaper lane.
+// Row provenance. The KEEP-LIST is the owner's instruction of 2026-09-28 (the
+// picker should offer only what we actually run). The IDS below are not the
+// names he typed: each was verified per provider before its row was written,
+// because a picker row naming an id no provider serves is a dead option that
+// looks alive. Receipts, one per provider:
+//   (a) CLAUDE — `GET https://api.anthropic.com/v1/models/<id>` with this
+//       account's own OAuth credential returns 200 with display_name
+//       "Claude Fable 5.1" for `claude-fable-5-1`, while a control id
+//       (`claude-fable-9-nope`) returns 404 — so a 200 means the id exists,
+//       not merely that the route answers. Cross-checked against the installed
+//       CLI binary's own model table (extractClaudeModelsFromBin), which agrees
+//       on 1000000. Hence claude-cli-table for every Claude row.
+//   (b) CODEX — the backend's `~/.codex/models_cache.json` lists gpt-6-astra,
+//       gpt-6-sol, gpt-6-luna and gpt-daybreak-blue-latest, all at ctx 272000,
+//       and the proxy's own live usage log `codex-as-api-usage.jsonl` shows all
+//       four actually served through :18085 (9559 gpt-6-sol, 7922 gpt-6-luna,
+//       6951 gpt-6-astra, 222 daybreak). The retired gpt-5.6-* rows were last
+//       served 2026-09-23, and gpt-5.6-terra never appears in that log at all.
+//   (c) OLLAMA — ollama.com /library/<name>/tags carries a single `:cloud` tag
+//       each for kimi-k3, deepseek-v4.1-flash, glm-5.3 and glm-5.3-flash.
+// WHAT LEFT, AND WHY (one line per ID GROUP; the long per-id histories are in
+// this file's git blame before the 2026-09-28 prune, not reproduced here):
+//   Claude — claude-fable-5, claude-opus-5, claude-opus-4-8: superseded
+//     in-family by the fable-5-1 / opus-5-5 rows above, which are what the
+//     reference fleet boots today.
+//   GPT — gpt-5.6-sol / gpt-5.6-terra / gpt-5.6-luna: replaced by the gpt-6
+//     family (last served 2026-09-23; terra never served). All GPT rows share
+//     ONE pro weekly meter (usage-API receipt 2026-09-16 via the fleet's
+//     scripts/codex-usage-poll.sh: `limit_reached=True
+//     buckets[GPT-5.3-Codex-Spark=0%]`), so picking a row changes the model,
+//     never the quota. GPT-5.3-Codex-Spark is still NOT offered: no proxy
+//     /health advertises it, so a row would have no receipt to pin.
+//   Ollama — kimi-k2.7-code (Kimi provider-wide drop 07-14 after raw
+//     <|tool_call|> leakage on the local lane; hooks/stop-reply-guard.mjs's
+//     mute-strike ledger stays as backstop), the bare `glm-5.2` ollama row
+//     (the DSH `glm-5.2:cloud` row below is a DIFFERENT lane and stays —
+//     the lane's patch pins that exact tag), `qwen3.5:397b`, `minimax-m3`,
+//     `gpt-oss:120b`, `mistral-large-3:675b`. The 08-13 and 09-16 ollama pick
+//     lists these came off are superseded; only the four cloud tags in receipt
+//     (c) survive.
 // - DSH rows (0.2.1 harness swap): ids the lane's own patch layer serves.
 //   provider-env.cjs's DSH_LANE_MODELS is still a hand-typed copy of these
 //   two ids; it should read them from here (see the P4 report).
@@ -136,52 +96,41 @@
   //                       engine. Honest about being ours rather than
   //                       dressed up as the vendor's.
   const MODELS = [
-    { id: 'claude-fable-5', label: 'Claude Fable 5', group: 'Claude', providers: CLAUDE_PROVIDERS, contextWindow: 1000000, contextWindowSource: 'claude-cli-table' },
-    { id: 'claude-opus-5', label: 'Claude Opus 5', group: 'Claude', providers: CLAUDE_PROVIDERS, contextWindow: 1000000, contextWindowSource: 'claude-cli-table' },
+    // Claude: the four ids the picker offers, all 1M / claude-cli-table
+    // (receipt (a) above). Order is the owner's keep-list.
     { id: 'claude-opus-5-5', label: 'Claude Opus 5.5', group: 'Claude', providers: CLAUDE_PROVIDERS, contextWindow: 1000000, contextWindowSource: 'claude-cli-table' },
-    { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', group: 'Claude', providers: CLAUDE_PROVIDERS, contextWindow: 1000000, contextWindowSource: 'claude-cli-table' },
+    { id: 'claude-fable-5-1', label: 'Claude Fable 5.1', group: 'Claude', providers: CLAUDE_PROVIDERS, contextWindow: 1000000, contextWindowSource: 'claude-cli-table' },
     { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', group: 'Claude', providers: CLAUDE_PROVIDERS, contextWindow: 1000000, contextWindowSource: 'claude-cli-table' },
     { id: 'claude-sonnet-5', label: 'Claude Sonnet 5', group: 'Claude', providers: CLAUDE_PROVIDERS, contextWindow: 1000000, contextWindowSource: 'claude-cli-table' },
-    // gpt-6-astra is 372K as a model, but codex-as-api 0.6.5 does not know
-    // the gpt-6 family and serves its unknown-model default of 200000, which
-    // is the window the lane in front of the user actually gets. The number
-    // that matters is the one the thing we ship enforces, so 200000 it is —
-    // re-raise when the proxy learns the family (same re-verify checklist
-    // http-server.cjs's cap table carries).
-    // RE-CHECKED 2026-09-16 and 200000 STANDS. The reference fleet's live
-    // proxies report 372000 (/health on :18085 :18080 :18083 all return
-    // {"context_window":372000,"auto_compact_token_limit":334800}), which reads
-    // like the pin is stale — it is not. That box's ~/.codex*/config.toml files
-    // each carry a hand-written `model_context_window = 372000`, and
-    // codex-as-api 0.6.5's getContextWindow() returns the config value
-    // whenever capabilityForModel(model).maxContextWindow is null, which it is
-    // because gpt-6-astra is STILL absent from the package's
-    // model_capabilities_default (grep: the table ends at gpt-5.2 plus
-    // gpt-5.3-codex-spark). A user with no such config line gets
-    // DEFAULT_CONTEXT_WINDOW = 2e5. So 372000 is the fleet's own override
-    // leaking into /health, not a vendor number, and pinning it here would
-    // under-report compaction for every normal install.
+    // GPT: 200000 for all four, MEASURED not assumed (2026-09-28) by booting
+    // the proxy in-process with an EMPTY CODEX_HOME — the number a fresh
+    // install gets, which is the one we ship. Raw /health, one line per id
+    // (auto_compact_token_limit = 0.8 x window):
+    //   {"id":"gpt-6-astra","context_window":200000,"auto_compact_token_limit":160000}
+    //   {"id":"gpt-6-luna","context_window":200000,"auto_compact_token_limit":160000}
+    //   {"id":"gpt-6-sol","context_window":200000,"auto_compact_token_limit":160000}
+    //   {"id":"gpt-daybreak-blue-latest","context_window":200000,"auto_compact_token_limit":160000}
+    // With CODEX_HOME UNSET on this dev box all four instead read
+    // 372000/334800 — that is this machine's ~/.codex/config.toml
+    // `model_context_window = 372000` leaking into /health, not a vendor
+    // number, which is exactly why the pin is the empty-home reading (the
+    // gpt-6 family is absent from the proxy's model_capabilities_default, so
+    // an unconfigured install gets the package default 2e5).
+    // tests/test-codex-proxy-model.mjs re-proves all four on every run.
     { id: 'gpt-6-astra', label: 'GPT 6 Astra', group: 'GPT', providers: ['chatgpt'], contextWindow: 200000, contextWindowSource: 'codex-as-api-table' },
-    // These three and gpt-6-astra above share ONE pro weekly meter (2026-09-16
-    // provenance note in the header): the pick is a model choice, not a quota
-    // choice. GPT-5.3-Codex-Spark is the only separately-metered id and is not
-    // offered here — no live proxy on the reference fleet serves it (checked
-    // 2026-09-16: /health on :18085 :18080 :18083 each advertise their ONE
-    // configured model, none of them a spark id), so there is no /health
-    // receipt to pin a contextWindow against and a row would be a guess.
-    { id: 'gpt-5.6-sol', label: 'GPT 5.6 Sol', group: 'GPT', providers: ['chatgpt'], contextWindow: 272000, contextWindowSource: 'codex-as-api-table' },
-    { id: 'gpt-5.6-terra', label: 'GPT 5.6 Terra', group: 'GPT', providers: ['chatgpt'], contextWindow: 272000, contextWindowSource: 'codex-as-api-table' },
-    { id: 'gpt-5.6-luna', label: 'GPT 5.6 Luna', group: 'GPT', providers: ['chatgpt'], contextWindow: 272000, contextWindowSource: 'codex-as-api-table' },
+    { id: 'gpt-6-luna', label: 'GPT 6 Luna', group: 'GPT', providers: ['chatgpt'], contextWindow: 200000, contextWindowSource: 'codex-as-api-table' },
+    { id: 'gpt-6-sol', label: 'GPT 6 Sol', group: 'GPT', providers: ['chatgpt'], contextWindow: 200000, contextWindowSource: 'codex-as-api-table' },
+    { id: 'gpt-daybreak-blue-latest', label: 'GPT Daybreak Blue', group: 'GPT', providers: ['chatgpt'], contextWindow: 200000, contextWindowSource: 'codex-as-api-table' },
+    // Ollama: the four cloud tags with a live ollama.com receipt (receipt (c)
+    // above). No third-party window receipt exists for them, so the number is
+    // OUR declared floor rather than a vendor figure we would be guessing at.
     { id: 'kimi-k3', label: 'Kimi K3', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
-    { id: 'kimi-k2.7-code', label: 'Kimi 2.7 Code', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
+    { id: 'deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
     { id: 'glm-5.3', label: 'GLM 5.3', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
     { id: 'glm-5.3-flash', label: 'GLM 5.3 Flash', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
-    { id: 'glm-5.2', label: 'GLM 5.2', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
-    { id: 'deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
-    { id: 'qwen3.5:397b', label: 'Qwen 3.5 (397B)', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
-    { id: 'minimax-m3', label: 'MiniMax M3', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
-    { id: 'gpt-oss:120b', label: 'GPT-OSS (120B)', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
-    { id: 'mistral-large-3:675b', label: 'Mistral Large 3 (675B)', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
+    // DSH rows: `glm-5.2:cloud` stays even though the bare ollama glm-5.2 row
+    // left on 2026-09-28 — the lane's patch pins this exact tag (see the DSH
+    // note in the header).
     { id: 'glm-5.2:cloud', label: 'GLM 5.2 (dsh)', group: 'DSH', providers: ['dsh'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
     { id: 'qwen3.5:cloud', label: 'Qwen 3.5 (dsh · vision)', group: 'DSH', providers: ['dsh'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
   ]

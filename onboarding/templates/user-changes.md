@@ -8,6 +8,11 @@
      a section here per release; missing versions simply brief as a bare
      version bump. -->
 
+## 0.3.3
+모델 목록이 지금 쓰는 것만 남게 정리됐어요. 클로드는 Opus 5.5·Fable 5.1·Opus 4.6·
+Sonnet 5, ChatGPT는 Astra·Sol 6·Luna 6·Daybreak, 올라마는 Kimi K3·DeepSeek V4.1 Flash·
+GLM 5.3·GLM 5.3 Flash예요. 쓰던 모델이 목록에서 빠져도 그대로 계속 답해요.
+
 ## 0.3.2
 모델 목록에 Claude Opus 5.5가 추가됐어요. 설정에서 고르면 바로 그 모델로 답하고,
 기억 용량은 100만 토큰으로 다른 Opus 계열과 같아요.

@@ -747,7 +747,11 @@ const PROVIDER_ROWS = [
       // consumed via ANTHROPIC_BASE_URL pre-swap), so it becomes a
       // hand-declared anthropic-messages route in the dsh lane. The proxy
       // ignores auth; the placeholder satisfies pi-ai's key requirement.
-      const model = requiredModel(config) || 'gpt-5.6-sol'
+      // Fallback must name a row the catalog actually carries: dshContextWindowFor()
+      // reads model-catalog.cjs, and an unknown id silently drops this lane's
+      // declared window to the 131072 floor (the 0.3 P4 regression). gpt-6-astra
+      // is the catalog's GPT default as of the 2026-09-28 prune.
+      const model = requiredModel(config) || 'gpt-6-astra'
       return {
         ...dshCommonEnv(config),
         DSH_ROUTE: 'declared',

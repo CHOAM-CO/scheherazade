@@ -3025,15 +3025,24 @@ function extractClaudeModelsFromBin(binPath) {
 //     The CLI does not know gpt ids, so its believed window (and therefore
 //     the autocompact trigger point) may be SMALLER than this; the gauge's
 //     occupancy number is exact either way, only pct is best-effort there.
-//     RE-VERIFIED against codex-as-api 0.6.5 (2026-08-13, task #6 upgrade):
-//     every gpt-5.x slug in model_capabilities_default now carries
-//     context_window: 272_000 (5.6 / 5.6-sol / 5.6-terra / 5.6-luna / 5.5 /
-//     5.4). Confirmed live, not just read: booting the 0.6.5 proxy in-process
-//     for gpt-5.6-sol and hitting /health returned {context_window: 272000,
-//     auto_compact_token_limit: 244800 (= 0.9 x 272k)}. The prior 372_000 pin
-//     for the 5.6 family was substantiated by NO installed package (0.5.2's
-//     table stopped at 5.5 and carried no window numbers at all) and made the
-//     gauge read ~27% emptier than the point the proxy actually compacts at.
+//     MEASURED 2026-09-28, every catalog chatgpt row booted in-process with an
+//     EMPTY CODEX_HOME (the fresh-install number we ship; /health reads config
+//     only, no ChatGPT call). Raw, one line per id:
+//       {"id":"gpt-6-astra","context_window":200000,"auto_compact_token_limit":160000}
+//       {"id":"gpt-6-luna","context_window":200000,"auto_compact_token_limit":160000}
+//       {"id":"gpt-6-sol","context_window":200000,"auto_compact_token_limit":160000}
+//       {"id":"gpt-daybreak-blue-latest","context_window":200000,"auto_compact_token_limit":160000}
+//     With CODEX_HOME UNSET on this box all four read 372000 / 334800 instead:
+//     that is this machine's ~/.codex/config.toml `model_context_window =
+//     372000` leaking into /health (codex-as-api's getContextWindow() returns
+//     the config value when capabilityForModel() carries no entry), not a vendor
+//     number -- pin THAT and every normal install's gauge reads ~46% too empty.
+//     The gpt-5.x branch below keeps its own, older receipt: codex-as-api 0.6.5
+//     carries context_window 272_000 for every 5.x slug (5.6 / 5.6-sol /
+//     5.6-terra / 5.6-luna / 5.5 / 5.4), and the prior 372_000 pin for the 5.6
+//     family was substantiated by NO installed package. That branch no longer
+//     serves a catalog row (2026-09-28 prune) but stays for a saved config that
+//     still names one.
 // Re-verify these pins on every codex-as-api upgrade (see docs/HISTORY.md
 // for the upgrade checklist) -- a version bump can silently move the table.
 // Unknown model → cap null, UI shows occupancy without a percentage.
@@ -3043,7 +3052,15 @@ function contextCapForModel(model) {
   // "every pickable catalog model resolves to a cap" section: the catalog row
   // alone would leave it with cap null and silently drop its gauge. 1M from
   // both receipts — see model-catalog.cjs's row-provenance note.
-  const CLAUDE_1M = new Set(['claude-fable-5', 'claude-opus-5', 'claude-opus-5-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6'])
+  // claude-fable-5-1 (2026-09-28 prune): same 1M / claude-cli-table receipt as
+  // its fable sibling.
+  // The retired picker ids (claude-fable-5, claude-opus-5, claude-opus-4-8)
+  // STAY in this set on purpose, as do the two entries that never matched a
+  // catalog row (claude-opus-4-7, claude-sonnet-4-6): a saved config can still
+  // name any of them, and a removed entry would make contextCapForModel return
+  // null for it -- the gauge goes blank rather than merely stale. Deleting a
+  // picker ROW is not licence to stop answering for the id.
+  const CLAUDE_1M = new Set(['claude-fable-5', 'claude-fable-5-1', 'claude-opus-5', 'claude-opus-5-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6'])
   const base = model.replace(/\[1m\]$/, '')
   // Live tier first (2026-08-13): whatever the last binary scan saw is the
   // installed CLI's own table -- fresher than any hand-pinned entry below.
@@ -3059,16 +3076,21 @@ function contextCapForModel(model) {
   // (see the provenance block above). Merged from the old split 5.6→372k /
   // 5.[245]→272k pins once the 372k value was falsified against 0.6.5.
   if (/^gpt-5\.[23456]/.test(base)) return { cap: 272_000, capSource: 'codex-as-api-table' }
-  // gpt-6-astra (added 2026-09-06, v0.2.20): NOT in codex-as-api 0.6.5's
+  // gpt-6-* / gpt-daybreak-blue-latest: not in codex-as-api's
   // model_capabilities_default, so the proxy serves its unknown-model default
-  // context_window 200_000 (verified in-process with an empty CODEX_HOME:
-  // /health -> {context_window: 200000}) and compacts at 0.9x that. The
-  // model itself is 372K; a user's ~/.codex/config.toml
+  // context_window 200_000 (measured 2026-09-28 in-process with an empty
+  // CODEX_HOME -- see the raw /health lines in the provenance block above) and
+  // compacts at 160000. The model itself is 372K; a user's ~/.codex/config.toml
   // `model_context_window = 372000` overrides the proxy live (that is how the
-  // one reference-fleet lane reports 372000 on 0.6.3). Pin the proxy's default here
-  // so the gauge matches the compaction point on a fresh machine; re-verify
-  // when codex-as-api learns the gpt-6 family.
+  // reference-fleet lanes report 372000). Pin the proxy's DEFAULT here so the
+  // gauge matches the compaction point on a fresh machine; re-verify when
+  // codex-as-api learns the gpt-6 family.
   if (/^gpt-6/.test(base)) return { cap: 200_000, capSource: 'codex-as-api-table' }
+  // gpt-daybreak-blue-latest (catalog row 2026-09-28) needs its own branch, not
+  // a share of /^gpt-6/: without one it fell through to {cap:null} and the
+  // test-codex-proxy-model drift guard caught it (proxy=200000 pin=null). Same
+  // measured default as the gpt-6 rows, same source label.
+  if (base === 'gpt-daybreak-blue-latest') return { cap: 200_000, capSource: 'codex-as-api-table' }
   return { cap: null, capSource: null }
 }
 
