@@ -16,6 +16,14 @@
              actually riding and whether it can see images -- the 2026-08-11
              field bug would have been self-evident with this visible. -->
         <span class="chat-lane-chip" id="ct-lane-chip" hidden></span>
+        <!-- Pending signal (design-0024, 2026-09-28): the owner's own "!" —
+             she speaks first when something of hers has piled up that he has
+             not been shown. Ships HIDDEN: it lights only when GET
+             /api/pending-signal reports a pile, and a failed read hides it
+             rather than lighting it. One click injects one recital; the only
+             thing the user then sees is the divider it produces and her
+             words. No queue, no editor (chat.js). -->
+        <button class="chat-pending" id="ct-pending" type="button" hidden></button>
         <!-- "New conversation" clean break (2026-08-18): fresh session +
              empty transcript, no checkpoint handoff, memory kept. Irreversible,
              so it confirms first (chat.js). secondary like the other controls;

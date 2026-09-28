@@ -1081,6 +1081,15 @@ window.COPY = {
     // Lane status chip (0.1.4): states capability, never apologizes for it.
     laneChipVisionYes: 'sees images',
     laneChipVisionNo: 'no image vision · helper describes',
+    // Pending signal (design-0024, 2026-09-28): the "!" in the header. The
+    // glyph is the owner's own mark for "something of hers has piled up that
+    // you have not been shown", so it stays "!"; this label is what the mark
+    // MEANS, in words -- it is the button's title and its aria-label, so the
+    // mark is not a symbol only a sighted reader can read. Neighbours'
+    // register (laneChipVision*): plain English, one short sentence, no em
+    // dash, no exclamation beyond the glyph itself.
+    pendingSignalGlyph: '!',
+    pendingSignalLabel: 'Click to let her speak about what has piled up',
     // "New conversation" clean break (2026-08-18): a genuine fresh session.
     // The button is low-key; the confirm carries the weight because the action
     // is irreversible. The copy is honest about the exact split -- this thread

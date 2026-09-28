@@ -3720,6 +3720,7 @@ const API_ROUTES = [
   ...require('./routes/oauth-usage.cjs').createRoutes(staticCtx), // G13 (usage-gauge full-scope OAuth)
   ...require('./routes/files.cjs').createRoutes(staticCtx), // G14 (recent-files ledger, 같이보기 batch 2026-08-19)
   ...require('./routes/oauth-login.cjs').createRoutes(staticCtx), // G15 (in-app Claude login → claude-subscription, drops CLI dep)
+  ...require('./routes/pending-signal.cjs').createRoutes(staticCtx), // G16 (design-0024 pending signal "!")
 ]
 
 module.exports = {

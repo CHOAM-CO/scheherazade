@@ -1249,6 +1249,34 @@ button.nav-ctl.is-busy::after {
   margin-left: 0.6rem;
   white-space: nowrap;
 }
+/* Pending signal (design-0024, 2026-09-28): the owner's "!" — she speaks first
+   when something of hers has piled up. Lane-chip pill language (same edge, same
+   0.6rem gap) but SQUARE-ish (--radius-s, not the pill): a badge, not a chip.
+   Accent-lit only while it is visible; `[hidden]` is spelled out here so the
+   mark cannot flash before the first read answers, whatever the UA does with
+   the attribute. No new colour tokens — --accent, --accent-ring and the
+   --accent-rgb triplet the user bubble already derives from. */
+.chat-pending {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.55rem;
+  height: 1.55rem;
+  padding: 0 0.35rem;
+  margin-left: 0.6rem;
+  border: 1px solid var(--accent-ring);
+  border-radius: var(--radius-s);
+  background: rgb(var(--accent-rgb) / 0.16);
+  color: var(--accent);
+  font-size: 1.05rem;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: middle;
+  cursor: pointer;
+}
+.chat-pending[hidden] { display: none; }
+.chat-pending:hover { border-color: var(--accent); background: rgb(var(--accent-rgb) / 0.26); }
+.chat-pending:disabled { opacity: 0.5; cursor: default; }
 .chat-attach-img {
   display: block;
   max-width: min(20rem, 100%);

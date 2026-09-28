@@ -49,6 +49,7 @@
   const POLL_MS = 1000
   const STATUS_EVERY_TICKS = 5 // /status is a live /health probe upstream; 5s is fresh enough
   const LANE_STATUS_MS = 2000 // /api/agent/status, fetched only while a turn is in flight
+  const PENDING_MS = 30000 // the "!" read (design-0024): 30x slower than the transcript poll on purpose
   const MAX_CLIENT_MSGS = 500 // mirror of the channel's MAX_QUEUE
   const TYPING_SHOW_MAX_MS = TURN ? TURN.TYPING_SHOW_MAX_MS : 3 * 60 * 1000
   const REACTIONS = ['👍', '❤️'] // mirror of the channel's USER_REACTIONS
@@ -67,6 +68,7 @@
   let nextSeq = null // null = cursor not seeded yet (first poll renders nothing)
   let msgCount = 0
   let pollTimer = null
+  let pendingTimer = null // the "!" read's own slow interval (design-0024), not the transcript poll
   let tick = 0
   let emptyEl = null
   let lastStatus = null
@@ -945,6 +947,65 @@
     }
   }
 
+  // ── pending signal (design-0024, 2026-09-28) ──────────────────────────────
+  // The "!" in the header: she speaks first when something of hers has piled
+  // up (corrections still active, reflux proposals pending, dream fragments)
+  // that the user has not been shown. Read-only, on its own interval -- NOT
+  // the 1s transcript poll, which would be twenty-nine reads a minute for a
+  // number that changes when she writes to memory, not when a message lands.
+  //
+  // Two rules the owner set, and they are the whole of this surface:
+  //   1. the mark only ever APPEARS (total > 0). A failed or erroring read
+  //      HIDES it -- an advisory surface fails toward silence, never lights
+  //      on an error.
+  //   2. one click = one recital. The button is disabled while the request is
+  //      in flight, so a double-click cannot inject two.
+  // There is no toast, banner, list or panel. What the user sees after the
+  // click is the system divider the inject produces and then her own words.
+  let pendingBusy = false
+  function setPendingMark(total) {
+    const btn = $('ct-pending')
+    if (!btn) return
+    const n = Number(total)
+    btn.hidden = !(Number.isFinite(n) && n > 0)
+  }
+  async function refreshPending() {
+    try {
+      const r = await window.api('/api/pending-signal')
+      setPendingMark(r && r.total)
+    } catch (err) {
+      console.error('pending signal failed:', err)
+      setPendingMark(0) // a failed read must never light the mark
+    }
+  }
+  async function recitePending() {
+    if (pendingBusy) return
+    const btn = $('ct-pending')
+    pendingBusy = true
+    if (btn) btn.disabled = true
+    try {
+      await window.api('/api/pending-signal/recite', { method: 'POST' })
+    } catch (err) {
+      // No error surface by design: `injected:false` leaves the mark lit, and
+      // a failed POST leaves the pile untouched. The re-read below says which.
+      console.error('pending recite failed:', err)
+    } finally {
+      pendingBusy = false
+      if (btn) btn.disabled = false
+      await refreshPending() // re-read once: the mark clears only if the pile is gone
+    }
+  }
+  function initPendingSignal() {
+    const btn = $('ct-pending')
+    if (!btn) return
+    btn.textContent = C.pendingSignalGlyph // static copy, never user data
+    btn.title = C.pendingSignalLabel
+    btn.setAttribute('aria-label', C.pendingSignalLabel)
+    btn.onclick = recitePending
+    refreshPending()
+    pendingTimer = setInterval(refreshPending, PENDING_MS)
+  }
+
   // 'user' passes through, anything else renders as the agent: the enum is
   // channel-owned and this page must not invent a third bubble style for a
   // value it doesn't know.
@@ -1618,6 +1679,7 @@
     const fileInput = $('ct-file')
     resolveVisionState() // async, best-effort; 'unknown' until it lands
     initModelSwitch() // async, best-effort; chip stays hidden on any failure
+    initPendingSignal() // async, best-effort; the "!" stays hidden on any failure
     if (attachBtn && fileInput) {
       attachBtn.title = C.attachTitle
       attachBtn.onclick = () => fileInput.click()
@@ -1638,7 +1700,10 @@
     })
     input.focus()
     pollOnce()
-    window.addEventListener('beforeunload', () => { if (pollTimer) clearTimeout(pollTimer) })
+    window.addEventListener('beforeunload', () => {
+      if (pollTimer) clearTimeout(pollTimer)
+      if (pendingTimer) clearInterval(pendingTimer)
+    })
   }
 
   document.addEventListener('DOMContentLoaded', init)

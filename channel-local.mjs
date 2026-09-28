@@ -715,6 +715,35 @@ export async function deliverReaction(emoji, target, { notify, now = localNow } 
 // agent's context.
 export const USER_REACTIONS = ['👍', '❤️']
 
+// ── out-of-band SYSTEM turn (design-0024, the pending signal) ──────────────
+// The click-time recital rides the SAME seam the boot greeting does: a
+// notifications/claude/channel notification with meta.sender 'SYSTEM' on the
+// one local conversation.
+//
+// Deliberately NOT deliverInbound with a swapped sender: that function is the
+// /in twin and its caller records what it returns as the user's own half of
+// the transcript. A machine-authored recital must never enter the transcript
+// as a message from the user, so this is its own named function with no
+// enqueue next to it -- the shape is announce-only, like the routine and
+// schedule injects above.
+//
+// channelId stays LOCAL_CHANNEL_ID, never the literal 'system':
+// hooks/stop-reply-guard.mjs treats triggerChannelId === 'system' as a lane
+// housekeeping turn that NOBODY answers, and this turn's entire purpose is
+// that the guard makes her speak on the home channel.
+export async function deliverSystemTurn(content, { notify, now = localNow } = {}) {
+  const text = String(content || '').trim()
+  if (!text) throw new Error('system turn: content is required')
+  await notify({
+    method: 'notifications/claude/channel',
+    params: {
+      content: text,
+      meta: { sender: 'SYSTEM', channelId: LOCAL_CHANNEL_ID, authorId: '', timestamp: now() },
+    },
+  })
+  return text
+}
+
 // ── loopback HTTP listener ────────────────────────────────────────────────
 // Bound to 127.0.0.1 with a per-run bearer token. Loopback alone is not
 // access control on a shared machine -- any local process could otherwise
@@ -887,6 +916,27 @@ export function createRequestHandler({ notify, token, onInbound = () => {}, inte
         // never saw must not appear in the transcript as if it had been seen.
         await deliverReaction(emoji, target, { notify })
         enqueueReaction('user', emoji, target.seq)
+        return send(202, { ok: true })
+      }
+      // POST /system-turn (design-0024, the pending signal): inject ONE
+      // SYSTEM-authored turn into this process's own notifyInbound. The
+      // Electron route above it (onboarding/routes/pending-signal.cjs) is the
+      // only caller, and what starts it is a click on the chat header's "!".
+      // Body {content} through the same reader /in uses. Nothing enters the
+      // transcript: this is a message TO the agent, not the user's half of the
+      // conversation (the /interrupt and /clear rule). Auth and the Host check
+      // are the shared gates above -- there is no second auth path here.
+      if (url.pathname === '/system-turn' && req.method === 'POST') {
+        let body = ''
+        for await (const chunk of req) {
+          body += chunk
+          if (body.length > 100_000) return send(413, { error: 'too large' })
+        }
+        let parsed
+        try { parsed = JSON.parse(body || '{}') } catch { return send(400, { error: 'bad json' }) }
+        const content = parsed && parsed.content
+        if (typeof content !== 'string' || !content.trim()) return send(400, { error: 'content required' })
+        await deliverSystemTurn(content, { notify })
         return send(202, { ok: true })
       }
       // POST /interrupt (0.3.1, turn-level STOP): end the turn that is in

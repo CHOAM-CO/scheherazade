@@ -167,5 +167,50 @@ assert(connectors.includes('!m.custom && !m.providers.some(') && connectors.incl
 assert(!js.includes('Engine-page nicety'),
   'chat.js no longer claims the Engine page merges extras the chat dropdown lacks — both surfaces read the one catalog')
 
+console.log('\n3f. pending signal (design-0024, 2026-09-28) — the "!" above the chat')
+// The owner's "채팅창 위에서 퀘스트처럼 ! 떠있고 누르면 바로 세라가 반응해서" →
+// "밀린 거 -> 페르소나 / 환류 / 꿈 등등". Source-level pins, same convention as
+// the sections above (the page is DOM-in-browser). The failure modes worth
+// catching are all visible in the text: a mark that ships VISIBLE (a phantom
+// "!" on a fresh install), a glyph not from copy, wiring that never reads the
+// route or never posts the click, and a failed read that lights the mark
+// instead of hiding it.
+const header = html.slice(html.indexOf('class="page-header"'), html.indexOf('class="subtitle"'))
+assert(header.includes('id="ct-pending"') && header.includes('class="chat-pending"'),
+  'the mark is a button in .page-header (chat.html)')
+assert(/<button class="chat-pending" id="ct-pending"[^>]*\bhidden\b/.test(header),
+  '...and it ships hidden — no phantom "!" before the first read answers')
+assert(header.indexOf('ct-lane-chip') < header.indexOf('ct-pending')
+  && header.indexOf('ct-pending') < header.indexOf('ct-new-convo'),
+  'it sits between the lane chip and the new-conversation button (the header order the owner asked for)')
+assert(copy.includes("pendingSignalGlyph: '!'") && js.includes('C.pendingSignalGlyph'),
+  'the glyph is the owner\'s own "!" and it comes from copy.js, set on the node by chat.js')
+assert(copy.includes('pendingSignalLabel'),
+  'its title/aria label lives in copy.js too (the mark is readable in words, not symbol only)')
+assert(/btn\.setAttribute\('aria-label', C\.pendingSignalLabel\)/.test(js) && /btn\.title = C\.pendingSignalLabel/.test(js),
+  'both the hover (title) and the screen-reader label (aria-label) read that one string')
+assert(js.includes("window.api('/api/pending-signal')"),
+  'chat.js reads the pile with GET /api/pending-signal (the mark is a read of the route, not a second calculation)')
+assert(js.includes("window.api('/api/pending-signal/recite'"),
+  'a click POSTs /api/pending-signal/recite (one recital per press)')
+assert(js.includes('if (pendingBusy) return') && /pendingBusy = true[\s\S]{0,120}?btn\.disabled = true/.test(js),
+  'the button is disabled while the request is in flight, so a double-click cannot inject two recitals')
+assert(/PENDING_MS = 30000/.test(js) && /setInterval\(refreshPending, PENDING_MS\)/.test(js),
+  'the read rides its own 30s interval, never the 1s transcript poll')
+assert(/catch \(err\) \{\s*console\.error\('pending signal failed:', err\)\s*setPendingMark\(0\)/.test(js),
+  'a failed read HIDES the mark rather than lighting it (fail toward silence)')
+assert(/setPendingMark[\s\S]{0,120}?btn\.hidden = !\(Number\.isFinite\(n\) && n > 0\)/.test(js),
+  'the mark is shown only when the total is a positive number — no truthy accident')
+assert(!/recitePending[\s\S]{0,700}?showToast/.test(js),
+  'a failed recite shows no toast: the divider the inject produces and her words are the only visible result')
+assert(/\.chat-pending \{[^}]*margin-left: 0\.6rem/s.test(css)
+  && /\.chat-pending \{[^}]*color: var\(--accent\)/s.test(css)
+  && /\.chat-pending \{[^}]*border: 1px solid var\(--accent-ring\)/s.test(css),
+  'the badge keeps the header gap and is accent-lit from the existing tokens (--accent, --accent-ring)')
+assert(css.includes('.chat-pending[hidden] { display: none; }'),
+  'the hidden attribute is honoured in CSS, so the mark cannot flash before its first read')
+assert(/\.chat-pending \{[^}]*border-radius: var\(--radius-s\)/s.test(css),
+  'square-ish (--radius-s), not the pill — it is a badge, not a chip')
+
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)

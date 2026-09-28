@@ -1,8 +1,12 @@
 # design-0024 — the pending signal ("!") in the chat header
 
 Drafted 2026-09-28 from the owner's own description, in two passes the same
-evening. Status: **design only, nothing built.** The avatar work (separate)
-is what he approved for release; this is the next piece.
+evening. Status: **BUILT 2026-09-28, in the 0.3.4 rehearsal build** — all five
+pieces; the detector is option (a). Code: `onboarding/routes/pending-signal.cjs`
+(reader + stamp + inject), `POST /system-turn` in `channel-local.mjs`, the
+header mark in `onboarding/public/{chat.html,js/chat.js,css/app.css}`; tests
+`tests/test-pending-signal.mjs` and section 3f of `tests/test-chat-surface.mjs`.
+The "Open, for the owner" list below is what remains open.
 
 His words, in order:
 
