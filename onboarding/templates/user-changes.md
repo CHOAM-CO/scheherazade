@@ -8,6 +8,10 @@
      a section here per release; missing versions simply brief as a bare
      version bump. -->
 
+## 0.3.2
+모델 목록에 Claude Opus 5.5가 추가됐어요. 설정에서 고르면 바로 그 모델로 답하고,
+기억 용량은 100만 토큰으로 다른 Opus 계열과 같아요.
+
 ## 0.3.1
 답하는 중에도 멈출 수 있어요 — 채팅창 Stop 버튼을 누르면 지금 돌던 차례가 끝나고
 기다리던 메시지도 같이 치워져요. 멈추지 않고 방향만 바꾸고 싶으면 그냥 이어서 쓰면

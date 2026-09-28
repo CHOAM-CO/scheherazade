@@ -28,6 +28,25 @@
 // history in git blame of that file before the 0.2.6 extraction):
 // - claude-opus-5 added 08-13 (the owner ask), id verified against the installed
 //   CLI binary's model table + runs live in the the reference fleet daily.
+// - claude-opus-5-5 added 2026-09-28 (the owner ask: the picker must offer the
+//   model the reference fleet already runs — run-agent.sh:405 has pinned
+//   CLAUDE_CODE_SUBAGENT_MODEL=claude-opus-5-5 since 09-23, so a picker without
+//   it offers strictly less than the fleet's own workers). contextWindow
+//   1000000 verified TWO ways, both agreeing: (1) GET
+//   https://api.anthropic.com/v1/models/claude-opus-5-5 with this account's own
+//   OAuth credential -> {display_name:"Claude Opus 5.5",
+//   max_input_tokens:1000000, max_tokens:128000, created_at:2026-09-21}; (2) the
+//   installed CLI binary's own table — extractClaudeModelsFromBin() over
+//   ~/.local/share/claude/versions/2.1.283 -> claude-opus-5-5 = 1000000. Hence
+//   claude-cli-table, like its opus neighbours.
+//   ⚠️ An `ANTHROPIC_API_KEY=`-less `claude -p` probe is NOT a usable receipt on
+//   this box and was not used as one: the shell carries
+//   ANTHROPIC_BASE_URL=http://localhost:11434 (a local ollama), whose
+//   404 model_not_found for any claude-* id is a property of that lane, not
+//   evidence of absence; and pointed at the real endpoint the probe returns 429
+//   "You've hit your weekly limit" for EVERY model, claude-haiku-4-5 included,
+//   so it cannot discriminate one id from another. /v1/models does not consume
+//   inference quota, which is why it is the receipt here.
 // - GPT group: versioned 5.6 ids over the old single 'gpt' Codex entry.
 // - Kimi provider-wide drop 07-14 (mute incident, raw <|tool_call|> leakage
 //   on the local lane); kimi-k2.7-code is a DIFFERENT lane (ollama.com
@@ -119,6 +138,7 @@
   const MODELS = [
     { id: 'claude-fable-5', label: 'Claude Fable 5', group: 'Claude', providers: CLAUDE_PROVIDERS, contextWindow: 1000000, contextWindowSource: 'claude-cli-table' },
     { id: 'claude-opus-5', label: 'Claude Opus 5', group: 'Claude', providers: CLAUDE_PROVIDERS, contextWindow: 1000000, contextWindowSource: 'claude-cli-table' },
+    { id: 'claude-opus-5-5', label: 'Claude Opus 5.5', group: 'Claude', providers: CLAUDE_PROVIDERS, contextWindow: 1000000, contextWindowSource: 'claude-cli-table' },
     { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', group: 'Claude', providers: CLAUDE_PROVIDERS, contextWindow: 1000000, contextWindowSource: 'claude-cli-table' },
     { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', group: 'Claude', providers: CLAUDE_PROVIDERS, contextWindow: 1000000, contextWindowSource: 'claude-cli-table' },
     { id: 'claude-sonnet-5', label: 'Claude Sonnet 5', group: 'Claude', providers: CLAUDE_PROVIDERS, contextWindow: 1000000, contextWindowSource: 'claude-cli-table' },

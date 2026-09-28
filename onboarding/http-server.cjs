@@ -3039,7 +3039,11 @@ function extractClaudeModelsFromBin(binPath) {
 // Unknown model → cap null, UI shows occupancy without a percentage.
 function contextCapForModel(model) {
   if (typeof model !== 'string' || !model) return { cap: null, capSource: null }
-  const CLAUDE_1M = new Set(['claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6'])
+  // claude-opus-5-5 (2026-09-28) is REQUIRED here by test-context-gauge's
+  // "every pickable catalog model resolves to a cap" section: the catalog row
+  // alone would leave it with cap null and silently drop its gauge. 1M from
+  // both receipts — see model-catalog.cjs's row-provenance note.
+  const CLAUDE_1M = new Set(['claude-fable-5', 'claude-opus-5', 'claude-opus-5-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6'])
   const base = model.replace(/\[1m\]$/, '')
   // Live tier first (2026-08-13): whatever the last binary scan saw is the
   // installed CLI's own table -- fresher than any hand-pinned entry below.
