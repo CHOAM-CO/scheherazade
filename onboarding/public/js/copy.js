@@ -1239,7 +1239,7 @@ window.COPY = {
     avatarSaved: 'Picture saved.',
     avatarRemoved: 'Picture removed.',
     avatarBadType: 'Pick a PNG, JPG, or WebP image.',
-    avatarTooLarge: 'That image is over 2MB — too big for a profile picture.',
+    avatarTooLarge: 'That image is too large to open. Pick a file under 25MB.',
     // The crop step (2026-09-28). Until now the upload was take-it-or-leave
     // -it: whatever framing the file arrived with was the framing the agent
     // got, because the only crop happened at display time and always took the

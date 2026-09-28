@@ -572,9 +572,9 @@
       if (!file) return
       // Size and type BEFORE reading, same ordering as chat.js's
       // uploadImageFile: the server re-checks both (it must -- the page is
-      // not the authority), but an 8MB photo must not be read into memory and
+      // not the authority), but a 40MB photo must not be read into memory and
       // posted just to be refused.
-      if (file.size > 2_000_000) { avatarFail(C.avatarTooLarge); return }
+      if (file.size > 25_000_000) { avatarFail(C.avatarTooLarge); return }
       if (!/^image\/(png|jpe?g|webp)$/.test(file.type || '')) { avatarFail(C.avatarBadType); return }
       // The CHOICE happens before anything is uploaded: the crop step shows
       // the picked file and hands back a fresh 256x256 PNG of the square the
