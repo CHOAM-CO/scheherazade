@@ -307,7 +307,7 @@ function createRoutes(staticCtx) {
       const v = JSON.parse(fs.readFileSync(pendingPath, 'utf8'))
       if (Array.isArray(v)) list = v
     } catch { /* fresh list */ }
-    list.push({ content, meta, ts: Date.now() })
+    list.push({ content, meta, ts: Date.now(), sweep: true })
     const tmp = `${pendingPath}.tmp`
     fs.writeFileSync(tmp, JSON.stringify(list.slice(-20)) + '\n', { mode: 0o600 })
     fs.renameSync(tmp, pendingPath)
@@ -315,6 +315,21 @@ function createRoutes(staticCtx) {
   }
 
   return [
+    {
+      // 0.3.6: is a queued sweep still waiting? The lane removes sweep
+      // entries from the FIFO when it delivers them at boot, so 0 = delivered.
+      method: 'GET',
+      match: (pathname) => pathname === '/api/migrate/queue',
+      handler: async (req, res) => {
+        let queued = 0
+        try {
+          const v = JSON.parse(fs.readFileSync(path.join(DATA_HOME, '.headless-pending.json'), 'utf8'))
+          if (Array.isArray(v)) queued = v.filter((e) => e && e.sweep === true).length
+        } catch { /* no file = nothing waiting */ }
+        sendJson(res, 200, { queued })
+        return
+      },
+    },
     {
       // design-0022 §3.1/§4 wizard step: the copy plan. Detected sources
       // only, names + sizes + kind + default checkbox state; never contents.

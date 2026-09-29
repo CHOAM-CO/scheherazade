@@ -142,6 +142,24 @@ const TURN_STALL_MS = Math.max(2, Number(process.env.SCHEHERAZADE_TURN_STALL_MIN
 // that have not yet been paid for by a `result` event; whatever is left at
 // boot gets re-injected once (redelivered:true entries are never re-sent a
 // second time -- one retry, no loops).
+// Splits the boot-time pending FIFO. `sweeps` = entries the onboarding UI
+// queued while the lane was down (flagged sweep:true by routes/migrate.cjs):
+// they are sender=SYSTEM on purpose but NOT moment-bound, so the SYSTEM drop
+// below must not apply to them (root cause of 0.3.6 "Queued but never
+// delivered"). `stranded` = the old mid-turn-recycle redelivery set.
+export function partitionPending(list, now, { sweepMaxAgeMs = 7 * 24 * 3600_000 } = {}) {
+  const sweeps = []
+  const stranded = []
+  for (const ev of list) {
+    const age = now - (Number(ev.ts) || 0)
+    if (ev && ev.sweep === true) {
+      if (age < sweepMaxAgeMs) sweeps.push(ev)
+    } else if (!ev.redelivered && age < 48 * 3600_000 && !(ev.meta && ev.meta.sender === 'SYSTEM')) {
+      stranded.push(ev)
+    }
+  }
+  return { stranded, sweeps }
+}
 function readPending() {
   try {
     const v = JSON.parse(fs.readFileSync(pendingFile(), 'utf8'))
@@ -736,9 +754,21 @@ async function main() {
     // 02:01: the stranded shutdown-flush turn was redelivered into the next
     // boot and killed it again, extending the quit loop the owner watched).
     // User messages still redeliver exactly as before.
-    const stranded = readPending().filter((ev) => !ev.redelivered && Date.now() - (Number(ev.ts) || 0) < 48 * 3600_000
-      && !(ev.meta && ev.meta.sender === 'SYSTEM'))
+    const { stranded, sweeps } = partitionPending(readPending(), Date.now())
     writePending(stranded.map((ev) => ({ ...ev, redelivered: true })))
+    // Queued sweeps (migrate/handover "Hand it over" while the lane was down):
+    // delivered ONCE as-is -- no [redelivered] note (they were never answered
+    // by anyone), and already removed from the FIFO above so the UI's queue
+    // read flips to delivered and a later recycle cannot replay them.
+    for (const ev of sweeps) {
+      try {
+        child.stdin.write(renderUserEvent({ content: ev.content, meta: ev.meta || {} }))
+        noteStdinWrite()
+      } catch (err) {
+        log(`queued sweep delivery failed: ${err.message}`)
+      }
+    }
+    if (sweeps.length) log(`delivered ${sweeps.length} queued sweep request(s) at boot`)
     if (stranded.length) {
       log(`re-delivering ${stranded.length} message(s) stranded by the previous recycle`)
       for (const ev of stranded) {

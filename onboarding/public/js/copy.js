@@ -1221,6 +1221,7 @@ window.COPY = {
     migrateStarting: 'Asking the agent to take over…',
     migrateStartedLive: 'The agent is on it — watch the chat.',
     migrateStartedQueued: "Queued. The agent will start the import next time it's running.",
+    migrateDeliveredAfterQueue: 'Delivered — the agent picked it up. Watch the chat.',
     // design-0023 handover: custom agents (rev B: agent-led discovery
     // first, manual path as fallback).
     handoverLabel: 'A custom agent',

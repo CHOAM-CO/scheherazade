@@ -1043,6 +1043,52 @@ console.log('\nN. turn-abort record: the lane\'s stall producer')
   assert(!threw, 'a failed record write never throws into the kill path')
 }
 
+// ── 2b. queued-while-down sweep is delivered on start (0.3.6) ─────────────
+console.log('\n2b. queued sweep drains at lane boot')
+{
+  const { partitionPending } = await import(pathToFileURL(path.join(ROOT, 'headless-lane.mjs')).href)
+  const now = Date.now()
+  const sysMeta = { sender: 'SYSTEM', channelId: 'in-app' }
+  const part = partitionPending([
+    { content: 'sweep', meta: sysMeta, ts: now - 3600_000, sweep: true },
+    { content: 'flush', meta: sysMeta, ts: now - 1000 },
+    { content: 'user q', meta: { sender: 'user' }, ts: now - 1000 },
+  ], now)
+  assert(part.sweeps.length === 1 && part.sweeps[0].content === 'sweep', 'sweep-flagged SYSTEM entry is kept for delivery')
+  assert(part.stranded.length === 1 && part.stranded[0].content === 'user q', 'unflagged SYSTEM turn still dropped, user message still redelivered')
+  if (WIN) skipWin('queued sweep boot E2E')
+  else {
+    const MEM = path.join(TMP, 'mem-sweep')
+    fs.mkdirSync(MEM, { recursive: true })
+    fs.writeFileSync(path.join(MEM, '.headless-pending.json'), JSON.stringify([
+      { content: '[SYSTEM] sweep-me', meta: sysMeta, ts: now, sweep: true },
+    ]))
+    const fake = path.join(TMP, 'fake-sweep.mjs')
+    fs.writeFileSync(fake, `
+import fs from 'node:fs'
+import { createInterface } from 'node:readline'
+process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sweep-sess', model: 'fake', mcp_servers: [] }) + '\\n')
+createInterface({ input: process.stdin }).on('line', (l) => fs.appendFileSync(process.env.FAKE_SINK, l + '\\n'))
+process.on('SIGTERM', () => process.exit(0))
+`)
+    const sink = path.join(TMP, 'sink-sweep.jsonl')
+    const shim = path.join(TMP, 'claude-shim-sweep.sh')
+    fs.writeFileSync(shim, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fake)} "$@"\n`, { mode: 0o755 })
+    const lane = spawn(process.execPath, [path.join(ROOT, 'headless-lane.mjs')], {
+      env: { ...process.env, MEM, MODEL: 'fake-model', CLAUDE_BIN: shim, FAKE_SINK: sink },
+      stdio: ['ignore', 'ignore', 'ignore'],
+    })
+    const dl = Date.now() + 8000
+    while (!(fs.existsSync(sink) && fs.readFileSync(sink, 'utf8').includes('sweep-me')) && Date.now() < dl) await new Promise((r) => setTimeout(r, 50))
+    const got = fs.existsSync(sink) ? fs.readFileSync(sink, 'utf8') : ''
+    assert(got.includes('sweep-me'), 'queued sweep reached the agent stdin on start')
+    assert(!got.includes('[redelivered'), 'sweep carries no misleading [redelivered] note')
+    assert(!fs.existsSync(path.join(MEM, '.headless-pending.json')), 'sweep removed from the FIFO once delivered (UI flips to Delivered)')
+    lane.kill('SIGTERM')
+    await new Promise((r) => setTimeout(r, 200))
+  }
+}
+
 fs.rmSync(TMP, { recursive: true, force: true })
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

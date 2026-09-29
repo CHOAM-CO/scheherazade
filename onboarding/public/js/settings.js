@@ -340,6 +340,18 @@
       }
       migStart.disabled = false
     }).catch(() => { migStatus.textContent = C.migrateNoneFound })
+    // A "Queued" line is a promise, not a receipt: poll until the lane has
+    // drained the FIFO, then say Delivered. Stops after ~10 min.
+    function watchQueue(el) {
+      let n = 0
+      const t = setInterval(async () => {
+        if (++n > 120 || !el.isConnected) return clearInterval(t)
+        try {
+          const q = await api('/api/migrate/queue')
+          if (q && q.queued === 0) { el.textContent = C.migrateDeliveredAfterQueue; clearInterval(t) }
+        } catch { /* keep showing Queued */ }
+      }, 5000)
+    }
     migStart.onclick = async () => {
       const ids = [...migChecks.entries()].filter(([, cb]) => cb.checked).map(([id]) => id)
       if (!ids.length) return
@@ -354,6 +366,7 @@
         })
         migStatus.className = 'status-line success'
         migStatus.textContent = r.delivery === 'live' ? C.migrateStartedLive : C.migrateStartedQueued
+        if (r.delivery === 'queued') watchQueue(migStatus)
       } catch (err) {
         migStatus.className = 'status-line failure'
         migStatus.textContent = GEN(err.message)
@@ -380,6 +393,7 @@
         const r = await api('/api/migrate/custom/discover', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
         hoDiscoverStatus.className = 'status-line success'
         hoDiscoverStatus.textContent = r.delivery === 'live' ? C.migrateStartedLive : C.migrateStartedQueued
+        if (r.delivery === 'queued') watchQueue(hoDiscoverStatus)
       } catch (err) {
         hoDiscoverStatus.className = 'status-line failure'
         hoDiscoverStatus.textContent = GEN(err.message)
@@ -435,6 +449,7 @@
         })
         hoStatus.className = 'status-line success'
         hoStatus.textContent = r.delivery === 'live' ? C.migrateStartedLive : C.migrateStartedQueued
+        if (r.delivery === 'queued') watchQueue(hoStatus)
       } catch (err) {
         hoStatus.className = 'status-line failure'
         hoStatus.textContent = GEN(err.message)
