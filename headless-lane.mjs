@@ -42,6 +42,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { killTree as procKillTree } from './proc.cjs'
 
 const MEM = process.env.MEM
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude'
@@ -224,6 +225,127 @@ export function writeTurnAbortRecord(reason, { dir = MEM } = {}) {
     fs.renameSync(tmp, file)
   } catch (err) {
     log(`turn-abort record write failed (non-fatal -- the recycle proceeds): ${err.message}`)
+  }
+}
+
+// ── turn-level STOP mechanics (0.3.5 soft stop) ─────────────────────────────
+// Which way a Stop press ends the in-flight turn, per platform. PURE: the
+// platform is an argument so the win32 branch is testable on a mac.
+//
+//   posix ('signal') -- unchanged since 0.3.1. SIGTERM is the interrupt the
+//     CLI understands there: its handler reaps its own MCP children and exits,
+//     the lane follows it out, the supervisor respawns with --resume. SIGKILL
+//     after 10 s if it did not go.
+//   win32 ('soft-then-tree') -- no signal is deliverable (process.kill is
+//     TerminateProcess: no handler runs), so the old SIGTERM was a hard
+//     terminate of claude.exe ALONE and every MCP server it had spawned
+//     (channel-local included) was orphaned. Now: a stream-json
+//     control_request {subtype:'interrupt'} on stdin, which the CLI honours
+//     in-process -- it cancels the running tool, answers control_response
+//     success, and closes the turn with a `result` (probe receipt, claude
+//     2.1.284 on mac, 2026-09-29: control_response at +0 ms, result
+//     subtype=error_during_execution in the same tick, the NEXT user message
+//     answered normally on the same live session). The session and its MCP
+//     children stay up, so there is nothing to orphan and no respawn. Only
+//     if no result lands inside the grace window (or the CLI refuses the
+//     request, or stdin is gone) does the lane escalate to a TREE kill
+//     (proc.killTree = taskkill /PID <claude> /T /F), which takes the MCP
+//     children with it. The claude child is spawned non-detached, but on
+//     win32 there are no process groups, so /T on the CHILD's pid never
+//     reaches this lane.
+export const SOFT_STOP_GRACE_MS = Math.max(1_000, (Number(process.env.SCHEHERAZADE_SOFT_STOP_SECONDS) || 8) * 1000)
+export const SIGNAL_STOP_KILL_MS = 10_000
+
+export function planTurnStop({ platform = process.platform, softGraceMs = SOFT_STOP_GRACE_MS } = {}) {
+  if (platform === 'win32') return { mode: 'soft-then-tree', graceMs: softGraceMs }
+  return { mode: 'signal', graceMs: SIGNAL_STOP_KILL_MS }
+}
+
+export function renderInterruptRequest(requestId) {
+  return JSON.stringify({ type: 'control_request', request_id: requestId, request: { subtype: 'interrupt' } }) + '\n'
+}
+
+// The stop executor. Everything with a side effect is injected (child handle,
+// tree kill, timer, clock), so tests drive the win32 branch with fakes and no
+// real taskkill ever runs. The lane feeds it the two stdout events that
+// matter: control_response (noteControlResponse) and result (noteResult).
+// noteResult() returns true exactly once per soft stop -- that result IS the
+// cancelled turn's close, and the lane must not count it as an error turn,
+// pay the FIFO with it, or mute-nudge on it.
+export function createTurnStopper({
+  child,
+  platform = process.platform,
+  isExited = () => false,
+  killTree = procKillTree,
+  setTimer = (fn, ms) => { const t = setTimeout(fn, ms); if (t && t.unref) t.unref(); return t },
+  clearTimer = (t) => clearTimeout(t),
+  softGraceMs = SOFT_STOP_GRACE_MS,
+  newRequestId = () => `stop_${Date.now()}_${randomBytes(4).toString('hex')}`,
+  log: slog = log,
+} = {}) {
+  let soft = null // { requestId, timer, escalated, settled }
+
+  const treeKill = (why) => {
+    if (soft) { soft.escalated = true; if (soft.timer) clearTimer(soft.timer); soft.timer = null }
+    if (isExited()) return 'gone'
+    slog(`user STOP: ${why} -- tree-killing the claude child and its MCP children (taskkill /T /F)`)
+    try {
+      killTree(child.pid, 'SIGKILL')
+      return 'tree'
+    } catch (err) {
+      // taskkill exit 128 = no such process: it went away on its own in the
+      // gap. Anything else: last resort is the single-process terminate,
+      // which at least ends the turn (children then fall to the supervisor's
+      // orphan sweep, the pre-0.3.5 behaviour).
+      slog(`tree kill failed (${err.message}) -- falling back to a single-process kill`)
+      try { child.kill('SIGKILL') } catch { /* already gone */ }
+      return 'single'
+    }
+  }
+
+  return {
+    plan: planTurnStop({ platform, softGraceMs }),
+    // Returns the mode actually taken: 'signal' | 'soft' | 'tree' | 'single' | 'gone'.
+    begin() {
+      const { mode, graceMs } = this.plan
+      if (mode === 'signal') {
+        try { child.kill('SIGTERM') } catch { /* already gone */ }
+        setTimer(() => { if (!isExited()) { try { child.kill('SIGKILL') } catch { /* gone */ } } }, graceMs)
+        return 'signal'
+      }
+      if (soft && !soft.settled && !soft.escalated) return 'soft' // a double press rides the first request
+      const requestId = newRequestId()
+      soft = { requestId, timer: null, escalated: false, settled: false }
+      try {
+        child.stdin.write(renderInterruptRequest(requestId))
+      } catch (err) {
+        return treeKill(`interrupt write failed (${err.message})`)
+      }
+      soft.timer = setTimer(() => {
+        if (!soft || soft.settled || soft.escalated) return
+        treeKill(`the soft interrupt did not end the turn within ${Math.round(graceMs / 1000)}s`)
+      }, graceMs)
+      slog(`user STOP: soft interrupt sent (control_request ${requestId}); tree kill in ${Math.round(graceMs / 1000)}s if the turn does not end`)
+      return 'soft'
+    },
+    noteControlResponse(e) {
+      const r = e && e.response
+      if (!soft || !r || r.request_id !== soft.requestId || soft.settled || soft.escalated) return false
+      if (r.subtype === 'error') {
+        treeKill(`the CLI refused the interrupt (${String(r.error || 'no detail').slice(0, 200)})`)
+      } else {
+        slog('user STOP: interrupt accepted by the CLI, waiting for the turn to close')
+      }
+      return true
+    },
+    noteResult() {
+      if (!soft || soft.settled || soft.escalated) return false
+      soft.settled = true
+      if (soft.timer) clearTimer(soft.timer)
+      soft.timer = null
+      return true
+    },
+    pending() { return !!(soft && !soft.settled && !soft.escalated) },
   }
 }
 
@@ -542,7 +664,13 @@ async function main() {
   // Reset by any healthy turn; at 3 the lane abandons the session id and
   // recycles -- see the result handler.
   let errorTurnStreak = 0
-  const noteStdinWrite = () => { openTurn = true; lastActivityTs = Date.now() }
+  let lastStdinWriteTs = 0
+  const noteStdinWrite = () => { openTurn = true; lastActivityTs = Date.now(); lastStdinWriteTs = lastActivityTs }
+  // Turn-level STOP executor (see createTurnStopper). stopSentTs lets the
+  // soft-stop result tell "a new message arrived during the stop window"
+  // (turn still owed, watchdog stays armed) from "nothing is owed".
+  const turnStopper = createTurnStopper({ child, isExited: () => childExited })
+  let stopSentTs = 0
 
   // Context-pressure rotation state (see the constants' header). rotatePending
   // mirrors the on-disk marker; lastTurnEndTs anchors the idle boundary to
@@ -674,6 +802,35 @@ async function main() {
         }
       }
       log(`init: model=${e.model} session=${e.session_id} mcp=${JSON.stringify((e.mcp_servers || []).map((s) => `${s.name}:${s.status}`))}`)
+    } else if (e.type === 'control_response') {
+      turnStopper.noteControlResponse(e)
+    } else if (e.type === 'result' && turnStopper.noteResult()) {
+      // The soft stop landed (win32, see createTurnStopper): this result is
+      // the cancelled turn's close (subtype error_during_execution on the
+      // probed CLI). It is NOT an error turn -- no strike, no banner -- and it
+      // pays nothing from the FIFO (the stop already cleared it; anything
+      // newer arrived after the press and is still owed). The session stays
+      // live, so the stop receipt that was left for a respawn is consumed
+      // here instead and rides the next real message, same as after a boot.
+      log(`turn result: ${e.subtype} -- ended by the user STOP (soft interrupt honoured; no respawn, the session and its MCP servers stay up)`)
+      openTurn = lastStdinWriteTs > stopSentTs
+      lastTurnEndTs = Date.now()
+      sawReplyThisTurn = false
+      sawTextThisTurn = false
+      turnHadUserInbound = false
+      if (fs.existsSync(stoppedFile())) {
+        stoppedNoticePending = true
+        try { fs.unlinkSync(stoppedFile()) } catch { /* consumed best-effort */ }
+      }
+      // A stopped handoff-flush turn: the checkpoint may be half written, but
+      // the rotation marker is on disk, so recycle exactly as a finished flush
+      // would; the hard path reached the same fresh boot by dying.
+      if (rotateFlushSent) {
+        log('the stopped turn was the rotation handoff -- recycling into a FRESH session as scheduled')
+        try { child.stdin.end() } catch { /* already gone */ }
+        child.kill('SIGTERM')
+        setTimeout(() => { if (!childExited) child.kill('SIGKILL') }, 10_000).unref()
+      }
     } else if (e.type === 'result') {
       // Durations exposed for the latency receipts (the owner 2026-08-05 02:47
       // "답변 추론에 비해 너무 늦는데"): dur = whole turn wall-clock, api =
@@ -852,14 +1009,17 @@ async function main() {
     // it (see stallTimer): a slow SIGTERM would otherwise let the watchdog
     // fire into the same dying child and log a second, false diagnosis.
     //
-    // Only the HARD path ships. `control_request {subtype:'interrupt'}` (the
-    // soft, no-reboot path design-0020 parks as "later-if-ever") is NOT
-    // implemented: it has never been probed against the shipped claude, and
-    // on win32 -- where no signal is deliverable at all (proc.cjs:112) -- it
-    // would be the only graceful option, so it needs its own probe pass.
-    // Cost of the hard path: the lane exits with the child, the supervisor
-    // respawns it with --resume, and the conversation survives while the
-    // turn does. Seconds, and visible to the user -- the button copy says so.
+    // HOW the turn ends is platform-split (createTurnStopper, 0.3.5):
+    //   posix -- the hard path, unchanged: SIGTERM, the lane exits with the
+    //     child, the supervisor respawns it with --resume, and the
+    //     conversation survives while the turn does. Seconds, and visible to
+    //     the user -- the button copy says so.
+    //   win32 -- `control_request {subtype:'interrupt'}` first (probed against
+    //     claude 2.1.284, receipt in createTurnStopper's header); the turn
+    //     closes in-process and nothing respawns. Only a request that is
+    //     refused or not honoured within SOFT_STOP_GRACE_MS escalates to
+    //     taskkill /T /F on the claude child, which takes its MCP children
+    //     with it (the old single-process TerminateProcess orphaned them).
     if (req.url === '/interrupt') {
       if (!tokenOk(req.headers['x-ingest-token'])) return send(403, { error: 'bad token' })
       if (childExited) return send(503, { error: 'agent not running' })
@@ -874,15 +1034,17 @@ async function main() {
         // reason to refuse a stop the user asked for.
         log(`stop receipt write failed: ${err.message}`)
       }
-      log('user STOP: ending the in-flight turn (pending FIFO cleared -- the cancelled message will NOT redeliver); the supervisor respawns this lane with --resume')
-      // The watchdog's own two lines, deliberately verbatim. NOT killTree from
-      // proc.cjs: this child is spawned NON-detached, so it shares the lane's
-      // process group and a negative-pid group signal would kill the lane
-      // itself before its exit handler could clean up the endpoint file.
+      log(turnStopper.plan.mode === 'signal'
+        ? 'user STOP: ending the in-flight turn (pending FIFO cleared -- the cancelled message will NOT redeliver); the supervisor respawns this lane with --resume'
+        : 'user STOP: ending the in-flight turn (pending FIFO cleared -- the cancelled message will NOT redeliver); soft interrupt first, tree kill only if it is not honoured')
+      // posix: the watchdog's own two lines, via the stopper. NOT a group
+      // killTree there: this child is spawned NON-detached, so it shares the
+      // lane's process group and a negative-pid group signal would kill the
+      // lane itself before its exit handler could clean up the endpoint file.
       // claude reaps its own MCP children on SIGTERM; the supervisor's
       // gracefulStop + orphan sweep remain the backstop, unchanged.
-      try { child.kill('SIGTERM') } catch { /* already gone */ }
-      setTimeout(() => { if (!childExited) { try { child.kill('SIGKILL') } catch { /* gone */ } } }, 10_000).unref()
+      stopSentTs = Date.now()
+      turnStopper.begin()
       return send(200, { ok: true, stopped: true })
     }
     if (req.url !== '/inbound') return send(404, { error: 'not found' })
