@@ -183,13 +183,36 @@ try {
     assert(daily.length === 1 && pendingCount(dir) === 1, 'a second tick the same day does nothing')
   }
 
+  console.log('\n5b. one tick owner across channel processes')
+  {
+    const { startScheduleTicker, acquireTickLease } = await import(pathToFileURL(path.join(root, 'channel-runtime.mjs')).href)
+    const dir = home('lease')
+    write(dir, 'session_notes/2026-09-28.md', '- 🔒 lease\n', PAST)
+    write(dir, 'journals/2026-09-27.md', 'entry\n', PAST)
+    const daily = []
+    const mk = () => { const t = startScheduleTicker({ dataHome: dir, readConfig: async () => ({}), fire: async () => {}, fireDaily: async (c) => { daily.push(c) }, activityMsProvider: () => Infinity, log: () => {}, now: () => AFTERNOON }); clearInterval(t.timer); return t.tick }
+    const slackTick = mk(), telegramTick = mk()
+    await Promise.all([slackTick(), telegramTick()])
+    assert(daily.length === 1, 'two channel processes ticking at once fire the daily clock once', String(daily.length))
+    const held = acquireTickLease(dir)
+    assert(held && acquireTickLease(dir) === null, 'a live lease blocks a second owner')
+    held()
+    assert(typeof acquireTickLease(dir) === 'function', 'released lease can be taken again')
+    fs.unlinkSync(path.join(dir, '.gates', 'schedule-tick.lock'))
+    fs.writeFileSync(path.join(dir, '.gates', 'schedule-tick.lock'), JSON.stringify({ pid: 2147480000, ts: Date.now() }))
+    const took = acquireTickLease(dir)
+    assert(typeof took === 'function', 'a lease held by a dead pid is taken over')
+    took()
+  }
+
   console.log('\n6. wiring pins')
   {
     const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8')
     const clockSrc = read('cadence/daily-clock.cjs')
     assert(!/setInterval|setTimeout|node-cron/.test(clockSrc), 'the clock owns no timer primitive (it is called by the Schedules tick)')
     assert(/runDailyClock\(/.test(read('channel-runtime.mjs')), 'startScheduleTicker calls runDailyClock')
-    for (const f of ['channel-local.mjs', 'channel.mjs']) {
+    for (const f of ['channel-local.mjs', 'channel.mjs', 'channel-slack.mjs', 'channel-telegram.mjs']) {
+      assert(/startScheduleTicker\(/.test(read(f)), `${f} starts the Schedules ticker (Slack/Telegram-only users get the clock)`)
       assert(/fireDaily:/.test(read(f)), `${f} passes the fireDaily inject seam to the Schedules ticker`)
     }
     assert(/require\('\.\.\/cadence\/reflux-pass\.cjs'\)/.test(read('scripts/persona-reflux.mjs')), 'the CLI runs the same pass module, not a copy')

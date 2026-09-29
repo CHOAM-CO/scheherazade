@@ -639,6 +639,35 @@ export function routineInjectContent(r) {
 // happen to be safe under overlap (markFired is idempotent-by-day); a
 // schedule's write-back is a single read-modify-write of the whole store,
 // which is not, so the guard is added rather than copied away.
+// One tick owner across processes. Every channel backend (Discord, Slack,
+// Telegram, local) is its own process and each starts this ticker, so several
+// channels up at once would each fire the same due entry. A per-tick lease in
+// DATA_HOME/.gates/schedule-tick.lock (O_EXCL create; stale after
+// leaseStaleMs or when the holder pid is dead) lets exactly one process run a
+// tick; the others skip it and try again next poll.
+export function acquireTickLease(dataHome, { nowMs = Date.now(), staleMs = 120_000 } = {}) {
+  const dir = path.join(dataHome, '.gates')
+  const lock = path.join(dir, 'schedule-tick.lock')
+  try { fsSync.mkdirSync(dir, { recursive: true }) } catch {}
+  const body = JSON.stringify({ pid: process.pid, ts: nowMs })
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      fsSync.writeFileSync(lock, body, { flag: 'wx' })
+      return () => { try { fsSync.unlinkSync(lock) } catch {} }
+    } catch (err) {
+      if (err.code !== 'EEXIST') return null
+      let held = null
+      try { held = JSON.parse(fsSync.readFileSync(lock, 'utf8')) } catch {}
+      let alive = true
+      if (held && held.pid) { try { process.kill(held.pid, 0) } catch (e) { alive = e.code === 'EPERM' } }
+      const stale = !held || !alive || nowMs - Number(held.ts) > staleMs
+      if (!stale) return null
+      try { fsSync.unlinkSync(lock) } catch {}
+    }
+  }
+  return null
+}
+
 export function startScheduleTicker({ dataHome, readConfig, fire, fireDaily = null, activityMsProvider = () => Infinity, log = console.log, intervalMs = 60_000, now = () => new Date() }) {
   const scheduleTick = require(path.join(MODULE_DIR, 'cadence', 'schedule-tick.cjs'))
   const dailyClock = require(path.join(MODULE_DIR, 'cadence', 'daily-clock.cjs'))
@@ -664,6 +693,8 @@ export function startScheduleTicker({ dataHome, readConfig, fire, fireDaily = nu
   const tick = async () => {
     if (inFlight) return
     inFlight = true
+    const release = acquireTickLease(dataHome)
+    if (!release) { inFlight = false; return } // another channel process owns this tick
     try {
       const config = await readConfig()
       let store = null
@@ -726,6 +757,7 @@ export function startScheduleTicker({ dataHome, readConfig, fire, fireDaily = nu
     } catch (err) {
       log(`schedule tick failed: ${err.message}`)
     } finally {
+      release()
       inFlight = false
     }
   }

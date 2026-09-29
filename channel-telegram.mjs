@@ -32,6 +32,7 @@ import {
   sweepStaleAtomicTmp, installParentDeathExit,
   createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer, createMuteStrikeAnnouncer,
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
+  startScheduleTicker, scheduleInjectContent, readAgentConfig,
   createInboundNotifier, createOutboundDedup,
 } from './channel-runtime.mjs'
 // Always-on in-app chat (2026-08-05): hosted alongside Telegram; import is
@@ -726,6 +727,26 @@ async function verifyTokenOrFail(opts = {}) {
   }
 }
 
+// Schedules + the daily clock (cadence/daily-clock.cjs): this channel used to
+// run only routines, so users here never got the daily clock. The ticker is
+// shared with every backend; a per-tick lease in DATA_HOME/.gates keeps one
+// owner when several channel processes are up.
+function startSchedulesTicker() {
+  try {
+    const meta = () => ({ sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() })
+    startScheduleTicker({
+      dataHome: DATA_HOME,
+      readConfig: () => readAgentConfig(DATA_HOME),
+      fire: (entry) => notifyInbound({ content: scheduleInjectContent(entry), meta: meta() }),
+      fireDaily: (content) => notifyInbound({ content, meta: meta() }),
+      activityMsProvider: () => Date.now() - lastActivityMs,
+      log,
+    })
+  } catch (err) {
+    log(`schedule ticker failed to start (feature disabled this session): ${err.message}`)
+  }
+}
+
 const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])
 
 async function boot() {
@@ -781,6 +802,7 @@ async function boot() {
     log(`routine ticker failed to start (feature disabled this session): ${err.message}`)
   }
 
+  startSchedulesTicker()
   announceBoot().catch((err) => log(`boot announce failed: ${err.message}`))
   muteAnnouncer.start().catch((err) => log(`mute announcer failed to start (feature disabled this session): ${err.message}`))
 
