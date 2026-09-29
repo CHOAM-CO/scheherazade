@@ -102,7 +102,12 @@ try {
     chk('pending entry matches headless-lane readPending shape', typeof entry.content === 'string' && entry.meta && typeof entry.ts === 'number', JSON.stringify(Object.keys(entry)))
     chk('sweep turn is [SYSTEM] and names both roots', entry.content.startsWith('[SYSTEM]') && entry.content.includes(claudeDir) && entry.content.includes(hermesDir))
     chk('sweep turn carries the DO-NOT-READ list', entry.content.includes('auth.json') && entry.content.includes('.credentials.json'))
+    chk('pending entry is flagged sweep:true (lane boot drain keys on it)', entry.sweep === true)
+    const q = await (await fetch(`${base}/api/migrate/queue`, { headers: auth })).json()
+    chk('queue status reports 1 waiting while lane is down', q.queued === 1, JSON.stringify(q))
     fs.rmSync(pendPath, { force: true })
+    const q0 = await (await fetch(`${base}/api/migrate/queue`, { headers: auth })).json()
+    chk('queue status reports 0 once the FIFO is drained', q0.queued === 0, JSON.stringify(q0))
   }
 
   // ── start, live fake lane -> delivered over the ingest endpoint ─────────
