@@ -1568,6 +1568,27 @@ window.COPY = {
     // every backend hosts it), so its row states presence, not selection.
     localAlwaysOn: 'Always on',
     switchButton: 'Switch to this channel',
+    // 0.3.7 multi-channel: messengers are independent on/off switches; the agent
+    // answers on every one that is on (same memory, one turn at a time).
+    onBadge: 'On',
+    offBadge: 'Off',
+    primaryTag: 'main',
+    turnOn: 'Turn on',
+    turnOff: 'Turn off',
+    turnOnConfirm: (name) => `Turn on ${name} and restart the agent. Continue?`,
+    turnOffConfirm: (name) => `Turn off ${name} and restart the agent. Continue?`,
+    turnOnAfterConnect: (name) => `${name} is connected. Turn it on now (the agent restarts)?`,
+    turnedOn: (name) => `${name} is on`,
+    turnedOff: (name) => `${name} is off`,
+    lastChannel: 'Keep at least one messenger on',
+    stateLine: (live) => {
+      if (!live) return ''
+      if (live.connected) return 'Connected'
+      if (live.state === 'backoff') return live.failure ? `Retrying (${live.failure.reason})` : 'Restarting…'
+      if (live.state === 'running') return 'Connecting…'
+      if (live.state === 'failed' || live.failure) return `Failed${live.failure ? `: ${live.failure.reason}` : ''}`
+      return live.state === 'stopped' ? 'Stopped' : 'Starting…'
+    },
     switchConfirm: (name) => `Switch to ${name} and restart the agent. Continue?`,
     switchOk: 'Switch',
     switching: 'Switching and restarting the agent…',

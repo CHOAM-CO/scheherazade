@@ -50,18 +50,40 @@
     // is actually on. The status TEXT keeps the configured/not distinction.
     const dot = $(`ch-${key}-dot`)
     if (dot) dot.classList.toggle('ok', isActive || key === 'local')
+    const isMessenger = key !== 'local'
+    const enabled = Array.isArray(status.enabled) ? status.enabled.includes(key) : isActive
+    const live = (status.channels && status.channels[key]) || null
     const parts = []
-    if (key === 'local') parts.push(C.localAlwaysOn)
-    else parts.push(isActive ? C.activeBadge : info.configured ? C.configuredBadge : C.notConfiguredBadge)
+    if (!isMessenger) parts.push(C.localAlwaysOn)
+    else if (!info.configured) parts.push(C.notConfiguredBadge)
+    else if (!enabled) parts.push(C.offBadge)
+    else parts.push(isActive && status.enabled.length > 1 ? `${C.onBadge} (${C.primaryTag})` : C.onBadge, C.stateLine(live))
     if (info.configured && info.home) parts.push(C.homeLine(info.detail ? `${info.detail} / ${info.home}` : info.home))
-    $(`ch-${key}-status`).textContent = parts.join(' · ')
+    $(`ch-${key}-status`).textContent = parts.filter(Boolean).join(' · ')
+    // On/off light: green = this channel's process is actually connected.
+    if (dot) dot.classList.toggle('ok', !isMessenger || Boolean(enabled && (live ? live.connected : isActive)))
     const connectBtn = connectBtnFor(key)
     if (connectBtn) {
       const flowEl = flowFor(key)
       const flowOpen = flowEl && !flowEl.classList.contains('hidden')
       if (!flowOpen) connectBtn.textContent = baseLabel(key)
     }
+    // The *-switch button is the on/off switch for messengers (several can be
+    // on at once, 0.3.7); for the in-app row it stays "switch to in-app only".
     const switchBtn = $(`ch-${key}-switch`)
+    if (isMessenger) {
+      switchBtn.textContent = enabled ? C.turnOff : C.turnOn
+      switchBtn.setAttribute('role', 'switch')
+      switchBtn.setAttribute('aria-checked', enabled ? 'true' : 'false')
+      switchBtn.classList.toggle('hidden', !info.configured)
+      switchBtn.onclick = async () => {
+        const ok = await confirmDialog(enabled ? C.turnOffConfirm(C.names[key]) : C.turnOnConfirm(C.names[key]), enabled ? C.turnOff : C.turnOn, window.COPY.nav.cancel)
+        if (!ok) return
+        switchBtn.disabled = true
+        try { await setEnabled(key, !enabled) } finally { switchBtn.disabled = false }
+      }
+      return
+    }
     switchBtn.textContent = C.switchButton
     switchBtn.classList.toggle('hidden', isActive || !info.configured)
     switchBtn.onclick = async () => {
@@ -73,6 +95,26 @@
       } finally {
         switchBtn.disabled = false
       }
+    }
+  }
+
+  async function setEnabled(key, enabled) {
+    try {
+      const result = await api('/api/channels/enabled', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ backend: key, enabled }),
+      })
+      if (!result.ok) {
+        showToast(result.branch === 'not_configured' ? C.notConfiguredYet : result.branch === 'last_channel' ? C.lastChannel : GEN(result.error || result.branch || 'toggle failed'))
+        return
+      }
+      showToast(enabled ? C.turnedOn(C.names[key]) : C.turnedOff(C.names[key]))
+      await refreshStatus()
+      // the restart drops the connection for a few seconds: re-poll so the light follows reality
+      setTimeout(() => { refreshStatus().catch(() => {}) }, 6000)
+    } catch (err) {
+      showToast(GEN(err.message))
     }
   }
 
@@ -101,9 +143,9 @@
   // noticed. Declining keeps the old behavior exactly.
   async function offerSwitchAfterConnect(key) {
     await refreshStatus()
-    if (!lastStatus || lastStatus.active === key) return
-    const ok = await confirmDialog(C.switchAfterConnect(C.names[key]), C.switchOk, window.COPY.nav.cancel)
-    if (ok) await switchTo(key)
+    if (!lastStatus || (lastStatus.enabled || [lastStatus.active]).includes(key)) return
+    const ok = await confirmDialog(C.turnOnAfterConnect(C.names[key]), C.turnOn, window.COPY.nav.cancel)
+    if (ok) await setEnabled(key, true)
   }
 
   async function refreshStatus() {

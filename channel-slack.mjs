@@ -28,6 +28,8 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { createRequire as createRequireForBackends } from 'node:module'
+const channelBackendsLib = createRequireForBackends(import.meta.url)('./channel-backends.cjs')
 import {
   installStdoutHygiene, resolveDataHome, localISO, localNow,
   sweepStaleAtomicTmp, installParentDeathExit,
@@ -35,6 +37,7 @@ import {
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
   startScheduleTicker, scheduleInjectContent, readAgentConfig,
   createInboundNotifier, createOutboundDedup,
+  isCompanionRole, startCompanionToolServer, createCompanionForwarder,
 } from './channel-runtime.mjs'
 // Always-on in-app chat (2026-08-05): hosted alongside Slack; import is
 // side-effect-safe (isMainModule guard) -- full rationale in channel.mjs.
@@ -62,7 +65,10 @@ const HOME_CHANNEL_ID = process.env.HOME_CHANNEL_ID
 // wired via .mcp.json, not both), so the supervisor polls one contract
 // regardless of which transport is live.
 const DATA_HOME = resolveDataHome(AGENT_NAME)
-const markers = createMarkerStore({ dataHome: DATA_HOME })
+// 0.3.7 multi-channel: a companion process (not the agent's primary MCP
+// channel) keeps its own suffixed markers -- see createMarkerStore.
+const IS_COMPANION = isCompanionRole()
+const markers = createMarkerStore({ dataHome: DATA_HOME, suffix: IS_COMPANION ? 'slack' : '' })
 void sweepStaleAtomicTmp(DATA_HOME, log) // boot hygiene: tmp orphans from unclean shutdowns (never boot-blocking)
 const routineStore = createRoutineStore({ dataHome: DATA_HOME, log: (...a) => log(...a) })
 const { LIVENESS_MARKER_PATH, FAILURE_MARKER_PATH, LIVENESS_HEARTBEAT_MS } = markers
@@ -392,8 +398,13 @@ const notifyInbound = createInboundNotifier({
 
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
 
-mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
+const companionForward = createCompanionForwarder({ dataHome: DATA_HOME, ownBackend: 'slack', backendForChannelId: (id) => channelBackendsLib.backendForChannelId(id), log })
+const toolHandler = async (req) => {
   const { name, arguments: args } = req.params
+
+  // Multi-channel: a call for another enabled messenger's conversation is handed to that
+  // messenger's companion process (channel-runtime.mjs createCompanionForwarder).
+  if (!IS_COMPANION) { const fwd = await companionForward(name, args); if (fwd) return fwd }
 
   // In-app chat rides along on every backend (2026-08-05): "in-app" is the
   // local surface's constant id, disjoint from Slack's C/D/G-prefixed ids.
@@ -430,7 +441,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   if (name === 'routine') return handleRoutineTool(routineStore, args)
 
   throw new Error(`unknown tool: ${name}`)
-})
+}
+mcp.setRequestHandler(CallToolRequestSchema, toolHandler)
 
 // ── Bot-echo / non-message-event filtering (hard constraint #2) ────────────
 function isBotEvent(event) {
@@ -753,7 +765,7 @@ function startRoutineTickerOnce() {
   if (routineTickerStarted) return
   routineTickerStarted = true
   try {
-    startRoutineTicker({
+    if (!IS_COMPANION) startRoutineTicker({
       store: routineStore,
       fire: (r) => notifyInbound({
           content: routineInjectContent(r),
@@ -775,7 +787,7 @@ function startRoutineTickerOnce() {
 function startSchedulesTicker() {
   try {
     const meta = () => ({ sender: 'SYSTEM', channelId: HOME_CHANNEL_ID || lastInboundChannelId || '', authorId: '', timestamp: localNow() })
-    startScheduleTicker({
+    if (!IS_COMPANION) startScheduleTicker({
       dataHome: DATA_HOME,
       readConfig: () => readAgentConfig(DATA_HOME),
       fire: (entry) => notifyInbound({ content: scheduleInjectContent(entry), meta: meta() }),
@@ -895,13 +907,20 @@ async function validateAppToken(opts = {}) {
 const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])
 
 async function boot() {
-  await mcp.connect(new StdioServerTransport())
+  // Companion role: no MCP stdio (the claude CLI only spawns the primary).
+  // Tools are served on a loopback endpoint the primary forwards to.
+  let companionTools = null
+  if (IS_COMPANION) {
+    companionTools = await startCompanionToolServer({ dataHome: DATA_HOME, backend: 'slack', handle: toolHandler, log })
+  } else {
+    await mcp.connect(new StdioServerTransport())
+  }
   log(`MCP server up (${AGENT_NAME})`)
 
   // Always-on in-app chat surface, fail-soft (see channel.mjs's twin block).
   let localSurface = null
   try {
-    localSurface = await startLocalChatSurface({ notify: (n) => { lastInboundSurface = 'in-app'; return notifyInbound(n.params) }, log })
+    if (!IS_COMPANION) localSurface = await startLocalChatSurface({ notify: (n) => { lastInboundSurface = 'in-app'; return notifyInbound(n.params) }, log })
   } catch (err) {
     log(`in-app chat surface failed to start (chat page off this session): ${err.message}`)
   }
@@ -915,6 +934,7 @@ async function boot() {
     name: 'Slack channel MCP server',
     log,
     cleanup: async () => {
+      try { companionTools?.stop() } catch {}
       try { localSurface?.stop() } catch (err) { log(`surface stop failed during shutdown: ${err.message}`) }
       try { await socketModeClient.disconnect() } catch (err) { log(`socket mode disconnect failed during shutdown: ${err.message}`) }
     },

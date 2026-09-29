@@ -15,7 +15,7 @@
 function createRoutes(staticCtx) {
   const {
     readJsonBody, sendJson, validateDiscordToken, storeDiscordTokenVerified, readDiscordToken,
-    enumerateDiscordTargets, writeEnv, writeAgentConfig, readAgentConfig, activeChannelBackend,
+    enumerateDiscordTargets, writeEnv, writeAgentConfig, readAgentConfig, activeChannelBackend, enabledChannelBackends,
     channelBackendReadiness, readTelegramToken, enumerateTelegramChats, telegramApi,
     storeTelegramTokenVerified, readSlackBotToken, readSlackAppToken, enumerateSlackChannels,
     slackApi, storeSlackBotTokenVerified, storeSlackAppTokenVerified, CHANNEL_BACKENDS,
@@ -150,7 +150,48 @@ function createRoutes(staticCtx) {
       method: 'GET',
       match: (pathname) => pathname === '/api/channels/status',
       handler: async (req, res, callCtx) => {
-        sendJson(res, 200, { active: activeChannelBackend(), backends: channelBackendReadiness() })
+        // 0.3.7: `enabled` = every messenger switched on (primary first);
+        // `channels` = live per-channel process state from main.cjs (primary
+        // is the agent's own MCP entry; the rest are companion processes).
+        const { agentControls } = callCtx
+        let channels = {}
+        try { channels = (agentControls && agentControls.channelStatus && agentControls.channelStatus()) || {} } catch { channels = {} }
+        sendJson(res, 200, { active: activeChannelBackend(), enabled: enabledChannelBackends(), backends: channelBackendReadiness(), channels })
+        return
+      },
+    },
+    {
+      // Per-messenger on/off (Settings). Enabling needs the messenger's
+      // credentials on file; the last enabled messenger cannot be switched off
+      // (an agent with no channel is a mute agent -- the in-app chat is the
+      // only other surface and it has its own backend value).
+      method: 'POST',
+      match: (pathname) => pathname === '/api/channels/enabled',
+      handler: async (req, res, callCtx) => {
+        const { agentControls } = callCtx
+        const { backend, enabled } = await readJsonBody(req)
+        if (!['discord', 'slack', 'telegram'].includes(backend) || typeof enabled !== 'boolean') {
+          sendJson(res, 400, { error: 'backend must be discord|slack|telegram and enabled a boolean' })
+          return
+        }
+        const current = enabledChannelBackends()
+        if (enabled && !channelBackendReadiness()[backend].configured) {
+          sendJson(res, 200, { ok: false, branch: 'not_configured', backend })
+          return
+        }
+        // 'local' only stands when no messenger is enabled; enabling a messenger replaces it.
+        let next = enabled ? [...current.filter((b) => b !== 'local'), backend] : current.filter((b) => b !== backend)
+        next = [...new Set(next)]
+        if (!next.length) {
+          sendJson(res, 200, { ok: false, branch: 'last_channel', backend })
+          return
+        }
+        writeAgentConfig(require('../../channel-backends.cjs').backendConfigFields(next))
+        ensureMcpJsonAgentName() // primary may have changed -> agent-channel script path
+        if (agentControls && typeof agentControls.restartAgent === 'function') {
+          agentControls.restartAgent().catch((err) => console.error('[scheherazade/onboarding] channel toggle restart threw:', err))
+        }
+        sendJson(res, 202, { ok: true, enabled: next })
         return
       },
     },
@@ -208,7 +249,7 @@ function createRoutes(staticCtx) {
         })
         // Restart ONLY when telegram is the active backend: configuring an
         // inactive backend must not bounce the agent living on another one.
-        const isActive = activeChannelBackend() === 'telegram'
+        const isActive = enabledChannelBackends().includes('telegram')
         if (isActive && agentControls && typeof agentControls.restartAgent === 'function') {
           agentControls.restartAgent().catch((err) => console.error('[scheherazade/onboarding] telegram apply restart threw:', err))
         }
@@ -290,7 +331,7 @@ function createRoutes(staticCtx) {
           SLACK_HOME_CHANNEL_NAME: channelName,
           SLACK_TEAM_NAME: auth.body.team || '',
         })
-        const isActive = activeChannelBackend() === 'slack'
+        const isActive = enabledChannelBackends().includes('slack')
         if (isActive && agentControls && typeof agentControls.restartAgent === 'function') {
           agentControls.restartAgent().catch((err) => console.error('[scheherazade/onboarding] slack apply restart threw:', err))
         }
@@ -313,7 +354,7 @@ function createRoutes(staticCtx) {
           sendJson(res, 200, { ok: false, branch: 'not_configured', backend })
           return
         }
-        writeAgentConfig({ CHANNEL_BACKEND: backend })
+        writeAgentConfig(require('../../channel-backends.cjs').backendConfigFields([backend]))
         // Rewrite .mcp.json NOW (not at next boot): the restart below re-spawns
         // the claude CLI, which reads .mcp.json at ITS spawn -- the agent-channel
         // entry must already point at the new backend script by then.
@@ -339,7 +380,7 @@ function createRoutes(staticCtx) {
       handler: async (req, res, callCtx) => {
         const { onOnboardingComplete, agentControls } = callCtx // per-call values, never staticCtx
         const already = readAgentConfig().ONBOARDING_COMPLETE === '1'
-        const stamp = { CHANNEL_BACKEND: 'local', ONBOARDING_STEP: '4' }
+        const stamp = { ...require('../../channel-backends.cjs').backendConfigFields(['local']), ONBOARDING_STEP: '4' }
         if (!already) {
           // COMPLETED_AT records when onboarding happened; a wizard re-entry
           // (?step=4 resume) landing here must not falsify that record --

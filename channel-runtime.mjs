@@ -199,9 +199,15 @@ export async function sweepStaleAtomicTmp(dataHome, log = () => {}) {
 // top-level fields, so the base schema cannot drift per transport.
 // `code` defaults to 'unknown' so a call site can never silently emit a
 // marker with no cause at all.
-export function createMarkerStore({ dataHome }) {
-  const LIVENESS_MARKER_PATH = path.join(dataHome, '.agent-live')
-  const FAILURE_MARKER_PATH = path.join(dataHome, '.agent-failed.json')
+export function createMarkerStore({ dataHome, suffix = '' }) {
+  // suffix (0.3.7 multi-channel): a COMPANION channel process (any enabled
+  // messenger that is not the primary) writes .agent-live.<backend> /
+  // .agent-failed.<backend>.json. It must never touch the unsuffixed pair:
+  // those are the agent's own liveness/failure markers (main.cjs polls them),
+  // and a companion's heartbeat would mask a dead primary while its failure
+  // would flag a healthy agent as failed.
+  const LIVENESS_MARKER_PATH = path.join(dataHome, suffix ? `.agent-live.${suffix}` : '.agent-live')
+  const FAILURE_MARKER_PATH = path.join(dataHome, suffix ? `.agent-failed.${suffix}.json` : '.agent-failed.json')
   // http-server.cjs's LIVENESS_FRESH_MS (150s) tolerates one missed beat.
   const LIVENESS_HEARTBEAT_MS = 60_000
 
@@ -796,7 +802,7 @@ export function scheduleInjectContent(entry) {
 // this THROWS after attempting the MCP fallback -- backends already treat a
 // failed notify as "retry on next poll" (channel.mjs / telegram pollOnce),
 // which is exactly the right behavior while the lane respawns.
-export function createInboundNotifier({ dataHome, mcpNotify, log = console.log, fetchFn = fetch }) {
+export function createInboundNotifier({ dataHome, mcpNotify, log = console.log, fetchFn = fetch, surface = process.env.SCHEHERAZADE_CHANNEL_SURFACE || '' }) {
   const endpointPath = path.join(dataHome, '.ingest-endpoint.json')
 
   async function postToLane(params) {
@@ -821,7 +827,9 @@ export function createInboundNotifier({ dataHome, mcpNotify, log = console.log, 
     const res = await fetchFn(`http://127.0.0.1:${ep.port}/inbound`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-ingest-token': ep.token },
-      body: JSON.stringify(params),
+      // `surface` names the messenger this came from; the lane's turn gate
+      // (turn-gate.mjs) keys on it. It rides beside meta, never inside the tag.
+      body: JSON.stringify(surface ? { ...params, surface } : params),
     })
     if (!res.ok) throw new Error(`ingest POST failed: HTTP ${res.status}`)
     return true
@@ -996,5 +1004,81 @@ export function createMuteStrikeAnnouncer({ dataHome, homeId, lastChannelStore, 
     },
     stop() { if (timer) clearInterval(timer); timer = null },
     _tick: tick, // test seam
+  }
+}
+
+// ── companion channels (0.3.7 multi-channel) ───────────────────────────────
+// The claude CLI spawns exactly ONE agent-channel MCP server (the PRIMARY
+// backend), and the allowlist + every hook match its tool names literally
+// (mcp__agent-channel__reply ...), so a second MCP entry would be unapproved
+// and unguarded. Every other enabled messenger therefore runs as a COMPANION:
+// the same channel script started by main.cjs with SCHEHERAZADE_CHANNEL_ROLE=
+// companion. It speaks its own transport and POSTs inbound to the lane exactly
+// like the primary (same createInboundNotifier), but has no MCP stdio: its
+// tools are reached through a loopback endpoint, and the primary's tool
+// handler forwards calls whose channelId belongs to it (backendForChannelId).
+// Endpoint file per companion, same 0600 token + pid-liveness discipline as
+// .ingest-endpoint.json.
+export const isCompanionRole = () => process.env.SCHEHERAZADE_CHANNEL_ROLE === 'companion'
+
+export function companionEndpointPath(dataHome, backend) {
+  return path.join(dataHome, `.companion-${backend}.json`)
+}
+
+export async function startCompanionToolServer({ dataHome, backend, handle, log = console.log }) {
+  const { createServer } = await import('node:http')
+  const { randomBytes, timingSafeEqual } = await import('node:crypto')
+  const token = randomBytes(32).toString('hex')
+  const tokenBuf = Buffer.from(token)
+  const server = createServer((req, res) => {
+    const send = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)) }
+    const host = String(req.headers.host || '')
+    if (!/^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(host)) return send(403, { error: 'bad host' })
+    const got = Buffer.from(String(req.headers['x-companion-token'] || ''))
+    if (req.method !== 'POST' || req.url !== '/tool') return send(404, { error: 'not found' })
+    if (got.length !== tokenBuf.length || !timingSafeEqual(got, tokenBuf)) return send(403, { error: 'bad token' })
+    let body = ''
+    req.on('data', (c) => { body += c; if (body.length > 2 * 1024 * 1024) req.destroy() })
+    req.on('end', async () => {
+      let call
+      try { call = JSON.parse(body) } catch { return send(400, { error: 'invalid json' }) }
+      try { send(200, await handle({ params: { name: call.name, arguments: call.arguments || {} } })) }
+      catch (err) { send(200, { isError: true, content: [{ type: 'text', text: `${backend}: ${err.message}` }] }) }
+    })
+  })
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
+  const { port } = server.address()
+  await atomicWriteJson(companionEndpointPath(dataHome, backend), { port, token, pid: process.pid })
+  try { fsSync.chmodSync(companionEndpointPath(dataHome, backend), 0o600) } catch {}
+  log(`companion tool endpoint for ${backend} on 127.0.0.1:${port}`)
+  return {
+    port,
+    stop: () => { try { server.close() } catch {} try { fsSync.unlinkSync(companionEndpointPath(dataHome, backend)) } catch {} },
+  }
+}
+
+// Returns async (name, args) => result | null. null = "not mine to forward,
+// handle locally" (own backend, unknown id, in-app, or no live companion) --
+// the caller's own handler then runs and fails/succeeds exactly as before.
+export function createCompanionForwarder({ dataHome, ownBackend, backendForChannelId, log = console.log, fetchFn = fetch }) {
+  return async function forward(name, args) {
+    const target = backendForChannelId(args && args.channelId)
+    if (!target || target === ownBackend || target === 'local') return null
+    let ep
+    try { ep = JSON.parse(await fs.readFile(companionEndpointPath(dataHome, target), 'utf8')) } catch { return null }
+    if (!ep || !ep.port || !ep.token) return null
+    if (ep.pid) { try { process.kill(ep.pid, 0) } catch { return null } }
+    try {
+      const res = await fetchFn(`http://127.0.0.1:${ep.port}/tool`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-companion-token': ep.token },
+        body: JSON.stringify({ name, arguments: args }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return await res.json()
+    } catch (err) {
+      log(`[companion-forward] ${target} tool call failed: ${err.message}`)
+      return { isError: true, content: [{ type: 'text', text: `The ${target} channel process did not answer (${err.message}); it may be restarting -- try again shortly.` }] }
+    }
   }
 }
