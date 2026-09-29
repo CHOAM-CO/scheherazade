@@ -52,10 +52,10 @@
 // round trip; generous only because the turn lands in a running agent.
 const CHANNEL_TIMEOUT_MS = 5_000
 
-const SOURCES = ['corrections', 'reflux', 'dreams']
+const SOURCES = ['corrections', 'reflux', 'dreams', 'checkpoint']
 // The shape every "nothing readable" answer falls back to. One literal, so a
 // new source cannot be added to SOURCES and forgotten in the fallbacks.
-const ZERO_SOURCES = { corrections: 0, reflux: 0, dreams: 0 }
+const ZERO_SOURCES = { corrections: 0, reflux: 0, dreams: 0, checkpoint: 0 }
 // A recital is one short paragraph, not a listing: at most this many reflux
 // proposals are quoted, each clipped. The COUNT is always the honest one.
 const RECITAL_MAX_PROPOSALS = 5
@@ -153,6 +153,28 @@ function createRoutes(staticCtx) {
     }
   }
 
+  // checkpoint (0.3.8, Mino 2026-09-29 "! 기능에서 체크포인트 / 페르소나 정리도
+  // 같이"): how many session notes were written after checkpoint.md last
+  // changed. Every note she writes without refreshing the snapshot adds one,
+  // so a checkpoint that falls behind lights the mark on its own. No
+  // checkpoint.md at all = every note counts. Missing session_notes/ -> 0.
+  function countCheckpointLag() {
+    try {
+      const dir = path.join(DATA_HOME, 'session_notes')
+      let since = 0
+      try { since = fs.statSync(path.join(DATA_HOME, 'checkpoint.md')).mtimeMs } catch { since = 0 }
+      return fs.readdirSync(dir).filter((f) => {
+        if (!f.endsWith('.md')) return false
+        try {
+          const st = fs.statSync(path.join(dir, f))
+          return st.isFile() && st.mtimeMs > since
+        } catch { return false }
+      }).length
+    } catch {
+      return 0
+    }
+  }
+
   // ── the stamp: last recital's numbers, compared and never interpreted ─────
   function readStamp() {
     const p = path.join(DATA_HOME, '.gates', STAMP_BASENAME)
@@ -207,6 +229,7 @@ function createRoutes(staticCtx) {
       corrections: await countCorrections(),
       reflux: reflux.count,
       dreams: countDreams(),
+      checkpoint: countCheckpointLag(),
     }
     return { current, proposals: reflux.corrections }
   }
@@ -224,13 +247,28 @@ function createRoutes(staticCtx) {
     if (current.corrections > 0) bits.push(`아직 살아있는 교정 ${current.corrections}건`)
     if (current.reflux > 0) bits.push(`검토를 기다리는 환류 제안 ${current.reflux}건`)
     if (current.dreams > 0) bits.push(`꿈 조각 ${current.dreams}개`)
+    if (current.checkpoint > 0) bits.push(`체크포인트 이후 쌓인 세션노트 ${current.checkpoint}개`)
     const lines = [`[system] 밀린 게 있다. ${bits.join(', ')}.`]
     if (proposals.length > 0) {
       lines.push(`환류 제안: ${proposals.slice(0, RECITAL_MAX_PROPOSALS).join(' / ')}`)
     }
+    // Housekeeping rides every recital (0.3.8): the click is the one moment
+    // the user has asked her to catch up, so the snapshot and the persona
+    // get tidied in the same turn instead of waiting for a cycle that may
+    // never run on this machine.
+    lines.push(
+      current.checkpoint > 0
+        ? `체크포인트가 세션노트 ${current.checkpoint}개만큼 뒤처져 있다. 말 걸기 전에 checkpoint.md를 지금 상태로 새로 써라 (120줄 이하, 덧붙이지 말고 통째로).`
+        : '체크포인트는 최신이다. 이번 턴에 상태가 바뀌면 그때 checkpoint.md를 새로 써라.',
+    )
+    lines.push(
+      current.reflux > 0
+        ? 'procedures/persona-reflux.md 대로 PENDING 제안마다 self_persona.md를 어떻게 바꿀지 채우고, 유저에게 한 줄씩 들고 가서 승인/거절을 받아라. 승인된 것만 self_persona.md에 반영한다.'
+        : '살아있는 교정 중에 self_persona.md와 어긋나는 게 있으면 바꿀 문장을 한 줄로 제안해라. 유저가 승인하기 전엔 self_persona.md를 고치지 않는다.',
+    )
     lines.push(
       '유저에게 아직 못 한 말이나 기억이 부족한 부분은 네가 이미 알고 있는 것만으로 직접 짚어라. ' +
-      '지금 채팅에서 네 목소리로 먼저 말을 걸어라. 뭐가 밀렸는지, 뭘 고칠 생각인지 짧게.',
+      '지금 채팅에서 네 목소리로 먼저 말을 걸어라. 뭐가 밀렸는지, 체크포인트와 페르소나를 어떻게 정리했는지, 뭘 고칠 생각인지 짧게.',
     )
     return lines.join('\n')
   }

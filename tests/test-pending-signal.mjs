@@ -257,6 +257,35 @@ try {
       g2.body.sources.reflux === 1 && g2.body.sources.dreams === 0 && g2.body.total === 1, JSON.stringify(g2.body))
   }
 
+  // ── (5b) checkpoint lag + housekeeping lines (0.3.8, Mino 2026-09-29) ─────
+  // A session note written after checkpoint.md (or with no checkpoint at all)
+  // lights the checkpoint source; the recital then orders the rewrite and the
+  // persona pass. Refreshing checkpoint.md settles it.
+  {
+    fs.mkdirSync(path.join(DATA_HOME, 'session_notes'), { recursive: true })
+    fs.writeFileSync(path.join(DATA_HOME, 'session_notes', '2026-09-20.md'), '# note\n')
+    const g = await getPending()
+    chk('a session note with no checkpoint.md lights the checkpoint source',
+      g.body.sources.checkpoint === 1, JSON.stringify(g.body))
+    const before = received.length
+    const r = await recite()
+    chk('checkpoint lag recites', r.body.injected === true, JSON.stringify(r.body))
+    const n = received[before]
+    const content = String(n && n.params && n.params.content)
+    chk('recital orders the checkpoint rewrite with the lag count',
+      /세션노트 1개만큼 뒤처져/.test(content) && content.includes('checkpoint.md'), content)
+    chk('recital carries the persona pass through the reflux procedure',
+      content.includes('persona-reflux.md') && content.includes('self_persona.md'), content)
+    const later = new Date(Date.now() + 60_000)
+    fs.writeFileSync(path.join(DATA_HOME, 'checkpoint.md'), '# checkpoint\n')
+    fs.utimesSync(path.join(DATA_HOME, 'checkpoint.md'), later, later)
+    const g2 = await getPending()
+    chk('a fresh checkpoint.md settles the checkpoint source',
+      g2.body.sources.checkpoint === 0, JSON.stringify(g2.body))
+    fs.rmSync(path.join(DATA_HOME, 'session_notes'), { recursive: true, force: true })
+    fs.rmSync(path.join(DATA_HOME, 'checkpoint.md'), { force: true })
+  }
+
   // ── (6) every unreadable source is 0, and never a 500 ────────────────────
   {
     fs.rmSync(path.join(DATA_HOME, '.review'), { recursive: true, force: true })
