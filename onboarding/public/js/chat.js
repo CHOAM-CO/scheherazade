@@ -86,6 +86,24 @@
   // that appears a beat after the name is a visible jump in the feed.
   let avatarSrc = window.AVATAR_FALLBACK_URL || '/img/agent-avatar.png'
   window.avatarUrl().then((u) => { avatarSrc = u })
+  // The user's own picture (0.3.5, the owner 2026-09-29): a second slot, drawn
+  // at the same 32px on the row that opens a USER run. It has no fallback --
+  // with nothing uploaded the user's rows carry no picture at all, and the
+  // row stays hidden rather than showing the app icon on the user's side.
+  // Rows replayed before the fetch answers are painted as hidden rows and
+  // held here, then filled (or left hidden) the moment it resolves.
+  let userAvatarSrc = null
+  const userAvatarNodes = []
+  window.avatarUrl('user').then((u) => {
+    userAvatarSrc = u
+    for (const img of userAvatarNodes) paintUserAvatar(img)
+  })
+  function paintUserAvatar(img) {
+    const row = img.parentNode
+    if (!userAvatarSrc) { if (row) row.hidden = true; return }
+    img.src = userAvatarSrc
+    if (row) row.hidden = false
+  }
   let awaitingSince = null // state.awaitingReplySince from the last /out
   let channelUp = false // freshest signal: did the last /out poll succeed
   let readEl = null
@@ -395,6 +413,25 @@
       if (memoryMark) { meta.appendChild(memoryMarkNode()); placedMemoryMark = true }
       pane.appendChild(meta)
     }
+    // The user's picture (0.3.5, the owner 2026-09-29, retiring the 08-05 "no
+    // role labels" rule for the picture ONLY): the first bubble of a user run
+    // gets a right-aligned row holding the picture and nothing else. No name,
+    // no "You" -- the picture is the one mark, and the asymmetry still does
+    // the rest. createElement, never innerHTML. A picture that fails to load
+    // hides its row instead of showing a broken-image icon (no fallback).
+    if (role === 'user' && lastRenderedRole !== 'user') {
+      const meta = document.createElement('div')
+      meta.className = 'chat-meta chat-meta-user'
+      meta.hidden = true // until the user slot resolves to a picture
+      const av = document.createElement('img')
+      av.className = 'chat-meta-avatar'
+      av.alt = '' // decorative: the bubble's side already says whose it is
+      av.onerror = () => { av.onerror = null; meta.hidden = true }
+      meta.appendChild(av)
+      userAvatarNodes.push(av)
+      paintUserAvatar(av)
+      pane.appendChild(meta)
+    }
     lastRenderedRole = role
     const el = document.createElement('div')
     el.className = `chat-msg chat-${role}`
@@ -433,6 +470,9 @@
       // Backwards so the splice cannot skip the next entry.
       for (let i = nameNodes.length - 1; i >= 0; i--) {
         if (!nameNodes[i].isConnected) nameNodes.splice(i, 1)
+      }
+      for (let i = userAvatarNodes.length - 1; i >= 0; i--) {
+        if (!userAvatarNodes[i].isConnected) userAvatarNodes.splice(i, 1)
       }
       msgCount--
     }
@@ -1134,6 +1174,7 @@
     pane.textContent = ''
     bubbles = new Map()
     msgCount = 0
+    userAvatarNodes.length = 0 // their rows just left with the pane
     emptyEl = null
     lastUserBubble = null
     readEl = null

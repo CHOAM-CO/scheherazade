@@ -369,14 +369,20 @@ function createRoutes(staticCtx) {
         // instead of probing GET /api/settings/avatar on every page load --
         // and updatedAt is what lets the chat bubble's <img> be cache-busted
         // after a replacement (same URL, new bytes, max-age=86400).
-        // The three slot names mirror routes/settings.cjs's AVATAR_EXTS.
-        let avatar = { present: false, updatedAt: null }
-        for (const ext of ['png', 'jpg', 'webp']) {
-          try {
-            const st = fs.statSync(path.join(DATA_HOME, `avatar.${ext}`))
-            if (st.isFile()) { avatar = { present: true, updatedAt: st.mtime.toISOString() }; break }
-          } catch { /* that slot is empty -- try the next */ }
+        // The three slot names mirror routes/settings.cjs's AVATAR_EXTS, and
+        // the two stems its AVATAR_SLOTS: `avatar` (the agent, 0.3.4) and
+        // `user-avatar` (the user's own picture, 0.3.5), same shape each.
+        const slotState = (stem) => {
+          for (const ext of ['png', 'jpg', 'webp']) {
+            try {
+              const st = fs.statSync(path.join(DATA_HOME, `${stem}.${ext}`))
+              if (st.isFile()) return { present: true, updatedAt: st.mtime.toISOString() }
+            } catch { /* that slot is empty -- try the next */ }
+          }
+          return { present: false, updatedAt: null }
         }
+        const avatar = slotState('avatar')
+        const userAvatar = slotState('user-avatar')
         sendJson(res, 200, {
           ...readAgentConfig(),
           homeChannelId: readHomeChannelId(),
@@ -386,6 +392,7 @@ function createRoutes(staticCtx) {
           hostPlatform: HOST.id,
           hostCapabilities: HOST.clientView(),
           avatar,
+          userAvatar,
         })
         return
       },

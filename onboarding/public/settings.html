@@ -66,6 +66,22 @@
             <button id="set-avatar-choose"></button>
             <button class="secondary" id="set-avatar-remove"></button>
           </div>
+
+          <!-- The user's own picture (0.3.5, 2026-09-29): the same control,
+               a second slot. settings.js wires both through one function;
+               only the id prefix, the route and the empty state differ (this
+               slot has no fallback, so with nothing uploaded the preview is
+               an empty circle and the chat draws no picture on user rows). -->
+          <div class="agent-control-row">
+            <label for="set-user-avatar-input" id="set-user-avatar-label"></label>
+            <img id="set-user-avatar-preview" class="agent-avatar-preview" alt="" />
+            <input type="file" id="set-user-avatar-input" accept="image/png,image/jpeg,image/webp" hidden />
+          </div>
+          <div class="step-actions">
+            <span class="field-hint hidden" id="set-user-avatar-status"></span>
+            <button id="set-user-avatar-choose"></button>
+            <button class="secondary" id="set-user-avatar-remove"></button>
+          </div>
         </div>
 
         <!-- Autonomous cycle (v0.0.6). The only setting on this page that

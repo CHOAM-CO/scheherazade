@@ -381,6 +381,60 @@ try {
       JSON.stringify(cfg1.avatar))
     await fetch(`${base}/api/settings/avatar`, { method: 'DELETE', headers: auth })
   }
+
+  // ── user picture (0.3.5, 2026-09-29): the SECOND slot ───────────────────
+  // Same handlers as the agent slot (routes/settings.cjs AVATAR_SLOTS), its
+  // own route and file stem, NO fallback: an empty user slot is a 404
+  // no_picture, never the app icon. The two slots must not touch each other,
+  // and a rename (DISPLAY_NAME only) must keep both.
+  {
+    const png1 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
+    const png2 = Buffer.concat([png1, Buffer.from('agent-slot-marker')])
+    const home = process.env.AGENT_DATA_HOME
+    const U = `${base}/api/settings/user-avatar`
+    const A = `${base}/api/settings/avatar`
+    const empty = await fetch(U, { headers: auth })
+    const emptyBody = await empty.json()
+    chk('user-avatar GET with nothing uploaded: 404 no_picture (no fallback on the user side)',
+      empty.status === 404 && emptyBody.reason === 'no_picture', `${empty.status} ${JSON.stringify(emptyBody)}`)
+    const up = await fetch(U, { method: 'POST', headers: auth, body: JSON.stringify({ filename: 'avatar.png', dataBase64: png1.toString('base64') }) })
+    const upBody = await up.json()
+    chk('user-avatar upload saves and answers {ok, present:true}', up.status === 200 && upBody.ok === true && upBody.present === true, JSON.stringify(upBody))
+    chk('...into its own file, user-avatar.png, and NOT the agent slot',
+      fs.existsSync(path.join(home, 'user-avatar.png')) && !fs.existsSync(path.join(home, 'avatar.png')))
+    const got = await fetch(U, { headers: auth })
+    chk('user-avatar GET serves the uploaded bytes as image/png',
+      got.status === 200 && got.headers.get('content-type') === 'image/png' && Buffer.from(await got.arrayBuffer()).equals(png1))
+    const svg = await fetch(U, { method: 'POST', headers: auth, body: JSON.stringify({ filename: 'x.png', dataBase64: Buffer.from('<svg/>').toString('base64') }) })
+    chk('user-avatar shares the magic-byte gate: a fake .png is 400 bad_type', svg.status === 400 && (await svg.json()).reason === 'bad_type')
+    const noTok = await fetch(U, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ filename: 'x.png', dataBase64: png1.toString('base64') }) })
+    chk('user-avatar POST without the onboard token is refused', noTok.status === 403, noTok.status)
+
+    // Both slots filled, then a rename: both pictures survive, each on its own route.
+    await fetch(A, { method: 'POST', headers: auth, body: JSON.stringify({ filename: 'avatar.png', dataBase64: png2.toString('base64') }) })
+    const cfgBoth = await (await fetch(`${base}/api/config`, { headers: auth })).json()
+    chk('/api/config reports avatar AND userAvatar present with both slots filled',
+      cfgBoth.avatar && cfgBoth.avatar.present === true && cfgBoth.userAvatar && cfgBoth.userAvatar.present === true
+      && typeof cfgBoth.userAvatar.updatedAt === 'string', JSON.stringify({ a: cfgBoth.avatar, u: cfgBoth.userAvatar }))
+    const ren = await fetch(`${base}/api/settings/rename`, { method: 'POST', headers: auth, body: JSON.stringify({ displayName: 'Renamed For Avatar Test' }) })
+    chk('rename answers 200', ren.status === 200, ren.status)
+    const aAfter = Buffer.from(await (await fetch(A, { headers: auth })).arrayBuffer())
+    const uAfter = Buffer.from(await (await fetch(U, { headers: auth })).arrayBuffer())
+    chk('after a rename the agent slot still serves the agent picture', aAfter.equals(png2))
+    chk('after a rename the user slot still serves the user picture', uAfter.equals(png1))
+    const cfgRen = await (await fetch(`${base}/api/config`, { headers: auth })).json()
+    chk('...and /api/config still reports both present under the new name',
+      cfgRen.DISPLAY_NAME === 'Renamed For Avatar Test' && cfgRen.avatar.present === true && cfgRen.userAvatar.present === true,
+      JSON.stringify({ n: cfgRen.DISPLAY_NAME, a: cfgRen.avatar, u: cfgRen.userAvatar }))
+
+    // Deleting one slot leaves the other alone.
+    const del = await fetch(U, { method: 'DELETE', headers: auth })
+    chk('user-avatar DELETE answers {ok, present:false}', del.status === 200 && (await del.json()).present === false)
+    chk('...empties only the user slot; the agent picture is untouched',
+      ['png', 'jpg', 'webp'].every((e) => !fs.existsSync(path.join(home, `user-avatar.${e}`))) && fs.readFileSync(path.join(home, 'avatar.png')).equals(png2))
+    chk('...and the user GET is back to 404 no_picture', (await fetch(U, { headers: auth })).status === 404)
+    await fetch(A, { method: 'DELETE', headers: auth })
+  }
 } finally {
   srv.server.close()
   await new Promise((r) => fakeChannel.close(r))

@@ -37,14 +37,22 @@
   //
   // Memoized per page: a chat with fifty agent runs fetches the picture
   // once, and every row shares one object URL.
+  //
+  // Two slots (0.3.5, 2026-09-29): `slot` is 'agent' (the default, and every
+  // 0.3.4 call site, unchanged) or 'user'. The user slot has NO fallback --
+  // there is no shipped face to put on the user's own rows -- so an empty
+  // user slot (the route's 404 no_picture) or a failed fetch resolves null,
+  // and the caller draws nothing. The agent slot still never resolves null.
   const AVATAR_FALLBACK_URL = '/img/agent-avatar.png'
   window.AVATAR_FALLBACK_URL = AVATAR_FALLBACK_URL
-  let avatarUrlPromise = null
-  window.avatarUrl = function avatarUrl() {
-    if (avatarUrlPromise) return avatarUrlPromise
-    avatarUrlPromise = (async () => {
+  const AVATAR_ROUTES = { agent: '/api/settings/avatar', user: '/api/settings/user-avatar' }
+  const avatarUrlPromises = { agent: null, user: null }
+  window.avatarUrl = function avatarUrl(slot = 'agent') {
+    if (avatarUrlPromises[slot]) return avatarUrlPromises[slot]
+    const fallback = slot === 'agent' ? AVATAR_FALLBACK_URL : null
+    avatarUrlPromises[slot] = (async () => {
       try {
-        const res = await fetch('/api/settings/avatar', {
+        const res = await fetch(AVATAR_ROUTES[slot], {
           headers: { 'X-Onboard-Token': window.getOnboardToken() || '' },
           // The route answers max-age=86400 and a REPLACEMENT avatar reuses
           // the same URL, so without this a browser could show yesterday's
@@ -55,16 +63,16 @@
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         return URL.createObjectURL(await res.blob())
       } catch {
-        return AVATAR_FALLBACK_URL
+        return fallback
       }
     })()
-    return avatarUrlPromise
+    return avatarUrlPromises[slot]
   }
-  // Drop the memo so the next avatarUrl() re-reads the disk. Called by
+  // Drop the memo so the next avatarUrl(slot) re-reads the disk. Called by
   // settings.js after an upload or a removal -- the consumers re-point their
   // src at the new value, which is why the old object URL is deliberately
   // NOT revoked here (an already-painted chat row still holds it).
-  window.avatarUrlForget = function avatarUrlForget() { avatarUrlPromise = null }
+  window.avatarUrlForget = function avatarUrlForget(slot = 'agent') { avatarUrlPromises[slot] = null }
 
   // ── window.api (consolidated; was duplicated in memory.js + settings.js) ──
   window.api = async function api(path, options) {

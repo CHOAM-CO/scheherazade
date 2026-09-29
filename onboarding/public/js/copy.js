@@ -1249,6 +1249,12 @@ window.COPY = {
     avatarRemoved: 'Picture removed.',
     avatarBadType: 'Pick a PNG, JPG, or WebP image.',
     avatarTooLarge: 'That image is too large to open. Pick a file under 25MB.',
+    // The user's own picture (0.3.5, 2026-09-29): the second slot. Choose,
+    // Remove, the two refusals and the crop step reuse the agent slot's
+    // strings above; only the label and the two toasts say whose it is.
+    userAvatarLabel: 'Your picture',
+    userAvatarSaved: 'Your picture saved.',
+    userAvatarRemoved: 'Your picture removed.',
     // The crop step (2026-09-28). Until now the upload was take-it-or-leave
     // -it: whatever framing the file arrived with was the framing the agent
     // got, because the only crop happened at display time and always took the
