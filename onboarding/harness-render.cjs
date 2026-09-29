@@ -955,6 +955,16 @@ function createHarnessRender(ctx) {
     }
     const updateBrief = computeUpdateBrief(readFileFn)
 
+    // Korean voice (0.3.8, Mino 2026-09-29 "어떤 모델 쓰든 말투가 크게
+    // 튀어나오지 않았으면"). Inlined, not lazy-loaded like the manual: the
+    // voice applies to every Korean turn, and the weaker models this app runs
+    // on follow what is in the prompt far more than a file they were told to
+    // open. Read BEFORE the prompt template so that template stays the last
+    // read (test-harness-refresh's all-or-nothing pin).
+    const koreanVoice = readFileFn(
+      path.join(REPO_ROOT, 'onboarding', 'templates', 'korean-voice.md'),
+      'utf8'
+    ).trim()
     const promptSrc = readFileFn(
       path.join(REPO_ROOT, 'onboarding', 'templates', 'agent-system-prompt.md'),
       'utf8'
@@ -968,7 +978,8 @@ function createHarnessRender(ctx) {
         .replaceAll('{PRIMARY_TASK}', primaryTask || '일상 대화와 기록')
         .replaceAll('{PREDECESSOR_NOTE}', predecessorNote)
         .replaceAll('{UPDATE_BRIEF}', updateBrief.block)
-        .replaceAll('{PLATFORM_SECTION}', platformSection()),
+        .replaceAll('{PLATFORM_SECTION}', platformSection())
+        .replaceAll('{KOREAN_VOICE}', koreanVoice),
     })
 
     // Every source read and rendered. Only now does anything touch the harness.

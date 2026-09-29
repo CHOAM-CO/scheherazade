@@ -80,6 +80,14 @@ const PROMPT = path.join(SANDBOX, 'system_prompt.md')
 console.log('\n0. a clean render is the baseline')
 assert(refreshHarnessIfOnboarded() === true, 'a clean refresh returns true')
 assert(existsSync(CLAUDE) && existsSync(PROMPT), 'the harness files were written')
+{
+  // Korean voice guide (0.3.8) is inlined into the prompt, and no template
+  // placeholder survives the render.
+  const rendered = readFileSync(PROMPT, 'utf8')
+  assert(rendered.includes('## Speaking Korean') && rendered.includes('파일 세 개'),
+    'the rendered prompt carries the Korean voice guide')
+  assert(!/\{[A-Z_]+\}/.test(rendered), 'no {PLACEHOLDER} left in the rendered prompt')
+}
 assert(readHarnessFailure() === null, 'no failure marker after a clean render')
 const goodClaude = readFileSync(CLAUDE, 'utf8')
 // Behavioural version of what tests/test-attach-topology.mjs used to assert
