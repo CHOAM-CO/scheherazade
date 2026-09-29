@@ -587,6 +587,39 @@ for (const b of BACKENDS) {
   check('ledger deletion reads as zero strikes (guard contract), no announce', sent.length === 3)
 }
 
+// ── mute auto-deliver (0.3.7) ─────────────────────────────────────────────
+{
+  const { createMuteStrikeAnnouncer } = await import(pathToFileURL(path.join(ROOT, 'channel-runtime.mjs')).href)
+  const home = path.join(tmpDir, 'mute-home2')
+  fs.mkdirSync(home, { recursive: true })
+  const sp = path.join(home, '.mute-strikes.json')
+  const up = path.join(home, '.mute-unsent.json')
+  const sent = []
+  const ann = createMuteStrikeAnnouncer({
+    dataHome: home, homeId: 'HOME', lastChannelStore: { load: async () => 'PERSISTED' },
+    getLastInboundId: () => 'LIVE', fetchTarget: async (id) => ({ id }),
+    sendText: async (t, text) => { sent.push({ id: t.id, text }) }, log: () => {},
+  })
+  fs.writeFileSync(sp, JSON.stringify({ strikes: 0 }))
+  await ann.start(); ann.stop()
+  // no strike rise, unsent present -> nothing (agent delivered normally / guard did not convict)
+  fs.writeFileSync(up, JSON.stringify({ turnId: 't1', channelId: 'C9', text: '진짜 답장', delivered: false }))
+  await ann._tick()
+  check('no strike rise -> unsent text is not sent', sent.length === 0)
+  fs.writeFileSync(sp, JSON.stringify({ strikes: 1 }))
+  await ann._tick()
+  check('rise forwards the composed text to the trigger channel, then a short notice',
+    sent.length === 2 && sent[0].id === 'C9' && sent[0].text.includes('진짜 답장') && sent[0].text.startsWith('📨') && sent[1].text.includes('1회차') && sent[1].text.length < 120)
+  check('unsent marked delivered on disk', JSON.parse(fs.readFileSync(up, 'utf8')).delivered === true)
+  fs.writeFileSync(sp, JSON.stringify({ strikes: 2 }))
+  await ann._tick()
+  check('same turn is never forwarded twice (only the plain warning follows)', sent.length === 3 && !sent[2].text.includes('진짜 답장') && sent[2].text.includes('2회차'))
+  fs.writeFileSync(up, JSON.stringify({ turnId: 't2', channelId: 'in-app', text: '  ', delivered: false }))
+  fs.writeFileSync(sp, JSON.stringify({ strikes: 3 }))
+  await ann._tick()
+  check('empty text falls back to the original warning', sent.length === 4 && sent[3].text.includes('답장이 만들어지고도 전송되지 않았어') && sent[3].id === 'LIVE')
+}
+
 // ── cleanup ──────────────────────────────────────────────────────────────
 fs.rmSync(tmpDir, { recursive: true, force: true })
 

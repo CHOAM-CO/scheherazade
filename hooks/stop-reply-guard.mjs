@@ -18,6 +18,7 @@
 
 import fs from 'fs'
 import path from 'path'
+import crypto from 'crypto'
 import { resolveDataHome } from '../data-home.cjs' // one resolver: AGENT_DATA_HOME || MEM || ~/Documents/Scheherazade
 
 // Escalating scan windows (red-team 2026-08-05 item 5, "tail anchor"): a
@@ -77,6 +78,7 @@ const SCAN_STEPS = [
 // for the case where a hook is invoked outside a managed spawn.
 const DATA_HOME = resolveDataHome()
 const STRIKES_PATH = path.join(DATA_HOME, '.mute-strikes.json')
+const UNSENT_PATH = path.join(DATA_HOME, '.mute-unsent.json')
 const AGENT_CONFIG_PATH = path.join(DATA_HOME, '.agent-config')
 
 function currentModel() {
@@ -113,6 +115,35 @@ function recordStrike() {
   // old count is about a different subject -- start over rather than inherit.
   const strikes = (cur.model === model && Number.isInteger(cur.strikes)) ? cur.strikes + 1 : 1
   writeStrikes({ strikes, model, lastAt: new Date().toISOString() })
+}
+// Composed-but-unsent text (0.3.7): on a mute conviction, keep what the model
+// wrote so the backend (channel-runtime createMuteStrikeAnnouncer) can deliver
+// it to the user instead of only warning about it. The longest assistant text
+// block after the trigger wins: the retry turn after the bounce is often a
+// short "sending now", the real reply is the earlier long one. Same turn (same
+// channel + same text) keeps its delivered flag so a repeated guard run cannot
+// re-arm an already-forwarded reply. Best-effort, never throws.
+function persistUnsent(entries, triggerIdx, channelId) {
+  try {
+    let text = ''
+    for (let i = triggerIdx + 1; i < entries.length; i++) {
+      const e = entries[i]
+      if (e.type !== 'assistant' || !Array.isArray(e.message?.content)) continue
+      for (const b of e.message.content) {
+        if (b?.type === 'text' && typeof b.text === 'string' && b.text.trim().length > text.length) text = b.text.trim()
+      }
+    }
+    if (!text) return
+    const turnId = crypto.createHash('sha1').update(`${channelId}\n${text}`).digest('hex').slice(0, 16)
+    let delivered = false
+    try {
+      const cur = JSON.parse(fs.readFileSync(UNSENT_PATH, 'utf8'))
+      if (cur && cur.turnId === turnId && cur.delivered) delivered = true
+    } catch { /* none */ }
+    const tmp = `${UNSENT_PATH}.tmp`
+    fs.writeFileSync(tmp, JSON.stringify({ turnId, channelId, text, at: new Date().toISOString(), delivered }))
+    fs.renameSync(tmp, UNSENT_PATH)
+  } catch { /* best-effort */ }
 }
 // Explicit silence requests -- the user told the agent NOT to answer.
 const SKIP_PATTERNS = [
@@ -293,6 +324,7 @@ async function main() {
     // We told it to send, it retried, it STILL didn't. That is the mute
     // signature -- record it. This is the only place a strike is scored: a
     // single quiet turn (pre-retry) is not evidence of anything.
+    persistUnsent(entries, triggerIdx, triggerChannelId) // before the strike: the announcer fires on the strike rise
     recordStrike()
     process.stderr.write('[stop-reply-guard] cap hit (stop_hook_active), allowing; mute strike recorded\n')
     process.exit(0)

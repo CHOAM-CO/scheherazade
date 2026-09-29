@@ -142,6 +142,24 @@ console.log('\n5. dual-channel: a reply to the OTHER surface is not silent death
   assert(trulyMute.code === 2, 'a NEW trigger after the last delivery, with no reply following it -> still convict (silent-death net intact)')
 }
 
+console.log('\n6. mute conviction persists the composed text (0.3.7)')
+{
+  const UNSENT = path.join(TMP, '.mute-unsent.json')
+  const asst = (t) => ({ type: 'assistant', message: { content: [{ type: 'text', text: t }] } })
+  try { fs.rmSync(UNSENT) } catch {}
+  const first = runGuard([userText(channelTag('in-app', '야')), asst('긴 답장 본문입니다 정말로')])
+  assert(first.code === 2 && !fs.existsSync(UNSENT), 'first bounce does not write (retry may still send)')
+  const cap = runGuard([userText(channelTag('in-app', '야')), asst('긴 답장 본문입니다 정말로'), asst('보낼게')], { stopActive: true })
+  const u = fs.existsSync(UNSENT) ? JSON.parse(fs.readFileSync(UNSENT, 'utf8')) : null
+  assert(cap.code === 0 && u && u.text === '긴 답장 본문입니다 정말로' && u.channelId === 'in-app' && u.turnId && u.delivered === false, 'cap-hit conviction writes the longest composed text, undelivered')
+  fs.writeFileSync(UNSENT, JSON.stringify({ ...u, delivered: true }))
+  runGuard([userText(channelTag('in-app', '야')), asst('긴 답장 본문입니다 정말로')], { stopActive: true })
+  assert(JSON.parse(fs.readFileSync(UNSENT, 'utf8')).delivered === true, 'same turn re-convicted keeps delivered flag (no re-arm)')
+  fs.rmSync(UNSENT)
+  runGuard([userText(channelTag('in-app', '야'))], { stopActive: true })
+  assert(!fs.existsSync(UNSENT), 'no composed text -> nothing written (announcer keeps the plain warning)')
+}
+
 fs.rmSync(TMP, { recursive: true, force: true })
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

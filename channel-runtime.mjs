@@ -918,6 +918,7 @@ export function createLaneInterrupter({ dataHome, log = console.log, fetchFn = f
 // so the notice lands where the conversation actually is.
 export function createMuteStrikeAnnouncer({ dataHome, homeId, lastChannelStore, getLastInboundId, fetchTarget, sendText, log = console.log, pollMs = 5_000 }) {
   const STRIKES_PATH = path.join(dataHome, '.mute-strikes.json')
+  const UNSENT_PATH = path.join(dataHome, '.mute-unsent.json')
   let baseline = null
   let timer = null
 
@@ -931,19 +932,45 @@ export function createMuteStrikeAnnouncer({ dataHome, homeId, lastChannelStore, 
     }
   }
 
+  // 0.3.7: the guard keeps the composed-but-unsent text; deliver THAT first so
+  // the user gets the reply, not a warning about it. Marked delivered on disk
+  // (turnId) before the strike notice, so a re-run never sends it twice.
+  async function forwardUnsent(fallbackTarget) {
+    let u
+    try { u = JSON.parse(await fs.readFile(UNSENT_PATH, 'utf8')) } catch { return false }
+    const text = u && typeof u.text === 'string' ? u.text.trim() : ''
+    if (!text || u.delivered || !u.turnId) return false
+    let target = null
+    if (u.channelId && u.channelId !== 'in-app') { try { target = await fetchTarget(u.channelId) } catch { target = null } }
+    if (!target) target = await fallbackTarget()
+    const body = `📨 (답장이 전송 안 돼서 앱이 대신 전달했어)\n${text}`
+    for (let i = 0; i < body.length; i += 1900) await sendText(target, body.slice(i, i + 1900))
+    try {
+      await fs.writeFile(UNSENT_PATH + '.tmp', JSON.stringify({ ...u, delivered: true, deliveredAt: new Date().toISOString() }))
+      await fs.rename(UNSENT_PATH + '.tmp', UNSENT_PATH)
+    } catch { /* marker best-effort; in-memory guard below */ }
+    return true
+  }
+
   async function announce(count) {
-    const targetId = (getLastInboundId && getLastInboundId()) || (lastChannelStore && await lastChannelStore.load()) || homeId
-    if (!targetId) throw new Error('no channel to announce to (no inbound yet, no persisted channel, no home)')
-    const target = await fetchTarget(targetId)
-    // Copy is strike-count-aware: the panel's one-click revert banner only
-    // exists from MUTE_STRIKE_THRESHOLD (2) onward -- promising a button
-    // that is not there yet would be its own small silent-death.
+    const resolve = async () => {
+      const targetId = (getLastInboundId && getLastInboundId()) || (lastChannelStore && await lastChannelStore.load()) || homeId
+      if (!targetId) throw new Error('no channel to announce to (no inbound yet, no persisted channel, no home)')
+      return fetchTarget(targetId)
+    }
+    let forwarded = false
+    try { forwarded = await forwardUnsent(resolve) } catch (err) { log(`[mute-announcer] forwarding the unsent text failed: ${err.message}`) }
+    const target = await resolve()
     const fix = count >= 2
-      ? '앱 패널을 열면 상단에 이전 모델로 되돌리는 원클릭 버튼이 떠 있어. Settings > Model에서 직접 바꿔도 되고.'
-      : '한 번 더 반복되면 앱 패널에 이전 모델로 되돌리는 원클릭 버튼이 떠. 지금 바꾸려면 Settings > Model에서.'
+      ? '앱 패널 상단에 이전 모델로 되돌리는 원클릭 버튼이 떠 있어.'
+      : '한 번 더 반복되면 앱 패널에 되돌리기 버튼이 떠.'
+    if (forwarded) {
+      await sendText(target, `⚠️ 모델이 메시지 도구 호출에 실패했어 (뮤트 ${count}회차). ${fix}`)
+      return
+    }
     await sendText(target,
       `⚠️ 방금 턴에서 답장이 만들어지고도 전송되지 않았어 (뮤트 감지 ${count}회차). ` +
-      `모델이 메시지 도구 호출에 실패하고 있어 — ${fix} 상세 로그는 패널 Logs에.`)
+      `모델이 메시지 도구 호출에 실패하고 있어 — ${count >= 2 ? '앱 패널을 열면 상단에 이전 모델로 되돌리는 원클릭 버튼이 떠 있어. Settings > Model에서 직접 바꿔도 되고.' : '한 번 더 반복되면 앱 패널에 이전 모델로 되돌리는 원클릭 버튼이 떠. 지금 바꾸려면 Settings > Model에서.'} 상세 로그는 패널 Logs에.`)
   }
 
   async function tick() {
