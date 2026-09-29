@@ -500,6 +500,12 @@ discord.once(Events.ClientReady, (c) => {
           content: scheduleInjectContent(entry),
           meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() },
         }),
+      // The daily clock's madoromi turn (cadence/daily-clock.cjs builds the
+      // text), on the same rail and the same conversation.
+      fireDaily: (content) => notifyInbound({
+          content,
+          meta: { sender: 'SYSTEM', channelId: HOME_CHANNEL_ID, authorId: '', timestamp: localNow() },
+        }),
       activityMsProvider: () => Date.now() - lastActivityMs,
       log,
     })

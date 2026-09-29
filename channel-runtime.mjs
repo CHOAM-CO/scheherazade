@@ -629,13 +629,19 @@ export function routineInjectContent(r) {
 // backend the same way startRoutineTicker is -- so a backend that forgets
 // to call it is missing a wiring line, not missing an implementation.
 //
+// The same tick also drives the once-a-day clock (cadence/daily-clock.cjs,
+// 0.3.5): the reflux pass and the madoromi turn that feed the "!" above the
+// chat. Stamped in DATA_HOME/.gates/daily-clock.json, so after the first tick
+// of a day it costs one small read.
+//
 // One difference from startRoutineTicker worth naming: this ticker guards
 // against overlapping ticks (`inFlight`). Routines' own dueNow()/markFired()
 // happen to be safe under overlap (markFired is idempotent-by-day); a
 // schedule's write-back is a single read-modify-write of the whole store,
 // which is not, so the guard is added rather than copied away.
-export function startScheduleTicker({ dataHome, readConfig, fire, activityMsProvider = () => Infinity, log = console.log, intervalMs = 60_000, now = () => new Date() }) {
+export function startScheduleTicker({ dataHome, readConfig, fire, fireDaily = null, activityMsProvider = () => Infinity, log = console.log, intervalMs = 60_000, now = () => new Date() }) {
   const scheduleTick = require(path.join(MODULE_DIR, 'cadence', 'schedule-tick.cjs'))
+  const dailyClock = require(path.join(MODULE_DIR, 'cadence', 'daily-clock.cjs'))
   const storePath = path.join(dataHome, 'schedules.json')
   let inFlight = false
 
@@ -697,6 +703,25 @@ export function startScheduleTicker({ dataHome, readConfig, fire, activityMsProv
           if (fired.includes(raw.id)) raw.lastRunISO = nowISO
         }
         await atomicWriteJson(storePath, store) // tmp+rename, same convention as .autonomy-state.json
+      }
+
+      // The once-a-day clock (cadence/daily-clock.cjs): reflux pass + the
+      // autonomy-independent madoromi turn, riding THIS tick rather than a
+      // timer of its own. Its own try: a clock fault must not read as a
+      // schedule fault, and vice versa. fireDaily takes the finished turn
+      // text; a backend that does not pass it still gets the reflux half.
+      try {
+        await dailyClock.runDailyClock({
+          dataHome,
+          now: now(),
+          config,
+          store: store && Array.isArray(store.schedules) ? store : null,
+          agentActiveMs: activityMsProvider(),
+          fire: fireDaily,
+          log,
+        })
+      } catch (err) {
+        log(`daily clock tick failed: ${err.message}`)
       }
     } catch (err) {
       log(`schedule tick failed: ${err.message}`)

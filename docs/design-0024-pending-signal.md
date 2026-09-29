@@ -8,6 +8,20 @@ header mark in `onboarding/public/{chat.html,js/chat.js,css/app.css}`; tests
 `tests/test-pending-signal.mjs` and section 3f of `tests/test-chat-surface.mjs`.
 The "Open, for the owner" list below is what remains open.
 
+**Addendum 2026-09-29 (0.3.5, the owner's call).** The two feeds that never
+filled now have a clock. `cadence/daily-clock.cjs` rides the existing
+Schedules tick (`startScheduleTicker`, no timer of its own) and, at most once
+per local day, runs the reflux pass in-process (`cadence/reflux-pass.cjs`, the
+same rule `scripts/persona-reflux.mjs` runs) and injects the madoromi turn
+regardless of autonomy mode. Both skip when no session note or journal changed
+since their last run; the dream turn also waits for the madoromi window and a
+quiet chat, and stands down when autonomy is on and the madoromi schedule
+entry will dream anyway. Stamp: `DATA_HOME/.gates/daily-clock.json`.
+`SCHEDULES=off` turns it off. This supersedes the "do not build a schedule"
+lines below for reflux and dreams; the "!" routes themselves are still
+click-only (test pin (7) in `tests/test-pending-signal.mjs` still holds).
+Tests: `tests/test-daily-clock.mjs`.
+
 His words, in order:
 
 > 채팅창에 세헤라자드 이름만 뜨는데 프로필 사진 뜨고 이야기하면 좋을 것 같아

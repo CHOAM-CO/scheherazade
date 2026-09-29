@@ -100,9 +100,10 @@ function createRoutes(staticCtx) {
 
   // reflux: .review/reflux-proposals.md, one proposal per block delimited by a
   // line that is exactly `---`, each carrying `**Status**: PENDING`
-  // (scripts/persona-reflux.mjs:76-84). Missing dir or file -> no proposals,
-  // never an error: a fresh install has never run the reflux pass, and the
-  // design deliberately does not give it a schedule.
+  // (cadence/reflux-pass.cjs). Missing dir or file -> no proposals, never an
+  // error: a fresh install has not run the reflux pass yet, and the daily
+  // clock (cadence/daily-clock.cjs) only creates the file once it has a
+  // proposal to write.
   //
   // Returns the count AND the `**Correction**:` lines of the pending blocks --
   // the recital quotes those, which is why this reader is not a bare count.
