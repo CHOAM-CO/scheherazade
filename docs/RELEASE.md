@@ -73,6 +73,26 @@ Nothing is published without `--publish`.
 Everything the run says — including npm's, electron-builder's and the remote
 builds' own output — is tee'd to `release/release-all-<tag>.log`.
 
+### Packaged content (0.3.5)
+
+v0.3.4 shipped without anyone opening the app.asar inside an artifact. Now each
+lane writes `BUILD_INFO.json` (tag, git HEAD, a per-run id) into its build tree
+right before packaging (`build.files` ships it; it is gitignored), and after the
+build `tools/release-check.mjs` reads `package.json` and `BUILD_INFO.json` back
+out of the asar. Rows: asar opens, packaged version == tag, stamp tag == tag,
+stamp head == the preflight HEAD, stamp run id == this run.
+
+| lane | what gets opened | limit |
+|---|---|---|
+| mac | the dmg itself (`hdiutil attach -readonly`), right after `npm run dist` | none known |
+| win | `release\win-unpacked\resources\app.asar` on the box, inside `build.cmd`, before cleanup | the NSIS `.exe` payload is not opened (needs a full 7-Zip); this is the staging tree it was packed from in the same run |
+| linux | the AppImage itself via `--appimage-extract resources/app.asar` in WSL | if extraction fails it falls back to `linux-unpacked` and says so in the log |
+
+win/linux write `release/content-check-<lane>.json` back to this Mac. A
+mismatch fails the leg; any failed row blocks `--publish`. Under
+`--verify-only` there is no run id to match, so that row is reported as not
+checked and win/linux need the JSON from the box.
+
 ### Rehearsing
 
 ```sh
@@ -232,6 +252,14 @@ Before any release, the D-73 rule still stands: an E2E on **both** boxes.
   and bwrap sandboxing remain "unsupported with honest UI".
 
 Clean up the rig afterwards: scheduled tasks, tunnels, test installs.
+
+The magi-win rig's `schz-e2e-install` task does not name a version: its action is
+`powershell ... -File E:\schz-e2e\install-latest.ps1`, which reads
+`releases/latest/download/latest.yml` from the public feed, downloads that
+installer, checks its sha512 and runs it `/S`, logging to
+`E:\schz-e2e\install-latest.log`. Source: `tools/e2e/schz-e2e-install-latest.ps1`
+(scp it over the deployed copy after editing). `schz-e2e-app` runs the
+installed `Scheherazade.exe` and was never version-pinned.
 
 ---
 
