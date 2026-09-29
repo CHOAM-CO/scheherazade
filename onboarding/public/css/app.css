@@ -1300,6 +1300,25 @@ button.nav-ctl.is-busy::after {
   cursor: pointer;
 }
 .migrate-tool-row input[type='checkbox'] { flex: 0 0 auto; }
+/* design-0022 §4 wizard step 1b: one card per detected tool, the file list
+   folded under a summary so a 500-file Claude home does not bury the Copy
+   button. */
+.import-tool {
+  margin: 0 0 0.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+}
+.import-tool-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem 0.5rem; font-weight: 600; cursor: pointer; }
+.import-tool-root { flex: 1 0 100%; color: var(--fg-dim); font-weight: 400; font-size: 0.85rem; overflow-wrap: anywhere; }
+.import-tool-meta { color: var(--fg-dim); font-size: 0.85rem; margin: 0.3rem 0; }
+.import-tool details summary { cursor: pointer; user-select: none; font-size: 0.85rem; }
+.import-file-list { max-height: 14rem; overflow-y: auto; margin-top: 0.4rem; }
+.import-file-row { display: flex; align-items: baseline; gap: 0.5rem; font-size: 0.85rem; padding: 0.1rem 0; cursor: pointer; }
+.import-file-row input[type='checkbox'] { flex: 0 0 auto; }
+.import-file-path { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.import-file-kind, .import-file-size { color: var(--fg-dim); flex: 0 0 auto; }
+.import-held { font-size: 0.85rem; margin-top: 0.4rem; }
 /* design-0023 handover: path input + preview button on one line */
 .handover-row {
   display: flex;

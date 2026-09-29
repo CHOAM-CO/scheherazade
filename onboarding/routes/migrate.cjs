@@ -30,6 +30,7 @@
 'use strict'
 
 const os = require('node:os')
+const migrateImport = require('../../memory/migrate-import.cjs')
 
 const MAX_LISTED_FILES = 60
 const MAX_WALK_DEPTH = 3
@@ -274,7 +275,11 @@ function createRoutes(staticCtx) {
     } catch { return null }
   }
 
-  async function deliverSweep(content) {
+  // liveOnly: the import handover must NOT ride the pending FIFO -- the
+  // lane's boot redelivery drops sender=SYSTEM entries on purpose, so a
+  // queued copy would be silently lost. The marker file covers the lane-down
+  // case instead (migrate-import.cjs writeHandoverMarker).
+  async function deliverSweep(content, { liveOnly = false } = {}) {
     const meta = {
       sender: 'SYSTEM',
       channelId: readHomeChannelId() || (activeChannelBackend() === 'local' ? 'in-app' : ''),
@@ -293,6 +298,7 @@ function createRoutes(staticCtx) {
         if (r.status === 200) return 'live'
       } catch { /* fall through to the queued path */ }
     }
+    if (liveOnly) return 'marker'
     // Lane down: ride the boot-redelivery FIFO (headless-lane F4). Shape
     // must match its readPending() entries exactly.
     const pendingPath = path.join(DATA_HOME, '.headless-pending.json')
@@ -309,6 +315,52 @@ function createRoutes(staticCtx) {
   }
 
   return [
+    {
+      // design-0022 §3.1/§4 wizard step: the copy plan. Detected sources
+      // only, names + sizes + kind + default checkbox state; never contents.
+      method: 'GET',
+      match: (pathname) => pathname === '/api/migrate/import/plan',
+      handler: async (req, res) => {
+        const tools = migrateImport.detectSources({ home: home(), env: process.env }).filter((t) => t.detected)
+        sendJson(res, 200, { tools })
+        return
+      },
+    },
+    {
+      // The copy itself. Body: { selections: { <toolId>: [relPath...] } }.
+      // Re-plans server side; only paths in the fresh plan are copied.
+      method: 'POST',
+      match: (pathname) => pathname === '/api/migrate/import',
+      handler: async (req, res) => {
+        const { selections } = await readJsonBody(req)
+        if (!selections || typeof selections !== 'object' || Array.isArray(selections)) {
+          sendJson(res, 400, { error: 'selections is required', reason: 'selections_required' })
+          return
+        }
+        let result
+        try {
+          result = migrateImport.runImport({ home: home(), env: process.env, dataHome: DATA_HOME, selections })
+        } catch (err) {
+          sendJson(res, 500, { error: `import failed: ${err.message}`, reason: 'import_failed' })
+          return
+        }
+        let delivery = null
+        if (result.tools.length) {
+          try {
+            delivery = await deliverSweep(`[SYSTEM] ${migrateImport.handoverInstruction(result.tools)}`, { liveOnly: true })
+          } catch { delivery = 'marker' }
+          log(`migrate import: ${result.copied.length} copied, ${result.heldBack.length} held back (${result.tools.join(', ')}); handover ${delivery}`)
+        }
+        sendJson(res, 200, {
+          ok: true,
+          copied: result.copied.map(({ tool, path: p, size }) => ({ tool, path: p, size })),
+          heldBack: result.heldBack,
+          tools: result.tools,
+          delivery,
+        })
+        return
+      },
+    },
     {
       // design-0023 rev B: agent-led discovery. One consented click delivers
       // the hunt turn; everything after (candidates, per-folder consent,

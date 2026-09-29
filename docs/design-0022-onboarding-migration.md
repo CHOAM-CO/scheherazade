@@ -137,3 +137,43 @@ an explicit agent task.
 1. 세션 트랜스크립트: v1 스윕 프롬프트는 "시크릿 값은 옮겨적지 마라"
    지시로 커버. 더 조이려면(트랜스크립트 통째 제외) 말해줘.
 2. 온보딩 위저드 스텝 추가 타이밍 — 지금 넣을까, 퍼널 카피랑 같이?
+
+## 8. What shipped in v1.1 (0.3.5, Mino 2026-09-29 15:07 "다 해줘")
+
+- `memory/migrate-import.cjs`: §3.1 copy-with-receipt. Per-source
+  allowlist (only named paths are offered), byte-for-byte copy into
+  `DATA_HOME/imported/<tool>/`, 0600, receipt JSON per run. Config files
+  (settings.json, config.toml, opencode.json, config.yaml, openclaw.json)
+  and credential stores are reported as "left in place", never read.
+  Every selected file is scanned once in memory for key-shaped text and
+  held back on a hit. Symlinks never followed. CLAUDE.md / AGENTS.md are
+  stored as `imported-*.md` so the CLI never auto-loads them as the
+  agent's own instructions. Sources are never moved, changed or deleted.
+- Paths re-verified 2026-09-29 against current docs + local inspection:
+  Claude `CLAUDE.md`, `rules/`, `agents/`, `commands/`,
+  `projects/<p>/memory/*.md`, `projects/<p>/*.jsonl` (CLAUDE_CONFIG_DIR
+  honored); Codex `AGENTS.md`, `AGENTS.override.md`, `prompts/`,
+  `sessions/YYYY/MM/DD/rollout-*.jsonl` (CODEX_HOME); Hermes `SOUL.md`,
+  `memories/MEMORY.md` + `USER.md`, `cron/jobs.json`, `sessions/`;
+  OpenCode `AGENTS.md`, `agents/`, `commands/` (+ singular forms,
+  XDG_CONFIG_HOME); OpenClaw workspace `AGENTS.md`, `SOUL.md`,
+  `USER.md`, `IDENTITY.md`, `MEMORY.md`, `TOOLS.md`, `memory/*.md`
+  (OPENCLAW_PROFILE).
+- Routes: GET `/api/migrate/import/plan`, POST `/api/migrate/import`
+  (re-plans server side; forged or disallowed paths drop).
+- Wizard step 1b, right after provider connect: one card per detected
+  tool, per-file checkboxes (chat history OFF by default), Skip, Copy.
+  Auto-skips when nothing is detected.
+- Handover: the copy writes `imported/.handover-pending.json`;
+  `hooks/session-start.mjs` turns it into a fold-into-memory line every
+  session start until the agent deletes it. Live lane gets the same text
+  as one [SYSTEM] turn. The pending FIFO is NOT used: headless-lane's boot
+  redelivery drops sender=SYSTEM entries (see below).
+- Found while building: the v1 `/api/migrate/start` "queued" path appends
+  a sender=SYSTEM turn to `.headless-pending.json`, which the lane's boot
+  redelivery filters out (headless-lane.mjs F4, 2026-08-05). Settings >
+  Import tells the user "Queued" for a turn that never arrives. Not fixed
+  in this pass.
+- Still open: README/releases funnel copy, Hermes cron re-creation
+  checkboxes, transcript summarization task, Codex `memories/` (layout not
+  verifiable from docs), Settings card switching to the copy flow.
