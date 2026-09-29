@@ -4,6 +4,9 @@
 ;(function () {
   const C = window.COPY.settings
   const GEN = window.COPY.genericError
+  // The import picker's strings live at COPY.step1b (shared with the wizard),
+  // not under COPY.settings. Reading COPY.settings.step1b threw and blanked the page (0.3.6-0.3.7).
+  const S1B = window.COPY.step1b
 
   function $(id) { return document.getElementById(id) }
 
@@ -313,7 +316,7 @@
     $('set-migrate-hint').textContent = C.migrateHint || ''
     const migStatus = $('set-migrate-status')
     const migCopy = $('set-migrate-start')
-    migCopy.textContent = C.step1b.copy(0)
+    migCopy.textContent = S1B.copy(0)
     migCopy.disabled = true
     // Same plan + picker + POST /api/migrate/import as the onboarding step:
     // the files are copied into the agent's own store, never read in place.
@@ -325,7 +328,7 @@
         return
       }
       window.ImportPicker.render({
-        tools: found, T: C.step1b, api, GEN,
+        tools: found, T: S1B, api, GEN,
         list: $('set-migrate-tools'), copyBtn: migCopy, statusEl: migStatus,
       })
     }).catch(() => { migStatus.textContent = C.migrateNoneFound; migCopy.classList.add('hidden') })
@@ -357,7 +360,7 @@
         } else {
           hoDiscoverCopy.classList.remove('hidden')
           window.ImportPicker.render({
-            tools: d.tools, T: C.step1b, api, GEN,
+            tools: d.tools, T: S1B, api, GEN,
             list: $('set-handover-discover-tools'), copyBtn: hoDiscoverCopy, statusEl: hoDiscoverStatus,
           })
         }
@@ -396,7 +399,7 @@
         } else {
           hoStart.classList.remove('hidden')
           window.ImportPicker.render({
-            tools: r.tools, T: C.step1b, api, GEN,
+            tools: r.tools, T: S1B, api, GEN,
             list: hoTools, copyBtn: hoStart, statusEl: hoStatus,
           })
         }
