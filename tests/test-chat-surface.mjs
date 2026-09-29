@@ -78,6 +78,27 @@ assert(/\.chat-meta \{[^}]*align-items: baseline/s.test(css),
 assert(!/\.chat-meta \{[^}]*align-items: center/s.test(css),
   '...and was not "fixed" to center, which would move the name off the time line instead')
 
+console.log('\n3d. user-row avatar (0.3.5, 2026-09-29): the user\'s own picture, no label')
+// The 08-05 "no role labels" rule was retired for the PICTURE only (the owner
+// 2026-09-29 15:07): a user run opens with a row holding the picture and
+// nothing else. The pins: same 32px class, fed by the 'user' slot of the
+// shared resolver, no name/text on the row, hidden while the slot is empty.
+{
+  const i = js.indexOf("'chat-meta chat-meta-user'")
+  assert(i !== -1, 'a user run opens with a chat-meta-user row')
+  const userRow = js.slice(i, js.indexOf('pane.appendChild(meta)', i))
+  assert(userRow.includes("createElement('img')") && userRow.includes("'chat-meta-avatar'") && userRow.includes(".alt = ''"),
+    '...holding a decorative <img> with the same 32px chat-meta-avatar class')
+  assert(!/textContent|chat-meta-name|chat-meta-time|innerHTML/.test(userRow),
+    '...and NOTHING else: no name, no "You", no text of any kind on the user row')
+  assert(userRow.includes('meta.hidden = true'), '...hidden until the user slot resolves to a picture')
+  assert(js.includes("window.avatarUrl('user')"), 'the user picture comes from the shared resolver\'s user slot')
+  assert(!/AVATAR_FALLBACK_URL/.test(userRow), 'the user row never falls back to the agent/app icon')
+  assert(/\.chat-meta\[hidden\] \{[^}]*display: none/s.test(css),
+    '[hidden] is restated for .chat-meta (display: flex would otherwise keep an empty row on screen)')
+  assert(/\.chat-meta-user \{[^}]*align-self: flex-end/s.test(css), 'the user row sits on the user\'s side')
+}
+
 console.log('\n3d. memory mark (2026-09-28) — a quiet tell on a reply that came out of memory')
 // The owner's "기억을 꺼낸 티 내기" → "완전 굿". The flagged item is the ONLY
 // input (channel-local's POST /memory-read arms it; the next agent message

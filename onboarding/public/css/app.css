@@ -559,6 +559,9 @@ button.nav-ctl.is-busy::after {
   border: 1px solid var(--border);
   background: var(--panel-raised);
 }
+/* The user slot with nothing uploaded (0.3.5): no fallback picture exists for
+   it, so the preview is an empty dashed circle of the same size. */
+.agent-avatar-preview[data-empty] { border-style: dashed; }
 /* A checkbox must NOT stretch to the control column's full width -- it sits
    at the column's left edge, same x as every text control's left edge. */
 .agent-control-row input[type="checkbox"] {
@@ -1729,6 +1732,13 @@ html {
   align-self: center;
   flex: 0 0 auto;
 }
+/* The user's own picture row (0.3.5, 2026-09-29): same 32px avatar, on the
+   user's side, and nothing beside it -- no name, no "You". It opens a user
+   run the way .chat-meta opens an agent run. [hidden] must be restated:
+   .chat-meta's display: flex would otherwise beat the UA's display: none, and
+   the row stays hidden whenever the user slot is empty. */
+.chat-meta-user { align-self: flex-end; justify-content: flex-end; margin-bottom: 0; }
+.chat-meta[hidden] { display: none; }
 .chat-meta-name { font-size: 0.8rem; font-weight: 600; color: rgb(var(--accent-rgb) / 0.95); }
 .chat-meta-time {
   font-size: 0.72rem;
