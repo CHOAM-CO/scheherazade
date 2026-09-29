@@ -888,6 +888,78 @@ window.COPY = {
     // "기억페이지 리프레시 버튼이라도 있으면 좋겠어"
     refreshLabel: 'Refresh',
     refreshToast: 'Reloaded.',
+    // AUTHORED -- folder view (0.3.8, the owner: "폴더 탐색하듯, 옵시디언처럼
+    // 두 패널"). Left = tree, right = reader. Everything the tree and reader
+    // say that is not a file's own text lives here.
+    folder: {
+      treeAria: 'Memory folder',
+      treeToggle: 'Browse',
+      rememberNode: 'What I remember',
+      recentNode: 'Recent',
+      recentEmpty: 'Nothing yet',
+      recentDot: 'Touched recently',
+      recentOutside: 'Outside the agent folder — opens in your system app',
+      knownNode: 'What I know about you',
+      journalDbNode: 'Journal (database)',
+      journalDbEntry: 'Daily entries',
+      sessionNode: 'Remembered this session',
+      pointersNode: 'Other tools',
+      treeEmpty: 'No notes in the agent folder yet.',
+      treeLoadError: (msg) => `Couldn't read the agent folder (${msg}).`,
+      treeCapped: 'This folder is large, so the list is capped. Not every file is shown.',
+      treeDeep: 'Some deeply nested folders are not shown.',
+      readerEmpty: 'Pick something on the left.',
+      fileMeta: (p, size, when) => `${p} · ${size}${when ? ` · updated ${when}` : ''}`,
+      fileTruncated: (kb) => `Only the first ${kb} KB of this file is shown.`,
+      fileEmpty: 'This file is empty.',
+      fileLoadError: (msg) => `Couldn't open this file (${msg}).`,
+      // Two different records can share a date: journals/*.md are day files
+      // the agent writes from session notes (procedures/journal-compression),
+      // while the Journal (database) is what journal_write puts in memory.db.
+      // Never merged, never shown as one thing.
+      journalFileNote: 'A file on disk in journals/, written from your session notes. This is a separate record from “Journal (database)”: the same day can appear in both.',
+      journalDbNote: 'Stored in the memory database, not a file. The journals/ folder holds separate day files written from session notes, so the same day can appear in both.',
+      sessionEmpty: 'Nothing remembered this session yet.',
+      tableIntro: (name) => `What ${name} has kept about you. Delete anything that is wrong.`,
+    },
+    // Moved verbatim out of memory.js (it kept two inline string tables).
+    journal: {
+      label: 'Journal',
+      intro: "What the agent writes for itself at the end of each day. It's the day's story, not a summary. A line, once written, can't be edited — only you can delete it.",
+      empty: 'No journal entries yet.',
+      // A gap is stated, never hidden. "The agent ran that day and wrote nothing"
+      // and "nothing happened that day" are different facts, and only one of them
+      // is a bug -- so the user gets to tell them apart.
+      gaps: (n) => `${n} day(s) have no entry (the agent was running that day but wrote nothing).`,
+      loadError: (msg) => `Couldn't load the journal (${msg}).`,
+      del: 'Delete this day',
+      delConfirm: (d) => `Delete the ${d} entry? This can't be undone.`,
+      delOk: 'Delete',
+      deleted: 'Deleted.',
+      failed: (msg) => `Failed: ${msg}`,
+    },
+    pointers: {
+      label: "Other tools' memory (locations only)",
+      intro: `Finds the locations of memory files other AI tools left on ${THIS_MACHINE}, and lists them. It doesn't copy the contents, and doesn't mix them into its own memory. Paths that contain login credentials are excluded from scanning entirely.`,
+      scan: 'Scan now',
+      clear: 'Clear list',
+      scanning: 'Scanning…',
+      // Truncation is stated, never silent: a capped list that reads as complete
+      // is a lie the user has no way to detect.
+      scanned: (n, truncated) => (truncated
+        ? `Found ${n} (capped — only some are shown).`
+        : `Found ${n}.`),
+      cleared: 'List cleared.',
+      empty: 'Nothing scanned yet.',
+      clearConfirm: 'Clear this whole list?',
+      clearOk: 'Clear',
+      coverage: (label, found, note) => `${label}: ${found} — ${note}`,
+      // A heading we refused to keep because it looked like a credential. Silence
+      // here would be the same bug in a friendlier coat: the user would never learn
+      // that we ate a label, and could not tell a caught key from an over-strict
+      // filter. Zero is normal, so this line only appears when it isn't zero.
+      suppressed: (n) => `${n} heading(s) looked like a credential, so they were left out of the list (the file's location is still kept).`,
+    },
   },
 
   // AUTHORED (not in copy file) -- shared shell (nav.js), subpage split
