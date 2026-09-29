@@ -214,7 +214,10 @@ assert(/window\.open\(r\.authorizeUrl/.test(wizardSrc), 'wizard opens the author
 const connectedBlock = wizardSrc.match(/st === 'connected'\)\s*\{[\s\S]*?\}\s*else if/)
 assert(Boolean(connectedBlock), 'located the connected branch in wizard.js')
 if (connectedBlock) {
-  assert(/showStep\('2'\)/.test(connectedBlock[0]), 'connected advances the wizard directly')
+  // afterProvider() (design-0022 step 1b) is the direct advance since
+  // 2026-09-29: it shows the optional import step when another agent tool
+  // is detected, else Step 2. Either way no key re-validation.
+  assert(/showStep\('2'\)|afterProvider\(\)/.test(connectedBlock[0]), 'connected advances the wizard directly')
   assert(!/validateNextHandler|wireValidateNext/.test(connectedBlock[0]),
     'connected does NOT re-enter the key-validate handler (there is no key to send)')
   assert(/nextBtn\.disabled = false/.test(connectedBlock[0]), 'connected un-gates Next')

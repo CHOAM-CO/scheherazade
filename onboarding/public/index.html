@@ -60,6 +60,22 @@
           </div>
         </section>
 
+        <!-- Step 1b: import from other agent tools (design-0022 §4). Shown
+             only when /api/migrate/import/plan finds something; one card per
+             detected tool, per-file checkboxes, nothing copied without the
+             Copy click. -->
+        <section class="step hidden" data-step="1b">
+          <h1 id="s1b-title"></h1>
+          <p id="s1b-body"></p>
+          <p class="field-hint" id="s1b-safety"></p>
+          <div id="s1b-tools"></div>
+          <div class="status-line" id="s1b-status"></div>
+          <div class="step-actions">
+            <button class="secondary" id="s1b-skip"></button>
+            <button id="s1b-copy"></button>
+          </div>
+        </section>
+
         <!-- Step 2: name -->
         <section class="step hidden" data-step="2">
           <h1 id="s2-title"></h1>

@@ -461,6 +461,41 @@ window.COPY = {
     button: 'Next',
   },
 
+  // Step 1b: import from agent tools already on this machine (design-0022
+  // §4). Renders only when something was detected; otherwise the wizard goes
+  // straight from Step 1 to Step 2 and the user never sees it.
+  step1b: {
+    title: 'Bring over what your old agent knew',
+    body: 'We found files from other AI agent tools on this computer. Pick what to copy into your new agent\'s home. It reads them on its first start and keeps what matters. Files are copied, never moved or changed.',
+    safety: 'Keys, tokens, login files and tool settings are never read or copied. A file that looks like it contains a key is held back.',
+    showFiles: (n) => `Show ${n} file${n === 1 ? '' : 's'}`,
+    toolLine: (selected, total, size) => `${selected} of ${total} selected, ${size}`,
+    kinds: {
+      instructions: 'instructions',
+      memory: 'memory',
+      persona: 'persona',
+      schedules: 'recurring jobs',
+      prompts: 'commands',
+      transcript: 'chat history',
+    },
+    transcriptNote: 'Chat history is off by default: old chats can hold keys pasted long ago.',
+    leftInPlace: (names) => `Left in place: ${names.join(', ')}`,
+    skip: 'Skip',
+    copy: (n) => (n === 0 ? 'Copy' : `Copy ${n} file${n === 1 ? '' : 's'}`),
+    copying: 'Copying...',
+    done: (n) => `Copied ${n} file${n === 1 ? '' : 's'}. Your agent will go through them when it starts.`,
+    heldBack: (n) => `${n} file${n === 1 ? '' : 's'} held back:`,
+    reasons: {
+      looks_like_secret: 'looks like it contains a key',
+      too_large: 'larger than 5 MB',
+      gone: 'no longer there',
+      unreadable: 'could not be read',
+      overlaps_data_home: 'overlaps the agent\'s own home',
+      bad_path: 'unexpected path',
+    },
+    continue: 'Continue',
+  },
+
   step2: {
     title: 'Name your agent',
     body: "You'll talk to it by this name. You can change it later in Settings.",

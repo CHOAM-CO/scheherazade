@@ -173,6 +173,19 @@ for (const [label, file] of [
   } catch { /* absent file = nothing to warn about */ }
 }
 
+// Onboarding import handover (design-0022 §3.2). The wizard copies files into
+// imported/ before the agent exists, and the lane's boot redelivery drops
+// sender=SYSTEM turns, so the marker is the durable handoff: this line repeats
+// every session start until the agent folds the copies in and deletes it.
+// Fail open: a broken marker or module says nothing rather than blocking boot.
+let importLine = null
+try {
+  const require = createRequire(import.meta.url)
+  const { readHandoverMarker, handoverInstruction } = require('../memory/migrate-import.cjs')
+  const marker = readHandoverMarker(MEM)
+  if (marker) importLine = handoverInstruction(marker.tools)
+} catch { /* no marker, or unreadable: nothing to say */ }
+
 const out = []
 out.push(`Session note for ${TODAY}: ${noteStatus}.`)
 if (oversize.length > 0) {
@@ -180,6 +193,7 @@ if (oversize.length > 0) {
 }
 if (permLine) out.push(permLine)
 out.push(`Checkpoint: ${checkpointStatus}.`)
+if (importLine) out.push(importLine)
 if (pendingCount > 0) out.push(`${pendingCount} prior-date session note(s) waiting on journal compression -- run journal-compress.mjs scan.`)
 if (dreamCount > 0) out.push(`${dreamCount} dream fragment(s) in dreams/ -- skim the 2 most recent (CLAUDE.md §1 lazy-restore).`)
 if (skillLines.length > 0) {
