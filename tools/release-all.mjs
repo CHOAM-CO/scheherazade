@@ -15,6 +15,22 @@
 // collects and says what is actually inside, and it will not publish a set it
 // has not verified.
 //
+// PACKAGED CONTENT (added for 0.3.5). v0.3.4 shipped with nobody having opened
+// the app.asar inside any artifact: the evidence was the preflight HEAD, a
+// one-byte size delta and the verify stage, none of which reads what is IN
+// the package. So every lane now writes BUILD_INFO.json (tag + git HEAD + a
+// per-run id) into its build tree right before packaging, and after the build
+// the asar is opened and held to it (tools/release-check.mjs):
+//   mac   -- the dmg itself is mounted (hdiutil) and its app.asar read.
+//   win   -- read ON the box from win-unpacked\resources\app.asar, the staging
+//            tree the NSIS installer was packed from in the same run, before
+//            the remote build dir is deleted. The .exe payload itself is NOT
+//            opened: NSIS needs a full 7-Zip, which neither side has.
+//   linux -- read in WSL out of the AppImage itself (--appimage-extract),
+//            falling back LOUDLY to linux-unpacked if extraction fails.
+// Any mismatch (package.json version != tag, stamp head != preflight HEAD,
+// stamp run id != this run) fails the leg and therefore blocks --publish.
+//
 // THE THREE LANES, and the traps each one is written around:
 //
 //   mac    -- here. `npm test` then `npm run dist`. predist/postdist run
@@ -72,6 +88,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { STAMP_NAME, compareFacts, readDmgFacts } from './release-check.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
@@ -106,6 +123,22 @@ const remoteSlug = (tag) => (REHEARSE ? `rehearsal-${tag}` : tag)
 // drop the connection with exit 255. Keepalives, generously.
 const SSH_OPTS = ['-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=240']
 
+// THIS RUN, as the packaged-content check sees it. head is what preflight
+// printed; runId is minted fresh in main() and stamped into every lane's
+// BUILD_INFO.json, so an artifact left over from any earlier run (even of the
+// same commit) cannot pass for this one.
+const RUN = { tag: null, head: null, runId: null }
+// Where each lane's "what the asar said" JSON lands locally. Not an asset.
+const contentCheckFile = (lane) => path.join(RELEASE_DIR, `content-check-${lane}.json`)
+// The mac lane reads its facts once, right after the build, and the verify
+// stage reuses them instead of mounting the dmg a second time.
+const contentFacts = { mac: null }
+// electron-builder's x64 staging dirs (package.json build.win/linux are x64).
+const WIN_STAGE_ASAR = 'release\\win-unpacked\\resources\\app.asar'
+const LINUX_STAGE_ASAR = 'release/linux-unpacked/resources/app.asar'
+const winContentCheckName = 'content-check-win.json'
+const linuxContentCheckName = (tag) => `schz-content-check-${remoteSlug(tag)}-linux.json`
+
 // ── argument parsing ────────────────────────────────────────────────────────
 
 function usage() {
@@ -135,6 +168,10 @@ function usage() {
                     check it. This is how a leg someone else ran on the boxes
                     gets checked here, and it is the only way the win/linux
                     verification rows can be exercised without a shared box.
+                    The packaged-content rows then hold the asar to the tag
+                    and the current HEAD only (there is no run id to match);
+                    win/linux need release/content-check-<lane>.json from
+                    the box, and FAIL without it.
   --notes <file>    release notes file (required by --publish).
   --keep-remote     do not delete the remote build directory afterwards.
   --help`)
@@ -345,20 +382,45 @@ function preflight(opts, tag) {
 
 // ── lane: mac (this machine) ────────────────────────────────────────────────
 
-async function legMac() {
+async function legMac(names) {
   header('mac lane -- this machine (darwin/arm64)')
   log('  npm test first: the packaging gate that runs inside npm run dist checks what the build')
   log('  produced, not whether the code works. Both, in that order, or neither is worth much.')
   await mustRun('npm', ['test'])
-  // predist/postdist run tools/test-packaging.mjs fail-closed around this,
-  // and dist itself re-asserts the host before electron-builder starts.
-  await mustRun('npm', ['run', 'dist'])
+  const stampPath = path.join(ROOT, STAMP_NAME)
+  try {
+    log(`  stamp: ${STAMP_NAME} (tag, HEAD, run id) goes into the tree root; build.files ships it into app.asar.`)
+    await mustRun(process.execPath, ['tools/release-check.mjs', 'stamp', '--tag', RUN.tag, '--run-id', RUN.runId, '--head', RUN.head])
+    // predist/postdist run tools/test-packaging.mjs fail-closed around this,
+    // and dist itself re-asserts the host before electron-builder starts.
+    await mustRun('npm', ['run', 'dist'])
+  } finally {
+    // A stamp left in the tree would ride into the next hand-run `npm run dist`
+    // and vouch for a build this driver never saw.
+    if (!DRY) { try { fs.rmSync(stampPath, { force: true }) } catch { /* gitignored anyway */ } }
+  }
+  if (DRY) { log(`  (dry run) would mount ${names.mac[0]} and hold its app.asar to ${RUN.tag} / ${RUN.head.slice(0, 12)} / run ${RUN.runId.slice(0, 8)}`); return }
+  // Open what was just built, now, so a wrong package stops the run before
+  // the remote legs spend twenty minutes on a shared box.
+  log(`  opening the built dmg's app.asar (hdiutil attach -readonly)`)
+  const facts = readDmgFacts(path.join(RELEASE_DIR, names.mac[0]), PRODUCT)
+  contentFacts.mac = facts
+  try { fs.writeFileSync(contentCheckFile('mac'), JSON.stringify(facts, null, 2) + '\n') } catch { /* record only */ }
+  const bad = compareFacts(facts, RUN).filter((r) => !r.ok)
+  if (bad.length) {
+    throw new Error(`mac packaged-content check failed: ${bad.map((r) => `${r.name} (${r.detail})`).join('; ')}`)
+  }
+  log('  mac packaged content matches this run (rows repeated in the verify stage)')
 }
 
 // ── lane: win (magi-win, over ssh) ──────────────────────────────────────────
 
 function winCmdScript(tag, version, names) {
   const dir = `${WIN_BUILD_ROOT}\\${remoteSlug(tag)}`
+  // node.exe is a real executable, not a batch file, so it needs no `call`.
+  // --no-git: this tree is `git archive` output and has no .git, so --head
+  // (the preflight HEAD the archive was made from) is the stamp's only source.
+  const check = `--tag ${tag} --head ${RUN.head} --run-id ${RUN.runId}`
   // Every `npm` is `call npm`. cmd.exe TRANSFERS control to a batch file
   // rather than calling it, and npm on Windows is npm.cmd -- so a bare
   // `npm ci` here would end this script and every line below it would
@@ -373,11 +435,20 @@ function winCmdScript(tag, version, names) {
     'echo [release-all] npm ci',
     'call npm ci',
     'if errorlevel 1 exit /b 1',
+    `echo [release-all] stamping ${STAMP_NAME}`,
+    `node tools\\release-check.mjs stamp --no-git ${check}`,
+    'if errorlevel 1 exit /b 1',
     'echo [release-all] npm run dist:win',
     'call npm run dist:win',
     'if errorlevel 1 exit /b 1',
     `if not exist "${dir}\\release\\${names.win[0]}" exit /b 1`,
     `if not exist "${dir}\\release\\${names.win[2]}" exit /b 1`,
+    // The NSIS .exe cannot be opened without a full 7-Zip, so the check reads
+    // the staging tree electron-builder packed it from in this same run. It
+    // runs HERE, on the box, because the cleanup stage rmdir's this directory.
+    'echo [release-all] packaged-content check (win-unpacked app.asar)',
+    `node tools\\release-check.mjs dump --asar "${WIN_STAGE_ASAR}" --source win-unpacked --out "release\\${winContentCheckName}" ${check}`,
+    'if errorlevel 1 exit /b 1',
     'echo [release-all] done',
     'exit /b 0',
     '',
@@ -404,7 +475,14 @@ async function legWin(tag, version, names, tmpDir) {
   await mustRun('scp', [...SSH_OPTS, tarball, `${WIN_HOST}:${remoteDirScp}/src.tar.gz`])
   await mustRun('scp', [...SSH_OPTS, cmdFile, `${WIN_HOST}:${remoteDirScp}/build.cmd`])
   log('  the build runs in the FOREGROUND: anything backgrounded dies when this ssh session ends.')
-  await mustRun('ssh', [...SSH_OPTS, WIN_HOST, `"${remoteDir}\\build.cmd"`])
+  if (!DRY) { try { fs.rmSync(contentCheckFile('win'), { force: true }) } catch { /* stale evidence */ } }
+  try {
+    await mustRun('ssh', [...SSH_OPTS, WIN_HOST, `"${remoteDir}\\build.cmd"`])
+  } finally {
+    // Bring the content-check evidence back even when the build (or the check
+    // itself) failed, so the verify stage can name what the asar said.
+    await run('scp', [...SSH_OPTS, `${WIN_HOST}:${remoteDirScp}/release/${winContentCheckName}`, contentCheckFile('win')])
+  }
 
   for (const n of names.win) {
     await mustRun('scp', [...SSH_OPTS, `${WIN_HOST}:${remoteDirScp}/release/${n}`, path.join(RELEASE_DIR, n)])
@@ -414,6 +492,7 @@ async function legWin(tag, version, names, tmpDir) {
 // ── lane: linux (WSL2 on the same box) ──────────────────────────────────────
 
 function wslShScript(tag, bundleName, names) {
+  const check = `--tag ${tag} --head ${RUN.head} --run-id ${RUN.runId}`
   // exec </dev/null FIRST. Fed over stdin, git and npm consume the script
   // itself; even run by path, a child that reads stdin inherits the ssh
   // channel and hangs a build nobody is watching.
@@ -426,6 +505,8 @@ function wslShScript(tag, bundleName, names) {
     'OUT=/mnt/c/Users/magi',
     'echo "[release-all] tree $TREE"',
     'cd "$TREE"',
+    '# No earlier run\'s content-check may survive to be copied back as this one\'s.',
+    `rm -f "$OUT/${linuxContentCheckName(tag)}"`,
     '# npm install leaves package-lock.json dirty here, and a dirty lockfile',
     '# blocks the checkout below with a message about local changes.',
     'git checkout -- package-lock.json 2>/dev/null || true',
@@ -440,10 +521,25 @@ function wslShScript(tag, bundleName, names) {
     `git fetch --force "$BUNDLE" 'HEAD:refs/heads/${remoteSlug(tag)}'`,
     `git checkout --force ${remoteSlug(tag)}`,
     'git --no-pager log --oneline -1',
+    `# ${STAMP_NAME} from THIS tree's git HEAD; refuses if it is not the preflight HEAD.`,
+    `node tools/release-check.mjs stamp ${check}`,
     'npm ci',
     'npm run dist:linux',
     `test -f "release/${names.linux[0]}"`,
     `test -f "release/${names.linux[1]}"`,
+    '# Packaged-content check, out of the AppImage itself. --appimage-extract needs',
+    '# no FUSE; if the runtime will not extract, fall back to the staging tree the',
+    '# AppImage was packed from in this same run, and SAY so.',
+    'CHK=$(mktemp -d)',
+    'trap \'rm -rf "$CHK"\' EXIT',
+    `chmod +x "release/${names.linux[0]}"`,
+    `if (cd "$CHK" && "$TREE/release/${names.linux[0]}" --appimage-extract resources/app.asar >/dev/null 2>&1) && [ -f "$CHK/squashfs-root/resources/app.asar" ]; then`,
+    '  ASAR="$CHK/squashfs-root/resources/app.asar"; SRC=appimage',
+    'else',
+    '  echo "[release-all] WARN could not extract app.asar from the AppImage; checking linux-unpacked (its staging tree) instead"',
+    `  ASAR="$TREE/${LINUX_STAGE_ASAR}"; SRC=linux-unpacked`,
+    'fi',
+    `node tools/release-check.mjs dump --asar "$ASAR" --source "$SRC" --out "$OUT/${linuxContentCheckName(tag)}" ${check}`,
     '# scp cannot reach into the WSL filesystem; hand the artifacts to the',
     '# Windows side and let scp take them from there.',
     `cp "release/${names.linux[0]}" "$OUT/"`,
@@ -469,7 +565,12 @@ async function legLinux(tag, version, names, tmpDir) {
   await mustRun('scp', [...SSH_OPTS, bundle, `${WIN_HOST}:${winScpPath(WIN_USER_DIR)}/${bundleName}`])
   await mustRun('scp', [...SSH_OPTS, sh, `${WIN_HOST}:${winScpPath(WIN_USER_DIR)}/${shName}`])
   log('  the script is run BY PATH, never piped into bash over stdin.')
-  await mustRun('ssh', [...SSH_OPTS, WIN_HOST, `wsl -d ${WSL_DISTRO} -u root -- bash /mnt/c/Users/magi/${shName}`])
+  if (!DRY) { try { fs.rmSync(contentCheckFile('linux'), { force: true }) } catch { /* stale evidence */ } }
+  try {
+    await mustRun('ssh', [...SSH_OPTS, WIN_HOST, `wsl -d ${WSL_DISTRO} -u root -- bash /mnt/c/Users/magi/${shName}`])
+  } finally {
+    await run('scp', [...SSH_OPTS, `${WIN_HOST}:${winScpPath(WIN_USER_DIR)}/${linuxContentCheckName(tag)}`, contentCheckFile('linux')])
+  }
 
   for (const n of names.linux) {
     await mustRun('scp', [...SSH_OPTS, `${WIN_HOST}:${winScpPath(WIN_USER_DIR)}/${n}`, path.join(RELEASE_DIR, n)])
@@ -556,6 +657,32 @@ function verifyLinux(version, names) {
       `file says ${JSON.stringify(h)} -- an "x86_64"-named artifact no x86_64 Linux can execute (the v0.2.20 defect)`)
   }
   verifyYml(yml, version, appimage)
+}
+
+// Holds the packaged app.asar to this run. mac: the dmg (mounted in legMac,
+// or here under --verify-only). win/linux: the JSON the box wrote from the
+// asar it opened before cleanup.
+function verifyContent(lane, names, verifyOnly) {
+  log(`  -- ${lane} packaged content (app.asar vs tag / preflight HEAD / run id)`)
+  let facts = null
+  if (lane === 'mac') {
+    facts = contentFacts.mac || readDmgFacts(path.join(RELEASE_DIR, names.mac[0]), PRODUCT)
+  } else {
+    const f = contentCheckFile(lane)
+    if (!ok(`${shortPath(f)} came back from the box`, fs.existsSync(f),
+      `no packaged-content evidence for ${lane}: the check did not run, or its output was not copied back -- this artifact's contents are UNVERIFIED`)) return
+    try { facts = JSON.parse(fs.readFileSync(f, 'utf8')) } catch (e) {
+      ok(`${shortPath(f)} parses`, false, e && e.message); return
+    }
+  }
+  log(`        opened: ${facts.asar || '(nothing)'}${facts.source ? ` [${facts.source}]` : ''}`)
+  if (facts.source === 'linux-unpacked') log('        warn: the AppImage itself could not be extracted; this is its staging tree, not the shipped file')
+  if (facts.source === 'win-unpacked') log('        note: the NSIS .exe payload is not opened (no 7-Zip); this is the staging tree it was packed from')
+  if (facts.stamp) log(`        stamp: ${JSON.stringify(facts.stamp)}`)
+  for (const r of compareFacts(facts, { tag: RUN.tag, head: RUN.head, runId: verifyOnly ? null : RUN.runId })) {
+    if (r.notChecked) log(`  --    ${r.name}`)
+    else ok(r.name, r.ok, r.detail)
+  }
 }
 
 // ── publish ─────────────────────────────────────────────────────────────────
@@ -646,7 +773,11 @@ async function main() {
     return 2
   }
 
-  preflight(opts, tag)
+  const pre = preflight(opts, tag)
+  RUN.tag = tag
+  RUN.head = pre.head
+  RUN.runId = crypto.randomUUID()
+  log(`  run id ${RUN.runId} (stamped into every lane's ${STAMP_NAME})`)
   if (failures > 0) { log(`\nrelease-all: ${failures} preflight failure(s) -- nothing was built.`); return 1 }
 
   // The remote legs refuse to run on a host that is not this Mac's own; they
@@ -662,7 +793,7 @@ async function main() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `schz-release-${tag}-`))
   try {
     if (opts.verifyOnly) log('\n--verify-only: building nothing; opening what release/ already holds.')
-    else if (lanes.includes('mac')) await legMac()
+    else if (lanes.includes('mac')) await legMac(names)
     if (!opts.verifyOnly && lanes.includes('win')) await legWin(tag, version, names, tmpDir)
     if (!opts.verifyOnly && lanes.includes('linux')) await legLinux(tag, version, names, tmpDir)
   } catch (e) {
@@ -673,11 +804,11 @@ async function main() {
   header('verify -- every artifact opened, not assumed')
   if (DRY) {
     log('  (dry run: nothing was built, so there is nothing to open. The rows that would run:)')
-    for (const lane of lanes) log(`    ${lane}: ${names[lane].join(', ')}`)
+    for (const lane of lanes) log(`    ${lane}: ${names[lane].join(', ')}; packaged app.asar vs ${tag} / ${RUN.head.slice(0, 12)} / run ${RUN.runId.slice(0, 8)}`)
   } else {
-    if (lanes.includes('mac')) verifyMac(version, names)
-    if (lanes.includes('win')) verifyWin(version, names)
-    if (lanes.includes('linux')) verifyLinux(version, names)
+    if (lanes.includes('mac')) { verifyMac(version, names); verifyContent('mac', names, opts.verifyOnly) }
+    if (lanes.includes('win')) { verifyWin(version, names); verifyContent('win', names, opts.verifyOnly) }
+    if (lanes.includes('linux')) { verifyLinux(version, names); verifyContent('linux', names, opts.verifyOnly) }
   }
 
   await publish(opts, tag, lanes, names)
