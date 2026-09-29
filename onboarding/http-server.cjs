@@ -3069,7 +3069,7 @@ function contextCapForModel(model) {
   // name any of them, and a removed entry would make contextCapForModel return
   // null for it -- the gauge goes blank rather than merely stale. Deleting a
   // picker ROW is not licence to stop answering for the id.
-  const CLAUDE_1M = new Set(['claude-fable-5', 'claude-fable-5-1', 'claude-opus-5', 'claude-opus-5-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6'])
+  const CLAUDE_1M = new Set(['claude-fable-5', 'claude-fable-5-1', 'claude-opus-5', 'claude-opus-5-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-sonnet-4-6'])
   const base = model.replace(/\[1m\]$/, '')
   // Live tier first (2026-08-13): whatever the last binary scan saw is the
   // installed CLI's own table -- fresher than any hand-pinned entry below.

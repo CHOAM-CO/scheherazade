@@ -475,15 +475,15 @@ const SUBAGENT_PERSONA =
 // agentOptions is PRESET-mounted config, and ensureLanePreset force-rewrites
 // the authored preset every boot -- the same "preset rows cannot be patched"
 // class as tool-web/tool-ask-user above (Sera measured the overwrite live).
-// Route-aware defaults: anthropic-catalog pins claude-sonnet-5 (current
-// subagent-tier id, verified against the API skill 2026-09-02; NEVER append
+// Route-aware defaults: anthropic-catalog pins claude-sonnet-5-5 (current
+// subagent-tier id, verified against the API skill 2026-09-29, Mino 09-29 14:26 5.0 -> 5.5; NEVER append
 // a date suffix); a declared route keeps the parent model (explicit, same
 // behavior as before) because we cannot guess a valid id on an arbitrary
 // endpoint -- a wrong id kills every spawn. DSH_SUBAGENT_MODEL overrides both.
 function subagentAgentOptions () {
   const provider = DSH_ROUTE === 'anthropic-catalog' ? 'anthropic' : DSH_PROVIDER
   const model = process.env.DSH_SUBAGENT_MODEL ||
-    (DSH_ROUTE === 'anthropic-catalog' ? 'claude-sonnet-5' : DSH_MODEL)
+    (DSH_ROUTE === 'anthropic-catalog' ? 'claude-sonnet-5-5' : DSH_MODEL)
   return { provider, model }
 }
 function guardSubagentRows (yamlText, agentOptions = null) {

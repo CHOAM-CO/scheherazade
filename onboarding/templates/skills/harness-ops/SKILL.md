@@ -35,7 +35,7 @@ Exact strings — never append a date suffix (`-20251114` style is wrong):
 | Model | ID | Note |
 |---|---|---|
 | Claude Opus 5 | `claude-opus-5` | default top tier |
-| Claude Sonnet 5 | `claude-sonnet-5` | subagent/worker tier, cheaper than 4-6 |
+| Claude Sonnet 5.5 | `claude-sonnet-5-5` | subagent/worker tier, cheaper than 4-6 |
 | Claude Haiku 4.5 | `claude-haiku-4-5` | cheapest, simple tasks |
 | Claude Opus 4.6 / 4.7 / 4.8 | `claude-opus-4-6` / `-4-7` / `-4-8` | prior gen |
 | Claude Sonnet 4.6 | `claude-sonnet-4-6` | prior gen |
@@ -47,7 +47,7 @@ the Anthropic route is `anthropic`.
 ## Knobs (env, set by whoever runs the app — relay these, don't guess)
 
 - `DSH_SUBAGENT_MODEL` — pins the model your delegated subagents run on
-  (Anthropic route defaults to `claude-sonnet-5`).
+  (Anthropic route defaults to `claude-sonnet-5-5`).
 - `DSH_TURN_ERROR_RECYCLE` — consecutive-turn-error threshold for the
   self-recycle above (default 3, `0` disables).
 - `STALL_TIMEOUT` — supervisor stall watchdog window, seconds.

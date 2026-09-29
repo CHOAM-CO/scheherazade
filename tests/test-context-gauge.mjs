@@ -83,12 +83,12 @@ console.log('tail truncation:')
 {
   const t = path.join(mem, 't2.jsonl')
   const giant = JSON.stringify({ type: 'user', message: { content: 'A'.repeat(600 * 1024) } })
-  const target = assistantLine('claude-sonnet-5', { input_tokens: 7, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 3 })
+  const target = assistantLine('claude-sonnet-5-5', { input_tokens: 7, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 3 })
   fs.writeFileSync(t, giant + '\n' + target + '\n')
   const r = runHook(mem, t)
   check('hook exits 0 through truncated tail', r.status === 0, `status=${r.status} stderr=${String(r.stderr).slice(0, 200)}`)
   const snap = JSON.parse(fs.readFileSync(statusPath, 'utf8'))
-  check('usage found past the truncated first record', snap.contextTokens === 10 && snap.model === 'claude-sonnet-5', JSON.stringify({ t: snap.contextTokens, m: snap.model }))
+  check('usage found past the truncated first record', snap.contextTokens === 10 && snap.model === 'claude-sonnet-5-5', JSON.stringify({ t: snap.contextTokens, m: snap.model }))
 }
 
 // ── 3. no-clobber + ghost marking: usage-free transcript keeps the previous
@@ -144,7 +144,7 @@ console.log('cap table:')
     ['claude-opus-4-8', 1000000, 'claude-cli-table'],
     ['claude-opus-4-6', 1000000, 'claude-cli-table'],
     ['claude-opus-4-6[1m]', 1000000, 'claude-cli-table'],
-    ['claude-sonnet-5', 1000000, 'claude-cli-table'],
+    ['claude-sonnet-5-5', 1000000, 'claude-cli-table'],
     ['claude-haiku-4-5', 200000, 'claude-cli-table'],
     ['claude-opus-4-5', 200000, 'claude-cli-table'],
     ['kimi-k2.7-code', null, null],

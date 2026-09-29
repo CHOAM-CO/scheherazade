@@ -101,7 +101,7 @@
     { id: 'claude-opus-5-5', label: 'Claude Opus 5.5', group: 'Claude', providers: CLAUDE_PROVIDERS, contextWindow: 1000000, contextWindowSource: 'claude-cli-table' },
     { id: 'claude-fable-5-1', label: 'Claude Fable 5.1', group: 'Claude', providers: CLAUDE_PROVIDERS, contextWindow: 1000000, contextWindowSource: 'claude-cli-table' },
     { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', group: 'Claude', providers: CLAUDE_PROVIDERS, contextWindow: 1000000, contextWindowSource: 'claude-cli-table' },
-    { id: 'claude-sonnet-5', label: 'Claude Sonnet 5', group: 'Claude', providers: CLAUDE_PROVIDERS, contextWindow: 1000000, contextWindowSource: 'claude-cli-table' },
+    { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', group: 'Claude', providers: CLAUDE_PROVIDERS, contextWindow: 1000000, contextWindowSource: 'claude-cli-table' },
     // GPT: 200000 for all four, MEASURED not assumed (2026-09-28) by booting
     // the proxy in-process with an EMPTY CODEX_HOME — the number a fresh
     // install gets, which is the one we ship. Raw /health, one line per id

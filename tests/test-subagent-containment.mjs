@@ -95,10 +95,10 @@ assert(/filtered = guardSubagentRows\(filtered, subagentAgentOptions\(\)\)/.test
 // only when a pin is passed -- the bare call (how this test ran the shipped
 // yaml above) must stay pin-free so declared-route behavior is explicit.
 assert(!/agentOptions:/.test(out), 'no agentOptions rows without a pin argument')
-const pinned = guardSubagentRows(fs.readFileSync(shipped, 'utf8'), { provider: 'anthropic', model: 'claude-sonnet-5' })
-const pinCount = (pinned.match(/agentOptions:\n\s+provider: anthropic\n\s+model: claude-sonnet-5/g) || []).length
+const pinned = guardSubagentRows(fs.readFileSync(shipped, 'utf8'), { provider: 'anthropic', model: 'claude-sonnet-5-5' })
+const pinCount = (pinned.match(/agentOptions:\n\s+provider: anthropic\n\s+model: claude-sonnet-5-5/g) || []).length
 assert(pinCount === 2, `agentOptions pin lands on exactly the two continuable rows (got ${pinCount})`)
-assert(/^(\s+)agentOptions:\n\1 {2}provider: anthropic\n\1 {2}model: claude-sonnet-5$/m.test(pinned), 'agentOptions block is indented as a child mapping')
+assert(/^(\s+)agentOptions:\n\1 {2}provider: anthropic\n\1 {2}model: claude-sonnet-5-5$/m.test(pinned), 'agentOptions block is indented as a child mapping')
 
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)
