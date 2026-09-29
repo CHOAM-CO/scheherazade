@@ -586,8 +586,8 @@
     // when discord IS the active backend -- on slack/telegram it would open
     // a channel the agent no longer lives in. CHANNEL_BACKEND rides
     // /api/config's readAgentConfig() spread; absent = discord (legacy).
-    const activeBackend = String(cfg.CHANNEL_BACKEND || 'discord').toLowerCase()
-    if (activeBackend === 'discord' && cfg.HOME_GUILD_ID && cfg.homeChannelId) {
+    const enabledBackends = String(cfg.CHANNEL_BACKENDS || cfg.CHANNEL_BACKEND || 'discord').toLowerCase().split(',').map((x) => x.trim())
+    if (enabledBackends.includes('discord') && cfg.HOME_GUILD_ID && cfg.homeChannelId) {
       discordBtn.textContent = NAV.openDiscord
       discordBtn.classList.remove('hidden')
       discordBtn.onclick = async () => {

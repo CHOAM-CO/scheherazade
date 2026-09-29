@@ -20,6 +20,8 @@ import os from 'node:os'
 import https from 'node:https'
 import http from 'node:http'
 import { fileURLToPath } from 'node:url'
+import { createRequire as createRequireForBackends } from 'node:module'
+const channelBackendsLib = createRequireForBackends(import.meta.url)('./channel-backends.cjs')
 import { createRequire } from 'node:module'
 import {
   installStdoutHygiene, resolveDataHome, atomicWriteJson, localISO, localNow,
@@ -28,6 +30,7 @@ import {
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
   startScheduleTicker, scheduleInjectContent,
   createInboundNotifier, createOutboundDedup,
+  isCompanionRole, startCompanionToolServer, createCompanionForwarder,
 } from './channel-runtime.mjs'
 // Always-on in-app chat (2026-08-05): this backend HOSTS the local chat
 // surface alongside Discord, so the app's chat window works without
@@ -69,7 +72,10 @@ const HOME_CHANNEL_ID = process.env.HOME_CHANNEL_ID
 // the supervisor's own marker shares the same file, so main.cjs polls one file
 // regardless of which layer detected the problem first. (history: docs/HISTORY.md)
 const DATA_HOME = resolveDataHome(AGENT_NAME)
-const markers = createMarkerStore({ dataHome: DATA_HOME })
+// 0.3.7 multi-channel: a companion process (not the agent's primary MCP
+// channel) keeps its own suffixed markers -- see createMarkerStore.
+const IS_COMPANION = isCompanionRole()
+const markers = createMarkerStore({ dataHome: DATA_HOME, suffix: IS_COMPANION ? 'discord' : '' })
 void sweepStaleAtomicTmp(DATA_HOME, log) // boot hygiene: tmp orphans from unclean shutdowns (never boot-blocking)
 // User-requested scheduled prompts ("매일 아침 메일 브리핑"), shared logic in
 // channel-runtime. Ticker starts on ClientReady below.
@@ -353,8 +359,13 @@ const notifyInbound = createInboundNotifier({
 
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
 
-mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
+const companionForward = createCompanionForwarder({ dataHome: DATA_HOME, ownBackend: 'discord', backendForChannelId: (id) => channelBackendsLib.backendForChannelId(id), log })
+const toolHandler = async (req) => {
   const { name, arguments: args } = req.params
+
+  // Multi-channel: a call for another enabled messenger's conversation is handed to that
+  // messenger's companion process (channel-runtime.mjs createCompanionForwarder).
+  if (!IS_COMPANION) { const fwd = await companionForward(name, args); if (fwd) return fwd }
 
   // In-app chat rides along on every backend (2026-08-05): channelId
   // "in-app" is the local surface's constant id, disjoint from Discord's
@@ -445,7 +456,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   if (name === 'routine') return handleRoutineTool(routineStore, args)
 
   throw new Error(`unknown tool: ${name}`)
-})
+}
+mcp.setRequestHandler(CallToolRequestSchema, toolHandler)
 
 // ── Discord event handlers ──────────────────────────────────────────────────
 // (LIVENESS_MARKER_PATH / writeLivenessMarker() / FAILURE_MARKER_PATH /
@@ -463,19 +475,20 @@ discord.once(Events.ClientReady, (c) => {
   setInterval(() => {
     writeLivenessMarker().catch((err) => log(`liveness heartbeat write failed: ${err.message}`))
   }, LIVENESS_HEARTBEAT_MS).unref()
-  startShutdownRequestWatcher()
-  startAutonomyWatcher()
+  // Companion processes never inject system turns (shutdown flush, autonomy, note cadence,
+  // routines, schedules): the primary owns them, so each fires once, not once per messenger.
+  if (!IS_COMPANION) { startShutdownRequestWatcher(); startAutonomyWatcher() }
   // An optional feature must never take the bridge down with it: degrade to
   // a loud log, keep Discord alive. (history: docs/HISTORY.md)
   try {
-    startNoteCadenceWatcher()
+    if (!IS_COMPANION) startNoteCadenceWatcher()
   } catch (err) {
     log(`note-cadence watcher failed to start (feature disabled this session): ${err.message}`)
   }
   // Routines: same optional-feature contract as the note cadence -- a broken
   // ticker degrades to a log line, never takes Discord down.
   try {
-    startRoutineTicker({
+    if (!IS_COMPANION) startRoutineTicker({
       store: routineStore,
       fire: (r) => notifyInbound({
           content: routineInjectContent(r),
@@ -493,7 +506,7 @@ discord.once(Events.ClientReady, (c) => {
   // fire callback (notifyInbound on the home channel), and the activity
   // signal driving the suppression gate.
   try {
-    startScheduleTicker({
+    if (!IS_COMPANION) startScheduleTicker({
       dataHome: DATA_HOME,
       readConfig: readAgentConfigFile,
       fire: (entry) => notifyInbound({
@@ -873,7 +886,14 @@ discord.on(Events.MessageCreate, async (message) => {
 const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])
 
 async function boot() {
-  await mcp.connect(new StdioServerTransport())
+  // Companion role: no MCP stdio (the claude CLI only spawns the primary).
+  // Tools are served on a loopback endpoint the primary forwards to.
+  let companionTools = null
+  if (IS_COMPANION) {
+    companionTools = await startCompanionToolServer({ dataHome: DATA_HOME, backend: 'discord', handle: toolHandler, log })
+  } else {
+    await mcp.connect(new StdioServerTransport())
+  }
   log(`MCP server up (${AGENT_NAME})`)
 
   // Always-on in-app chat surface, fail-soft: a surface that cannot bind
@@ -886,7 +906,7 @@ async function boot() {
     // Every in-app inbound (a /in message OR a user reaction) flows through
     // this one notify callback -- mark the surface here so an omitted-channelId
     // reply routes back to the chat window (H1 surface tracking).
-    localSurface = await startLocalChatSurface({ notify: (n) => { lastInboundSurface = 'in-app'; return notifyInbound(n.params) }, log })
+    if (!IS_COMPANION) localSurface = await startLocalChatSurface({ notify: (n) => { lastInboundSurface = 'in-app'; return notifyInbound(n.params) }, log })
   } catch (err) {
     log(`in-app chat surface failed to start (chat page off this session): ${err.message}`)
   }
@@ -902,6 +922,7 @@ async function boot() {
     log,
     timeoutMs: 2500,
     cleanup: async () => {
+      try { companionTools?.stop() } catch {}
       try { localSurface?.stop() } catch (err) { log(`surface stop failed during shutdown: ${err.message}`) }
       await discord.destroy()
     },

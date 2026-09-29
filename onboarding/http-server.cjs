@@ -650,7 +650,31 @@ function readAgentConfig() {
     }
     out[m[1]] = value
   }
+  // 0.3.7 migrate-on-read: an old install has only the legacy single
+  // CHANNEL_BACKEND. Present it in list form too (same one channel, same
+  // primary) so every reader can use CHANNEL_BACKENDS; nothing about behaviour
+  // changes. migrateChannelBackendsOnDisk() below persists it once at boot.
+  if (out.CHANNEL_BACKEND && !out.CHANNEL_BACKENDS) {
+    out.CHANNEL_BACKENDS = require('../channel-backends.cjs').parseBackends(out).join(',')
+  }
   return out
+}
+
+// Persist the list form for a legacy-only config. No-op for fresh installs
+// (no CHANNEL_BACKEND at all: default discord needs no key) and for configs
+// already carrying the list. Returns true when it wrote.
+function migrateChannelBackendsOnDisk() {
+  try {
+    if (!fs.existsSync(AGENT_CONFIG_PATH)) return false
+    const raw = fs.readFileSync(AGENT_CONFIG_PATH, 'utf8')
+    if (/^CHANNEL_BACKENDS=/m.test(raw) || !/^CHANNEL_BACKEND=/m.test(raw)) return false
+    const cur = readAgentConfig()
+    writeAgentConfig(require('../channel-backends.cjs').backendConfigFields(require('../channel-backends.cjs').parseBackends(cur)))
+    return true
+  } catch (err) {
+    log(`channel config migration skipped: ${err.message}`)
+    return false
+  }
 }
 
 function writeAgentConfig(fields) {
@@ -755,12 +779,17 @@ const CHANNEL_SCRIPT_PATHS = {
   local: toUnpackedPath(path.join(REPO_ROOT, 'channel-local.mjs')),
 }
 const CHANNEL_BACKENDS = Object.keys(CHANNEL_SCRIPT_PATHS)
+// 0.3.7 multi-channel: .agent-config carries CHANNEL_BACKENDS (list) beside the
+// legacy CHANNEL_BACKEND (see channel-backends.cjs). "Active" = the PRIMARY: the
+// first enabled backend, the one the claude CLI's single agent-channel MCP
+// entry points at. Other enabled backends run as companion processes
+// (main.cjs). Unknown/absent values still degrade to discord, never throw.
+const channelBackendsLib = require('../channel-backends.cjs')
+function enabledChannelBackends() {
+  return channelBackendsLib.parseBackends(readAgentConfig()).filter((b) => CHANNEL_SCRIPT_PATHS[b])
+}
 function activeChannelBackend() {
-  const v = String(readAgentConfig().CHANNEL_BACKEND || 'discord').toLowerCase()
-  // Unknown value falls back to discord rather than throwing: a hand-edited
-  // .agent-config must degrade to the backend that has existed since 0.0.1,
-  // not brick the boot path that would let the user fix it.
-  return CHANNEL_SCRIPT_PATHS[v] ? v : 'discord'
+  return enabledChannelBackends()[0] || 'discord'
 }
 function activeChannelScriptPath() {
   return CHANNEL_SCRIPT_PATHS[activeChannelBackend()]
@@ -3657,7 +3686,7 @@ const staticCtx = {
   MUTE_STRIKE_THRESHOLD, EFFORT_LEVELS,
   // channels
   readHomeChannelId, writeEnv, validateDiscordToken, storeDiscordTokenVerified,
-  readDiscordToken, enumerateDiscordTargets, activeChannelBackend,
+  readDiscordToken, enumerateDiscordTargets, activeChannelBackend, enabledChannelBackends, migrateChannelBackendsOnDisk,
   channelBackendReadiness, readTelegramToken, enumerateTelegramChats,
   telegramApi, storeTelegramTokenVerified, readSlackBotToken, readSlackAppToken,
   enumerateSlackChannels, slackApi, storeSlackBotTokenVerified,
@@ -3826,7 +3855,7 @@ module.exports = {
   // main.cjs's spawn-time env injection (same seam as readDiscordToken
   // above), plus fetchImpl-injectable enumerators for
   // tests/test-channel-connect.mjs (pure, no Electron dependency).
-  activeChannelBackend,
+  activeChannelBackend, enabledChannelBackends, migrateChannelBackendsOnDisk,
   // Exported so tools/test-packaging.mjs can DERIVE the list of channel
   // backend scripts it must verify, instead of keeping its own copy. It kept
   // a hardcoded array of three until 2026-07-30 and a fourth backend shipped

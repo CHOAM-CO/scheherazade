@@ -43,6 +43,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { killTree as procKillTree } from './proc.cjs'
+import { createTurnGate } from './turn-gate.mjs'
 
 const MEM = process.env.MEM
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude'
@@ -721,6 +722,30 @@ async function main() {
   let errorTurnStreak = 0
   let lastStdinWriteTs = 0
   const noteStdinWrite = () => { openTurn = true; lastActivityTs = Date.now(); lastStdinWriteTs = lastActivityTs }
+  // Cross-channel turn ownership (0.3.7, see turn-gate.mjs). Enabled only when
+  // main.cjs says more than one messenger is on; otherwise admit() always says
+  // 'deliver' and nothing below changes behaviour.
+  const turnGate = createTurnGate({ enabled: process.env.SCHEHERAZADE_MULTI_CHANNEL === '1' })
+  // Deliver the next surface's queued messages once the lane is idle. Called at
+  // the end of every turn close. Skipped while a nudge/flush already reopened
+  // the turn (its own result calls this again) or the child is going away (the
+  // queued FIFO entries redeliver at the next boot).
+  const drainTurnGate = () => {
+    if (openTurn || childExited || rotateFlushSent || !child.stdin.writable) return
+    const items = turnGate.release()
+    if (!items.length) return
+    const now = Date.now()
+    const keys = new Set(items.map((i) => i.ts))
+    writePending(readPending().map((ev) => (ev.queued && keys.has(ev.ts) ? { content: ev.content, meta: ev.meta, ts: now } : ev)))
+    log(`turn gate: delivering ${items.length} queued message(s) from ${items[0].surface} (lane idle)`)
+    for (const it of items) {
+      try {
+        child.stdin.write(renderUserEvent({ content: it.content, meta: it.meta || {} }))
+        noteStdinWrite()
+        if (opensMuteGate({ channelId: (it.meta || {}).channelId, content: it.content })) turnHadUserInbound = true
+      } catch (err) { log(`turn gate delivery failed (the FIFO entry redelivers on next boot): ${err.message}`) }
+    }
+  }
   // Turn-level STOP executor (see createTurnStopper). stopSentTs lets the
   // soft-stop result tell "a new message arrived during the stop window"
   // (turn still owed, watchdog stays armed) from "nothing is owed".
@@ -755,7 +780,7 @@ async function main() {
     // boot and killed it again, extending the quit loop the owner watched).
     // User messages still redeliver exactly as before.
     const { stranded, sweeps } = partitionPending(readPending(), Date.now())
-    writePending(stranded.map((ev) => ({ ...ev, redelivered: true })))
+    writePending(stranded.map(({ queued, ...ev }) => ({ ...ev, redelivered: true })))
     // Queued sweeps (migrate/handover "Hand it over" while the lane was down):
     // delivered ONCE as-is -- no [redelivered] note (they were never answered
     // by anyone), and already removed from the FIFO above so the UI's queue
@@ -899,6 +924,7 @@ async function main() {
         try { child.stdin.end() } catch { /* already gone */ }
         terminateChild('stopped rotation handoff')
       }
+      drainTurnGate()
     } else if (e.type === 'result') {
       // Durations exposed for the latency receipts (the owner 2026-08-05 02:47
       // "답변 추론에 비해 너무 늦는데"): dur = whole turn wall-clock, api =
@@ -970,7 +996,7 @@ async function main() {
       //     [redelivered] note already tells the model not to double-reply).
       if (!e.is_error) {
         const p = readPending()
-        if (p.length) writePending(p.filter((ev) => (Number(ev.ts) || 0) > resultTs))
+        if (p.length) writePending(p.filter((ev) => ev.queued || (Number(ev.ts) || 0) > resultTs))
         // ── mute recovery ────────────────────────────────────────────────────
         // A user turn that composed text but called no reply-class tool is the
         // -p mute (the guard's exit 2 cannot force a resend in headless). Nudge
@@ -1031,6 +1057,7 @@ async function main() {
       sawReplyThisTurn = false
       sawTextThisTurn = false
       turnHadUserInbound = false
+      drainTurnGate()
     }
     // (the turn-transcript log ring lives in the FIRST assistant branch above
     // -- a second assistant branch here was dead code for all of 0.1.4/0.1.5,
@@ -1091,7 +1118,7 @@ async function main() {
       if (childExited) return send(503, { error: 'agent not running' })
       if (!openTurn) return send(409, { error: 'no turn in flight' })
       openTurn = false
-      const cleared = writePending([])
+      const cleared = writePending(readPending().filter((ev) => ev.queued)) // other channels' queued messages were never part of the stopped turn
       if (!cleared) log('WARNING: pending FIFO clear failed -- the cancelled message may redeliver on the next boot')
       try {
         writeJsonAtomic(stoppedFile(), { ts: Date.now() }, 0o600)
@@ -1135,6 +1162,19 @@ async function main() {
       const content = String(payload.content == null ? '' : payload.content).trim()
       if (!content) return send(400, { error: 'content required' })
       if (childExited || !child.stdin.writable) return send(503, { error: 'agent not running' })
+      // Cross-channel gate (turn-gate.mjs): a message from another messenger
+      // while a turn is in flight waits its turn. Durable first (queued:true
+      // FIFO entry), acked as queued, delivered by drainTurnGate().
+      const surface = String(payload.surface || '')
+      if (turnGate.admit(surface, openTurn) === 'queue') {
+        const qts = Date.now()
+        if (!writePending([...readPending(), { content, meta: payload.meta || {}, ts: qts, queued: true }])) {
+          return send(500, { error: 'pending persist failed' })
+        }
+        turnGate.enqueue({ content, meta: payload.meta || {}, surface, ts: qts })
+        log(`turn gate: ${surface} message queued behind the in-flight ${turnGate.owner} turn (${turnGate.size} waiting)`)
+        return send(200, { ok: true, queued: true })
+      }
       // Crash-recovery FIFO must be durable BEFORE the message reaches claude's
       // stdin: if the process dies in the window between the stdin write and the
       // persist, the turn is lost with no redelivery record -- yet the request

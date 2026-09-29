@@ -114,8 +114,10 @@ const os = require('node:os')
     'user-data'
   )
 })()
+const channelBackendsLib = require('./channel-backends.cjs')
 const {
   createOnboardingServer,
+  migrateChannelBackendsOnDisk,
   readAgentConfig,
   readDiscordToken,
   readSlackBotToken,
@@ -1040,6 +1042,137 @@ async function spawnRealAgentChild() {
   }
 }
 
+// ── companion channels (0.3.7 multi-channel) ──────────────────────────────
+// Messengers beyond the primary run as their own supervised child processes
+// (channel-companions.mjs), each with only its own credentials. Started right
+// after the supervisor spawns, ended whenever the supervisor is.
+let companionManager = null
+let companionPrimary = null
+async function startChannelCompanions(backends, config, agentName) {
+  stopChannelCompanions()
+  if (!backends.length) return
+  let mod, supMod
+  try {
+    mod = await import(pathToFileURL(path.join(__dirname, 'channel-companions.mjs')).href)
+    supMod = await import(pathToFileURL(SUPERVISOR_MJS_PATH).href)
+  } catch (err) {
+    log(`companion channels unavailable (module load failed: ${err.message}) -- primary channel only`)
+    return
+  }
+  const scriptFor = { discord: 'channel.mjs', slack: 'channel-slack.mjs', telegram: 'channel-telegram.mjs' }
+  const specs = []
+  for (const backend of backends) {
+    if (!scriptFor[backend]) continue // 'local' never runs as a companion
+    const creds = resolveChannelCredentials(backend, config)
+    if (!creds.ok) { log(`companion ${backend} skipped: ${creds.logMsg}`); continue }
+    // A clean, minimal env: NOT process.env's channel secrets (Electron's env may carry
+    // none, but never inherit another messenger's token by accident).
+    const env = { ...process.env }
+    for (const k of ['DISCORD_BOT_TOKEN', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'TELEGRAM_BOT_TOKEN']) delete env[k]
+    Object.assign(env, creds.channelEnv, {
+      HOME_CHANNEL_ID: creds.homeChannelId,
+      AGENT_NAME: agentName,
+      AGENT_DATA_HOME: DATA_HOME,
+      ELECTRON_RUN_AS_NODE: '1',
+      SCHEHERAZADE_CHANNEL_ROLE: 'companion',
+      SCHEHERAZADE_CHANNEL_SURFACE: backend,
+    })
+    specs.push({ backend, cmd: process.execPath, args: [toUnpackedPath(path.join(__dirname, scriptFor[backend]))], cwd: DATA_HOME, env })
+  }
+  if (!specs.length) return
+  companionManager = mod.createCompanionManager({
+    spawn: (spec) => spawn(spec.cmd, spec.args, { cwd: spec.cwd, env: spec.env, stdio: ['pipe', 'pipe', 'pipe'] }),
+    dataHome: DATA_HOME,
+    backoffFor: supMod.backoffFor,
+    log: (m) => log(m),
+  })
+  companionManager.start(specs)
+  log(`companion channels started: ${specs.map((x) => x.backend).join(', ')}`)
+}
+function stopChannelCompanions() {
+  if (!companionManager) return
+  try { companionManager.stopAll((c) => { if (c.pid) killTree(c.pid, 'SIGTERM') }) } catch (err) { log(`companion stop failed: ${err.message}`) }
+  companionManager = null
+}
+// Per-channel status for Settings: the primary (agent's own MCP channel) plus companions.
+function channelStatus() {
+  const out = {}
+  let cfg = {}
+  try { cfg = readAgentConfig() } catch { /* unreadable config: report nothing */ }
+  const list = channelBackendsLib.parseBackends(cfg)
+  const primary = list[0]
+  let connected = false
+  try {
+    const live = JSON.parse(fs.readFileSync(path.join(DATA_HOME, '.agent-live'), 'utf8'))
+    connected = Date.now() - Date.parse(live.lastHeartbeat) <= 150_000
+  } catch { /* no marker */ }
+  out[primary] = { role: 'primary', state: agentChild ? 'running' : 'stopped', connected: Boolean(agentChild && connected) }
+  const comp = companionManager ? companionManager.status() : {}
+  for (const b of list.slice(1)) out[b] = { role: 'companion', ...(comp[b] || { state: agentChild ? 'not_started' : 'stopped', connected: false }) }
+  return out
+}
+
+// ── per-backend credential resolution (0.3.7 multi-channel) ───────────────
+// Pure lookup extracted from spawnRealAgentChildLocked so the PRIMARY channel
+// (injected into the supervisor env, which the claude CLI hands to the one
+// agent-channel MCP server) and every COMPANION channel (its own child process,
+// spawned below) resolve credentials through the same code. Each caller injects
+// ONLY the env this returns -- a companion never sees another messenger's token.
+// Returns { ok:true, channelEnv, homeChannelId } or
+//         { ok:false, logMsg, isError?, status?:[state, code, message] }.
+function resolveChannelCredentials(backend, config) {
+  const channelEnv = {}
+  let homeChannelId
+  if (backend === 'slack') {
+    let slackBot, slackApp
+    try {
+      slackBot = readSlackBotToken()
+      slackApp = readSlackAppToken()
+    } catch (err) {
+      return { ok: false, isError: true, logMsg: `slack token read failed, cannot spawn agent: ${err}`, status: ['failed', 'channel_token_error', `slack token read failed: ${err.message}`] }
+    }
+    if (!slackBot || !slackApp) return { ok: false, logMsg: 'agent spawn skipped: slack backend active but bot/app token missing' }
+    // SLACK_HOME_CHANNEL_ID is OPTIONAL since DM-default mode (2026-08-04): tokens alone are
+    // a complete slack config -- the conversation binds to whoever DMs the bot.
+    homeChannelId = config.SLACK_HOME_CHANNEL_ID || ''
+    channelEnv.SLACK_BOT_TOKEN = slackBot
+    channelEnv.SLACK_APP_TOKEN = slackApp
+  } else if (backend === 'telegram') {
+    let tgToken
+    try {
+      tgToken = readTelegramToken()
+    } catch (err) {
+      return { ok: false, isError: true, logMsg: `telegram token read failed, cannot spawn agent: ${err}`, status: ['failed', 'channel_token_error', `telegram token read failed: ${err.message}`] }
+    }
+    if (!tgToken) return { ok: false, logMsg: 'agent spawn skipped: telegram backend active but no validated bot token yet' }
+    homeChannelId = config.TELEGRAM_HOME_CHAT_ID
+    if (!homeChannelId) return { ok: false, logMsg: 'agent spawn skipped: telegram backend active but no TELEGRAM_HOME_CHAT_ID yet' }
+    channelEnv.TELEGRAM_BOT_TOKEN = tgToken
+  } else if (backend === 'local') {
+    // In-app chat: no third-party credential, nothing to gate the spawn on.
+    // supervisorEnv always carries a HOME_CHANNEL_ID, so hand it the backend's
+    // own constant (channel-local.mjs LOCAL_CHANNEL_ID), not a leftover id.
+    homeChannelId = 'in-app'
+  } else {
+    // discord -- the default AND the unknown-value fallback (mirrors http-server.cjs
+    // activeChannelBackend() so spawn and .mcp.json cannot disagree).
+    let token
+    try {
+      token = readDiscordToken()
+    } catch (err) {
+      // log(), not console.error: stderr never reaches app.log (the Windows OSCrypt case).
+      // 'channel_token_error' is distinct from key_error (provider key) and
+      // discord_token_bad (marker-driven rejected token).
+      return { ok: false, logMsg: `readDiscordToken failed, cannot spawn agent: ${(err && err.message) || err}`, status: ['failed', 'channel_token_error', `readDiscordToken failed: ${err.message}`] }
+    }
+    if (!token) return { ok: false, logMsg: 'agent spawn skipped: no validated Discord bot token on file yet' }
+    homeChannelId = readHomeChannelId()
+    if (!homeChannelId) return { ok: false, logMsg: 'agent spawn skipped: no HOME_CHANNEL_ID on file yet' }
+    channelEnv.DISCORD_BOT_TOKEN = token
+  }
+  return { ok: true, channelEnv, homeChannelId }
+}
+
 async function spawnRealAgentChildLocked() {
   if (agentChild) {
     log(`agent spawn skipped: a child is already alive (pid=${agentChild.pid})`)
@@ -1303,96 +1436,21 @@ async function spawnRealAgentChildLocked() {
   // channel scripts' dotenv read (dotenv never overrides existing env
   // vars), so a stale .env HOME_CHANNEL_ID from the discord era cannot
   // leak into a slack/telegram run.
-  const channelBackend = String(config.CHANNEL_BACKEND || 'discord').toLowerCase()
-  const channelEnv = {}
-  let homeChannelId
-  if (channelBackend === 'slack') {
-    let slackBot, slackApp
-    try {
-      slackBot = readSlackBotToken()
-      slackApp = readSlackAppToken()
-    } catch (err) {
-      console.error('[scheherazade/main] slack token read failed, cannot spawn agent:', err)
-      setAgentStatus('failed', 'channel_token_error', `slack token read failed: ${err.message}`)
-      return null
-    }
-    if (!slackBot || !slackApp) {
-      log('agent spawn skipped: slack backend active but bot/app token missing')
-      return null
-    }
-    // SLACK_HOME_CHANNEL_ID is OPTIONAL since DM-default mode (2026-08-04,
-    // the owner "홈채널 방식 말고 DM 기본"): tokens alone are a complete slack
-    // config -- the conversation binds to whoever DMs the bot. An empty
-    // homeChannelId just means channel-slack.mjs boots without a home
-    // channel (it logs the DM-default line and accepts message.im events).
-    homeChannelId = config.SLACK_HOME_CHANNEL_ID || ''
-    channelEnv.SLACK_BOT_TOKEN = slackBot
-    channelEnv.SLACK_APP_TOKEN = slackApp
-  } else if (channelBackend === 'telegram') {
-    let tgToken
-    try {
-      tgToken = readTelegramToken()
-    } catch (err) {
-      console.error('[scheherazade/main] telegram token read failed, cannot spawn agent:', err)
-      setAgentStatus('failed', 'channel_token_error', `telegram token read failed: ${err.message}`)
-      return null
-    }
-    if (!tgToken) {
-      log('agent spawn skipped: telegram backend active but no validated bot token yet')
-      return null
-    }
-    homeChannelId = config.TELEGRAM_HOME_CHAT_ID
-    if (!homeChannelId) {
-      log('agent spawn skipped: telegram backend active but no TELEGRAM_HOME_CHAT_ID yet')
-      return null
-    }
-    channelEnv.TELEGRAM_BOT_TOKEN = tgToken
-  } else if (channelBackend === 'local') {
-    // In-app chat (in-app chat slice 1): the "platform" is the app itself,
-    // so there is no third-party credential to read and NOTHING to gate the
-    // spawn on -- which is the entire point of the backend: a fresh user
-    // reaches the agent before configuring any messenger. Before this
-    // branch existed (bug, found 2026-07-30 via the owner's live repro), 'local'
-    // fell through to the discord else below: an install WITH a discord
-    // token spawned carrying a stale discord HOME_CHANNEL_ID, and a
-    // local-only install (the slice-5 wizard user this backend was built
-    // for) hit "no validated Discord bot token" and NEVER SPAWNED AT ALL --
-    // onboarding "completed" into an agent that did not exist.
-    // channel-local.mjs ignores HOME_CHANNEL_ID, but supervisorEnv always
-    // carries one, so hand it the backend's own constant (channel-local.mjs
-    // LOCAL_CHANNEL_ID) rather than another backend's leftover id.
-    homeChannelId = 'in-app'
-  } else {
-    // discord -- the default AND the unknown-value fallback, mirroring
-    // http-server.cjs's activeChannelBackend() so spawn and .mcp.json can
-    // never disagree about which backend a weird config value means.
-    let token
-    try {
-      token = readDiscordToken()
-    } catch (err) {
-      // log(), not console.error: this abort was INVISIBLE in the field
-      // (the Windows box 2026-08-21, the OSCrypt fold-in case) -- stderr never
-      // reaches app.log, so the boot just looked like "no spawn line".
-      log(`readDiscordToken failed, cannot spawn agent: ${(err && err.message) || err}`)
-      // 'channel_token_error', deliberately distinct from its two neighbours:
-      // key_error is the PROVIDER key, and discord_token_bad is the marker-
-      // driven missing/rejected-token path in channel.mjs. This one is "the
-      // token may be perfectly good and the OS would not hand it over", which
-      // is a different thing to tell the user (2026-08-04; was 'unknown').
-      setAgentStatus('failed', 'channel_token_error', `readDiscordToken failed: ${err.message}`)
-      return null
-    }
-    if (!token) {
-      log('agent spawn skipped: no validated Discord bot token on file yet')
-      return null
-    }
-    homeChannelId = readHomeChannelId()
-    if (!homeChannelId) {
-      log('agent spawn skipped: no HOME_CHANNEL_ID on file yet')
-      return null
-    }
-    channelEnv.DISCORD_BOT_TOKEN = token
+  // Which messengers are on (channel-backends.cjs; legacy CHANNEL_BACKEND still
+  // read). The FIRST is the primary: its credentials ride the supervisor env and
+  // it is the claude CLI's agent-channel MCP server. The rest start as companion
+  // processes after the supervisor is up (startChannelCompanions).
+  const enabledBackends = channelBackendsLib.parseBackends(config)
+  migrateChannelBackendsOnDisk() // legacy CHANNEL_BACKEND-only config -> list form, once (behaviour unchanged)
+  const channelBackend = enabledBackends[0]
+  const primaryCreds = resolveChannelCredentials(channelBackend, config)
+  if (!primaryCreds.ok) {
+    if (primaryCreds.isError) console.error(`[scheherazade/main] ${primaryCreds.logMsg}`)
+    else log(primaryCreds.logMsg)
+    if (primaryCreds.status) setAgentStatus(...primaryCreds.status)
+    return null
   }
+  const { channelEnv, homeChannelId } = primaryCreds
 
   const agentName = config.AGENT_NAME || FIXED_AGENT_NAME
   const model = config.MODEL || 'claude-opus-4-6' // same default as the supervisor's own MODEL fallback
@@ -1421,6 +1479,10 @@ async function spawnRealAgentChildLocked() {
     ...process.env,
     ...channelEnv,
     HOME_CHANNEL_ID: homeChannelId,
+    // The lane's cross-channel turn gate (turn-gate.mjs) and the primary's own
+    // inbound surface name (which messenger this MCP process speaks for).
+    SCHEHERAZADE_CHANNEL_SURFACE: channelBackend,
+    ...(enabledBackends.length > 1 ? { SCHEHERAZADE_MULTI_CHANNEL: '1' } : { SCHEHERAZADE_MULTI_CHANNEL: '' }),
     AGENT_NAME: agentName,
     MODEL: model,
     // Effort selector (the owner 07-13 click-test item 2): only forwarded when
@@ -1490,6 +1552,7 @@ async function spawnRealAgentChildLocked() {
 
   agentChild = child
   agentSupervisorPid = child.pid
+  startChannelCompanions(enabledBackends.slice(1), config, agentName).catch((err) => log(`companion start failed: ${err.message}`))
   // Spawn-time reality record for GET /api/agent/spawn-info ("셸은 현실",
   // IA v0.0.9): what THIS child was born with. Config can drift the moment
   // the user touches a dropdown; this snapshot cannot -- the shell and the
@@ -1557,6 +1620,7 @@ async function spawnRealAgentChildLocked() {
     setAgentStatus('failed', 'spawn_failed', `spawn error: ${err.message}`)
     agentChild = null
     agentSupervisorPid = null
+    stopChannelCompanions()
     stopFailurePoll()
     fs.rmSync(AGENT_PIDFILE, { force: true })
   })
@@ -1576,6 +1640,7 @@ async function spawnRealAgentChildLocked() {
     log(`agent child exited code=${code} signal=${signal}${wasIntentional ? ` (intentional: ${wasIntentional})` : ''}`)
     agentChild = null
     agentSupervisorPid = null
+    stopChannelCompanions()
     stopFailurePoll()
     fs.rmSync(AGENT_PIDFILE, { force: true })
     if (wasIntentional === 'stop') {
@@ -1781,6 +1846,7 @@ function agentTopologyIsAttach() {
 }
 
 function killAgentSupervisor(signal = 'SIGTERM') {
+  stopChannelCompanions() // companions die with the supervisor tree, on every stop path
   // NOTE (2026-09-08): a null agentSupervisorPid used to return here, which
   // ALSO skipped the identity-safe `supervisor stop` cleanup below -- exactly
   // the case where it is most needed. The supervisor dying (or being killed)
@@ -2187,6 +2253,7 @@ const agentControls = {
   newConversation,
   proxyHealth,
   spawnInfo: () => lastSpawnInfo,
+  channelStatus,
   resolveClaudeBin: () => { const r = resolveClaudeBin(); return r ? r.bin : null },
   // Install-assist info (2026-08-04, the owner "2로 가자"): the wizard's CLI
   // preflight renders install command / plan requirement / license link from
@@ -2355,7 +2422,7 @@ async function requestAgentShutdownGrace() {
     return 'skipped'
   }
   let backend = 'discord'
-  try { backend = String(readAgentConfig().CHANNEL_BACKEND || 'discord').toLowerCase() } catch { /* unreadable config: assume the default */ }
+  try { backend = channelBackendsLib.parseBackends(readAgentConfig())[0] } catch { /* unreadable config: assume the default */ }
   if (!ACK_CAPABLE_BACKENDS.has(backend)) {
     log(`graceful quit: channel backend '${backend}' has no shutdown-ack watcher -- nothing can ack, skipping grace window`)
     return 'skipped'
