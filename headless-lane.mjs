@@ -349,6 +349,43 @@ export function createTurnStopper({
   }
 }
 
+// ── whole-child terminator (0.3.6) ───────────────────────────────────────────
+// Every NON-user-Stop way the lane ends its claude child (stall watchdog,
+// 3-error recycle, context-rotation recycle, .stop_requested / SIGTERM
+// shutdown, endpoint FATAL) used to be a bare child.kill('SIGTERM'), which on
+// win32 is TerminateProcess on ONE pid and orphans every MCP server claude
+// spawned (the 0.3.5 soft-stop bug, other doors). Same seam as the Stop button:
+//   win32: proc.killTree (taskkill /PID /T /F), single-pid kill if that throws.
+//   posix: SIGTERM, SIGKILL after graceMs -- unchanged (claude reaps its MCP
+//          children on SIGTERM; a group kill would take the lane with it).
+export function createChildTerminator({
+  child,
+  platform = process.platform,
+  isExited = () => false,
+  killTree = procKillTree,
+  setTimer = (fn, ms) => { const t = setTimeout(fn, ms); if (t && t.unref) t.unref(); return t },
+  graceMs = SIGNAL_STOP_KILL_MS,
+  log: tlog = log,
+} = {}) {
+  return function terminate(why = '') {
+    if (isExited()) return 'gone'
+    if (platform === 'win32') {
+      tlog(`${why ? why + ': ' : ''}tree-killing the claude child and its MCP children (taskkill /T /F)`)
+      try {
+        killTree(child.pid, 'SIGKILL')
+        return 'tree'
+      } catch (err) {
+        tlog(`tree kill failed (${err.message}) -- falling back to a single-process kill`)
+        try { child.kill('SIGKILL') } catch { /* already gone */ }
+        return 'single'
+      }
+    }
+    try { child.kill('SIGTERM') } catch { /* already gone */ }
+    setTimer(() => { if (!isExited()) { try { child.kill('SIGKILL') } catch { /* gone */ } } }, graceMs)
+    return 'signal'
+  }
+}
+
 function readPriorSession() {
   try {
     const v = JSON.parse(fs.readFileSync(sessionFile(), 'utf8'))
@@ -671,6 +708,8 @@ async function main() {
   // (turn still owed, watchdog stays armed) from "nothing is owed".
   const turnStopper = createTurnStopper({ child, isExited: () => childExited })
   let stopSentTs = 0
+  // Every non-Stop kill goes through this (createChildTerminator): win32 tree kill, posix SIGTERM then SIGKILL.
+  const terminateChild = createChildTerminator({ child, isExited: () => childExited })
 
   // Context-pressure rotation state (see the constants' header). rotatePending
   // mirrors the on-disk marker; lastTurnEndTs anchors the idle boundary to
@@ -828,8 +867,7 @@ async function main() {
       if (rotateFlushSent) {
         log('the stopped turn was the rotation handoff -- recycling into a FRESH session as scheduled')
         try { child.stdin.end() } catch { /* already gone */ }
-        child.kill('SIGTERM')
-        setTimeout(() => { if (!childExited) child.kill('SIGKILL') }, 10_000).unref()
+        terminateChild('stopped rotation handoff')
       }
     } else if (e.type === 'result') {
       // Durations exposed for the latency receipts (the owner 2026-08-05 02:47
@@ -870,8 +908,7 @@ async function main() {
           errLog(`3 consecutive error turns -- treating the resumed conversation as poisoned; recycling into a FRESH session (old transcript stays on disk, it is just no longer auto-resumed)`)
           try { fs.unlinkSync(sessionFile()) } catch { /* already gone */ }
           try { child.stdin.end() } catch { /* already gone */ }
-          child.kill('SIGTERM')
-          setTimeout(() => { if (!childExited) child.kill('SIGKILL') }, 10_000).unref()
+          terminateChild('3 consecutive error turns')
         }
       } else {
         errorTurnStreak = 0
@@ -956,8 +993,7 @@ async function main() {
       if (rotateFlushSent) {
         log('handoff flush turn finished -- recycling into a FRESH session (context-pressure rotation)')
         try { child.stdin.end() } catch { /* already gone */ }
-        child.kill('SIGTERM')
-        setTimeout(() => { if (!childExited) child.kill('SIGKILL') }, 10_000).unref()
+        terminateChild('rotation handoff finished')
       }
       // Per-turn mute flags reset for the NEXT turn (runs for error turns too,
       // so stale flags never leak forward). muteNudgeCount and the on-disk
@@ -1123,7 +1159,7 @@ async function main() {
       // which is dead in -p -- that is an agent that can talk but not hear.
       // Loud and fatal: the supervisor loop respawns us for another try.
       errLog(`FATAL: cannot write ingest endpoint file: ${err.message}`)
-      child.kill('SIGTERM')
+      terminateChild('endpoint FATAL')
       process.exitCode = 74 // EX_IOERR
     }
   })
@@ -1144,8 +1180,7 @@ async function main() {
     // design-0025: leave the record BEFORE the kill so the app can settle the
     // pane to an honest "gone" line if the answer never lands (see the writer).
     writeTurnAbortRecord('stall')
-    child.kill('SIGTERM')
-    setTimeout(() => { if (!childExited) child.kill('SIGKILL') }, 10_000).unref()
+    terminateChild('turn watchdog stall')
   }, 30_000)
   stallTimer.unref()
 
@@ -1179,8 +1214,7 @@ async function main() {
   const shutdown = (sig) => {
     log(`${sig} received, stopping child`)
     try { child.stdin.end() } catch { /* already gone */ }
-    child.kill('SIGTERM')
-    setTimeout(() => { if (!childExited) child.kill('SIGKILL') }, 10_000).unref()
+    terminateChild('shutdown')
   }
   process.on('SIGTERM', () => shutdown('SIGTERM'))
   process.on('SIGINT', () => shutdown('SIGINT'))

@@ -528,6 +528,21 @@ function guardSubagentRows (yamlText, agentOptions = null) {
 // ── engine boot ─────────────────────────────────────────────────────────────
 let child = null
 let childExited = false
+// Every lane-initiated engine kill goes here (0.3.6). win32: a plain kill is
+// TerminateProcess on one pid and orphans the engine's MCP servers, so use
+// proc.killTree (taskkill /T /F); posix keeps SIGTERM. Exported-shape helper
+// takes its seams as arguments so a test can drive it without a real kill.
+export function killEngine (c, { platform = process.platform, killTree = (pid, sig) => require('./proc.cjs').killTree(pid, sig) } = {}) {
+  if (!c || c.killed) return 'gone'
+  if (platform === 'win32') {
+    try { killTree(c.pid, 'SIGKILL'); return 'tree' } catch {
+      try { c.kill('SIGKILL') } catch {}
+      return 'single'
+    }
+  }
+  try { c.kill('SIGTERM') } catch {}
+  return 'signal'
+}
 
 // Turn-error recycle (0.2.19, Sera field report 2026-09-02): the supervisor's
 // stall watchdog reads claude-CLI transcripts under ~/.claude/projects, which
@@ -995,7 +1010,7 @@ async function main () {
             consecutiveTurnErrors += 1
             if (TURN_ERROR_RECYCLE > 0 && consecutiveTurnErrors >= TURN_ERROR_RECYCLE) {
               errLog(`${consecutiveTurnErrors} consecutive turn errors (last: ${code || 'unknown'}) -- recycling lane for a fresh session`)
-              try { if (child && !child.killed) child.kill('SIGTERM') } catch {}
+              killEngine(child)
               process.exit(1)
             }
           } else {
@@ -1307,7 +1322,7 @@ async function main () {
     if (shuttingDown) return
     shuttingDown = true
     clearInterval(heartbeatTimer)
-    try { if (child && !child.killed) child.kill('SIGTERM') } catch {}
+    killEngine(child)
     try { fs.unlinkSync(endpointFile()) } catch {}
     try { fs.unlinkSync(heartbeatFile()) } catch {}
     process.exit(0)
@@ -1333,4 +1348,4 @@ async function main () {
   stopWatch.unref()
 }
 
-main().catch((e) => { errLog(`boot failed: ${e.message}`); try { if (child) child.kill('SIGTERM') } catch {}; process.exit(1) })
+main().catch((e) => { errLog(`boot failed: ${e.message}`); killEngine(child); process.exit(1) })

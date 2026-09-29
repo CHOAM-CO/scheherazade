@@ -162,5 +162,48 @@ console.log('\n6. wiring pins (what the fakes cannot see)')
   assert(added.length > 0 && !added.includes(String.fromCharCode(0x2014)), 'no em dash in the new stop block')
 }
 
+console.log('\n7. 0.3.6: every other kill path goes through the same tree kill')
+{
+  const { createChildTerminator } = L
+  const mk = (platform, opts = {}) => {
+    const r = { kills: [], trees: [], timers: [], exited: !!opts.exited }
+    const child = { pid: 777, kill: (s) => r.kills.push(s) }
+    r.term = createChildTerminator({
+      child, platform, isExited: () => r.exited,
+      killTree: (pid, sig) => { if (opts.throws) throw new Error('taskkill exit 1'); r.trees.push([pid, sig]) },
+      setTimer: (fn, ms) => { r.timers.push({ fn, ms }) }, log: () => {},
+    })
+    return r
+  }
+  const w = mk('win32')
+  assert(w.term('turn watchdog stall') === 'tree' && w.trees.length === 1 && w.trees[0][0] === 777 && w.kills.length === 0,
+    'win32: terminate() tree-kills the claude pid, no bare child.kill')
+  const wf = mk('win32', { throws: true })
+  assert(wf.term('x') === 'single' && wf.kills[0] === 'SIGKILL', 'win32: a failed tree kill falls back to a single-pid kill')
+  const m = mk('darwin')
+  assert(m.term('x') === 'signal' && m.kills[0] === 'SIGTERM' && m.trees.length === 0 && m.timers[0].ms === SIGNAL_STOP_KILL_MS,
+    'posix: SIGTERM then a 10 s SIGKILL timer, no tree kill (unchanged)')
+  m.timers[0].fn()
+  assert(m.kills.join() === 'SIGTERM,SIGKILL', 'posix: the timer escalates to SIGKILL when still alive')
+  const g = mk('win32', { exited: true })
+  assert(g.term('x') === 'gone' && g.trees.length === 0, 'an already-exited child is left alone')
+
+  const lane = readFileSync(path.join(ROOT, 'headless-lane.mjs'), 'utf8')
+  const body = lane.slice(lane.indexOf('const turnStopper = createTurnStopper'))
+  assert(!/child\.kill\(/.test(body), 'headless lane body after the stopper has no bare child.kill left')
+  for (const why of ['stopped rotation handoff', '3 consecutive error turns', 'rotation handoff finished', 'turn watchdog stall', 'shutdown', 'endpoint FATAL']) {
+    assert(body.includes(`terminateChild('${why}')`), `path routed: ${why}`)
+  }
+  const sd = body.slice(body.indexOf("const stopflag = path.join(MEM, '.stop_requested')"))
+  assert(sd.includes("shutdown('stop request (.stop_requested)')"), '.stop_requested -> shutdown -> terminateChild (tree kill on win32)')
+
+  const dsh = readFileSync(path.join(ROOT, 'dsh-lane.mjs'), 'utf8')
+  assert((dsh.match(/child\.kill\(/g) || []).length === 0, 'dsh-lane has no bare child.kill outside killEngine')
+  assert((dsh.match(/killEngine\(child\)/g) || []).length === 3, 'dsh-lane: error recycle, shutdown (incl. .stop_requested) and boot failure use killEngine')
+  assert(dsh.includes("killTree(c.pid, 'SIGKILL')") && dsh.includes("platform === 'win32'"), 'dsh killEngine tree-kills on win32')
+  const copy = readFileSync(path.join(ROOT, 'onboarding/public/js/copy.js'), 'utf8')
+  assert(!copy.includes('takes a few seconds to come back'), 'Stop copy no longer promises a restart delay on every platform')
+}
+
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)

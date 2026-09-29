@@ -1029,7 +1029,7 @@ window.COPY = {
     stop: 'Stop',
     stopAria: 'Stop the run that is in progress',
     stopping: 'Stopping…',
-    stopped: 'Stopped. The agent takes a few seconds to come back; the conversation is kept.',
+    stopped: 'Stopped. The conversation is kept. If the agent restarts, it is back in a few seconds.',
     stopNoTurn: 'That run had already finished.',
     stopFailed: "Couldn't stop the run. If the agent is restarting, try again in a moment.",
     // Steering: the composer stays live mid-run, and what it sends joins the
