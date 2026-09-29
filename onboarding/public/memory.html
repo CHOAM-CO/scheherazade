@@ -21,82 +21,26 @@
       </div>
       <p class="subtitle" id="m-subtitle"></p>
 
-      <!-- "What I remember" (Dreaming feature, 2026-08-16). The agent's own
-           nightly synthesis (procedures/memory-consolidation.md), not a
-           table of raw rows -- placed first because it's the one thing on
-           this page meant to be read as prose, not scanned as a list. -->
-      <div class="category" id="cat-remember">
-        <div class="category-header">
-          <div class="category-label" id="remember-label"></div>
-          <button class="secondary" id="remember-refresh"></button>
+      <!-- Folder view (0.3.8): tree left, reader right, like a notes app.
+           Every section this page used to stack vertically is now either a
+           real folder in the tree (DATA_HOME, via /api/agent-files/*) or a
+           virtual entry (summary, Recent, the four tables, the database
+           journal, session events, imported pointers). memory.js fills both
+           panes; nothing here is static content. -->
+      <div class="mem-split">
+        <div class="mem-side">
+          <button class="secondary mem-tree-toggle" id="mem-tree-toggle" aria-expanded="false" aria-controls="mem-tree"></button>
+          <nav class="category mem-tree" id="mem-tree"></nav>
         </div>
-        <div class="status-line" id="remember-status"></div>
-        <div class="chat-msg" id="remember-body"></div>
-      </div>
-
-      <!-- Recently touched files (같이보기 batch, 2026-08-19). Fed by the
-           file ledger hook (hooks/post-tool-file-ledger.mjs) via
-           /api/files/recent; read-only observability, placed right after the
-           prose pane because "what did it just do to my files" is the second
-           question a returning user asks. -->
-      <div class="category" id="cat-recent-files">
-        <div class="category-header">
-          <div class="category-label" id="recent-files-label"></div>
-          <button class="secondary" id="recent-files-refresh"></button>
-        </div>
-        <div class="field-hint" id="recent-files-hint"></div>
-        <div class="status-line" id="recent-files-status"></div>
-        <div class="entries" id="recent-files-entries"></div>
-      </div>
-
-      <div id="m-session-group" class="session-group hidden">
-        <div class="category-label" id="m-session-label"></div>
-        <div id="m-session-list"></div>
-      </div>
-
-      <!-- Journal (v0.0.5). Placed ABOVE the fact tables on purpose: the tables
-           are what the agent knows ABOUT you; this is what its days were like.
-           If you only ever look at one of these, it should be this one. -->
-      <div class="category" id="cat-journal">
-        <div class="category-label" id="cat-journal-label"></div>
-        <div class="journal-intro" id="journal-intro"></div>
-        <div class="status-line" id="journal-status"></div>
-        <div class="entries" id="journal-entries"></div>
-      </div>
-
-      <div class="category" id="cat-user_facts">
-        <div class="category-label" id="cat-user_facts-label"></div>
-        <div class="entries" id="cat-user_facts-entries"></div>
-      </div>
-      <div class="category" id="cat-open_threads">
-        <div class="category-label" id="cat-open_threads-label"></div>
-        <div class="entries" id="cat-open_threads-entries"></div>
-      </div>
-      <div class="category" id="cat-corrections">
-        <div class="category-label" id="cat-corrections-label"></div>
-        <div class="entries" id="cat-corrections-entries"></div>
-      </div>
-      <div class="category" id="cat-preferences">
-        <div class="category-label" id="cat-preferences-label"></div>
-        <div class="entries" id="cat-preferences-entries"></div>
-      </div>
-
-      <!-- Imported pointers (v0.0.4 item d). Moved to the very bottom
-           (the owner 08-24 01:15): borrowed locations from other tools are the
-           least-consulted thing on this page. Still visually and
-           structurally SEPARATE from the agent's own memory categories:
-           locations rather than content, never blended into the tables
-           above (imported_pointers is not in WRITABLE_TABLES). -->
-      <div class="category" id="cat-pointers">
-        <div class="category-label" id="cat-pointers-label"></div>
-        <div class="pointers-intro" id="pointers-intro"></div>
-        <div class="pointers-coverage" id="pointers-coverage"></div>
-        <div class="pointers-actions">
-          <button class="secondary" id="pointers-scan"></button>
-          <button class="secondary" id="pointers-clear"></button>
-        </div>
-        <div class="status-line" id="pointers-status"></div>
-        <div class="entries" id="pointers-entries"></div>
+        <section class="category mem-reader" id="mem-reader">
+          <div class="category-header">
+            <div class="category-label" id="reader-label"></div>
+            <div class="mem-reader-actions" id="reader-actions"></div>
+          </div>
+          <div class="field-hint" id="reader-hint"></div>
+          <div class="status-line" id="reader-status"></div>
+          <div id="reader-body"></div>
+        </section>
       </div>
     </div>
 

@@ -1,6 +1,6 @@
-// memory.js — read-only memory pane (+ per-entry delete). Renders the 4
-// category tables via memory_query and the "이번 세션에서 기억한 것" group
-// via memory_events, per
+// memory.js — the Memory page as a folder: tree on the left (the agent's home
+// folder plus virtual entries), reader on the right. Fact tables come from
+// memory_query (per-entry delete kept), session events from memory_events, per
 // the pane-copy / opener-criteria source note (2026-07-03) §A.
 // Confidence is never fetched into the DOM; source_session is never
 // rendered raw anywhere below -- only derived dates.
@@ -84,135 +84,566 @@
 
   let displayName = 'Scheherazade'
 
-  async function loadCategory(table) {
-    const container = $(`cat-${table}-entries`)
-    container.innerHTML = ''
-    let rows
+  const TABLES = ['user_facts', 'open_threads', 'corrections', 'preferences']
+  // A file touched within this window gets the "recent" dot in the tree.
+  const RECENT_DOT_MS = 3 * 24 * 60 * 60 * 1000
+  const RECENT_LIST_MAX = 30
+  const NARROW_QUERY = '(max-width: 820px)'
+  const TEXT_EXT = /\.(md|txt|json)$/i
+
+  const F = C.folder
+  const state = {
+    view: { key: 'remember', kind: 'remember' },
+    tree: null, // { root, exists, nodes, truncated, depthCapped } | { error }
+    treeSet: new Set(), // rel path of every file in the tree
+    recent: [], // ledger rows
+    recentRel: new Map(), // rel path -> ts, only rows inside the agent folder
+    open: new Set(['v:recent', 'v:known']), // expanded folders, kept across reloads
+    renderSeq: 0, // drops a slow response after the user clicked elsewhere
+  }
+
+  function el(tag, className, text) {
+    const n = document.createElement(tag)
+    if (className) n.className = className
+    if (text !== undefined) n.textContent = text
+    return n
+  }
+  function fmtSize(n) {
+    if (n < 1024) return `${n} B`
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`
+    return `${(n / 1024 / 1024).toFixed(1)} MB`
+  }
+  function baseName(p) {
+    const s = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+    return s >= 0 ? p.slice(s + 1) : p
+  }
+
+  // ── reader pane ───────────────────────────────────────────────────────
+  // Every view starts from a clean reader and gets back the three slots it
+  // may use (hint / status / body) plus an actions row.
+  function resetReader(label, hint) {
+    $('reader-label').textContent = label
+    $('reader-hint').textContent = hint || ''
+    $('reader-hint').classList.toggle('hidden', !hint)
+    const st = $('reader-status')
+    st.textContent = ''
+    st.className = 'status-line'
+    $('reader-body').textContent = ''
+    $('reader-actions').textContent = ''
+    return $('reader-body')
+  }
+  function setStatus(text, kind) {
+    const st = $('reader-status')
+    st.className = kind ? `status-line ${kind}` : 'status-line'
+    st.textContent = text
+  }
+  function addAction(text, onClick) {
+    const b = el('button', 'secondary', text)
+    b.onclick = onClick
+    $('reader-actions').appendChild(b)
+    return b
+  }
+  function emptyState(text) { return el('div', 'empty-state', text) }
+
+  // ── views ─────────────────────────────────────────────────────────────
+  // "What I remember" (Dreaming feature, 2026-08-16). Read-only: this pane
+  // never writes -- the agent rewrites memory-summary.md itself, overnight,
+  // by following procedures/memory-consolidation.md. Markdown goes through
+  // window.renderMarkdown (markdown.js), the SAME textContent-only renderer
+  // chat.js uses for model output -- this string is model-authored prose
+  // too, and must never ride innerHTML.
+  async function viewRemember(seq) {
+    const R = C.remember
+    const body = resetReader(R.label)
+    const refreshBtn = addAction(R.refreshLabel, async () => {
+      refreshBtn.disabled = true
+      try { await viewRemember(++state.renderSeq) } finally { refreshBtn.disabled = false }
+    })
+    let data
     try {
-      const result = await api(`/api/memory/${table}`)
-      rows = result.rows
+      data = await api('/api/memory/summary')
     } catch (err) {
-      container.innerHTML = ''
-      const errEl = document.createElement('div')
-      errEl.className = 'empty-state'
-      errEl.textContent = GEN(err.message)
-      container.appendChild(errEl)
+      if (seq !== state.renderSeq) return
+      setStatus(R.loadError(err.message), 'failure')
       return
     }
+    if (seq !== state.renderSeq) return
+    if (!data.exists) {
+      body.appendChild(emptyState(R.empty(displayName)))
+      return
+    }
+    const md = el('div', 'chat-msg')
+    renderMarkdown(md, data.markdown)
+    body.appendChild(md)
+    const when = data.updatedISO ? `${isoDate(data.updatedISO)} ${localTime(data.updatedISO)}` : ''
+    setStatus(when ? R.updated(when) : '')
+  }
+
+  // One file from the agent's folder. .md goes through the same
+  // textContent-only renderer; .txt/.json are shown verbatim in a <pre>.
+  async function viewFile(seq, rel) {
+    const body = resetReader(baseName(rel), rel)
+    let data
+    try {
+      data = await api(`/api/agent-files/file?path=${encodeURIComponent(rel)}`)
+    } catch (err) {
+      if (seq !== state.renderSeq) return
+      setStatus(F.fileLoadError(err.message), 'failure')
+      return
+    }
+    if (seq !== state.renderSeq) return
+    const when = data.mtimeISO ? `${isoDate(data.mtimeISO)} ${localTime(data.mtimeISO)}` : ''
+    $('reader-hint').textContent = F.fileMeta(data.path, fmtSize(data.size), when)
+    if (/^journals\//.test(rel)) body.appendChild(el('div', 'field-hint mem-note', F.journalFileNote))
+    if (data.truncated) setStatus(F.fileTruncated(Math.round(data.text.length / 1024)), 'pending')
+    if (!data.text.trim()) {
+      body.appendChild(emptyState(F.fileEmpty))
+    } else if (/\.md$/i.test(rel)) {
+      const md = el('div', 'chat-msg')
+      renderMarkdown(md, data.text)
+      body.appendChild(md)
+    } else {
+      body.appendChild(el('pre', 'mem-raw', data.text))
+    }
+  }
+
+  // One of the four fact tables, with the delete control per row.
+  async function viewTable(seq, table) {
+    const body = resetReader(C.categories[table].label, F.tableIntro(displayName))
+    let rows
+    try {
+      rows = (await api(`/api/memory/${table}`)).rows
+    } catch (err) {
+      if (seq !== state.renderSeq) return
+      body.appendChild(emptyState(GEN(err.message)))
+      return
+    }
+    if (seq !== state.renderSeq) return
+    const box = el('div', 'entries')
+    body.appendChild(box)
     if (rows.length === 0) {
       const emptyCopy = C.categories[table].empty
-      const text = typeof emptyCopy === 'function' ? emptyCopy(displayName) : emptyCopy
-      const el = document.createElement('div')
-      el.className = 'empty-state'
-      el.textContent = text
-      container.appendChild(el)
+      box.appendChild(emptyState(typeof emptyCopy === 'function' ? emptyCopy(displayName) : emptyCopy))
       return
     }
     const format = ROW_FORMATTERS[table]
     for (const row of rows) {
       const formatted = format(row)
-      const rowEl = document.createElement('div')
-      rowEl.className = 'entry-row'
-      const main = document.createElement('div')
-      main.className = 'entry-main'
-      const valueEl = document.createElement('div')
-      valueEl.className = 'entry-value'
-      valueEl.textContent = formatted.value
-      const metaEl = document.createElement('div')
-      metaEl.className = 'entry-meta'
-      metaEl.textContent = formatted.meta
-      main.appendChild(valueEl)
-      main.appendChild(metaEl)
-      const delBtn = document.createElement('button')
-      delBtn.className = 'entry-delete'
-      delBtn.textContent = C.deleteLabel
+      const rowEl = el('div', 'entry-row')
+      const main = el('div', 'entry-main')
+      main.appendChild(el('div', 'entry-value', formatted.value))
+      main.appendChild(el('div', 'entry-meta', formatted.meta))
+      const delBtn = el('button', 'entry-delete', C.deleteLabel)
       delBtn.onclick = async () => {
         const confirmed = await confirmDelete(C.deleteDialog(displayName))
         if (!confirmed) return
         try {
           await api(`/api/memory/${table}/${row.id}`, { method: 'DELETE' })
           showToast(C.deleteToast)
-          loadCategory(table)
-          loadSessionGroup()
+          if (state.view.key === `table:${table}`) viewTable(++state.renderSeq, table)
         } catch (err) {
           showToast(GEN(err.message))
         }
       }
       rowEl.appendChild(main)
       rowEl.appendChild(delBtn)
-      container.appendChild(rowEl)
+      box.appendChild(rowEl)
     }
   }
 
-  async function loadSessionGroup() {
-    const groupEl = $('m-session-group')
+  async function viewSession(seq) {
+    const body = resetReader(C.sessionGroupTitle)
     let result
     try {
       result = await api('/api/memory/session-events')
     } catch (err) {
-      groupEl.classList.add('hidden')
+      if (seq !== state.renderSeq) return
+      setStatus(GEN(err.message), 'failure')
       return
     }
+    if (seq !== state.renderSeq) return
     if (!result.events || result.events.length === 0) {
-      groupEl.classList.add('hidden')
+      body.appendChild(emptyState(F.sessionEmpty))
       return
     }
-    groupEl.classList.remove('hidden')
-    $('m-session-label').textContent = C.sessionGroupTitle
-    const listEl = $('m-session-list')
-    listEl.innerHTML = ''
+    const box = el('div', 'entries')
+    body.appendChild(box)
     for (const ev of result.events) {
-      const row = document.createElement('div')
-      row.className = 'entry-row'
-      const main = document.createElement('div')
-      main.className = 'entry-main'
-      const valueEl = document.createElement('div')
-      valueEl.className = 'entry-value'
-      const tableLabel = (window.COPY.memoryPane.categories[ev.table] && window.COPY.memoryPane.categories[ev.table].label) || ev.table
+      const row = el('div', 'entry-row')
+      const main = el('div', 'entry-main')
+      const tableLabel = (C.categories[ev.table] && C.categories[ev.table].label) || ev.table
       const eventLabel = C.eventLabels[ev.event] || ev.event
       let preview = ''
       if (ev.preview) {
         const fmt = ROW_FORMATTERS[ev.table]
         if (fmt) preview = ' — ' + fmt(ev.preview).value
       }
-      valueEl.textContent = `${tableLabel} · ${eventLabel}${preview}`
-      const metaEl = document.createElement('div')
-      metaEl.className = 'entry-meta'
-      const time = localTime(ev.at)
-      metaEl.textContent = time
-      main.appendChild(valueEl)
-      main.appendChild(metaEl)
+      main.appendChild(el('div', 'entry-value', `${tableLabel} · ${eventLabel}${preview}`))
+      main.appendChild(el('div', 'entry-meta', localTime(ev.at)))
       row.appendChild(main)
-      listEl.appendChild(row)
+      box.appendChild(row)
     }
   }
 
-  // ── Imported pointers (v0.0.4 item d) ─────────────────────────────────
-  // Copy discipline: say what this IS (locations), what it is NOT (a copy of
-  // your files), and what it costs. The scan opens nothing but markdown
-  // headings, and never enters a credential path -- if we claim that, the copy
-  // has to be plain enough that the claim is checkable.
-  const POINTERS_COPY = {
-    label: "Other tools' memory (locations only)",
-    intro: `Finds the locations of memory files other AI tools left on ${window.THIS_MACHINE}, and lists them. It doesn't copy the contents, and doesn't mix them into its own memory. Paths that contain login credentials are excluded from scanning entirely.`,
-    scan: 'Scan now',
-    clear: 'Clear list',
-    scanning: 'Scanning…',
-    // Truncation is stated, never silent: a capped list that reads as complete
-    // is a lie the user has no way to detect.
-    scanned: (n, truncated) => (truncated
-      ? `Found ${n} (capped — only some are shown).`
-      : `Found ${n}.`),
-    cleared: 'List cleared.',
-    empty: 'Nothing scanned yet.',
-    clearConfirm: 'Clear this whole list?',
-    clearOk: 'Clear',
-    coverage: (label, found, note) => `${label}: ${found} — ${note}`,
-    // A heading we refused to keep because it looked like a credential. Silence
-    // here would be the same bug in a friendlier coat: the user would never learn
-    // that we ate a label, and could not tell a caught key from an over-strict
-    // filter. Zero is normal, so this line only appears when it isn't zero.
-    suppressed: (n) => `${n} heading(s) looked like a credential, so they were left out of the list (the file's location is still kept).`,
+  // The DB journal (memory.db journal_entries, via journal_write). NOT the
+  // journals/ files -- those are day files the agent writes from session
+  // notes. Different stores, no mirroring, so this view says which it is.
+  async function viewJournalDb(seq) {
+    const J = C.journal
+    const body = resetReader(F.journalDbNode, J.intro)
+    body.appendChild(el('div', 'field-hint mem-note', F.journalDbNote))
+    let data
+    try {
+      data = await api('/api/journal')
+    } catch (err) {
+      // Fail loud: an unreachable journal must not render as an empty one.
+      if (seq !== state.renderSeq) return
+      setStatus(J.loadError(err.message), 'failure')
+      return
+    }
+    if (seq !== state.renderSeq) return
+    const rows = data.rows || []
+    const gaps = data.gaps || []
+    if (gaps.length > 0) setStatus(J.gaps(gaps.length))
+    if (rows.length === 0) {
+      body.appendChild(emptyState(J.empty))
+      return
+    }
+    const listEl = el('div', 'entries')
+    body.appendChild(listEl)
+    for (const row of rows) {
+      const card = el('div', 'journal-day')
+      const head = el('div', 'journal-day-head')
+      head.appendChild(el('span', 'journal-date', row.date))
+      const del = el('button', 'secondary journal-del', J.del)
+      del.addEventListener('click', async () => {
+        const ok = await confirmDialog(J.delConfirm(row.date), J.delOk, NAV.cancel)
+        if (!ok) return
+        del.disabled = true
+        try {
+          await api(`/api/journal/${row.date}`, { method: 'DELETE' })
+          showToast(J.deleted)
+          if (state.view.key === 'journal-db') viewJournalDb(++state.renderSeq)
+        } catch (err) {
+          del.disabled = false
+          showToast(J.failed(err.message))
+        }
+      })
+      head.appendChild(del)
+      card.appendChild(head)
+      // The body is the agent's own prose, including its timestamp seams. It is
+      // shown as written -- textContent, never innerHTML: this string came from
+      // a model and must never be able to become markup.
+      card.appendChild(el('div', 'journal-body', row.body))
+      listEl.appendChild(card)
+    }
+  }
+
+  // Imported pointers. Note what does NOT happen here: opening this view does
+  // not scan anything. GET /api/memory/pointers reads the table only. The scan
+  // runs on the button and nowhere else -- opt-in has to mean opt-in even when
+  // scanning would be convenient.
+  async function viewPointers(seq) {
+    const P = C.pointers
+    const body = resetReader(P.label, P.intro)
+    const coverageEl = el('div', 'pointers-coverage')
+    const entries = el('div', 'entries')
+    body.appendChild(coverageEl)
+    body.appendChild(entries)
+
+    function paint(data) {
+      const rows = data.rows || []
+      coverageEl.textContent = ''
+      for (const c of data.coverage || []) {
+        coverageEl.appendChild(el('div', 'pointers-coverage-line', P.coverage(c.label, c.found, c.note)))
+        if (c.suppressed > 0) coverageEl.appendChild(el('div', 'pointers-coverage-line pointers-suppressed', P.suppressed(c.suppressed)))
+      }
+      entries.textContent = ''
+      if (!rows.length) {
+        entries.appendChild(el('div', 'entry-empty', P.empty))
+        return
+      }
+      for (const r of rows) {
+        const item = el('div', 'entry pointer-entry')
+        // The pointer shows WHERE and (at most) a heading. There is no body
+        // text to show, because none was ever read.
+        item.appendChild(el('div', 'pointer-path', r.path))
+        item.appendChild(el('div', 'pointer-meta', [r.source_tool, r.topic].filter(Boolean).join(' · ')))
+        entries.appendChild(item)
+      }
+    }
+    async function load() {
+      try {
+        const data = await api('/api/memory/pointers')
+        if (seq === state.renderSeq) paint(data)
+      } catch (err) {
+        console.error('pointer load failed:', err)
+      }
+    }
+    const scanBtn = addAction(P.scan, async () => {
+      scanBtn.disabled = true
+      setStatus(P.scanning, 'pending')
+      try {
+        const result = await api('/api/memory/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+        const truncated = (result.coverage || []).some((c) => c.truncated)
+        setStatus(P.scanned(result.written || 0, truncated))
+        await load()
+      } catch (err) {
+        setStatus(String(err.message || err), 'failure')
+      } finally {
+        scanBtn.disabled = false
+      }
+    })
+    const clearBtn = addAction(P.clear, async () => {
+      const ok = await confirmDialog(P.clearConfirm, P.clearOk, NAV.cancel)
+      if (!ok) return
+      clearBtn.disabled = true
+      try {
+        await api('/api/memory/pointers', { method: 'DELETE' })
+        setStatus(P.cleared)
+        await load()
+      } catch (err) {
+        setStatus(String(err.message || err), 'failure')
+      } finally {
+        clearBtn.disabled = false
+      }
+    })
+    await load()
+  }
+
+  function renderView() {
+    const seq = ++state.renderSeq
+    const v = state.view
+    if (v.kind === 'remember') return viewRemember(seq)
+    if (v.kind === 'file') return viewFile(seq, v.rel)
+    if (v.kind === 'table') return viewTable(seq, v.table)
+    if (v.kind === 'journal-db') return viewJournalDb(seq)
+    if (v.kind === 'session') return viewSession(seq)
+    if (v.kind === 'pointers') return viewPointers(seq)
+    return undefined
+  }
+
+  // ── tree ──────────────────────────────────────────────────────────────
+  function isNarrow() { return window.matchMedia && window.matchMedia(NARROW_QUERY).matches }
+
+  function setTreeOpen(open) {
+    $('mem-tree').classList.toggle('open', open)
+    $('mem-tree-toggle').setAttribute('aria-expanded', open ? 'true' : 'false')
+  }
+  function viewLabel() {
+    const v = state.view
+    if (v.kind === 'remember') return C.remember.label
+    if (v.kind === 'file') return baseName(v.rel)
+    if (v.kind === 'table') return C.categories[v.table].label
+    if (v.kind === 'journal-db') return F.journalDbNode
+    if (v.kind === 'session') return C.sessionGroupTitle
+    return C.pointers.label.replace(/ \(.*$/, '')
+  }
+  function updateToggle() { $('mem-tree-toggle').textContent = `${F.treeToggle} · ${viewLabel()}` }
+
+  // The selection lives in the URL hash (#file:journals/2026-09-28.md,
+  // #table:user_facts, #journal-db ...) so a reload lands where you were.
+  function viewFromKey(key) {
+    if (key === 'remember' || key === 'journal-db' || key === 'session' || key === 'pointers') return { key, kind: key }
+    if (key.startsWith('table:') && TABLES.includes(key.slice(6))) return { key, kind: 'table', table: key.slice(6) }
+    if (key.startsWith('file:') && TEXT_EXT.test(key)) {
+      const rel = key.slice(5)
+      const parts = rel.split('/')
+      for (let i = 1; i < parts.length; i++) state.open.add(`dir:${parts.slice(0, i).join('/')}`)
+      return { key, kind: 'file', rel }
+    }
+    return null
+  }
+
+  function select(view) {
+    state.view = view
+    try { history.replaceState(null, '', `#${encodeURIComponent(view.key)}`) } catch { /* file:// or sandbox */ }
+    renderTree()
+    updateToggle()
+    if (isNarrow()) setTreeOpen(false)
+    renderView()
+  }
+
+  // Which recent ledger paths can the reader open? Inside the agent folder AND
+  // something the file route would serve. Everything else keeps the old
+  // behaviour: hand it to the OS (/api/files/open).
+  function relInsideHome(abs) {
+    const root = state.tree && state.tree.root
+    if (!root) return null
+    const norm = abs.replace(/\\/g, '/')
+    const r = root.replace(/\\/g, '/').replace(/\/+$/, '')
+    if (!norm.startsWith(r + '/')) return null
+    const rel = norm.slice(r.length + 1)
+    const segs = rel.split('/')
+    if (segs.some((s) => !s || s.startsWith('.')) || !TEXT_EXT.test(rel)) return null
+    return rel
+  }
+
+  function collectRecentRel() {
+    state.recentRel = new Map()
+    for (const row of state.recent) {
+      const rel = relInsideHome(row.path)
+      if (rel && Date.now() - row.ts < RECENT_DOT_MS) state.recentRel.set(rel, row.ts)
+    }
+  }
+  function hasRecent(node) {
+    if (node.type === 'file') return state.recentRel.has(node.path)
+    return (node.children || []).some(hasRecent)
+  }
+
+  function nodeButton(label, opts) {
+    const b = el('button', 'mem-node' + (opts.active ? ' active' : '') + (opts.folder ? ' mem-folder-row' : ''))
+    b.type = 'button'
+    b.style.paddingLeft = `${0.55 + opts.depth * 0.95}rem`
+    b.appendChild(el('span', 'mem-caret', opts.folder ? (opts.open ? '▾' : '▸') : ''))
+    const name = el('span', 'mem-name', label)
+    if (opts.title) b.title = opts.title
+    b.appendChild(name)
+    if (opts.dot) {
+      const d = el('span', 'mem-dot')
+      d.title = F.recentDot
+      b.appendChild(d)
+    }
+    if (opts.badge) b.appendChild(el('span', 'mem-badge', opts.badge))
+    if (opts.folder) {
+      b.setAttribute('aria-expanded', opts.open ? 'true' : 'false')
+    } else if (opts.active) {
+      b.setAttribute('aria-current', 'true')
+    }
+    b.onclick = opts.onClick
+    return b
+  }
+
+  // A folder row plus its children, honoring the persisted open-set.
+  function folder(parent, key, label, depth, dot, fillChildren, badge) {
+    const open = state.open.has(key)
+    parent.appendChild(nodeButton(label, {
+      folder: true, open, depth, dot: dot && !open, badge,
+      onClick: () => {
+        if (state.open.has(key)) state.open.delete(key)
+        else state.open.add(key)
+        renderTree()
+      },
+    }))
+    if (open) fillChildren()
+  }
+
+  function renderFileNodes(parent, nodes, depth) {
+    for (const n of nodes) {
+      if (n.type === 'dir') {
+        folder(parent, `dir:${n.path}`, `${n.name}/`, depth, hasRecent(n), () => renderFileNodes(parent, n.children, depth + 1), String(n.children.length))
+      } else {
+        // memory-summary.md is the "What I remember" entry above -- listing
+        // the same file twice under two names is the thing to avoid.
+        if (n.path === 'memory-summary.md') continue
+        const key = `file:${n.path}`
+        parent.appendChild(nodeButton(n.name, {
+          depth, dot: state.recentRel.has(n.path), active: state.view.key === key,
+          onClick: () => select({ key, kind: 'file', rel: n.path }),
+        }))
+      }
+    }
+  }
+
+  function renderTree() {
+    const tree = $('mem-tree')
+    const keepScroll = tree.scrollTop
+    tree.textContent = ''
+    const v = state.view
+
+    tree.appendChild(nodeButton(C.remember.label, {
+      depth: 0, active: v.key === 'remember', onClick: () => select({ key: 'remember', kind: 'remember' }),
+    }))
+
+    // Recent: the file ledger. Inside the agent folder -> opens in the reader;
+    // outside (e.g. ~/.chromux/config.json) -> the OS opens it, as before.
+    const recentRows = state.recent.slice(0, RECENT_LIST_MAX)
+    folder(tree, 'v:recent', F.recentNode, 0, false, () => {
+      if (recentRows.length === 0) tree.appendChild(el('div', 'mem-note-row', F.recentEmpty))
+      for (const row of recentRows) {
+        const rel = relInsideHome(row.path)
+        const inTree = rel && (!state.tree || state.tree.truncated || state.treeSet.has(rel))
+        // Inside the agent folder show the folder-relative path: a bare
+        // "2026-09-28.md" says nothing about which folder it lives in.
+        tree.appendChild(nodeButton(rel || baseName(row.path), {
+          depth: 1,
+          dot: rel && state.recentRel.has(rel),
+          active: inTree && v.key === `file:${rel}`,
+          badge: inTree ? '' : '↗',
+          title: inTree ? row.path : `${row.path}\n${F.recentOutside}`,
+          onClick: inTree
+            ? () => select({ key: `file:${rel}`, kind: 'file', rel })
+            : async () => {
+              try {
+                await api('/api/files/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: row.path }) })
+              } catch (err) {
+                showToast(C.recentFiles.openFail(err.message))
+              }
+            },
+        }))
+      }
+    }, recentRows.length ? String(recentRows.length) : '')
+
+    folder(tree, 'v:known', F.knownNode, 0, false, () => {
+      for (const t of TABLES) {
+        tree.appendChild(nodeButton(C.categories[t].label, {
+          depth: 1, active: v.key === `table:${t}`,
+          onClick: () => select({ key: `table:${t}`, kind: 'table', table: t }),
+        }))
+      }
+    })
+
+    // The real folder.
+    if (!state.tree) {
+      // still loading
+    } else if (state.tree.error) {
+      tree.appendChild(el('div', 'mem-note-row failure', F.treeLoadError(state.tree.error)))
+    } else if (!state.tree.nodes.length) {
+      tree.appendChild(el('div', 'mem-note-row', F.treeEmpty))
+    } else {
+      tree.appendChild(el('div', 'mem-rule'))
+      renderFileNodes(tree, state.tree.nodes, 0)
+      if (state.tree.truncated) tree.appendChild(el('div', 'mem-note-row', F.treeCapped))
+      else if (state.tree.depthCapped) tree.appendChild(el('div', 'mem-note-row', F.treeDeep))
+      tree.appendChild(el('div', 'mem-rule'))
+    }
+
+    folder(tree, 'v:jdb', F.journalDbNode, 0, false, () => {
+      tree.appendChild(nodeButton(F.journalDbEntry, {
+        depth: 1, active: v.key === 'journal-db', onClick: () => select({ key: 'journal-db', kind: 'journal-db' }),
+      }))
+      tree.appendChild(nodeButton(F.sessionNode, {
+        depth: 1, active: v.key === 'session', onClick: () => select({ key: 'session', kind: 'session' }),
+      }))
+    })
+
+    // Imported pointers: locations only, at the very bottom (the owner 08-24).
+    tree.appendChild(nodeButton(F.pointersNode, {
+      depth: 0, active: v.key === 'pointers', onClick: () => select({ key: 'pointers', kind: 'pointers' }),
+    }))
+
+    tree.scrollTop = keepScroll
+  }
+
+  async function loadTreeData() {
+    let tree
+    try {
+      tree = await api('/api/agent-files/tree')
+    } catch (err) {
+      tree = { error: err.message, nodes: [] }
+    }
+    state.tree = tree
+    state.treeSet = new Set()
+    const walk = (ns) => { for (const n of ns || []) { if (n.type === 'file') state.treeSet.add(n.path); else walk(n.children) } }
+    walk(tree.nodes)
+    try {
+      state.recent = ((await api('/api/files/recent')).rows || [])
+    } catch (err) {
+      console.error('recent files load failed:', err)
+      state.recent = []
+    }
+    collectRecentRel()
+    renderTree()
   }
 
   async function init() {
@@ -225,355 +656,29 @@
 
     $('m-title').textContent = C.title
     $('m-subtitle').textContent = C.subtitle(displayName)
-
-    for (const table of ['user_facts', 'open_threads', 'corrections', 'preferences']) {
-      $(`cat-${table}-label`).textContent = C.categories[table].label
-    }
+    $('mem-tree').setAttribute('aria-label', F.treeAria)
+    $('mem-tree-toggle').onclick = () => setTreeOpen(!$('mem-tree').classList.contains('open'))
+    state.treeSet = new Set()
 
     const refreshBtn = $('m-refresh')
     refreshBtn.textContent = C.refreshLabel
     refreshBtn.onclick = async () => {
       refreshBtn.disabled = true
       try {
-        await Promise.all([
-          loadSessionGroup(),
-          ...['user_facts', 'open_threads', 'corrections', 'preferences'].map((t) => loadCategory(t)),
-        ])
+        await Promise.all([loadTreeData(), renderView()])
         showToast(C.refreshToast)
       } finally {
         refreshBtn.disabled = false
       }
     }
 
-    renderRemember()
-    renderRecentFiles()
-    renderJournal()
-    renderPointers()
-    await loadSessionGroup()
-    for (const table of ['user_facts', 'open_threads', 'corrections', 'preferences']) {
-      loadCategory(table)
-    }
-  }
-
-  // Recently touched files (같이보기 batch, 2026-08-19). Read-only over the
-  // file-ledger JSONL the PostToolUse hook appends; every row is
-  // textContent-built (paths are agent-influenced strings -- same
-  // no-innerHTML rule as everything else on this page). Failed touches dim
-  // with a mark instead of hiding: hiding a failed write is the
-  // silent-false-success class design-0017 exists to kill.
-  async function renderRecentFiles() {
-    const R = window.COPY.memoryPane.recentFiles
-    $('recent-files-label').textContent = R.label(displayName)
-    $('recent-files-hint').textContent = R.openHint
-    const refreshBtn = $('recent-files-refresh')
-    refreshBtn.textContent = R.refreshLabel
-    const entriesEl = $('recent-files-entries')
-    const statusEl = $('recent-files-status')
-
-    async function load() {
-      statusEl.textContent = ''
-      statusEl.className = 'status-line'
-      let data
-      try {
-        data = await api('/api/files/recent')
-      } catch (err) {
-        entriesEl.textContent = ''
-        statusEl.className = 'status-line failure'
-        statusEl.textContent = R.loadError(err.message)
-        return
-      }
-      entriesEl.textContent = ''
-      if (!data.rows || data.rows.length === 0) {
-        const empty = document.createElement('div')
-        empty.className = 'empty-state'
-        empty.textContent = R.empty(displayName)
-        entriesEl.appendChild(empty)
-        return
-      }
-      for (const row of data.rows) {
-        const el = document.createElement('div')
-        el.className = 'entry'
-        el.style.cursor = 'pointer'
-        if (row.failed) el.style.opacity = '0.6'
-
-        const line = document.createElement('div')
-        const nameSpan = document.createElement('strong')
-        const slash = row.path.lastIndexOf('/') >= 0 ? row.path.lastIndexOf('/') : row.path.lastIndexOf('\\')
-        nameSpan.textContent = slash >= 0 ? row.path.slice(slash + 1) : row.path
-        line.appendChild(nameSpan)
-        const dirSpan = document.createElement('span')
-        dirSpan.className = 'entry-meta'
-        dirSpan.textContent = slash >= 0 ? `  ${row.path.slice(0, slash + 1)}` : ''
-        line.appendChild(dirSpan)
-        el.appendChild(line)
-
-        const meta = document.createElement('div')
-        meta.className = 'entry-meta'
-        const when = new Date(row.ts)
-        const parts = [when.toLocaleString(), R.touches(row.touches)]
-        if (row.failed) parts.push(R.failedMark)
-        meta.textContent = parts.join(' · ')
-        el.appendChild(meta)
-
-        el.onclick = async () => {
-          try {
-            await api('/api/files/open', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ path: row.path }),
-            })
-          } catch (err) {
-            showToast(R.openFail(err.message))
-          }
-        }
-        entriesEl.appendChild(el)
-      }
-    }
-
-    refreshBtn.onclick = async () => {
-      refreshBtn.disabled = true
-      try { await load() } finally { refreshBtn.disabled = false }
-    }
-    load()
-  }
-
-  // "What I remember" (Dreaming feature, 2026-08-16). Read-only: this pane
-  // never writes -- the agent rewrites memory-summary.md itself, overnight,
-  // by following procedures/memory-consolidation.md. Markdown goes through
-  // window.renderMarkdown (markdown.js), the SAME textContent-only renderer
-  // chat.js uses for model output -- this string is model-authored prose
-  // too, and must never ride innerHTML.
-  async function renderRemember() {
-    const R = window.COPY.memoryPane.remember
-    $('remember-label').textContent = R.label
-    const refreshBtn = $('remember-refresh')
-    refreshBtn.textContent = R.refreshLabel
-    const bodyEl = $('remember-body')
-    const statusEl = $('remember-status')
-
-    async function load() {
-      statusEl.textContent = ''
-      statusEl.className = 'status-line'
-      let data
-      try {
-        data = await api('/api/memory/summary')
-      } catch (err) {
-        bodyEl.textContent = ''
-        statusEl.className = 'status-line failure'
-        statusEl.textContent = R.loadError(err.message)
-        return
-      }
-      if (!data.exists) {
-        bodyEl.textContent = ''
-        const empty = document.createElement('div')
-        empty.className = 'empty-state'
-        empty.textContent = R.empty(displayName)
-        bodyEl.appendChild(empty)
-        return
-      }
-      renderMarkdown(bodyEl, data.markdown)
-      const when = data.updatedISO ? `${isoDate(data.updatedISO)} ${localTime(data.updatedISO)}` : ''
-      statusEl.textContent = when ? R.updated(when) : ''
-    }
-
-    refreshBtn.onclick = async () => {
-      refreshBtn.disabled = true
-      try {
-        await load()
-      } finally {
-        refreshBtn.disabled = false
-      }
-    }
-
-    await load()
-  }
-
-  // The journal (v0.0.5). The four tables below are what the agent knows ABOUT
-  // the user; this is what its days were like. It sits first for that reason.
-  const JOURNAL_COPY = {
-    label: 'Journal',
-    intro: "What the agent writes for itself at the end of each day. It's the day's story, not a summary. A line, once written, can't be edited — only you can delete it.",
-    empty: 'No journal entries yet.',
-    // A gap is stated, never hidden. "The agent ran that day and wrote nothing"
-    // and "nothing happened that day" are different facts, and only one of them
-    // is a bug -- so the user gets to tell them apart.
-    gaps: (n) => `${n} day(s) have no entry (the agent was running that day but wrote nothing).`,
-    del: 'Delete this day',
-    delConfirm: (d) => `Delete the ${d} entry? This can't be undone.`,
-    delOk: 'Delete',
-    deleted: 'Deleted.',
-  }
-
-  async function renderJournal() {
-    const J = JOURNAL_COPY
-    $('cat-journal-label').textContent = J.label
-    $('journal-intro').textContent = J.intro
-    const listEl = $('journal-entries')
-    const statusEl = $('journal-status')
-    listEl.innerHTML = ''
-    statusEl.textContent = ''
-
-    let data
-    try {
-      data = await api('/api/journal')
-    } catch (err) {
-      // Fail loud: an unreachable journal must not render as an empty one.
-      statusEl.textContent = `Couldn't load the journal (${err.message}).`
-      return
-    }
-
-    const rows = data.rows || []
-    const gaps = data.gaps || []
-    if (gaps.length > 0) statusEl.textContent = J.gaps(gaps.length)
-    if (rows.length === 0) {
-      const empty = document.createElement('div')
-      empty.className = 'empty-state'
-      empty.textContent = J.empty
-      listEl.appendChild(empty)
-      return
-    }
-
-    for (const row of rows) {
-      const card = document.createElement('div')
-      card.className = 'journal-day'
-
-      const head = document.createElement('div')
-      head.className = 'journal-day-head'
-      const dateEl = document.createElement('span')
-      dateEl.className = 'journal-date'
-      dateEl.textContent = row.date
-      head.appendChild(dateEl)
-
-      const del = document.createElement('button')
-      del.className = 'secondary journal-del'
-      del.textContent = J.del
-      del.addEventListener('click', async () => {
-        const ok = await confirmDialog(J.delConfirm(row.date), J.delOk, NAV.cancel)
-        if (!ok) return
-        del.disabled = true
-        try {
-          await api(`/api/journal/${row.date}`, { method: 'DELETE' })
-          showToast(J.deleted)
-          await renderJournal()
-        } catch (err) {
-          del.disabled = false
-          showToast(`Failed: ${err.message}`)
-        }
-      })
-      head.appendChild(del)
-      card.appendChild(head)
-
-      // The body is the agent's own prose, including its timestamp seams. It is
-      // shown as written -- textContent, never innerHTML: this string came from
-      // a model and must never be able to become markup.
-      const body = document.createElement('div')
-      body.className = 'journal-body'
-      body.textContent = row.body
-      card.appendChild(body)
-
-      listEl.appendChild(card)
-    }
-  }
-
-  // Imported pointers. Note what does NOT happen here: opening this page does
-  // not scan anything. GET /api/memory/pointers reads the table only. The scan
-  // runs on the button and nowhere else -- opt-in has to mean opt-in even when
-  // scanning would be convenient.
-  function renderPointers() {
-    const P = POINTERS_COPY
-    $('cat-pointers-label').textContent = P.label
-    $('pointers-intro').textContent = P.intro
-    const scanBtn = $('pointers-scan')
-    const clearBtn = $('pointers-clear')
-    const statusEl = $('pointers-status')
-    scanBtn.textContent = P.scan
-    clearBtn.textContent = P.clear
-
-    function paint(data) {
-      const rows = data.rows || []
-      const cov = data.coverage || []
-      $('pointers-coverage').innerHTML = ''
-      for (const c of cov) {
-        const line = document.createElement('div')
-        line.className = 'pointers-coverage-line'
-        line.textContent = P.coverage(c.label, c.found, c.note)
-        $('pointers-coverage').appendChild(line)
-        if (c.suppressed > 0) {
-          const warn = document.createElement('div')
-          warn.className = 'pointers-coverage-line pointers-suppressed'
-          warn.textContent = P.suppressed(c.suppressed)
-          $('pointers-coverage').appendChild(warn)
-        }
-      }
-      const entries = $('pointers-entries')
-      entries.innerHTML = ''
-      if (!rows.length) {
-        const empty = document.createElement('div')
-        empty.className = 'entry-empty'
-        empty.textContent = P.empty
-        entries.appendChild(empty)
-        return
-      }
-      for (const r of rows) {
-        const el = document.createElement('div')
-        el.className = 'entry pointer-entry'
-        // The pointer shows WHERE and (at most) a heading. There is no body
-        // text to show, because none was ever read.
-        const loc = document.createElement('div')
-        loc.className = 'pointer-path'
-        loc.textContent = r.path
-        const meta = document.createElement('div')
-        meta.className = 'pointer-meta'
-        meta.textContent = [r.source_tool, r.topic].filter(Boolean).join(' · ')
-        el.appendChild(loc)
-        el.appendChild(meta)
-        entries.appendChild(el)
-      }
-    }
-
-    async function load() {
-      try {
-        paint(await api('/api/memory/pointers'))
-      } catch (err) {
-        console.error('pointer load failed:', err)
-      }
-    }
-
-    scanBtn.onclick = async () => {
-      scanBtn.disabled = true
-      statusEl.textContent = P.scanning
-      try {
-        const result = await api('/api/memory/import', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
-        })
-        const truncated = (result.coverage || []).some((c) => c.truncated)
-        statusEl.textContent = P.scanned(result.written || 0, truncated)
-        await load()
-      } catch (err) {
-        statusEl.className = 'status-line failure'
-        statusEl.textContent = String(err.message || err)
-      } finally {
-        scanBtn.disabled = false
-      }
-    }
-
-    clearBtn.onclick = async () => {
-      const ok = await confirmDialog(P.clearConfirm, P.clearOk, NAV.cancel)
-      if (!ok) return
-      clearBtn.disabled = true
-      try {
-        await api('/api/memory/pointers', { method: 'DELETE' })
-        statusEl.textContent = P.cleared
-        await load()
-      } catch (err) {
-        statusEl.className = 'status-line failure'
-        statusEl.textContent = String(err.message || err)
-      } finally {
-        clearBtn.disabled = false
-      }
-    }
-
-    load()
+    let fromHash = null
+    try { fromHash = viewFromKey(decodeURIComponent(location.hash.slice(1))) } catch { /* bad escape */ }
+    if (fromHash) state.view = fromHash
+    renderTree()
+    updateToggle()
+    renderView()
+    await loadTreeData()
   }
 
   init()

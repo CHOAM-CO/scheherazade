@@ -919,6 +919,81 @@ button.nav-ctl.is-busy::after {
 .journal-body { white-space: pre-wrap; line-height: 1.6; font-size: 0.92rem; }
 .journal-intro { font-size: 0.85rem; color: var(--fg-dim); margin-bottom: 0.6rem; }
 
+/* ── Memory page: folder view (0.3.8) ──────────────────────────────────────
+   Two panes like a notes app: tree left, reader right. Both panes are
+   .category cards, so the glass grammar is unchanged. Below 820px the grid
+   becomes one column and the tree hides behind a toggle above the reader. */
+.mem-split {
+  display: grid;
+  grid-template-columns: minmax(200px, 270px) minmax(0, 1fr);
+  gap: var(--s4);
+  align-items: start;
+}
+.mem-side { min-width: 0; }
+.mem-tree-toggle { display: none; width: 100%; text-align: left; margin-bottom: var(--s2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mem-tree, .mem-reader { margin-bottom: 0; min-width: 0; }
+.mem-tree {
+  padding: var(--s2);
+  max-height: calc(100vh - 11rem);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.mem-reader { padding: var(--s4) var(--s5); overflow-wrap: anywhere; }
+.mem-reader .category-label { text-transform: none; letter-spacing: 0; font-size: 0.95rem; color: var(--fg); font-weight: 600; }
+.mem-reader .field-hint { margin-bottom: var(--s3); }
+.mem-reader-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end; }
+.mem-reader-actions button { font-size: 0.78rem; padding: 0.3rem 0.7rem; }
+.mem-reader .status-line:empty { display: none; }
+.mem-reader .chat-msg { padding: 0; border-left: 0; }
+.mem-note { padding: 0.5rem 0.7rem; border-left: 2px solid var(--border-strong); background: rgba(255, 255, 255, 0.03); border-radius: 0 var(--radius-s) var(--radius-s) 0; }
+.mem-raw {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--fg);
+}
+
+/* Tree rows. button.mem-node beats the global filled-accent <button> look. */
+button.mem-node {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0.28rem 0.55rem;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 0.84rem;
+  font-weight: 400;
+  text-align: left;
+}
+button.mem-node:hover:not(:disabled) { background: var(--panel-raised); color: var(--fg); }
+button.mem-node.active { background: rgb(var(--accent-rgb, 213 164 88) / 0.16); color: var(--fg); }
+button.mem-node.mem-folder-row { color: var(--fg); font-weight: 500; }
+button.mem-node:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: -2px; }
+.mem-caret { flex: none; width: 0.9rem; color: var(--fg-dim); font-size: 0.85rem; line-height: 1; text-align: center; }
+.mem-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mem-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.mem-badge { flex: none; color: var(--fg-faint); font-size: 0.72rem; }
+.mem-rule { height: 1px; background: var(--border); margin: 0.35rem 0.5rem; }
+.mem-note-row { color: var(--fg-faint); font-size: 0.78rem; padding: 0.25rem 0.8rem; }
+.mem-note-row.failure { color: var(--danger); }
+
+@media (max-width: 820px) {
+  .mem-split { grid-template-columns: minmax(0, 1fr); gap: var(--s3); }
+  .mem-tree-toggle { display: block; }
+  .mem-tree-toggle::after { content: '▾'; float: right; color: var(--fg-faint); }
+  .mem-tree-toggle[aria-expanded="true"]::after { content: '▴'; }
+  .mem-tree { display: none; max-height: 55vh; }
+  .mem-tree.open { display: block; }
+  .mem-reader { padding: var(--s4); }
+}
+
 /* ── /chat in-app conversation (in-app chat slice 4) ──────────────────────
    Chat register, NOT the terminal register next door: this pane is the
    conversation itself, so it reads as app chrome (panel bg, app font),
