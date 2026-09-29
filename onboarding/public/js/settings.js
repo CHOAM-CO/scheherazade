@@ -305,41 +305,30 @@
 
     // ── import from other agents (design-0022, the owner 20:13 "에이전트가
     // 싹 다 긁어서 '제가 이제 챙길게요'"). Settings is the always-there
-    // surface; the wizard step reuses the same endpoints later. This UI
-    // is ONLY the consent gate -- the agent performs the sweep itself,
-    // live in chat, after POST /api/migrate/start. ─────────────────────
+    // surface; the wizard step shares its picker (js/import-picker.js) and
+    // POST /api/migrate/import: chosen files are copied into the agent's own
+    // store with a receipt, and the agent folds the copies in. ──────────
     $('set-group-migrate').textContent = C.groupMigrate || 'Import'
     $('set-migrate-label').textContent = C.migrateLabel || 'Other agents'
     $('set-migrate-hint').textContent = C.migrateHint || ''
-    const migTools = $('set-migrate-tools')
     const migStatus = $('set-migrate-status')
-    const migStart = $('set-migrate-start')
-    migStart.textContent = C.migrateStartButton
-    migStart.disabled = true
-    const migChecks = new Map() // id -> checkbox
-    api('/api/migrate/detect').then((d) => {
-      const found = (d.tools || []).filter((t) => t.detected)
+    const migCopy = $('set-migrate-start')
+    migCopy.textContent = C.step1b.copy(0)
+    migCopy.disabled = true
+    // Same plan + picker + POST /api/migrate/import as the onboarding step:
+    // the files are copied into the agent's own store, never read in place.
+    api('/api/migrate/import/plan').then((d) => {
+      const found = (d.tools || []).filter((t) => t.detected && t.items && t.items.length)
       if (!found.length) {
         migStatus.textContent = C.migrateNoneFound
+        migCopy.classList.add('hidden')
         return
       }
-      for (const t of found) {
-        const row = document.createElement('label')
-        row.className = 'migrate-tool-row'
-        const cb = document.createElement('input')
-        cb.type = 'checkbox'
-        cb.checked = true
-        cb.onchange = () => { migStart.disabled = ![...migChecks.values()].some((c) => c.checked) }
-        migChecks.set(t.id, cb)
-        row.appendChild(cb)
-        const span = document.createElement('span')
-        span.textContent = C.migrateToolLine(t.label, t.files.length, t.truncated)
-        span.title = t.root
-        row.appendChild(span)
-        migTools.appendChild(row)
-      }
-      migStart.disabled = false
-    }).catch(() => { migStatus.textContent = C.migrateNoneFound })
+      window.ImportPicker.render({
+        tools: found, T: C.step1b, api, GEN,
+        list: $('set-migrate-tools'), copyBtn: migCopy, statusEl: migStatus,
+      })
+    }).catch(() => { migStatus.textContent = C.migrateNoneFound; migCopy.classList.add('hidden') })
     // A "Queued" line is a promise, not a receipt: poll until the lane has
     // drained the FIFO, then say Delivered. Stops after ~10 min.
     function watchQueue(el) {
@@ -351,27 +340,6 @@
           if (q && q.queued === 0) { el.textContent = C.migrateDeliveredAfterQueue; clearInterval(t) }
         } catch { /* keep showing Queued */ }
       }, 5000)
-    }
-    migStart.onclick = async () => {
-      const ids = [...migChecks.entries()].filter(([, cb]) => cb.checked).map(([id]) => id)
-      if (!ids.length) return
-      migStart.disabled = true
-      migStatus.className = 'status-line pending'
-      migStatus.textContent = C.migrateStarting
-      try {
-        const r = await api('/api/migrate/start', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ tools: ids }),
-        })
-        migStatus.className = 'status-line success'
-        migStatus.textContent = r.delivery === 'live' ? C.migrateStartedLive : C.migrateStartedQueued
-        if (r.delivery === 'queued') watchQueue(migStatus)
-      } catch (err) {
-        migStatus.className = 'status-line failure'
-        migStatus.textContent = GEN(err.message)
-        migStart.disabled = false
-      }
     }
 
     // ── handover: custom-path source (design-0023, the owner 2026-08-05

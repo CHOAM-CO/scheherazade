@@ -1214,7 +1214,7 @@ window.COPY = {
     // because the pre-tool guard actually enforces it.
     groupMigrate: 'Import',
     migrateLabel: 'Bring over another agent',
-    migrateHint: 'Found data from other AI agent tools on this computer. Pick which ones your agent may read — it will go through them in chat, keep what matters to its own memory, and offer to take over recurring jobs. Credential and token files are never touched.',
+    migrateHint: 'Found files from other AI agent tools on this computer. Pick what to copy into your agent\'s own home. It goes through the copies, keeps what matters, and offers to take over recurring jobs. Files are copied, never moved or changed; later edits or deletions of the originals do not affect your agent. Keys, tokens, login files and tool settings are never read or copied.',
     migrateStartButton: 'Hand it over',
     migrateNoneFound: 'No other agent tools were found on this computer.',
     migrateToolLine: (label, n, truncated) => `${label} — ${n}${truncated ? '+' : ''} files`,
