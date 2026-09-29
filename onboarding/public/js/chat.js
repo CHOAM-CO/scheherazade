@@ -99,10 +99,22 @@
     for (const img of userAvatarNodes) paintUserAvatar(img)
   })
   function paintUserAvatar(img) {
+    // 0.3.6: the row may also carry the time, so a missing picture hides the
+    // <img> and the row only when there is no time beside it either.
     const row = img.parentNode
-    if (!userAvatarSrc) { if (row) row.hidden = true; return }
+    const hasTime = !!(row && row.querySelector('.chat-meta-time'))
+    if (!userAvatarSrc) { img.hidden = true; if (row) row.hidden = !hasTime; return }
+    img.hidden = false
     img.src = userAvatarSrc
     if (row) row.hidden = false
+  }
+  // HH:MM for a sender row's time span; shared by agent and user rows.
+  function makeTimeNode(ts) {
+    const tm = document.createElement('span')
+    tm.className = 'chat-meta-time'
+    const d = new Date(ts)
+    tm.textContent = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+    return tm
   }
   let awaitingSince = null // state.awaitingReplySince from the last /out
   let channelUp = false // freshest signal: did the last /out poll succeed
@@ -403,13 +415,7 @@
       nm.textContent = agentName // unknown name = empty span, never a placeholder
       nameNodes.push(nm)
       meta.appendChild(nm)
-      if (m.ts) {
-        const tm = document.createElement('span')
-        tm.className = 'chat-meta-time'
-        const d = new Date(m.ts)
-        tm.textContent = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-        meta.appendChild(tm)
-      }
+      if (m.ts) meta.appendChild(makeTimeNode(m.ts))
       if (memoryMark) { meta.appendChild(memoryMarkNode()); placedMemoryMark = true }
       pane.appendChild(meta)
     }
@@ -422,11 +428,13 @@
     if (role === 'user' && lastRenderedRole !== 'user') {
       const meta = document.createElement('div')
       meta.className = 'chat-meta chat-meta-user'
-      meta.hidden = true // until the user slot resolves to a picture
+      meta.hidden = true // until the user slot resolves to a picture (or a time is present)
+      // 0.3.6: the time (same node/format as agent rows) sits left of the picture.
+      if (m.ts) meta.appendChild(makeTimeNode(m.ts))
       const av = document.createElement('img')
       av.className = 'chat-meta-avatar'
       av.alt = '' // decorative: the bubble's side already says whose it is
-      av.onerror = () => { av.onerror = null; meta.hidden = true }
+      av.onerror = () => { av.onerror = null; av.hidden = true; if (!meta.querySelector('.chat-meta-time')) meta.hidden = true }
       meta.appendChild(av)
       userAvatarNodes.push(av)
       paintUserAvatar(av)
