@@ -33,6 +33,7 @@ import {
   sweepStaleAtomicTmp, installParentDeathExit,
   createMarkerStore, createLastChannelStore, createOutboundResolver, createBootAnnouncer, createMuteStrikeAnnouncer,
   createRoutineStore, ROUTINE_TOOL, handleRoutineTool, startRoutineTicker, routineInjectContent,
+  startScheduleTicker, scheduleInjectContent, readAgentConfig,
   createInboundNotifier, createOutboundDedup,
 } from './channel-runtime.mjs'
 // Always-on in-app chat (2026-08-05): hosted alongside Slack; import is
@@ -767,6 +768,28 @@ function startRoutineTickerOnce() {
   }
 }
 
+// Schedules + the daily clock (cadence/daily-clock.cjs): this channel used to
+// run only routines, so users here never got the daily clock. The ticker is
+// shared with every backend; a per-tick lease in DATA_HOME/.gates keeps one
+// owner when several channel processes are up.
+function startSchedulesTicker() {
+  try {
+    const meta = () => ({ sender: 'SYSTEM', channelId: HOME_CHANNEL_ID || lastInboundChannelId || '', authorId: '', timestamp: localNow() })
+    startScheduleTicker({
+      dataHome: DATA_HOME,
+      readConfig: () => readAgentConfig(DATA_HOME),
+      fire: (entry) => notifyInbound({ content: scheduleInjectContent(entry), meta: meta() }),
+      fireDaily: (content) => notifyInbound({ content, meta: meta() }),
+      activityMsProvider: () => Date.now() - lastActivityMs,
+      log,
+    })
+  } catch (err) {
+    log(`schedule ticker failed to start (feature disabled this session): ${err.message}`)
+  }
+}
+let schedulesStarted = false
+function startSchedulesTickerOnce() { if (schedulesStarted) return; schedulesStarted = true; startSchedulesTicker() }
+
 let heartbeatStarted = false
 function startLivenessHeartbeatOnce() {
   if (heartbeatStarted) return
@@ -788,6 +811,7 @@ socketModeClient.on('connected', () => {
   writeLivenessMarker().catch((err) => log(`liveness marker write failed: ${err.message}`))
   startLivenessHeartbeatOnce()
   startRoutineTickerOnce()
+  startSchedulesTickerOnce()
   announceBoot().catch((err) => log(`boot announce failed: ${err.message}`))
   muteAnnouncer.start().catch((err) => log(`mute announcer failed to start (feature disabled this session): ${err.message}`))
 })
