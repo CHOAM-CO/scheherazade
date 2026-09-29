@@ -1089,6 +1089,51 @@ process.on('SIGTERM', () => process.exit(0))
   }
 }
 
+// ── 2c. sweep appended while the lane boots is not lost (0.3.7) ───────────
+// The window: the lane has read the FIFO at boot but not yet published its
+// ingest endpoint, so routes/migrate.cjs sees "lane down" and appends. A
+// preload patches net.Server.listen to append the sweep at exactly that point
+// (after the boot read, before the endpoint), which makes the race deterministic.
+console.log('\n2c. sweep appended during boot is delivered after ready')
+if (WIN) skipWin('boot-window sweep E2E')
+else {
+  const MEM = path.join(TMP, 'mem-race')
+  fs.mkdirSync(MEM, { recursive: true })
+  const pre = path.join(TMP, 'race-preload.mjs')
+  fs.writeFileSync(pre, `import net from 'node:net'
+import fs from 'node:fs'
+const orig = net.Server.prototype.listen
+let done = false
+net.Server.prototype.listen = function (...a) {
+  if (!done) {
+    done = true
+    fs.writeFileSync(${JSON.stringify(path.join(MEM, '.headless-pending.json'))}, JSON.stringify([{ content: '[SYSTEM] appended-mid-boot', meta: { sender: 'SYSTEM' }, ts: Date.now(), sweep: true }]))
+  }
+  return orig.apply(this, a)
+}
+`)
+  const fake = path.join(TMP, 'fake-race.mjs')
+  fs.writeFileSync(fake, `import fs from 'node:fs'
+process.stdin.on('data', (d) => fs.appendFileSync(process.env.FAKE_SINK, d))
+process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'race-sess', model: 'fake', mcp_servers: [] }) + '\\n')
+setInterval(() => {}, 1000)
+`)
+  const sink = path.join(TMP, 'sink-race.jsonl')
+  const shim = path.join(TMP, 'claude-shim-race.sh')
+  fs.writeFileSync(shim, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fake)} "$@"\n`, { mode: 0o755 })
+  const lane = spawn(process.execPath, ['--import', pathToFileURL(pre).href, path.join(ROOT, 'headless-lane.mjs')], {
+    env: { ...process.env, MEM, MODEL: 'fake-model', CLAUDE_BIN: shim, FAKE_SINK: sink },
+    stdio: ['ignore', 'ignore', 'ignore'],
+  })
+  const dl = Date.now() + 8000
+  while (!(fs.existsSync(sink) && fs.readFileSync(sink, 'utf8').includes('appended-mid-boot')) && Date.now() < dl) await new Promise((r) => setTimeout(r, 50))
+  const got = fs.existsSync(sink) ? fs.readFileSync(sink, 'utf8') : ''
+  assert(got.includes('appended-mid-boot'), 'sweep appended between boot read and endpoint publish reaches the agent')
+  assert(!fs.existsSync(path.join(MEM, '.headless-pending.json')), 'and leaves the FIFO empty (no replay on the next start)')
+  lane.kill('SIGTERM')
+  await new Promise((r) => setTimeout(r, 200))
+}
+
 fs.rmSync(TMP, { recursive: true, force: true })
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

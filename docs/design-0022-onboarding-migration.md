@@ -176,4 +176,40 @@ an explicit agent task.
   in this pass.
 - Still open: README/releases funnel copy, Hermes cron re-creation
   checkboxes, transcript summarization task, Codex `memories/` (layout not
-  verifiable from docs), Settings card switching to the copy flow.
+  verifiable from docs). (Settings card: done in 0.3.6, custom folder and
+  discover done in 0.3.7, see section 9.)
+
+## 9. 0.3.6 and 0.3.7 follow-through
+
+0.3.6:
+- Settings > Import (the main card) moved to the copy flow: it drives the
+  shared picker `onboarding/public/js/import-picker.js` off
+  `/api/migrate/import/plan` and POSTs `/api/migrate/import`, same as the
+  wizard. It no longer calls `/api/migrate/detect` or `/start`.
+- Sweeps queued while the lane was down are flagged `sweep:true` and the
+  lane delivers them at boot (`partitionPending` keeps them past the
+  sender=SYSTEM drop). This fixes the "Queued but never delivered" bug noted
+  in section 8. `GET /api/migrate/queue` lets Settings show Delivered.
+
+0.3.7 (this pass):
+- Settings > Hand it over now uses the copy flow too. Custom folder:
+  `POST /api/migrate/custom/plan {root}` returns one card (markdown and text
+  files only, three levels deep, config formats and credential names never
+  offered); Copy POSTs `/api/migrate/import` with `customRoots`, which the
+  server re-validates (home, filesystem root and the agent's own home
+  refused) and re-plans. Discover: `GET /api/migrate/discover/plan` finds
+  agent-shaped folders by marker filename (Spotlight on macOS, a
+  depth-limited walk of the usual work folders elsewhere; known tool homes,
+  the agent's own home and node_modules excluded) and each becomes a card.
+  Copies land in `imported/custom-<name>-<hash>/`; the same content gate,
+  receipt and handover marker apply. The legacy `/api/migrate/custom/*`
+  sweep routes and `/detect` + `/start` still answer but no UI calls them.
+- Boot race closed: headless-lane.mjs drains queued sweeps once more right
+  after it publishes its ingest endpoint. An append made between the boot
+  read and the endpoint is now delivered there; an append after it goes live
+  through the endpoint. Pinned in tests/test-headless-lane.mjs (2c).
+- Stop text is platform-aware: win32 says "Stopped. The conversation is
+  kept." with no restart promise (no supervisor relaunch there); posix keeps
+  the "back in a few seconds" line. Uses `IS_WIN` from the host-platform meta.
+- Still open: README/releases funnel copy, Hermes cron re-creation,
+  transcript summarization task, Codex `memories/`.

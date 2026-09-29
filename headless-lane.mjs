@@ -743,6 +743,20 @@ async function main() {
   let turnHadUserInbound = false // a real user question this turn -> mute check applies (SYSTEM/rotation/nudge turns do not set it)
   let muteNudgeCount = 0         // consecutive nudges without a delivered reply (loop backstop; reset on any reply)
 
+  // Writes queued sweep entries to the agent's stdin. Shared by the boot
+  // redelivery and the post-ready re-drain (see drainSweepsAfterReady).
+  function deliverSweeps(sweeps, when) {
+    for (const ev of sweeps) {
+      try {
+        child.stdin.write(renderUserEvent({ content: ev.content, meta: ev.meta || {} }))
+        noteStdinWrite()
+      } catch (err) {
+        log(`queued sweep delivery failed: ${err.message}`)
+      }
+    }
+    if (sweeps.length) log(`delivered ${sweeps.length} queued sweep request(s) ${when}`)
+  }
+
   // Redeliver messages stranded by a mid-turn recycle (F4). Runs before the
   // ingest server exists, so these precede any new inbound POST in stdin
   // order. Entries already redelivered once are dropped (no retry loops),
@@ -760,15 +774,7 @@ async function main() {
     // delivered ONCE as-is -- no [redelivered] note (they were never answered
     // by anyone), and already removed from the FIFO above so the UI's queue
     // read flips to delivered and a later recycle cannot replay them.
-    for (const ev of sweeps) {
-      try {
-        child.stdin.write(renderUserEvent({ content: ev.content, meta: ev.meta || {} }))
-        noteStdinWrite()
-      } catch (err) {
-        log(`queued sweep delivery failed: ${err.message}`)
-      }
-    }
-    if (sweeps.length) log(`delivered ${sweeps.length} queued sweep request(s) at boot`)
+    deliverSweeps(sweeps, 'at boot')
     if (stranded.length) {
       log(`re-delivering ${stranded.length} message(s) stranded by the previous recycle`)
       for (const ev of stranded) {
@@ -1184,6 +1190,21 @@ async function main() {
     try {
       writeJsonAtomic(endpointFile(), { port, token, pid: process.pid }, 0o600)
       log(`ingest endpoint on 127.0.0.1:${port} (token file ${path.basename(endpointFile())})`)
+      // Close the boot race: routes/migrate.cjs appends a sweep to the FIFO
+      // when it finds no endpoint, but this lane may have already read the FIFO
+      // (boot redelivery above) and not yet published its endpoint. An entry
+      // appended in that window would sit until the NEXT start. Publishing the
+      // endpoint is the point after which the route delivers live instead, so
+      // one more drain right here leaves no gap: anything appended before this
+      // line is taken now, anything after goes live.
+      try {
+        const late = readPending().filter((ev) => ev && ev.sweep === true)
+        if (late.length) {
+          const { sweeps: fresh } = partitionPending(late, Date.now())
+          writePending(readPending().filter((ev) => !(ev && ev.sweep === true)))
+          deliverSweeps(fresh, 'after ready (appended while booting)')
+        }
+      } catch (err) { log(`post-ready sweep drain failed: ${err.message}`) }
     } catch (err) {
       // Without the endpoint file backends fall back to the MCP notification,
       // which is dead in -p -- that is an agent that can talk but not hear.
