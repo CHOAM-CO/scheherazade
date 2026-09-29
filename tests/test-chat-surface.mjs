@@ -89,8 +89,10 @@ console.log('\n3d. user-row avatar (0.3.5, 2026-09-29): the user\'s own picture,
   const userRow = js.slice(i, js.indexOf('pane.appendChild(meta)', i))
   assert(userRow.includes("createElement('img')") && userRow.includes("'chat-meta-avatar'") && userRow.includes(".alt = ''"),
     '...holding a decorative <img> with the same 32px chat-meta-avatar class')
-  assert(!/textContent|chat-meta-name|chat-meta-time|innerHTML/.test(userRow),
-    '...and NOTHING else: no name, no "You", no text of any kind on the user row')
+  assert(!/textContent|chat-meta-name|innerHTML/.test(userRow),
+    '...no name, no "You", no text of any kind on the user row (the time comes from the shared helper)')
+  assert(userRow.includes('makeTimeNode(m.ts)'), '...plus the time, built by the same helper as agent rows (0.3.6)')
+  assert(js.includes('if (m.ts) meta.appendChild(makeTimeNode(m.ts))'), '...and agent rows use that helper too')
   assert(userRow.includes('meta.hidden = true'), '...hidden until the user slot resolves to a picture')
   assert(js.includes("window.avatarUrl('user')"), 'the user picture comes from the shared resolver\'s user slot')
   assert(!/AVATAR_FALLBACK_URL/.test(userRow), 'the user row never falls back to the agent/app icon')

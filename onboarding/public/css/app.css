@@ -1758,6 +1758,7 @@ html {
    the row stays hidden whenever the user slot is empty. */
 .chat-meta-user { align-self: flex-end; justify-content: flex-end; margin-bottom: 0; }
 .chat-meta[hidden] { display: none; }
+.chat-meta-avatar[hidden] { display: none; }
 .chat-meta-name { font-size: 0.8rem; font-weight: 600; color: rgb(var(--accent-rgb) / 0.95); }
 .chat-meta-time {
   font-size: 0.72rem;
