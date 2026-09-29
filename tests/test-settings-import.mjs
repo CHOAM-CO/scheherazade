@@ -12,6 +12,11 @@
 //     POSTs exactly the checked paths to /api/migrate/import;
 //   - over the real server: that POST copies into DATA_HOME/imported/<tool>/,
 //     then deleting/editing the source leaves the copy intact;
+//   - 0.3.7: Hand it over (custom folder + discover) uses the same copy flow:
+//     /custom/plan + /discover/plan feed the picker, /import takes customRoots,
+//     secrets are held back, broad roots refused; the legacy /custom/* sweep
+//     routes and /detect + /start still answer;
+//   - the Stop text is platform-aware (win32: no restart promise);
 //   - the legacy /detect and /start routes still answer (nothing saved or
 //     scripted against them breaks) and existing imported/ content survives.
 //
@@ -43,6 +48,14 @@ const wizardSrc = read('js', 'wizard.js')
 chk('settings.js: plans via /api/migrate/import/plan', settingsSrc.includes("'/api/migrate/import/plan'"))
 chk('settings.js: renders through ImportPicker', settingsSrc.includes('window.ImportPicker.render('))
 chk('settings.js: no longer calls the in-place /detect or /start', !settingsSrc.includes("'/api/migrate/detect'") && !settingsSrc.includes("'/api/migrate/start'"))
+chk('settings.js: custom folder plans via /api/migrate/custom/plan', settingsSrc.includes("'/api/migrate/custom/plan'"))
+chk('settings.js: discover plans via /api/migrate/discover/plan', settingsSrc.includes("'/api/migrate/discover/plan'"))
+chk('settings.js: no in-place custom/discover sweeps left', !/\/api\/migrate\/custom\/(start|preview|discover)/.test(settingsSrc))
+{
+  const m = read('js', 'copy.js').match(/\n    stopped: (window\.IS_WIN\s*\?[\s\S]*?),\n    stopNoTurn/)
+  const at = (isWin) => (m ? vm.runInNewContext(m[1], { window: { IS_WIN: isWin } }) : '')
+  chk('copy.js: Stop text is platform-aware', !!m && at(true) === 'Stopped. The conversation is kept.' && at(false).includes('back in a few seconds'), m && m[1].slice(0, 80))
+}
 chk('wizard.js: same shared picker, no private copy of the POST', wizardSrc.includes('window.ImportPicker.render(') && !wizardSrc.includes("'/api/migrate/import'"))
 for (const [page, script] of [['settings.html', 'settings.js'], ['index.html', 'wizard.js']]) {
   const html = read(page)
@@ -101,6 +114,16 @@ if (T) {
   chk('picker: works with no skip button (Settings has none)', statusEl.className.includes('success'), statusEl.className)
 }
 
+{
+  const ctools = [{ id: 'custom-cadence-abc123', label: 'cadence', root: '/x/cadence', custom: true, leftInPlace: [], items: [{ path: 'persona.md', size: 5, kind: 'instructions', defaultOn: true }] }]
+  const l2 = el('div'), b2 = el('button'), s2 = el('div')
+  let p2 = null
+  win.ImportPicker.render({ tools: ctools, T, GEN: (m) => m, list: l2, copyBtn: b2, statusEl: s2,
+    api: async (url, init) => { p2 = JSON.parse(init.body); return { copied: [], heldBack: [] } } })
+  await b2.onclick()
+  chk('picker: custom folder sends its root as customRoots', p2 && p2.customRoots && p2.customRoots[0] === '/x/cadence' && p2.selections['custom-cadence-abc123'][0] === 'persona.md', JSON.stringify(p2))
+}
+
 // ── real server: copy, then the source changes ──────────────────────────
 const fixtureHome = path.join(TMP, 'home')
 fs.mkdirSync(fixtureHome, { recursive: true })
@@ -131,6 +154,45 @@ try {
   fs.rmSync(path.dirname(soul), { recursive: true, force: true })
   chk('source deletion does not remove the copy', fs.existsSync(path.join(DATA, 'imported', 'hermes', 'SOUL.md')))
   chk('earlier imported content preserved', fs.readFileSync(path.join(DATA, 'imported', 'claude', 'earlier.md'), 'utf8') === 'from the wizard\n')
+  // ── 0.3.7 custom folder through the copy flow ──
+  const agentDir = path.join(TMP, 'work', 'cadence')
+  fs.mkdirSync(path.join(agentDir, 'notes'), { recursive: true })
+  fs.writeFileSync(path.join(agentDir, 'persona.md'), 'I am Cadence\n')
+  fs.writeFileSync(path.join(agentDir, 'notes', 'a.md'), 'likes tea\n')
+  fs.writeFileSync(path.join(agentDir, 'notes', 'leak.md'), 'api_key = abcdefghijklmnop1234\n')
+  fs.writeFileSync(path.join(agentDir, 'config.json'), '{"token":"SECRET-CFG"}')
+  fs.writeFileSync(path.join(agentDir, 'auth.json'), 'SECRET-AUTH')
+  const cp = await fetch(`${base}/api/migrate/custom/plan`, { method: 'POST', headers: auth, body: JSON.stringify({ root: agentDir }) })
+  const cpb = await cp.json()
+  const ct = cpb.tools && cpb.tools[0]
+  chk('custom plan: one card, custom flag, md files only', cp.status === 200 && ct && ct.custom === true && ct.items.map((i) => i.path).sort().join() === 'notes/a.md,notes/leak.md,persona.md', JSON.stringify(cpb).slice(0, 200))
+  chk('custom plan: config/credential files never offered', ct && !JSON.stringify(ct).includes('config.json') && !JSON.stringify(ct).includes('auth.json'))
+  const bp = await fetch(`${base}/api/migrate/custom/plan`, { method: 'POST', headers: auth, body: JSON.stringify({ root: fixtureHome }) })
+  chk('custom plan: broad root -> 400', bp.status === 400 && (await bp.json()).reason === 'root_too_broad')
+  const ci = await fetch(`${base}/api/migrate/import`, { method: 'POST', headers: auth, body: JSON.stringify({ selections: { [ct.id]: ['persona.md', 'notes/a.md', 'notes/leak.md', 'config.json'] }, customRoots: [agentDir] }) })
+  const cib = await ci.json()
+  const cdir = path.join(DATA, 'imported', ct.id)
+  chk('custom import: copies allowed files', ci.status === 200 && fs.readFileSync(path.join(cdir, 'persona.md'), 'utf8') === 'I am Cadence\n' && fs.existsSync(path.join(cdir, 'notes', 'a.md')))
+  chk('custom import: secret-looking file held back, forged config.json dropped', !fs.existsSync(path.join(cdir, 'notes', 'leak.md')) && !fs.existsSync(path.join(cdir, 'config.json')) && cib.heldBack.some((x) => x.path === 'notes/leak.md'), JSON.stringify(cib.heldBack))
+  const ci2 = await fetch(`${base}/api/migrate/import`, { method: 'POST', headers: auth, body: JSON.stringify({ selections: { [ct.id]: ['persona.md'] } }) })
+  chk('custom import: id without its customRoots plans nothing', ci2.status === 200 && (await ci2.json()).copied.length === 0)
+  const dp = await fetch(`${base}/api/migrate/discover/plan`, { headers: auth })
+  chk('discover plan answers with a tools array', dp.status === 200 && Array.isArray((await dp.json()).tools))
+  {
+    const mi = require_(path.join(ROOT, 'memory', 'migrate-import.cjs'))
+    const other = path.join(TMP, 'work', 'other')
+    fs.mkdirSync(other, { recursive: true })
+    fs.writeFileSync(path.join(other, 'SOUL.md'), 'soul\n')
+    fs.mkdirSync(path.join(fixtureHome, '.claude'), { recursive: true })
+    fs.writeFileSync(path.join(fixtureHome, '.claude', 'AGENTS.md'), 'known tool home\n')
+    fs.mkdirSync(path.join(DATA, 'own'), { recursive: true })
+    fs.writeFileSync(path.join(DATA, 'own', 'persona.md'), 'own\n')
+    const found = mi.discoverCandidates({
+      home: fixtureHome, dataHome: DATA,
+      find: () => [path.join(agentDir, 'persona.md'), path.join(other, 'SOUL.md'), path.join(fixtureHome, '.claude', 'AGENTS.md'), path.join(DATA, 'own', 'persona.md'), path.join(TMP, 'work', 'node_modules', 'x', 'persona.md')],
+    })
+    chk('discover: groups hits by folder, drops tool homes / own home / node_modules', found.map((t) => t.root).sort().join() === [agentDir, other].sort().join(), found.map((t) => t.root).join())
+  }
   const d = await fetch(`${base}/api/migrate/detect`, { headers: auth })
   chk('legacy /detect still answers', d.status === 200)
   const s = await fetch(`${base}/api/migrate/start`, { method: 'POST', headers: auth, body: JSON.stringify({ tools: ['nope'] }) })

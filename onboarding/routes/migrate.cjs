@@ -25,8 +25,11 @@
 // endpoint (DATA_HOME/.ingest-endpoint.json) -- backend-independent, works
 // for in-app chat exactly like Discord. If the lane is down, append to
 // .headless-pending.json: the lane's boot redelivery (F4 rail) injects it
-// once on next start. Known small race (lane booting during the append) is
-// accepted for v1 -- worst case is one lost request the user re-clicks.
+// on next start. The boot window (lane has read the FIFO but not yet published
+// its endpoint, so this side sees "down" and appends) is closed lane-side:
+// headless-lane.mjs drains sweep entries once more right after it publishes
+// the endpoint, so an append lands either before that drain (delivered there)
+// or after it (the endpoint exists, so this side delivers live).
 'use strict'
 
 const os = require('node:os')
@@ -347,14 +350,18 @@ function createRoutes(staticCtx) {
       method: 'POST',
       match: (pathname) => pathname === '/api/migrate/import',
       handler: async (req, res) => {
-        const { selections } = await readJsonBody(req)
+        const { selections, customRoots: rawRoots } = await readJsonBody(req)
         if (!selections || typeof selections !== 'object' || Array.isArray(selections)) {
           sendJson(res, 400, { error: 'selections is required', reason: 'selections_required' })
           return
         }
         let result
         try {
-          result = migrateImport.runImport({ home: home(), env: process.env, dataHome: DATA_HOME, selections })
+          // Custom folders ride the same copy: each root is re-validated here
+          // (broad / own-home roots drop), then re-planned inside runImport.
+          const customRoots = (Array.isArray(rawRoots) ? rawRoots : []).slice(0, 8)
+            .map((r) => validateCustomRoot(r)).filter((v) => v.root).map((v) => v.root)
+          result = migrateImport.runImport({ home: home(), env: process.env, dataHome: DATA_HOME, selections, customRoots })
         } catch (err) {
           sendJson(res, 500, { error: `import failed: ${err.message}`, reason: 'import_failed' })
           return
@@ -432,6 +439,36 @@ function createRoutes(staticCtx) {
         } catch (err) {
           sendJson(res, 500, { error: `could not deliver the sweep request: ${err.message}`, reason: 'delivery_failed' })
         }
+        return
+      },
+    },
+    {
+      // 0.3.7: plan for a user-pointed folder, same shape as /import/plan
+      // (one tool card, per-file checkboxes). Same root validation as the
+      // legacy /custom/preview; names and sizes only.
+      method: 'POST',
+      match: (pathname) => pathname === '/api/migrate/custom/plan',
+      handler: async (req, res) => {
+        const { root: raw } = await readJsonBody(req)
+        const v = validateCustomRoot(raw)
+        if (v.error) {
+          sendJson(res, 400, { error: v.error, reason: v.reason })
+          return
+        }
+        const tool = migrateImport.planCustomRoot(v.root)
+        sendJson(res, 200, { tools: tool.detected ? [tool] : [], root: v.root })
+        return
+      },
+    },
+    {
+      // 0.3.7: "Find agents on this computer" as a plan instead of a chat
+      // hunt: candidate folders by marker filename, each a card in the picker.
+      method: 'GET',
+      match: (pathname) => pathname === '/api/migrate/discover/plan',
+      handler: async (req, res) => {
+        let tools = []
+        try { tools = migrateImport.discoverCandidates({ home: home(), env: process.env, dataHome: DATA_HOME }) } catch { /* none found */ }
+        sendJson(res, 200, { tools })
         return
       },
     },

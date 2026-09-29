@@ -1029,7 +1029,12 @@ window.COPY = {
     stop: 'Stop',
     stopAria: 'Stop the run that is in progress',
     stopping: 'Stopping…',
-    stopped: 'Stopped. The conversation is kept. If the agent restarts, it is back in a few seconds.',
+    // Only posix has a supervisor that relaunches the lane after a stop; on
+    // Windows the stop is final until the next message, so promising a restart
+    // there would be false. HOST_PLATFORM comes from the served page's meta.
+    stopped: window.IS_WIN
+      ? 'Stopped. The conversation is kept.'
+      : 'Stopped. The conversation is kept. If the agent restarts, it is back in a few seconds.',
     stopNoTurn: 'That run had already finished.',
     stopFailed: "Couldn't stop the run. If the agent is restarting, try again in a moment.",
     // Steering: the composer stays live mid-run, and what it sends joins the
@@ -1225,11 +1230,13 @@ window.COPY = {
     // design-0023 handover: custom agents (rev B: agent-led discovery
     // first, manual path as fallback).
     handoverLabel: 'A custom agent',
-    handoverHint: "Built or ran an agent that isn't on the list? Your agent can hunt for its traces (persona.md, AGENTS.md and kin) by filename, show you what it found, and take over only the folders you approve — mapping how each one worked before absorbing anything. Credential files are never touched.",
+    handoverHint: "Built or ran an agent that isn't on the list? We can look for its traces (persona.md, AGENTS.md and kin) by filename, or you can point at a folder. You pick which text and markdown files to copy into your agent's home; the originals are never changed. Keys, tokens and config files are never copied.",
     handoverDiscoverButton: 'Find agents on this computer',
     handoverManualHint: 'Or point at a folder directly (useful for drives the search index misses):',
     handoverPlaceholder: '/path/to/that/agent',
     handoverCheckButton: 'Preview',
+    handoverDiscoverNone: 'No agent folders found in the usual places. Point at a folder below if you know where it is.',
+    handoverNoDocs: 'No text or markdown files in that folder to copy.',
     handoverChecking: 'Looking…',
     handoverPreviewLine: (n, truncated, shaped) =>
       `${n}${truncated ? '+' : ''} files.` + (shaped ? ' Looks like an agent lives here.' : ' No agent traces recognized — hand it over anyway if you know better.'),

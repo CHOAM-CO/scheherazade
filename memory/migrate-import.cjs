@@ -299,9 +299,90 @@ function detectOne(src, ctx) {
 // an empty ~/.codex holding nothing but auth.json has nothing to offer, and
 // the wizard step must not render a card for it (§4 "absent tools never
 // render").
-function detectSources({ home, env = process.env } = {}) {
+function detectSources({ home, env = process.env, customRoots = [] } = {}) {
   if (!home) throw new Error('detectSources: home is required')
-  return SOURCES.map((s) => detectOne(s, { home, env }))
+  return [...SOURCES.map((s) => detectOne(s, { home, env })), ...customRoots.map(planCustomRoot)]
+}
+
+// ── custom folders (Settings > Hand it over: pick a folder / discover) ──────
+// Same copy flow as the five tools. A user-chosen folder has no known layout,
+// so the allowlist is by NAME SHAPE: markdown/text files (the persona, memory
+// and instruction files agents are made of), three levels deep, dotfiles and
+// credential names skipped by filesUnder. Config formats (json/yaml/toml) are
+// never offered: that is where tokens live. The content gate in runImport
+// still reads every selected file before the copy.
+const CUSTOM_PREFIX = 'custom-'
+const isDocFile = (name) => /\.(md|markdown|txt)$/i.test(name)
+const CUSTOM_PERSONA = /^(persona|soul|identity|system[_-]?prompt|agents?|claude)\b.*\.(md|markdown|txt)$/i
+const CUSTOM_MAX_ITEMS = 200
+
+function customIdFor(root) {
+  const abs = path.resolve(root)
+  const slug = (path.basename(abs) || 'agent').replace(/[^\w.-]+/g, '_').slice(0, 40)
+  const h = require('node:crypto').createHash('sha1').update(abs).digest('hex').slice(0, 6)
+  return `${CUSTOM_PREFIX}${slug}-${h}`
+}
+
+function planCustomRoot(root) {
+  const abs = path.resolve(root)
+  const id = customIdFor(abs)
+  const label = path.basename(abs) || abs
+  const st = lstatSafe(abs)
+  if (!st || !st.isDirectory()) return { id, label, detected: false, custom: true }
+  const items = filesUnder(abs, '', isDocFile, 3, CUSTOM_MAX_ITEMS).map((f) => {
+    const kind = CUSTOM_PERSONA.test(path.basename(f.path)) ? 'instructions' : 'memory'
+    return { path: f.path, size: f.size, kind, defaultOn: true }
+  })
+  if (!items.length) return { id, label, detected: false, root: abs, custom: true }
+  return { id, label, detected: true, root: abs, items, leftInPlace: [], custom: true }
+}
+
+// Agent-shaped folders on this machine, by marker filename (names only, never
+// contents). Spotlight where it exists, otherwise a depth-limited walk of the
+// usual work folders; never a whole-disk walk. `find` is injectable for tests:
+// (names) => [absolute file paths].
+const DISCOVER_MARKERS = ['persona.md', 'soul.md', 'identity.md', 'system_prompt.md', 'system-prompt.md', 'agents.md']
+const DISCOVER_SKIP_DIRS = new Set(['node_modules', 'library', 'applications', 'system', 'appdata', 'program files', 'windows'])
+
+function defaultFind({ home, platform = process.platform }) {
+  if (platform === 'darwin') {
+    try {
+      const q = DISCOVER_MARKERS.map((n) => `kMDItemFSName == '${n}'c`).join(' || ')
+      const out = require('node:child_process').execFileSync('mdfind', [q], { encoding: 'utf8', timeout: 5000, maxBuffer: 4 * 1024 * 1024 })
+      return out.split('\n').filter(Boolean)
+    } catch { /* fall through to the walk */ }
+  }
+  const hits = []
+  const walk = (dir, depth) => {
+    if (depth > 3 || hits.length > 500) return
+    let entries
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+    for (const e of entries) {
+      if (e.name.startsWith('.') || e.isSymbolicLink()) continue
+      if (e.isDirectory()) { if (!DISCOVER_SKIP_DIRS.has(e.name.toLowerCase())) walk(path.join(dir, e.name), depth + 1) }
+      else if (DISCOVER_MARKERS.includes(e.name.toLowerCase())) hits.push(path.join(dir, e.name))
+    }
+  }
+  for (const d of ['Documents', 'Desktop', 'dev', 'code', 'projects', 'src', 'Developer']) walk(path.join(home, d), 0)
+  return hits
+}
+
+function discoverCandidates({ home, env = process.env, dataHome, find, max = 8 } = {}) {
+  if (!home) throw new Error('discoverCandidates: home is required')
+  const known = SOURCES.map((s) => path.resolve(s.root({ home, env })))
+  const data = dataHome ? path.resolve(dataHome) : null
+  const hitFiles = (find || defaultFind)({ home, platform: process.platform }) || []
+  const byDir = new Map()
+  for (const f of hitFiles) {
+    const dir = path.dirname(path.resolve(String(f)))
+    const segs = dir.split(path.sep)
+    if (segs.some((sg) => sg.startsWith('.') || DISCOVER_SKIP_DIRS.has(sg.toLowerCase()) || /\.app$/i.test(sg))) continue
+    if (dir === path.resolve(home) || dir === path.parse(dir).root) continue
+    if (known.some((k) => insideDir(dir, k) || insideDir(k, dir))) continue
+    if (data && (insideDir(dir, data) || insideDir(data, dir))) continue
+    byDir.set(dir, (byDir.get(dir) || 0) + 1)
+  }
+  return [...byDir.keys()].sort().slice(0, max * 3).map(planCustomRoot).filter((t) => t.detected).slice(0, max)
 }
 
 function insideDir(child, parent) {
@@ -314,11 +395,11 @@ function insideDir(child, parent) {
 //   checked. Anything not in the fresh plan drops silently.
 // -> { copied: [{ tool, path, dest, size }], heldBack: [{ tool, path, reason }],
 //      tools: [toolId...], receiptPath }
-function runImport({ home, env = process.env, dataHome, selections, now = Date.now() } = {}) {
+function runImport({ home, env = process.env, dataHome, selections, customRoots = [], now = Date.now() } = {}) {
   if (!home || !dataHome) throw new Error('runImport: home and dataHome are required')
   if (!selections || typeof selections !== 'object') return { copied: [], heldBack: [], tools: [], receiptPath: null }
   const importRoot = path.join(path.resolve(dataHome), 'imported')
-  const plan = detectSources({ home, env })
+  const plan = detectSources({ home, env, customRoots })
   const copied = []
   const heldBack = []
   const touched = []
@@ -381,13 +462,14 @@ function runImport({ home, env = process.env, dataHome, selections, now = Date.n
 // sender=SYSTEM entry on purpose (headless-lane.mjs F4). The marker is the
 // durable handoff: hooks/session-start.mjs reads it at every session start
 // until the agent deletes it after folding the copies in.
+const isKnownToolId = (t) => SOURCE_IDS.includes(t) || (typeof t === 'string' && /^custom-[\w.-]+$/.test(t))
 const MARKER_REL = path.join('imported', '.handover-pending.json')
 
 function writeHandoverMarker(dataHome, tools, now = Date.now()) {
   const p = path.join(dataHome, MARKER_REL)
   let prev = []
   try { prev = JSON.parse(fs.readFileSync(p, 'utf8')).tools || [] } catch { /* fresh */ }
-  const merged = [...new Set([...prev, ...tools])].filter((t) => SOURCE_IDS.includes(t))
+  const merged = [...new Set([...prev, ...tools])].filter(isKnownToolId)
   fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 })
   fs.writeFileSync(p, JSON.stringify({ tools: merged, at: new Date(now).toISOString() }) + '\n', { mode: 0o600 })
 }
@@ -395,7 +477,7 @@ function writeHandoverMarker(dataHome, tools, now = Date.now()) {
 function readHandoverMarker(dataHome) {
   try {
     const v = JSON.parse(fs.readFileSync(path.join(dataHome, MARKER_REL), 'utf8'))
-    const tools = Array.isArray(v.tools) ? v.tools.filter((t) => SOURCE_IDS.includes(t)) : []
+    const tools = Array.isArray(v.tools) ? v.tools.filter(isKnownToolId) : []
     return tools.length ? { tools, at: v.at || null } : null
   } catch { return null }
 }
@@ -417,6 +499,8 @@ function handoverInstruction(tools) {
 
 module.exports = {
   detectSources,
+  planCustomRoot,
+  discoverCandidates,
   runImport,
   readHandoverMarker,
   handoverInstruction,

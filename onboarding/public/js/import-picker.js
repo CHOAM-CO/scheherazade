@@ -122,6 +122,8 @@
         if (!c.cb.checked) continue
         ;(selections[c.tool] = selections[c.tool] || []).push(c.path)
       }
+      // Custom folders (Settings > Hand it over) are re-planned server side by root.
+      const customRoots = tools.filter((t) => t.custom && selections[t.id]).map((t) => t.root)
       copyBtn.disabled = true
       if (skipBtn) skipBtn.disabled = true
       statusEl.className = 'status-line pending'
@@ -130,7 +132,7 @@
         const r = await api('/api/migrate/import', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ selections }),
+          body: JSON.stringify(customRoots.length ? { selections, customRoots } : { selections }),
         })
         statusEl.className = 'status-line success'
         statusEl.textContent = T.done(r.copied.length)

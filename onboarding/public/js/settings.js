@@ -329,19 +329,6 @@
         list: $('set-migrate-tools'), copyBtn: migCopy, statusEl: migStatus,
       })
     }).catch(() => { migStatus.textContent = C.migrateNoneFound; migCopy.classList.add('hidden') })
-    // A "Queued" line is a promise, not a receipt: poll until the lane has
-    // drained the FIFO, then say Delivered. Stops after ~10 min.
-    function watchQueue(el) {
-      let n = 0
-      const t = setInterval(async () => {
-        if (++n > 120 || !el.isConnected) return clearInterval(t)
-        try {
-          const q = await api('/api/migrate/queue')
-          if (q && q.queued === 0) { el.textContent = C.migrateDeliveredAfterQueue; clearInterval(t) }
-        } catch { /* keep showing Queued */ }
-      }, 5000)
-    }
-
     // ── handover: custom-path source (design-0023, the owner 2026-08-05
     // "persona.md / agents.md 같은 시스템프롬프트류 파일 긁어서 구조파악하고
     // ... 흡수"). Preview first (names only), then the same one-consent
@@ -353,18 +340,31 @@
     const hoDiscover = $('set-handover-discover')
     const hoDiscoverStatus = $('set-handover-discover-status')
     hoDiscover.textContent = C.handoverDiscoverButton
+    const hoDiscoverCopy = $('set-handover-discover-copy')
+    // 0.3.7: discovery is a plan now (folders by marker filename, names only),
+    // copied through the same picker as everything else. Nothing is read in
+    // place and nothing is absorbed until the user ticks files and copies.
     hoDiscover.onclick = async () => {
       hoDiscover.disabled = true
       hoDiscoverStatus.className = 'status-line pending'
-      hoDiscoverStatus.textContent = C.migrateStarting
+      hoDiscoverStatus.textContent = C.handoverChecking
       try {
-        const r = await api('/api/migrate/custom/discover', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
-        hoDiscoverStatus.className = 'status-line success'
-        hoDiscoverStatus.textContent = r.delivery === 'live' ? C.migrateStartedLive : C.migrateStartedQueued
-        if (r.delivery === 'queued') watchQueue(hoDiscoverStatus)
+        const d = await api('/api/migrate/discover/plan')
+        if (!(d.tools || []).length) {
+          hoDiscoverStatus.className = 'status-line'
+          hoDiscoverStatus.textContent = C.handoverDiscoverNone
+          hoDiscoverCopy.classList.add('hidden')
+        } else {
+          hoDiscoverCopy.classList.remove('hidden')
+          window.ImportPicker.render({
+            tools: d.tools, T: C.step1b, api, GEN,
+            list: $('set-handover-discover-tools'), copyBtn: hoDiscoverCopy, statusEl: hoDiscoverStatus,
+          })
+        }
       } catch (err) {
         hoDiscoverStatus.className = 'status-line failure'
         hoDiscoverStatus.textContent = GEN(err.message)
+      } finally {
         hoDiscover.disabled = false
       }
     }
@@ -375,53 +375,40 @@
     const hoStart = $('set-handover-start')
     hoPath.placeholder = C.handoverPlaceholder
     hoCheck.textContent = C.handoverCheckButton
-    hoStart.textContent = C.migrateStartButton
     hoStart.classList.add('hidden')
-    let hoPreviewedRoot = null
-    hoPath.oninput = () => { hoStart.classList.add('hidden'); hoPreviewedRoot = null; hoStatus.textContent = '' }
+    const hoTools = $('set-handover-tools')
+    hoPath.oninput = () => { hoStart.classList.add('hidden'); hoTools.innerHTML = ''; hoStatus.textContent = '' }
     hoCheck.onclick = async () => {
       hoCheck.disabled = true
       hoStatus.className = 'status-line pending'
       hoStatus.textContent = C.handoverChecking
       try {
-        const r = await api('/api/migrate/custom/preview', {
+        const r = await api('/api/migrate/custom/plan', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ root: hoPath.value }),
         })
-        hoPreviewedRoot = r.root
-        hoStatus.className = 'status-line'
-        hoStatus.textContent = C.handoverPreviewLine(r.files.length, r.truncated, r.agentShaped)
-        hoStart.classList.remove('hidden')
+        if (!(r.tools || []).length) {
+          hoStart.classList.add('hidden')
+          hoTools.innerHTML = ''
+          hoStatus.className = 'status-line'
+          hoStatus.textContent = C.handoverNoDocs
+        } else {
+          hoStart.classList.remove('hidden')
+          window.ImportPicker.render({
+            tools: r.tools, T: C.step1b, api, GEN,
+            list: hoTools, copyBtn: hoStart, statusEl: hoStatus,
+          })
+        }
       } catch (err) {
-        hoPreviewedRoot = null
         hoStart.classList.add('hidden')
+        hoTools.innerHTML = ''
         hoStatus.className = 'status-line failure'
         // api() surfaces the server's error string (reason codes are not
         // preserved) — the route's messages are already user-shaped.
         hoStatus.textContent = err.message
       } finally {
         hoCheck.disabled = false
-      }
-    }
-    hoStart.onclick = async () => {
-      if (!hoPreviewedRoot) return
-      hoStart.disabled = true
-      hoStatus.className = 'status-line pending'
-      hoStatus.textContent = C.migrateStarting
-      try {
-        const r = await api('/api/migrate/custom/start', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ root: hoPreviewedRoot }),
-        })
-        hoStatus.className = 'status-line success'
-        hoStatus.textContent = r.delivery === 'live' ? C.migrateStartedLive : C.migrateStartedQueued
-        if (r.delivery === 'queued') watchQueue(hoStatus)
-      } catch (err) {
-        hoStatus.className = 'status-line failure'
-        hoStatus.textContent = GEN(err.message)
-        hoStart.disabled = false
       }
     }
 
