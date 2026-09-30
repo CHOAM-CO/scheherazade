@@ -16,7 +16,11 @@
 // replaces — one file read two ways cannot drift, a generated one can and
 // eventually does.
 //
-// WHAT THIS FILE IS NOT: it is not the context-gauge's cap table.
+// Node adds cached/live provider rows through model-discovery.cjs; browser
+// refresh() receives that merged catalog from the authenticated /api/models.
+// Bundled labels and windows win; provider receipts cover newly discovered ids.
+//
+// WHAT THIS FILE IS NOT: it is not the context-gauge's fallback cap table.
 // onboarding/http-server.cjs's contextCapForModel() still owns the number the
 // gauge divides by, because it also answers for ids that are NOT in this
 // picker (claude-haiku-4-5, gpt-5.4/5.5, an older id still in a user's
@@ -153,7 +157,27 @@
   // the gap is visible in one file instead of two.
   const DSH_REASONING_EFFORTS = ['off', 'low', 'high', 'max']
 
+  const BUNDLED_MODELS = MODELS.map((m) => ({ ...m }))
   const BY_ID = new Map(MODELS.map((m) => [m.id, m]))
+  function mergeDiscovered(rows) {
+    const discovery = require('../../../model-discovery.cjs')
+    const bundledIds = new Set(BUNDLED_MODELS.map((m) => m.id))
+    const merged = discovery.mergeModels(BUNDLED_MODELS, [...MODELS.filter((m) => !bundledIds.has(m.id)), ...rows])
+    MODELS.splice(0, MODELS.length, ...merged)
+    BY_ID.clear()
+    for (const m of MODELS) BY_ID.set(m.id, m)
+    discovery.saveModels(MODELS)
+    return MODELS
+  }
+  async function refresh() {
+    try {
+      const result = await root.api('/api/models')
+      if (!Array.isArray(result.models)) return
+      MODELS.splice(0, MODELS.length, ...result.models)
+      BY_ID.clear()
+      for (const m of MODELS) BY_ID.set(m.id, m)
+    } catch { /* Bundled rows keep the picker usable offline. */ }
+  }
   function byId(id) {
     return BY_ID.get(String(id || '')) || null
   }
@@ -171,6 +195,9 @@
 
   const catalog = {
     MODELS,
+    BUNDLED_MODELS,
+    mergeDiscovered,
+    refresh,
     EFFORT_LEVELS,
     EFFORT_DEFAULT,
     DSH_REASONING_EFFORTS,
@@ -181,6 +208,7 @@
 
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = catalog
+    mergeDiscovered(require('../../../model-discovery.cjs').initialRows())
   } else {
     // Browser globals keep their pre-0.3 names and shapes: chat.js and
     // connectors.js read window.SCHZ_MODEL_CATALOG as a plain array and the

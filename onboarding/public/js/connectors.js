@@ -1582,6 +1582,12 @@
   }
 
   async function init() {
+    await window.SCHZ_CATALOG.refresh()
+    const actions = MODEL_CATALOG.filter((m) => m.id === CUSTOM_MODEL_SENTINEL || m.id === OLLAMA_URL_SENTINEL)
+    MODEL_CATALOG.splice(0, MODEL_CATALOG.length, ...window.SCHZ_MODEL_CATALOG.map((m) => ({ ...m })))
+    const lastOllama = MODEL_CATALOG.reduce((acc, row, i) => row.group === 'Ollama' ? i : acc, -1)
+    MODEL_CATALOG.splice(lastOllama + 1, 0, actions.find((m) => m.id === OLLAMA_URL_SENTINEL))
+    MODEL_CATALOG.push(actions.find((m) => m.id === CUSTOM_MODEL_SENTINEL))
     $('conn-title').textContent = C.title
 
     // One /api/config for the whole load (2026-08-07 consolidation — this

@@ -771,6 +771,8 @@ const PROVIDER_ROWS = [
         DSH_ROUTE_BASE_URL: values.port ? `http://localhost:${values.port}` : undefined,
         DSH_ROUTE_KEY_ENV: 'CODEX_PROXY_KEY',
         CODEX_PROXY_KEY: CHATGPT_PLACEHOLDER_KEY,
+        // Pass the discovered receipt even if the child starts before async discovery settles.
+        DSH_MODEL_CONTEXT: String(require('./onboarding/public/js/model-catalog.cjs').dshContextWindowFor(model)),
         DSH_MODEL: model,
         DSH_MODEL_VISION: '1', // parity with the pre-swap lane's vision 'yes'
         MODEL: model,
@@ -938,7 +940,7 @@ const PROVIDER_ROWS = [
     env: ({ config }) => {
       const configured = (config.MODEL && String(config.MODEL).trim()) || ''
       const model = (config.DSH_MODEL && String(config.DSH_MODEL).trim())
-        || (DSH_LANE_MODELS.includes(configured) ? configured : 'glm-5.2:cloud')
+        || ((DSH_LANE_MODELS.includes(configured) || require('./onboarding/public/js/model-catalog.cjs').byId(configured)?.providers.includes('dsh')) ? configured : 'glm-5.2:cloud')
       return {
         ...dshCommonEnv(config),
         DSH_ROUTE: 'declared',

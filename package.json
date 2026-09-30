@@ -1,6 +1,6 @@
 {
   "name": "scheherazade",
-  "version": "0.3.9",
+  "version": "0.3.10",
   "private": true,
   "type": "module",
   "description": "Mac-native local AI agent. Forked from agent-portable (Claude Code single-agent harness); P0 spike layers an Electron packaging shell on top.",
@@ -78,6 +78,7 @@
       "channel-companions.mjs",
       "turn-gate.mjs",
       "provider-env.cjs",
+      "model-discovery.cjs",
       "codex-proxy-shim.cjs",
       "setup-token.cjs",
       "setup-token-session.cjs",
@@ -130,6 +131,7 @@
       "channel-companions.mjs",
       "turn-gate.mjs",
       "data-home.cjs",
+      "model-discovery.cjs",
       "local-date.cjs",
       "proc.cjs",
       "supervisor.mjs",

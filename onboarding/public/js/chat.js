@@ -1617,6 +1617,7 @@
 
   async function initModelSwitch() {
     if (!modelSel || !window.SCHZ_MODEL_CATALOG || !SET) return
+    await window.SCHZ_CATALOG.refresh()
     let cfg
     try { cfg = await window.api('/api/config') } catch (err) {
       console.error('model chip config probe failed:', err)

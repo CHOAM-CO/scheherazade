@@ -166,7 +166,8 @@ console.log('\n-- context-cap drift guard (proxy /health vs the hand-pinned cap)
     // the picker left it unproven against the live proxy, and this guard
     // would have kept passing while saying nothing about the new model.
     const catalog = require_(path.join(ROOT, 'onboarding', 'public', 'js', 'model-catalog.cjs'))
-    const CATALOG_GPT = catalog.MODELS.filter((m) => m.providers.includes('chatgpt')).map((m) => m.id)
+    // Bundled rows are proxy-table receipts; discovered rows use provider receipts instead.
+    const CATALOG_GPT = catalog.BUNDLED_MODELS.filter((m) => m.providers.includes('chatgpt')).map((m) => m.id)
     ok('the catalog offers chatgpt rows to check (an empty loop always passes)', CATALOG_GPT.length > 0, CATALOG_GPT.join(','))
     for (const model of CATALOG_GPT) {
       process.env.CODEX_AS_API_MODEL = model
@@ -186,6 +187,10 @@ console.log('\n-- context-cap drift guard (proxy /health vs the hand-pinned cap)
       ok(`${model}: catalog contextWindow === proxy /health context_window`,
         row && row.contextWindow === health.context_window,
         `catalog=${row && row.contextWindow} proxy=${health.context_window}`)
+    }
+    for (const row of catalog.MODELS.filter((m) => m.providers.includes('chatgpt') && !catalog.BUNDLED_MODELS.some((b) => b.id === m.id))) {
+      ok(`${row.id}: discovered provider window reaches gauge and lane`,
+        contextCapForModel(row.id).cap === row.contextWindow && catalog.dshContextWindowFor(row.id) === row.contextWindow)
     }
     delete process.env.CODEX_AS_API_MODEL
   } finally {
@@ -248,7 +253,7 @@ console.log('\n-- ensureCodexProxy reuse: explicit port change rebuilds')
       // (stubbed) env injection asked for, so the gate passes honestly.
       return { json: async () => ({ model: ctx.process.env.CODEX_AS_API_MODEL ?? null }) }
     },
-    require: Object.assign(() => ({ createApp: () => ({}) }), { cache: {}, resolve: (id) => id }),
+    require: Object.assign((id) => id === './model-discovery.cjs' ? { resolveCodexVersion: () => '0.159.2' } : ({ createApp: () => ({}) }), { cache: {}, resolve: (id) => id }),
     process: { env: {} },
   }
   vm.createContext(ctx)

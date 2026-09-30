@@ -2745,7 +2745,40 @@ function startMcpConnectorLogin(name, binPath) {
 //     asynchronously-written askpassToken ride callCtx, never staticCtx --
 //     a copied askpassToken would freeze the pre-listen() null forever
 //     (design §5 risk 3), so routes get a live getter.
+let modelDiscoveryPromise = null
+function discoverCatalog() {
+  if (!modelDiscoveryPromise) {
+    const discovery = require('../model-discovery.cjs')
+    const catalog = require('./public/js/model-catalog.cjs')
+    let claudeHeaders = null
+    try {
+      const key = readProviderKey('claude')
+      const token = key ? null : readProviderKey('claude-subscription')
+      if (key || token) claudeHeaders = {
+        ...(key ? { 'x-api-key': key } : { authorization: `Bearer ${token}`, 'anthropic-beta': CLAUDE_OAUTH_BETA_HEADER, 'x-app': 'cli' }),
+        'anthropic-version': '2023-06-01',
+      }
+    } catch { /* No stored credential is normal before onboarding. */ }
+    const config = readAgentConfig()
+    let ollamaUrl = null
+    if (config.PROVIDER === 'dsh') {
+      try {
+        const url = new URL(config.OLLAMA_BASE_URL || 'http://localhost:11434')
+        if (['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) ollamaUrl = url.href
+      } catch { /* Invalid URLs are handled by provider validation. */ }
+    }
+    modelDiscoveryPromise = discovery.discoverModels({ claudeHeaders, ollamaUrl })
+      .then((rows) => catalog.mergeDiscovered(rows))
+      .catch(() => catalog.MODELS)
+  }
+  return modelDiscoveryPromise
+}
+
 async function handleApi(req, res, pathname, onOnboardingComplete, agentControls) {
+  if (req.method === 'GET' && pathname === '/api/models') {
+    sendJson(res, 200, { models: await discoverCatalog() })
+    return
+  }
   const callCtx = { agentControls, onOnboardingComplete, getAskpassToken: () => askpassToken, getCaptionToken: () => captionToken }
   for (const entry of API_ROUTES) {
     if (entry.method && entry.method !== req.method) continue
@@ -2790,6 +2823,7 @@ function createOnboardingServer(onOnboardingComplete, agentControls) {
   return new Promise((resolve, reject) => {
     let allowedHosts = null // populated once listen() resolves and the real ephemeral port is known
 
+    discoverCatalog() // Cache rows are synchronous; provider discovery must not delay lane startup.
     const server = http.createServer((req, res) => {
       const respondError = (err, status = 500) => {
         // Fail loud SERVER-SIDE (full error incl. stack logged here), but
@@ -3107,6 +3141,10 @@ function contextCapForModel(model) {
   if (!/\[1m\]$/.test(model) && claudeBinModelsCache) {
     const scanned = claudeBinModelsCache.models.find((m) => m.id === base)
     if (scanned) return { cap: scanned.window, capSource: 'claude-cli-binary' }
+  }
+  const discovered = require('./public/js/model-catalog.cjs').byId(base)
+  if (discovered && Number.isInteger(discovered.contextWindow) && discovered.contextWindow > 0) {
+    return { cap: discovered.contextWindow, capSource: discovered.contextWindowSource }
   }
   if (CLAUDE_1M.has(base)) return { cap: 1_000_000, capSource: 'claude-cli-table' }
   if (/^claude-(opus-4-[015]|sonnet-4-[05]|haiku-4-5)/.test(base)) return { cap: 200_000, capSource: 'claude-cli-table' }

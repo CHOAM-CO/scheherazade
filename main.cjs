@@ -895,6 +895,9 @@ async function ensureCodexProxy(config) {
 
   let createApp
   try {
+    // Installed CLI/cache versions prevent new models being rejected as old clients.
+    const cliVersion = require('./model-discovery.cjs').resolveCodexVersion()
+    if (cliVersion) process.env.CODEX_AS_API_CODEX_CLI_VERSION = cliVersion
     if (desiredModel) process.env.CODEX_AS_API_MODEL = desiredModel
     else delete process.env.CODEX_AS_API_MODEL
     // Evict so the module-level MODEL constant re-reads the env we just set;

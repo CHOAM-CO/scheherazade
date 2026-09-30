@@ -152,7 +152,10 @@ console.log('cap table:')
   ]
   for (const [model, cap, src] of cases) {
     const got = contextCapForModel(model)
-    check(`cap(${model}) = ${cap}/${src}`, got.cap === cap && got.capSource === src, JSON.stringify(got))
+    const row = require_(path.join(ROOT, 'onboarding/public/js/model-catalog.cjs')).byId(model)
+    const expectedCap = row?.contextWindow || cap
+    const expectedSource = row?.contextWindow ? row.contextWindowSource : src
+    check(`cap(${model}) = ${expectedCap}/${expectedSource}`, got.cap === expectedCap && got.capSource === expectedSource, JSON.stringify(got))
   }
 
   // ── dynamic model extraction from the CLI binary (2026-08-13) ─────────
@@ -215,7 +218,7 @@ console.log('cap table:')
     // codex-family id -- same '^gpt' ambiguity channel-slack's laneHasVision
     // hit the same day (see its /^gpt-\d/ comment). Receipts-backed means
     // first-party claude + codex gpt-<digit> only.
-    const receiptsBacked = id.startsWith('claude-') || /^gpt-\d/.test(id)
+    const receiptsBacked = catalog.byId(id)?.contextWindow && (id.startsWith('claude-') || /^gpt-\d/.test(id))
     if (!receiptsBacked) continue
     const got = contextCapForModel(id)
     check(`catalog model '${id}' resolves to a cap (else its gauge silently disappears)`, got.cap !== null, JSON.stringify(got))
@@ -245,7 +248,8 @@ console.log('single source:')
   // patch file dsh accepts and then behaves strangely under.
   for (const m of catalog.MODELS) {
     check(`'${m.id}' contextWindow is a positive integer`,
-      Number.isInteger(m.contextWindow) && m.contextWindow > 0, JSON.stringify(m.contextWindow))
+      (m.contextWindow === undefined && !catalog.BUNDLED_MODELS.some((b) => b.id === m.id)) ||
+      (Number.isInteger(m.contextWindow) && m.contextWindow > 0), JSON.stringify(m.contextWindow))
     check(`'${m.id}' says where its window came from`,
       typeof m.contextWindowSource === 'string' && m.contextWindowSource.length > 0, String(m.contextWindowSource))
   }
@@ -272,12 +276,12 @@ console.log('single source:')
     const win = {}
     const ctx = vm.createContext({ window: win })
     vm.runInContext(src, ctx, { filename: CATALOG_REL })
-    check('browser branch publishes window.SCHZ_MODEL_CATALOG', Array.isArray(win.SCHZ_MODEL_CATALOG) && win.SCHZ_MODEL_CATALOG.length === catalog.MODELS.length,
+    check('browser branch publishes window.SCHZ_MODEL_CATALOG', Array.isArray(win.SCHZ_MODEL_CATALOG) && win.SCHZ_MODEL_CATALOG.length === catalog.BUNDLED_MODELS.length,
       `got ${win.SCHZ_MODEL_CATALOG && win.SCHZ_MODEL_CATALOG.length} rows, node side has ${catalog.MODELS.length}`)
     check('browser branch publishes the effort globals',
       Array.isArray(win.SCHZ_EFFORT_LEVELS) && typeof win.SCHZ_EFFORT_DEFAULT === 'string')
-    check('both sides carry the SAME ids in the SAME order',
-      JSON.stringify((win.SCHZ_MODEL_CATALOG || []).map((m) => m.id)) === JSON.stringify(catalog.MODELS.map((m) => m.id)))
+    check('both sides carry the SAME bundled ids in the SAME order',
+      JSON.stringify((win.SCHZ_MODEL_CATALOG || []).map((m) => m.id)) === JSON.stringify(catalog.BUNDLED_MODELS.map((m) => m.id)))
     check('browser rows carry contextWindow too (not stripped by the export path)',
       (win.SCHZ_MODEL_CATALOG || []).every((m) => Number.isInteger(m.contextWindow) && m.contextWindow > 0))
   }
