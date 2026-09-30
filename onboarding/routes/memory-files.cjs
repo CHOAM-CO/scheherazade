@@ -35,6 +35,10 @@ const CREDENTIAL_RE = /(token|secret|passw|credential|api[-_ ]?key|apikey|privat
 // the agent's notes, and hundreds of files of noise in a memory browser.
 const APP_OWNED = new Set(['bin', 'node_modules'])
 const DATE_NAME_RE = /^\d{4}-\d{2}-\d{2}/
+// Scratch and backup folders (tmp/, "fabric26.3-fix-backup-2026...") are not
+// memory; the owner 2026-09-30 screenshot showed them in the tree. Hidden from
+// the tree only -- files inside stay readable (Recent may still link to them).
+const NOISE_DIR_RE = /^(tmp|temp|cache)$|backup|\.bak/i
 
 function createRoutes(staticCtx) {
   const { fs, path, sendJson, DATA_HOME } = staticCtx
@@ -69,6 +73,7 @@ function createRoutes(staticCtx) {
       try { st = fs.lstatSync(abs) } catch { continue }
       if (st.isSymbolicLink()) continue
       if (st.isDirectory()) {
+        if (NOISE_DIR_RE.test(name)) continue
         if (depth >= MAX_DEPTH) { budget.depthCapped = true; continue }
         const children = listDir(abs, depth + 1, budget)
         if (children.length === 0) continue // empty (or all-filtered) folders are noise

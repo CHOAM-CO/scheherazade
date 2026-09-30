@@ -860,9 +860,8 @@ window.COPY = {
     // memory-summary.md, written by following procedures/memory-consolidation.md.
     remember: {
       label: 'What I remember',
-      refreshLabel: 'Refresh',
       updated: (t) => `Last updated ${t}`,
-      empty: (name) => `${name} hasn't written this yet. It's rewritten overnight, during a scheduled memory-consolidation pass — that requires autonomy to be turned on in Settings, and at least one night to have gone by since.`,
+      empty: (name) => `${name} hasn't written this yet. It's rewritten overnight, during a scheduled memory-consolidation pass. That needs autonomy turned on in Settings, and at least one night to have passed.`,
       loadError: (msg) => `Couldn't load this (${msg}).`,
     },
     // AUTHORED -- recently-touched files (같이보기 batch, the owner 2026-08-19:

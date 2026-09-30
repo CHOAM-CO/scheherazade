@@ -155,10 +155,8 @@
   async function viewRemember(seq) {
     const R = C.remember
     const body = resetReader(R.label)
-    const refreshBtn = addAction(R.refreshLabel, async () => {
-      refreshBtn.disabled = true
-      try { await viewRemember(++state.renderSeq) } finally { refreshBtn.disabled = false }
-    })
+    // No pane-level Refresh: the page-level one (m-refresh) already reloads
+    // tree + current view. Two stacked Refresh buttons, the owner 2026-09-30.
     let data
     try {
       data = await api('/api/memory/summary')
