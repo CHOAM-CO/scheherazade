@@ -940,7 +940,7 @@ const PROVIDER_ROWS = [
     env: ({ config }) => {
       const configured = (config.MODEL && String(config.MODEL).trim()) || ''
       const model = (config.DSH_MODEL && String(config.DSH_MODEL).trim())
-        || ((DSH_LANE_MODELS.includes(configured) || require('./onboarding/public/js/model-catalog.cjs').byId(configured)?.providers.includes('dsh')) ? configured : 'glm-5.2:cloud')
+        || (DSH_LANE_MODELS.includes(configured) ? configured : 'glm-5.2:cloud')
       return {
         ...dshCommonEnv(config),
         DSH_ROUTE: 'declared',

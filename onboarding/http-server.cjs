@@ -2750,24 +2750,7 @@ function discoverCatalog() {
   if (!modelDiscoveryPromise) {
     const discovery = require('../model-discovery.cjs')
     const catalog = require('./public/js/model-catalog.cjs')
-    let claudeHeaders = null
-    try {
-      const key = readProviderKey('claude')
-      const token = key ? null : readProviderKey('claude-subscription')
-      if (key || token) claudeHeaders = {
-        ...(key ? { 'x-api-key': key } : { authorization: `Bearer ${token}`, 'anthropic-beta': CLAUDE_OAUTH_BETA_HEADER, 'x-app': 'cli' }),
-        'anthropic-version': '2023-06-01',
-      }
-    } catch { /* No stored credential is normal before onboarding. */ }
-    const config = readAgentConfig()
-    let ollamaUrl = null
-    if (config.PROVIDER === 'dsh') {
-      try {
-        const url = new URL(config.OLLAMA_BASE_URL || 'http://localhost:11434')
-        if (['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) ollamaUrl = url.href
-      } catch { /* Invalid URLs are handled by provider validation. */ }
-    }
-    modelDiscoveryPromise = discovery.discoverModels({ claudeHeaders, ollamaUrl })
+    modelDiscoveryPromise = discovery.discoverModels()
       .then((rows) => catalog.mergeDiscovered(rows))
       .catch(() => catalog.MODELS)
   }

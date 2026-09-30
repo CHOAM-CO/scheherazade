@@ -167,7 +167,7 @@ console.log('\n-- context-cap drift guard (proxy /health vs the hand-pinned cap)
     // would have kept passing while saying nothing about the new model.
     const catalog = require_(path.join(ROOT, 'onboarding', 'public', 'js', 'model-catalog.cjs'))
     // Bundled rows are proxy-table receipts; discovered rows use provider receipts instead.
-    const CATALOG_GPT = catalog.BUNDLED_MODELS.filter((m) => m.providers.includes('chatgpt')).map((m) => m.id)
+    const CATALOG_GPT = catalog.BUNDLED_MODELS.filter((m) => m.contextWindowSource === 'codex-as-api-table' && m.providers.includes('chatgpt')).map((m) => m.id)
     ok('the catalog offers chatgpt rows to check (an empty loop always passes)', CATALOG_GPT.length > 0, CATALOG_GPT.join(','))
     for (const model of CATALOG_GPT) {
       process.env.CODEX_AS_API_MODEL = model
@@ -188,7 +188,7 @@ console.log('\n-- context-cap drift guard (proxy /health vs the hand-pinned cap)
         row && row.contextWindow === health.context_window,
         `catalog=${row && row.contextWindow} proxy=${health.context_window}`)
     }
-    for (const row of catalog.MODELS.filter((m) => m.providers.includes('chatgpt') && !catalog.BUNDLED_MODELS.some((b) => b.id === m.id))) {
+    for (const row of catalog.MODELS.filter((m) => m.providers.includes('chatgpt') && m.contextWindowSource !== 'codex-as-api-table')) {
       ok(`${row.id}: discovered provider window reaches gauge and lane`,
         contextCapForModel(row.id).cap === row.contextWindow && catalog.dshContextWindowFor(row.id) === row.contextWindow)
     }

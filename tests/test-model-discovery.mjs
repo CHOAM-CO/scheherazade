@@ -22,13 +22,17 @@ try {
   fs.writeFileSync(path.join(data, 'broken'), '{')
   assert.equal(d.readCodexCache(path.join(data, 'broken')), null)
   const rows = d.codexRows(fixture)
-  assert.deepEqual(rows.map((m) => m.id), ['gpt-6.1-sol', 'gpt-6-astra'])
+  assert.equal(rows.length, 10)
+  assert.equal(rows.find((m) => m.id === 'gpt-7-test').label, 'GPT 7 Test')
+  assert.ok(!rows.some((m) => m.id === 'codex-auto-review' || m.id === 'gpt-reserve'))
+  const mergeInputs = rows.filter((m) => ['gpt-6.1-sol', 'gpt-6-astra'].includes(m.id))
+  mergeInputs.find((m) => m.id === 'gpt-6-astra').contextWindow = 999999
   const bundled = [{ id: 'gpt-6-astra', label: 'Curated', group: 'GPT', providers: ['chatgpt'], contextWindow: 200000, contextWindowSource: 'bundled' }]
-  const merged = d.mergeModels(bundled, rows)
+  const merged = d.mergeModels(bundled, mergeInputs)
   assert.equal(merged.length, 2)
   assert.deepEqual(merged[0], bundled[0])
   assert.equal(merged[1].contextWindow, 272000)
-  assert.equal(d.mergeModels([{ ...bundled[0], contextWindow: undefined }], rows)[0].contextWindow, 999999)
+  assert.equal(d.mergeModels([{ ...bundled[0], contextWindow: undefined }], mergeInputs)[0].contextWindow, 999999)
   assert.equal(d.mergeModels([], [{ id: 'bad' }, null]).length, 0)
   assert.equal(d.pickCodexVersion(['codex-cli 0.159.2\n', '0.160.0', 'garbage']), '0.160.0')
   assert.equal(d.pickCodexVersion(['0.159.2', '0.159.10']), '0.159.10')
@@ -38,7 +42,18 @@ try {
   assert.equal(d.resolveCodexVersion({ cache: fixture, run: () => { throw Error('no binary') } }), '0.159.2')
   assert.equal(d.resolveCodexVersion({ cache: null, run: () => { throw Error('no binary') } }), null)
 
+  // A pre-upgrade cache must not resurrect retired GPT or unverified provider rows.
+  d.saveModels([...rows, { id: 'claude-old-cache', label: 'Old', group: 'Claude', providers: ['claude'] },
+    { id: 'local-old-cache', label: 'Old', group: 'Ollama', providers: ['dsh'] }])
   const catalog = require('../onboarding/public/js/model-catalog.cjs')
+  assert.deepEqual(catalog.MODELS.map((m) => m.id), [...catalog.BUNDLED_MODELS.map((m) => m.id), 'gpt-7-test'])
+  assert.equal(catalog.byId('gpt-5.6-sol'), null)
+  assert.equal(catalog.byId('claude-old-cache'), null)
+  assert.equal(catalog.byId('local-old-cache'), null)
+  assert.equal(catalog.byId('gpt-6.1-sol').label, 'GPT 6.1 Sol')
+  const actualCache = d.readCodexCache(path.join(os.homedir(), '.codex/models_cache.json'))
+  if (actualCache) assert.deepEqual(d.mergeModels(catalog.BUNDLED_MODELS, d.codexRows(actualCache), catalog.SEEN_AT_BUILD), catalog.BUNDLED_MODELS)
+  assert.equal(catalog.dshContextWindowFor('gpt-7-test'), 310000)
   assert.equal(catalog.byId('gpt-6.1-sol').contextWindow, 272000)
   assert.equal(catalog.dshContextWindowFor('gpt-6.1-sol'), 272000)
   assert.equal(catalog.byId('gpt-6-astra').contextWindow, 200000)
@@ -57,20 +72,25 @@ try {
   const win = { api: async (endpoint) => { assert.equal(endpoint, '/api/models'); return { models: catalog.MODELS } } }
   vm.runInNewContext(fs.readFileSync(path.join(root, 'onboarding/public/js/model-catalog.cjs'), 'utf8'), { window: win })
   const original = win.SCHZ_MODEL_CATALOG
-  assert.equal(original.some((m) => m.id === 'gpt-6.1-sol'), false)
+  assert.equal(original.some((m) => m.id === 'gpt-7-test'), false)
+  assert.equal(original.some((m) => m.id === 'gpt-6.1-sol'), true)
   await win.SCHZ_CATALOG.refresh()
   assert.equal(win.SCHZ_MODEL_CATALOG, original)
   assert.equal(win.SCHZ_CATALOG.byId('gpt-6.1-sol').contextWindow, 272000)
   win.api = async () => { throw Error('offline') }
   await win.SCHZ_CATALOG.refresh()
   assert.equal(win.SCHZ_CATALOG.byId('gpt-6.1-sol').contextWindow, 272000)
-  const discovered = await d.discoverModels({ claudeHeaders: { 'x-api-key': 'fixture' }, ollamaUrl: 'http://localhost:11434', fetchImpl: async (url) => ({ ok: true, json: async () => url.includes('anthropic') ? { data: [{ id: 'claude-fixture', display_name: 'Fixture', context_window: 200000 }, { id: 'not-chat' }] } : { models: [{ name: 'local-fixture' }] } }) })
-  assert.equal(discovered.find((m) => m.id === 'claude-fixture').contextWindow, 200000)
-  assert.deepEqual(discovered.find((m) => m.id === 'local-fixture').providers, ['dsh'])
+  fs.writeFileSync(process.env.CODEX_AS_API_AUTH_PATH, JSON.stringify({ tokens: { access_token: 'fixture-token', account_id: 'fixture-account' } }))
+  const discovered = await d.discoverModels({ fetchImpl: async (url, options) => {
+    assert.ok(url.startsWith('https://chatgpt.com/backend-api/codex/models?client_version='))
+    assert.equal(options.headers.authorization, 'Bearer fixture-token')
+    return { ok: true, json: async () => fixture }
+  } })
+  assert.equal(discovered.find((m) => m.id === 'gpt-7-test').label, 'GPT 7 Test')
+  fs.unlinkSync(process.env.CODEX_AS_API_AUTH_PATH)
   catalog.mergeDiscovered(discovered)
-  assert.equal(buildProviderEnv('dsh', { MODEL: 'local-fixture' }, {}).env.DSH_MODEL, 'local-fixture')
   catalog.mergeDiscovered([{ ...rows[0], contextWindow: 280000 }])
-  assert.equal(catalog.byId('gpt-6.1-sol').contextWindow, 280000)
+  assert.equal(catalog.byId('gpt-6.1-sol').contextWindow, 272000)
   assert.equal(catalog.byId('gpt-6-astra').contextWindow, 200000)
   const { server, url } = await createOnboardingServer()
   try {
@@ -84,8 +104,7 @@ try {
     server.closeAllConnections()
     await new Promise((resolve) => server.close(resolve))
   }
-  assert.ok(!discovered.find((m) => m.id === 'not-chat'))
-  console.log('PASS model discovery: merge, fixture, context, persisted lane, browser, providers, version')
+  console.log('PASS model discovery: merge, fixture, context, snapshot, persisted lane, browser, endpoint, version')
 } finally {
   fs.rmSync(data, { recursive: true, force: true })
 }

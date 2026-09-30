@@ -15,17 +15,19 @@ function readCodexCache(file = codexCachePath()) { return readJson(file) }
 function codexRows(cache) {
   return (Array.isArray(cache?.models) ? cache.models : [])
     .filter((m) => m.visibility === 'list' && /^gpt-/.test(m.slug) && !/^gpt-reserve/.test(m.slug))
-    .map((m) => ({ id: m.slug, label: m.display_name || m.slug, group: 'GPT', providers: ['chatgpt'],
+    .map((m) => ({ id: m.slug, label: (m.display_name || m.slug).replace(/-/g, ' '), group: 'GPT', providers: ['chatgpt'],
       contextWindow: m.context_window, contextWindowSource: 'codex-models-cache' }))
 }
 function validRow(m) {
   return m && typeof m.id === 'string' && typeof m.label === 'string' &&
     typeof m.group === 'string' && Array.isArray(m.providers) && m.providers.every((p) => typeof p === 'string')
 }
-function mergeModels(bundled, discovered) {
+function mergeModels(bundled, discovered, seenAtBuild = []) {
   const rows = new Map(bundled.map((m) => [m.id, { ...m }]))
   const bundledIds = new Set(rows.keys())
+  const seen = new Set(seenAtBuild)
   for (const m of discovered.filter(validRow)) {
+    if (seen.has(m.id) && !bundledIds.has(m.id)) continue
     const old = rows.get(m.id)
     const window = Number.isInteger(m.contextWindow) && m.contextWindow > 0 ? m.contextWindow : undefined
     if (!old || !bundledIds.has(m.id)) rows.set(m.id, { ...old, ...m,
@@ -81,7 +83,7 @@ function resolveCodexVersion({ cache = readCodexCache(), run = execFileSync } = 
   return pickCodexVersion([cli, cache?.client_version])
 }
 
-async function discoverModels({ claudeHeaders = null, ollamaUrl = null, fetchImpl = fetch } = {}) {
+async function discoverModels({ fetchImpl = fetch } = {}) {
   const rows = codexRows(readCodexCache())
   const get = async (url, headers) => {
     try {
@@ -100,15 +102,6 @@ async function discoverModels({ claudeHeaders = null, ollamaUrl = null, fetchImp
       ...(auth.tokens.account_id ? { 'ChatGPT-Account-Id': auth.tokens.account_id } : {}),
     }).then((body) => rows.push(...codexRows(body).map((m) => ({ ...m, contextWindowSource: 'codex-models-api' })))))
   }
-  if (claudeHeaders) tasks.push(get('https://api.anthropic.com/v1/models?limit=1000', claudeHeaders).then((body) => {
-    for (const m of body?.data || []) if (/^claude-/.test(m.id)) rows.push({ id: m.id,
-      label: m.display_name || m.id, group: 'Claude', providers: ['claude', 'claude-cli', 'claude-subscription'],
-      contextWindow: m.context_window, contextWindowSource: 'anthropic-models-api' })
-  }))
-  if (ollamaUrl) tasks.push(get(new URL('/api/tags', ollamaUrl).href).then((body) => {
-    for (const m of body?.models || []) if (typeof m.name === 'string') rows.push({ id: m.name,
-      label: m.name, group: 'Ollama', providers: ['dsh'], contextWindowSource: 'ollama-tags' })
-  }))
   await Promise.all(tasks)
   return rows
 }

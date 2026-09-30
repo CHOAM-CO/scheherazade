@@ -99,6 +99,13 @@
   //                       number is the one OUR patch layer declares to the
   //                       engine. Honest about being ours rather than
   //                       dressed up as the vendor's.
+  // Build receipt 2026-09-30: all nine visible ids in ~/.codex/models_cache.json.
+  // Previously pruned choices must not return as if they were newly released.
+  const SEEN_AT_BUILD = [
+    'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna',
+    'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-daybreak-blue-latest', 'gpt-5.5',
+  ]
+
   const MODELS = [
     // Claude: the four ids the picker offers, all 1M / claude-cli-table
     // (receipt (a) above). Order is the owner's keep-list.
@@ -121,6 +128,8 @@
     // gpt-6 family is absent from the proxy's model_capabilities_default, so
     // an unconfigured install gets the package default 2e5).
     // tests/test-codex-proxy-model.mjs re-proves all four on every run.
+    // Codex cache and live /models both report 272000 for Sol 6.1 (2026-09-30).
+    { id: 'gpt-6.1-sol', label: 'GPT 6.1 Sol', group: 'GPT', providers: ['chatgpt'], contextWindow: 272000, contextWindowSource: 'codex-models-cache' },
     { id: 'gpt-6-astra', label: 'GPT 6 Astra', group: 'GPT', providers: ['chatgpt'], contextWindow: 200000, contextWindowSource: 'codex-as-api-table' },
     { id: 'gpt-6-luna', label: 'GPT 6 Luna', group: 'GPT', providers: ['chatgpt'], contextWindow: 200000, contextWindowSource: 'codex-as-api-table' },
     { id: 'gpt-6-sol', label: 'GPT 6 Sol', group: 'GPT', providers: ['chatgpt'], contextWindow: 200000, contextWindowSource: 'codex-as-api-table' },
@@ -162,7 +171,10 @@
   function mergeDiscovered(rows) {
     const discovery = require('../../../model-discovery.cjs')
     const bundledIds = new Set(BUNDLED_MODELS.map((m) => m.id))
-    const merged = discovery.mergeModels(BUNDLED_MODELS, [...MODELS.filter((m) => !bundledIds.has(m.id)), ...rows])
+    // Only post-build GPT ids are discoverable in this release, including from old caches.
+    const candidates = [...MODELS.filter((m) => !bundledIds.has(m.id)), ...rows]
+      .filter((m) => m && /^gpt-/.test(m.id) && !/^gpt-reserve/.test(m.id) && m.providers?.includes('chatgpt'))
+    const merged = discovery.mergeModels(BUNDLED_MODELS, candidates, SEEN_AT_BUILD)
     MODELS.splice(0, MODELS.length, ...merged)
     BY_ID.clear()
     for (const m of MODELS) BY_ID.set(m.id, m)
@@ -196,6 +208,7 @@
   const catalog = {
     MODELS,
     BUNDLED_MODELS,
+    SEEN_AT_BUILD,
     mergeDiscovered,
     refresh,
     EFFORT_LEVELS,
