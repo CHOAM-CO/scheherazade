@@ -128,8 +128,9 @@
     // gpt-6 family is absent from the proxy's model_capabilities_default, so
     // an unconfigured install gets the package default 2e5).
     // tests/test-codex-proxy-model.mjs re-proves all four on every run.
-    // Codex cache and live /models both report 272000 for Sol 6.1 (2026-09-30).
-    { id: 'gpt-6.1-sol', label: 'GPT 6.1 Sol', group: 'GPT', providers: ['chatgpt'], contextWindow: 272000, contextWindowSource: 'codex-models-cache' },
+    // Codex cache and live /models report 272000 for Sol 6.1 (2026-09-30), but the bundled proxy
+    // reports and compacts at its 200000 default (/health, empty CODEX_HOME), same as the gpt-6 rows.
+    { id: 'gpt-6.1-sol', label: 'GPT 6.1 Sol', group: 'GPT', providers: ['chatgpt'], contextWindow: 200000, contextWindowSource: 'codex-as-api-table' },
     { id: 'gpt-6-astra', label: 'GPT 6 Astra', group: 'GPT', providers: ['chatgpt'], contextWindow: 200000, contextWindowSource: 'codex-as-api-table' },
     { id: 'gpt-6-luna', label: 'GPT 6 Luna', group: 'GPT', providers: ['chatgpt'], contextWindow: 200000, contextWindowSource: 'codex-as-api-table' },
     { id: 'gpt-6-sol', label: 'GPT 6 Sol', group: 'GPT', providers: ['chatgpt'], contextWindow: 200000, contextWindowSource: 'codex-as-api-table' },

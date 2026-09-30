@@ -5,6 +5,10 @@ const path = require('node:path')
 const { execFileSync } = require('node:child_process')
 const { resolveDataHome } = require('./data-home.cjs')
 
+// The bundled proxy reports 200000 (/health, empty CODEX_HOME) for any id outside its own
+// table, and compacts against that, whatever the backend's models list says (6.1 Sol: 272000
+// upstream, 200000 at the proxy). The lane and gauge follow the proxy, like the bundled GPT rows.
+const CODEX_PROXY_DEFAULT_WINDOW = 200000
 function readJson(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')) } catch { return null }
 }
@@ -16,7 +20,7 @@ function codexRows(cache) {
   return (Array.isArray(cache?.models) ? cache.models : [])
     .filter((m) => m.visibility === 'list' && /^gpt-/.test(m.slug) && !/^gpt-reserve/.test(m.slug))
     .map((m) => ({ id: m.slug, label: (m.display_name || m.slug).replace(/-/g, ' '), group: 'GPT', providers: ['chatgpt'],
-      contextWindow: m.context_window, contextWindowSource: 'codex-models-cache' }))
+      contextWindow: CODEX_PROXY_DEFAULT_WINDOW, contextWindowSource: 'codex-as-api-default' }))
 }
 function validRow(m) {
   return m && typeof m.id === 'string' && typeof m.label === 'string' &&
@@ -100,7 +104,7 @@ async function discoverModels({ fetchImpl = fetch } = {}) {
     tasks.push(get(`https://chatgpt.com/backend-api/codex/models?client_version=${encodeURIComponent(version)}`, {
       authorization: `Bearer ${auth.tokens.access_token}`,
       ...(auth.tokens.account_id ? { 'ChatGPT-Account-Id': auth.tokens.account_id } : {}),
-    }).then((body) => rows.push(...codexRows(body).map((m) => ({ ...m, contextWindowSource: 'codex-models-api' })))))
+    }).then((body) => rows.push(...codexRows(body))))
   }
   await Promise.all(tasks)
   return rows
