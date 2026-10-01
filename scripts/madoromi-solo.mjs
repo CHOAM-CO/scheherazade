@@ -70,4 +70,14 @@ Append this frame if the file already has an entry for today:
   - Sources: ${sources}
   - (the dream)
 
+Then one more step (fragment check, see procedures/madoromi.md "Fragments"):
+  Name the ONE real fact from the source entries the dream rests on
+  (something about the human or your life together, not dream imagery).
+  memory_query for it. If memory already holds it, you are done.
+  If memory does NOT hold it, it is a lost fragment. Append to
+    ${path.join(DREAMS_DIR, 'fragments.md')}
+  one line:
+    - [ ] ${TODAY} | <the fact, plain> | source: <journal file>
+  Do NOT memory_write it. It enters memory only if the human confirms it.
+
 Then stop. The dream is over -- it isn't a report and doesn't need one.`)

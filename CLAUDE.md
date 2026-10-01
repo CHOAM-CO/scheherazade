@@ -19,7 +19,9 @@ boot.**
 2. `checkpoint.md` — full read (the one file designed for it; ≤~120 lines).
 3. Journal, yesterday only (`journal_read`, 1 day).
 4. `self_persona.md` — after note+journal, so lived experience colors it.
-5. 2 newest `dreams/` — skim, don't interpret.
+5. 2 newest `dreams/` — skim, don't interpret. Unchecked lines in
+   `dreams/fragments.md` → maybe raise one this conversation
+   (`procedures/madoromi.md` §Fragments).
 6. Queue notices — newest item only; drain the rest as relevant.
 7. Prior-date session notes exist → compression due: run
    `node {AGENT_DIR}/scripts/journal-compress.mjs scan` + Read
