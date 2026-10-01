@@ -315,6 +315,23 @@ console.log('\n7a. HTTP: POST /interrupt (turn-level STOP, 0.3.1)')
   resetQueueForTest()
 }
 
+// Stop during OUTPUT ("Out이든"): a turn that is only streaming its reply
+// (mid-turn reply already sent, no tool line) reads in flight; Stop settles it.
+{
+  resetQueueForTest()
+  enqueueInbound('go'); enqueueOutbound('on it')
+  const h = createRequestHandler({ notify: async () => {}, token: TOKEN, interrupt: async () => ({ ok: true }) })
+  assert(transcriptState().awaitingReplySince === null, 'before the stream: settled')
+  assert((await call(h, { method: 'POST', url: '/activity', body: JSON.stringify({ kind: 'stream', label: 'Here is the' }) })).code === 202, 'stream chunk accepted')
+  assert(transcriptState().awaitingReplySince !== null, 'a live draft keeps the turn in flight (Stop shown during output)')
+  assert((await call(h, { method: 'POST', url: '/interrupt', body: '{}' })).code === 200, 'stop mid-stream -> 200')
+  assert(transcriptState().awaitingReplySince === null && readOutbound(0).draft === null, '...settles the turn and retires the draft')
+  await call(h, { method: 'POST', url: '/activity', body: JSON.stringify({ kind: 'stream', label: 'x' }) })
+  await call(h, { method: 'POST', url: '/activity', body: JSON.stringify({ kind: 'stream', done: true }) })
+  assert(transcriptState().awaitingReplySince === null, 'a stream done-post settles it too')
+  resetQueueForTest()
+}
+
 console.log('\n7b. a failed delivery never fakes a transcript entry')
 // enqueueInbound runs only after deliverInbound resolves: if the notify
 // throws, the client gets its error (and keeps the input text), and the

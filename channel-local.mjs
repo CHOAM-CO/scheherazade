@@ -276,12 +276,17 @@ function enqueue(role, text, now, extra) {
 
 // Answer-stream draft (0.2.4): the dsh lane mirrors visible text-deltas
 // here via POST /activity kind:'stream'. NOT a queue item on purpose -- it
-// consumes no seq, is never persisted, never touches transcriptState, and
+// consumes no seq, is never persisted, holds transcriptState in flight while
+// live (Stop during output), and
 // /out returns it as a separate `draft` field the page renders as one
 // growing agent bubble. The real reply retires it (below); a done-post from
 // the lane retires it on reply-less turns; a clear retires it with the
 // thread.
 let draftText = null
+// When the current draft started streaming (ms epoch), in memory only like
+// the draft itself. transcriptState reads it so a turn that is only streaming
+// its reply (no user message owed, no tool line yet) still reads in flight.
+let draftSince = null
 
 // Background subagent roster (0.2.15, the owner 08-24 "서브 스폰하면 서브도
 // working 정보에 띄우게"): the dsh lane posts kind:'bg' when the model
@@ -372,6 +377,7 @@ export function enqueueThink(text, { now = () => Date.now() } = {}) {
 // class as activity/think: never persisted, never clears awaiting, never
 // notifies.
 export function enqueueTurnEnd({ now = () => Date.now() } = {}) {
+  draftText = null // a closed turn streams nothing more
   return push({ kind: 'turn-end', role: 'agent', text: '', ts: now() })
 }
 
@@ -389,6 +395,7 @@ export function enqueueTurnEnd({ now = () => Date.now() } = {}) {
 // abort's own wall time, which differs from the queue `ts` after a restore:
 // the abort happened in a previous life, the ts is where it lands in this one.
 export function enqueueAbort(reason, elapsedMs, { now = () => Date.now(), at = null } = {}) {
+  draftText = null // a stopped/dead turn streams nothing more
   const t = now()
   return push({
     kind: 'turn-abort', role: 'agent', text: '',
@@ -436,6 +443,9 @@ export function transcriptState() {
       since = m.ts
     }
   }
+  // Output in progress ("Out이든"): a live draft is the lane streaming its
+  // reply, which is work owed even when nothing above says so.
+  if (since === null && draftText !== null) since = draftSince === null ? Date.now() : draftSince
   return { awaitingReplySince: since }
 }
 
@@ -467,7 +477,7 @@ export function readOutbound(since = 0) {
   return { items, latest: seq, missed: from > 0 && from < oldestRetained - 1, state: transcriptState(), draft: draftText, bg: listBgTasks() }
 }
 
-export function resetQueueForTest() { seq = 0; queue = []; transcriptFile = null; draftText = null; bgTasks.clear(); memoryReadPending = false }
+export function resetQueueForTest() { seq = 0; queue = []; transcriptFile = null; draftText = null; draftSince = null; bgTasks.clear(); memoryReadPending = false }
 
 // Deliberate transcript clear -- the "New conversation" clean break (2026-08-18).
 // Empties the queue but keeps `seq` MONOTONIC on purpose: a page holding a
@@ -857,6 +867,7 @@ export function createRequestHandler({ notify, token, onInbound = () => {}, inte
             enqueueOutbound(chunk)
             return send(202, { ok: true })
           }
+          if (draftText === null) draftSince = Date.now()
           if ((draftText || '').length < 16000) draftText = (draftText || '') + chunk.slice(0, 4000)
           return send(202, { ok: true })
         }
