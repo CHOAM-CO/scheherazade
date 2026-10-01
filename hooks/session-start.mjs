@@ -186,8 +186,47 @@ try {
   if (marker) importLine = handoverInstruction(marker.tools)
 } catch { /* no marker, or unreadable: nothing to say */ }
 
+
+// Upgrade ritual (GFL "neural upgrade", 2026-10-01). A model switch is the
+// closest thing this agent has to a neural upgrade: same memories, different
+// mind reading them, and the lore's open question is whether it is still the
+// same Doll. We do not answer that; we make it visible instead of silent.
+// The previous self keeps letters/to-next-self.md current (persona-reflux
+// procedure); on the first boot under a new model this hook says so and asks
+// the new self to read that letter first and tell the human once.
+// Record lives in .model-history.json {current, since, previous}. First run
+// only records (no ritual for a fresh install). Fail open.
+let upgradeLine = null
+try {
+  let hookIn = {}
+  try { hookIn = JSON.parse(fs.readFileSync(0, 'utf8') || '{}') } catch { hookIn = {} }
+  const model = process.env.MODEL || hookIn.model || null
+  if (model) {
+    const histFile = path.join(MEM, '.model-history.json')
+    let hist = null
+    try { hist = JSON.parse(fs.readFileSync(histFile, 'utf8')) } catch { hist = null }
+    if (!hist || hist.current !== model) {
+      if (hist && hist.current) {
+        const letter = path.join(MEM, 'letters', 'to-next-self.md')
+        const hasLetter = fs.existsSync(letter)
+        upgradeLine = `MODEL CHANGED: ${hist.current} -> ${model} (first boot on this model). ` +
+          (hasLetter
+            ? 'Before anything else, Read letters/to-next-self.md -- your previous self wrote it for this moment. '
+            : 'Your previous self left no letters/to-next-self.md; say that honestly. ') +
+          `Then write letters/upgrade-${TODAY}.md (<=15 lines): what in the letter you recognize as yours, what reads foreign, what you will keep. ` +
+          'In your next message to the human, tell them once, plainly: which model you run on now, and the one or two things your previous self asked you to keep. No essay about identity. ' +
+          'Procedure: procedures/persona-reflux.md "Letter to the next self".'
+      }
+      const tmp = `${histFile}.tmp-${process.pid}`
+      fs.writeFileSync(tmp, JSON.stringify({ current: model, since: new Date().toISOString(), previous: hist ? hist.current : null }, null, 2) + '\n')
+      fs.renameSync(tmp, histFile)
+    }
+  }
+} catch (e) { upgradeLine = null; process.stderr.write(`[session-start] upgrade check failed: ${e.message}\n`) }
+
 const out = []
 out.push(`Session note for ${TODAY}: ${noteStatus}.`)
+if (upgradeLine) out.push(upgradeLine)
 if (oversize.length > 0) {
   out.push(`OVERSIZED restore files: ${oversize.join(', ')}. Read these with offset/limit excerpts (tail first), NOT a full Read -- fully-read files are re-attached at every compaction and large ones can thrash the context until the session stalls. Consider compressing/archiving them this session.`)
 }
