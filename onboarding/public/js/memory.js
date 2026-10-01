@@ -93,7 +93,7 @@
 
   const F = C.folder
   const state = {
-    view: { key: 'remember', kind: 'remember' },
+    view: { key: 'table:user_facts', kind: 'table', table: 'user_facts' },
     tree: null, // { root, exists, nodes, truncated, depthCapped } | { error }
     treeSet: new Set(), // rel path of every file in the tree
     recent: [], // ledger rows
@@ -531,9 +531,6 @@
       if (n.type === 'dir') {
         folder(parent, `dir:${n.path}`, `${n.name}/`, depth, hasRecent(n), () => renderFileNodes(parent, n.children, depth + 1), String(n.children.length))
       } else {
-        // memory-summary.md is the "What I remember" entry above -- listing
-        // the same file twice under two names is the thing to avoid.
-        if (n.path === 'memory-summary.md') continue
         const key = `file:${n.path}`
         parent.appendChild(nodeButton(n.name, {
           depth, dot: state.recentRel.has(n.path), active: state.view.key === key,
@@ -549,9 +546,16 @@
     tree.textContent = ''
     const v = state.view
 
-    tree.appendChild(nodeButton(C.remember.label, {
-      depth: 0, active: v.key === 'remember', onClick: () => select({ key: 'remember', kind: 'remember' }),
-    }))
+    // "What I remember" panel removed 0.3.12 (the owner 10-01: the agent
+    // never reads it). What I know about you first, then Recent.
+    folder(tree, 'v:known', F.knownNode, 0, false, () => {
+      for (const t of TABLES) {
+        tree.appendChild(nodeButton(C.categories[t].label, {
+          depth: 1, active: v.key === `table:${t}`,
+          onClick: () => select({ key: `table:${t}`, kind: 'table', table: t }),
+        }))
+      }
+    })
 
     // Recent: the file ledger. Inside the agent folder -> opens in the reader;
     // outside (e.g. ~/.chromux/config.json) -> the OS opens it, as before.
@@ -581,15 +585,6 @@
         }))
       }
     }, recentRows.length ? String(recentRows.length) : '')
-
-    folder(tree, 'v:known', F.knownNode, 0, false, () => {
-      for (const t of TABLES) {
-        tree.appendChild(nodeButton(C.categories[t].label, {
-          depth: 1, active: v.key === `table:${t}`,
-          onClick: () => select({ key: `table:${t}`, kind: 'table', table: t }),
-        }))
-      }
-    })
 
     // The real folder.
     if (!state.tree) {
