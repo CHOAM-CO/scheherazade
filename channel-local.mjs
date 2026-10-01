@@ -419,6 +419,23 @@ export function transcriptState() {
     if (m.role !== 'user') break
     since = m.ts
   }
+  // Trailing work (the owner on 0.3.11 win32/ollama: "툴콜중에
+  // 멈추게할 수 있어야할거같은데"). The walk above only sees a turn as owed
+  // while the newest non-noise item is the USER's. A turn that keeps calling
+  // tools AFTER an agent message (a mid-turn "on it" reply) or that no user
+  // message opened (a background/system turn) read as awaiting=null, so the
+  // pane derived idle and hid Stop over a lane that was plainly working.
+  // Activity/think items are the lanes' own live-work evidence (every lane
+  // posts them) and are ephemeral, so a restart cannot resurrect this. The
+  // trailing run ends at anything else: a reply, a turn-end, a turn-abort.
+  if (since === null) {
+    for (let i = queue.length - 1; i >= 0; i--) {
+      const m = queue[i]
+      if (m.kind === 'reaction' && m.role === 'user') continue
+      if (m.kind !== 'activity' && m.kind !== 'think') break
+      since = m.ts
+    }
+  }
   return { awaitingReplySince: since }
 }
 
@@ -962,6 +979,10 @@ export function createRequestHandler({ notify, token, onInbound = () => {}, inte
           if (st.awaitingReplySince !== null) enqueueAbort('stop', Date.now() - st.awaitingReplySince)
           return send(200, { ok: true })
         }
+        // The lane has no open turn but the transcript still ends in live
+        // work (a lane that ended a tool-only turn without posting turn-end):
+        // settle it now, or the trailing-work rule above keeps Stop lit.
+        if (r && r.reason === 'no_turn' && transcriptState().awaitingReplySince !== null) enqueueTurnEnd()
         return send(r && r.reason === 'no_turn' ? 409 : 502, { error: 'stop failed', reason: (r && r.reason) || 'unreachable' })
       }
       if (url.pathname === '/clear' && req.method === 'POST') {

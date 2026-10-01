@@ -159,6 +159,28 @@ console.log('\n3c. presence state: read/typing derive from ONE value (DM interac
     'a user REACTION does not reopen it -- a tap is not a question')
 }
 
+// Stop must stay lit through a turn's tool calls even after a mid-turn agent
+// message, or in a turn no user message opened (0.3.11 win32/ollama: Send
+// only, no Stop, while read/grep/pwsh/edit kept landing).
+{
+  resetQueueForTest()
+  enqueueInbound('fix the draft', { now: () => 100 })
+  enqueueOutbound('on it')
+  assert(transcriptState().awaitingReplySince === null, 'agent reply alone settles the wait')
+  enqueueActivity('read', { now: () => 200 })
+  enqueueActivity('pwsh: verify', { now: () => 300 })
+  assert(transcriptState().awaitingReplySince === 200,
+    'tool calls AFTER a mid-turn agent message keep the turn in flight (since = first trailing work)')
+  enqueueOutbound('done')
+  assert(transcriptState().awaitingReplySince === null, 'the final reply settles it')
+  resetQueueForTest()
+  enqueueActivity('pwsh: back up checkpoint', { now: () => 500 })
+  assert(transcriptState().awaitingReplySince === 500, 'a background turn with no user message still reads in flight')
+  enqueueTurnEnd()
+  assert(transcriptState().awaitingReplySince === null, 'the lane turn-end settles a background turn')
+  resetQueueForTest()
+}
+
 console.log('\n3d. reactions are transcript items: same cursor, replayable, self-describing')
 {
   resetQueueForTest()
@@ -274,6 +296,23 @@ console.log('\n7a. HTTP: POST /interrupt (turn-level STOP, 0.3.1)')
   assert((await call(ok, { method: 'POST', url: '/interrupt', body: '{}', token: null })).code === 401, 'tokenless stop -> 401')
   assert((await call(ok, { method: 'POST', url: '/interrupt', body: '{}', host: 'evil.example.com' })).code === 403, 'foreign Host stop -> 403')
   assert((await call(ok, { method: 'GET', url: '/interrupt' })).code === 404, 'GET /interrupt -> 404 (stop is mutating)')
+}
+
+// Stop on a trailing-work turn (after a mid-turn reply): an honoured stop
+// leaves the turn-abort that settles the pane; a lane 'no_turn' settles it too.
+{
+  resetQueueForTest()
+  enqueueInbound('go'); enqueueOutbound('on it'); enqueueActivity('pwsh: x')
+  const h = createRequestHandler({ notify: async () => {}, token: TOKEN, interrupt: async () => ({ ok: true }) })
+  assert((await call(h, { method: 'POST', url: '/interrupt', body: '{}' })).code === 200, 'stop mid tool-call after a reply -> 200')
+  assert(readOutbound(0).items.some((m) => m.kind === 'turn-abort' && m.reason === 'stop') && transcriptState().awaitingReplySince === null,
+    '...writes the turn-abort and settles the wait')
+  resetQueueForTest()
+  enqueueActivity('pwsh: y')
+  const n = createRequestHandler({ notify: async () => {}, token: TOKEN, interrupt: async () => ({ ok: false, reason: 'no_turn' }) })
+  assert((await call(n, { method: 'POST', url: '/interrupt', body: '{}' })).code === 409, 'no_turn over trailing work -> 409')
+  assert(transcriptState().awaitingReplySince === null, '...and the trailing work is settled (Stop does not stay lit)')
+  resetQueueForTest()
 }
 
 console.log('\n7b. a failed delivery never fakes a transcript entry')
