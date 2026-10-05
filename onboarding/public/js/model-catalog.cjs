@@ -152,8 +152,11 @@
   // Effort ladder (the owner 07-13 click-test item 2). 'high' is run.sh's own
   // `${EFFORT_LEVEL:-high}` default; labels say so rather than pre-selecting
   // silently.
-  const EFFORT_LEVELS = ['low', 'medium', 'high', 'max']
+  const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
   const EFFORT_DEFAULT = 'high'
+  // Picker hints (the owner 10-06 00:40): max is slower and only pays on hard
+  // questions; a companion chat lives at high. Shown as an option suffix.
+  const EFFORT_HINTS = { low: 'fastest', xhigh: 'deep work', max: 'slow, hard questions only' }
 
   // The reasoningEfforts map dsh-lane.mjs declares on every hand-declared
   // model row. It is NOT the same list as EFFORT_LEVELS above and the two are
@@ -214,6 +217,7 @@
     refresh,
     EFFORT_LEVELS,
     EFFORT_DEFAULT,
+    EFFORT_HINTS,
     DSH_REASONING_EFFORTS,
     DSH_DECLARED_CONTEXT_FLOOR,
     byId,
@@ -231,6 +235,7 @@
     root.SCHZ_MODEL_CATALOG = MODELS
     root.SCHZ_EFFORT_LEVELS = EFFORT_LEVELS
     root.SCHZ_EFFORT_DEFAULT = EFFORT_DEFAULT
+    root.SCHZ_EFFORT_HINTS = EFFORT_HINTS
     root.SCHZ_CATALOG = catalog
   }
 })(typeof window !== 'undefined' ? window : globalThis)

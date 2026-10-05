@@ -417,7 +417,7 @@ const CLAUDE_CLI_CREDENTIALS_PATH = path.join(os.homedir(), '.claude', '.credent
 // Effort allowlist for POST /api/agent/effort (the owner 07-13 click-test item 2).
 // Values become CLAUDE_CODE_EFFORT_LEVEL in the spawned agent's env via
 // main.cjs -> the supervisor's childEnvExtra; its fallback default is 'high'.
-const EFFORT_LEVELS = ['low', 'medium', 'high', 'max']
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
 
 // Shared pattern-validation for any model id accepted from the client, no
 // matter which route (POST /api/agent/model and POST /api/agent/custom-

@@ -904,7 +904,8 @@
     for (const level of EFFORT_LEVELS) {
       const opt = document.createElement('option')
       opt.value = level
-      opt.textContent = level === EFFORT_DEFAULT ? `${level} (default)` : level
+      const hint = (window.SCHZ_EFFORT_HINTS || {})[level]
+      opt.textContent = (level === EFFORT_DEFAULT ? `${level} (default)` : level) + (hint ? ` - ${hint}` : '')
       if (level === effort) opt.selected = true
       sel.appendChild(opt)
     }

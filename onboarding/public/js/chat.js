@@ -1594,7 +1594,8 @@
     for (const level of window.SCHZ_EFFORT_LEVELS) {
       const opt = document.createElement('option')
       opt.value = level
-      opt.textContent = level === window.SCHZ_EFFORT_DEFAULT ? `${level} (default)` : level
+      const hint = (window.SCHZ_EFFORT_HINTS || {})[level]
+      opt.textContent = (level === window.SCHZ_EFFORT_DEFAULT ? `${level} (default)` : level) + (hint ? ` - ${hint}` : '')
       if (level === msEffort) opt.selected = true
       effortSel.appendChild(opt)
     }
