@@ -136,12 +136,11 @@ Old throwaway profiles pile up. `chromux profile prune` lists idle ones with
 their disk usage (dry run); `--yes` deletes them. It skips running profiles,
 `default`, `live`, and anything holding cookie data.
 
-> **SCHEHERAZADE BUNDLE NOTE: the `live` profile is UNAVAILABLE here.** The
-> companion extension is not shipped in this bundle, so live commands can
-> never connect and `chromux pair` waits forever. Never instruct the user to
-> install the extension or run `chromux pair`. If the user's own session is
-> genuinely required, say this deployment cannot do it and offer the isolated
-> profile route. The paragraph below is upstream reference only.
+> **SCHEHERAZADE BUNDLE NOTE: the `live` profile is gated here.** Reach it only
+> through `DATA_HOME/bin/chromux-live` (Settings > Browse live must be on, and the
+> shipped extension loaded in the user's Chrome). Exit 4 = toggle off, exit 3 = a
+> write verb without the user's consent in this channel. If the extension is not
+> connected, say so once and point at Settings > Browse live > Pair.
 
 The `live` profile is a second route: instead of an isolated Chrome, the
 chromux extension bridges the user's real, logged-in Chrome. It shares the

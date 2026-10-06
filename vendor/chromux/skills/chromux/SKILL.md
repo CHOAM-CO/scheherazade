@@ -258,15 +258,15 @@ chromux profile prune    # idle profiles worth deleting (add --yes to delete)
 
 ## Live Mode: The User's Real Chrome
 
-> **SCHEHERAZADE BUNDLE NOTE (do not skip): live mode is UNAVAILABLE in this
-> deployment.** This bundle ships chromux WITHOUT the companion extension, so
-> the `live` profile can never connect — `chromux pair` starts a bridge that
-> waits forever, and instructing the user to "install the extension and run
-> `chromux pair`" sends them on an errand that cannot be completed. If a task
-> truly needs the user's own logged-in session, say plainly that this
-> deployment cannot attach to their real browser, and offer the isolated
-> profile route (fresh login in the agent's Chrome) instead. The rest of this
-> section is upstream documentation kept for reference only.
+> **SCHEHERAZADE BUNDLE NOTE (do not skip): live mode is gated here.** It works
+> only when the user has turned on "Browse live" in Settings AND loaded the
+> shipped extension (`DATA_HOME/bin/chromux-portable/extension`, chrome://extensions
+> > Developer mode > Load unpacked). Use the `chromux-live` launcher in
+> `DATA_HOME/bin` for every live call (never `CHROMUX_PROFILE=live chromux` directly):
+> it exits 4 when the toggle is off and 3 when a write verb has no consent. If the
+> extension is not connected, say so in one line and point the user at Settings >
+> Browse live > Pair; do not loop on pairing. Write verbs (click, type, navigate)
+> need the user's yes in the same channel first, every time.
 
 Two routes reach a browser: isolated profiles (the "agent's browser", default)
 and the reserved `live` profile (the "user's browser", via the chromux
