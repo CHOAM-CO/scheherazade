@@ -228,7 +228,9 @@ try {
 let followUp = null
 try {
   const { pickFollowUp } = await import('../memory/follow-up.mjs')
-  const readRecord = file => ({ text: fs.readFileSync(file, 'utf8').split('\n').slice(-80).join('\n'), timestamp: fs.statSync(file).mtime.toISOString() })
+  // Session note: last 80 lines (a log). Checkpoint: whole file capped at 400 lines (a snapshot whose Status/open-thread
+  // sections sit near the top; reading only its tail picked tool notes over real open items on 10-06).
+  const readRecord = (file, keep = 80) => ({ text: fs.readFileSync(file, 'utf8').split('\n').slice(-keep).join('\n'), timestamp: fs.statSync(file).mtime.toISOString() })
   const previous = fs.readdirSync(path.join(MEM, 'session_notes'))
     .filter(f => /^\d{4}-\d{2}-\d{2}\.md$/.test(f))
     .map(f => path.join(MEM, 'session_notes', f))
@@ -249,7 +251,7 @@ try {
   } catch { /* optional DB unavailable */ }
   followUp = pickFollowUp({
     sessionNoteTail: previous ? readRecord(previous) : null,
-    checkpoint: fs.existsSync(checkpointFile) ? readRecord(checkpointFile) : null,
+    checkpoint: fs.existsSync(checkpointFile) ? readRecord(checkpointFile, 400) : null,
     openThreads,
   })
 } catch { /* fail open */ }
