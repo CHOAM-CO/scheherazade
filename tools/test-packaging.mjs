@@ -291,6 +291,7 @@ function mountedAsarEntries() {
     // extraResources ride NEXT TO app.asar, so asar listing never sees them --
     // check the vendored chromux (v0.1.10 web-search path) directly.
     const chromuxShipped = fs.existsSync(path.join(resources, 'chromux', 'chromux.mjs'))
+    const chromuxExtensionShipped = fs.existsSync(path.join(resources, 'chromux', 'extension', 'manifest.json'))
     const agentToolsShipped = fs.existsSync(path.join(resources, 'agent-tools', 'windowshot.cjs'))
     // The natives live OUTSIDE the asar, in app.asar.unpacked. The DMG's copy
     // is what a user actually gets, so that is the tree the natives gate
@@ -303,7 +304,7 @@ function mountedAsarEntries() {
     // hand back the ANSWER, not a path that will be gone by the time the
     // payload gate reads it.
     const unpacked = fs.existsSync(unpackedRoot) ? unpackedFiles(unpackedRoot) : null
-    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^\/+/, ''))), chromuxShipped, agentToolsShipped, natives, unpacked }
+    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^\/+/, ''))), chromuxShipped, chromuxExtensionShipped, agentToolsShipped, natives, unpacked }
   } catch (e) {
     // A DMG that EXISTS but will not mount / list is fail-CLOSED, never a skip.
     // (Skia fail-open catch: the old null-collapse let an hdiutil failure pass
@@ -339,12 +340,13 @@ function stagedAsarEntries() {
     // extraResources ride NEXT TO app.asar, invisible to the asar listing --
     // check the vendored chromux and agent-tools directly.
     const chromuxShipped = fs.existsSync(path.join(STAGED_RESOURCES, 'chromux', 'chromux.mjs'))
+    const chromuxExtensionShipped = fs.existsSync(path.join(STAGED_RESOURCES, 'chromux', 'extension', 'manifest.json'))
     const agentToolsShipped = fs.existsSync(path.join(STAGED_RESOURCES, 'agent-tools', 'windowshot.cjs'))
     const unpackedRoot = path.join(STAGED_RESOURCES, 'app.asar.unpacked')
     const nativesDir = path.join(unpackedRoot, 'node_modules')
     const natives = fs.existsSync(nativesDir) ? installedPackageNames(nativesDir) : null
     const unpacked = fs.existsSync(unpackedRoot) ? unpackedFiles(unpackedRoot) : null
-    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^[/\\]+/, '').split('\\').join('/'))), chromuxShipped, agentToolsShipped, natives, unpacked }
+    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^[/\\]+/, '').split('\\').join('/'))), chromuxShipped, chromuxExtensionShipped, agentToolsShipped, natives, unpacked }
   } catch (e) {
     // fail-CLOSED, same as the dmg lane: an artifact that exists but cannot be
     // listed is an UNVERIFIED artifact, never a skip.
@@ -411,6 +413,9 @@ if (IS_PREDIST) {
     ok('vendored chromux ships as an extraResource next to app.asar (web-search path for non-Anthropic backends)',
       asarResult.chromuxShipped === true,
       'build.extraResources should carry vendor/chromux -> chromux; without it syncChromuxPortable() no-ops and the websearch skill points at nothing')
+    ok('chromux live-mode Chrome extension ships with it (chromux/extension/manifest.json)',
+      asarResult.chromuxExtensionShipped === true,
+      'vendor/chromux/extension is what Settings > Browse live > Pair tells the user to load unpacked; 0.3.13 field test: missing folder -> "timed out waiting for the chromux extension"')
     ok('agent-tools ship as an extraResource next to app.asar (같이보기 windowshot helper)',
       asarResult.agentToolsShipped === true,
       'build.extraResources should carry onboarding/agent-tools -> agent-tools; without it syncAgentTools() no-ops on packaged installs (dev lane still finds the repo copy, so only packaged apps break) and the windowshot skill points at nothing')

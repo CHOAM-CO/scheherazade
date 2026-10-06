@@ -1,0 +1,49 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    width: 300px;
+    margin: 0;
+    padding: 14px;
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  h1 { font-size: 14px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #999; }
+  .dot.on { background: #1a7f37; }
+  .dot.off { background: #cf222e; }
+  .status { font-weight: 600; }
+  .muted { color: #888; }
+  .tabs { margin: 10px 0; padding: 0; list-style: none; max-height: 140px; overflow-y: auto; }
+  .tabs li { padding: 5px 8px; border-radius: 6px; background: rgba(127,127,127,0.12); margin-bottom: 4px; }
+  .tabs .t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tabs .u { font-size: 11px; color: #888; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .empty { color: #888; font-style: italic; margin: 10px 0; }
+  button {
+    width: 100%;
+    padding: 8px;
+    border: none;
+    border-radius: 7px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .kill { background: #cf222e; color: #fff; }
+  .enable { background: #1a7f37; color: #fff; }
+  .hint { font-size: 11px; color: #888; margin: 8px 0 0; }
+</style>
+</head>
+<body>
+  <h1><span id="dot" class="dot"></span> chromux live bridge</h1>
+  <div><span class="status" id="statusText">Checking…</span> <span class="muted" id="portText"></span></div>
+  <div class="hint">Connects to a local chromux bridge automatically — no pairing needed. Run <code>chromux pair</code> to start the bridge.</div>
+
+  <div id="attachedLabel" class="muted" style="margin-top:10px;">Attached tabs</div>
+  <ul class="tabs" id="tabs"></ul>
+  <div id="emptyState" class="empty" hidden>No tabs attached right now.</div>
+  <button id="killBtn" class="kill">Disconnect all (kill switch)</button>
+  <button id="enableBtn" class="enable" hidden>Re-enable connection</button>
+  <script src="popup.js"></script>
+</body>
+</html>

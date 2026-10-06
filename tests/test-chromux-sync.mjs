@@ -45,10 +45,17 @@ try {
   check(ret === true, 'sync returns true with vendor present')
   const dst = path.join(dataHome, 'bin', 'chromux-portable')
   check(fs.existsSync(path.join(dst, 'chromux.mjs')), 'chromux.mjs lands in DATA_HOME/bin/chromux-portable')
+  check(fs.existsSync(path.join(dst, 'extension', 'manifest.json')), 'live-mode extension lands in DATA_HOME/bin/chromux-portable/extension')
   const vendorVersion = fs.readFileSync(path.join(REPO_ROOT, 'vendor', 'chromux', 'VERSION'), 'utf8').trim()
   const dstVersion = fs.readFileSync(path.join(dst, 'VERSION'), 'utf8').trim()
   check(dstVersion === vendorVersion, `VERSION stamp carried (${dstVersion})`)
   check(!fs.existsSync(`${dst}.tmp`), 'no stray .tmp dir left behind')
+
+  // --- same VERSION, extension missing (an install from before the extension was vendored) --
+  console.log('same-version re-sync when extension is missing')
+  fs.rmSync(path.join(dst, 'extension'), { recursive: true, force: true })
+  harness.syncChromuxPortable()
+  check(fs.existsSync(path.join(dst, 'extension', 'manifest.json')), 'extension restored without a VERSION bump')
 
   // --- wrappers ---------------------------------------------------------
   console.log('wrappers')

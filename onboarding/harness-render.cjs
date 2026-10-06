@@ -1601,7 +1601,10 @@ function createHarnessRender(ctx) {
         try { return fs.readFileSync(path.join(dir, 'VERSION'), 'utf8').trim() } catch { return null }
       }
       const srcVersion = readVersion(src)
+      // Also require the live-mode extension: 0.3.13 added vendor/chromux/extension without a VERSION bump,
+      // and a same-version install must still pick it up (Pair points the user at this folder).
       const current = srcVersion && srcVersion === readVersion(dst) && fs.existsSync(path.join(dst, 'chromux.mjs'))
+        && (!fs.existsSync(path.join(src, 'extension', 'manifest.json')) || fs.existsSync(path.join(dst, 'extension', 'manifest.json')))
       if (!current) {
         const tmp = `${dst}.tmp`
         fs.rmSync(tmp, { recursive: true, force: true })
