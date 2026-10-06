@@ -142,6 +142,8 @@
       "dsh-client.cjs",
       "dsh-lane.mjs",
       "onboarding/public/js/model-catalog.cjs",
+      "onboarding/chromux-live-consent.cjs",
+      "onboarding/chromux-live-gate.cjs",
       "hooks/**",
       "scripts/**",
       "autonomy/**",

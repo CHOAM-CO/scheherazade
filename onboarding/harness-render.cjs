@@ -1616,6 +1616,10 @@ function createHarnessRender(ctx) {
       // hooks/*.mjs` (run.sh's own comment).
       const entry = path.join(dst, 'chromux.mjs')
       writeLauncher(path.join(DATA_HOME, 'bin'), 'chromux', entry)
+      for (const file of ['chromux-live-gate.cjs', 'chromux-live-consent.cjs']) {
+        fs.copyFileSync(path.join(REPO_ROOT, 'onboarding', file), path.join(DATA_HOME, 'bin', file))
+      }
+      writeLauncher(path.join(DATA_HOME, 'bin'), 'chromux-live', path.join(DATA_HOME, 'bin', 'chromux-live-gate.cjs'), [DATA_HOME, entry])
       // Seed chromux's bundled skills (SKILL.md + topics/ — multi-file, so
       // the shipped file list is walked recursively). Same overwrite-if-
       // pristine tri-state as seedSkillDefinitions: pristine-but-stale files

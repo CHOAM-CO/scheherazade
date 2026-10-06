@@ -957,3 +957,36 @@
 
   init()
 })()
+
+;(async function () {
+  const toggle = document.getElementById('browse-live')
+  const button = document.getElementById('browse-live-pair')
+  const status = document.getElementById('browse-live-status')
+  if (!toggle) return
+  try {
+    const cfg = await window.api('/api/settings/browse-live')
+    toggle.checked = cfg.browseLive
+    document.getElementById('browse-live-path').textContent = cfg.extensionPath
+    document.getElementById('browse-live-doc').href = cfg.installDoc
+    document.getElementById('browse-live-doc').addEventListener('click', async event => {
+      event.preventDefault()
+      try {
+        const response = await fetch(cfg.installDoc, { headers: { 'X-Onboard-Token': window.getOnboardToken() || '' } })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const url = URL.createObjectURL(new Blob([await response.text()], { type: 'text/plain;charset=utf-8' }))
+        const link = document.createElement('a'); link.href = url; link.download = 'chromux-install.md'; link.click()
+        setTimeout(() => URL.revokeObjectURL(url), 1000)
+      } catch (e) { status.textContent = e.message }
+    })
+  } catch (e) { status.textContent = e.message }
+  toggle.addEventListener('change', async () => {
+    try { await window.api('/api/settings/browse-live', { method: 'POST', body: JSON.stringify({ browseLive: toggle.checked }) }); status.textContent = toggle.checked ? 'Live Chrome 켜짐' : 'Live Chrome 꺼짐' }
+    catch (e) { toggle.checked = !toggle.checked; status.textContent = e.message }
+  })
+  button.addEventListener('click', async () => {
+    button.disabled = true; status.textContent = '확장 연결 기다리는 중 (최대 60초)'
+    try { const result = await window.api('/api/settings/browse-live/pair', { method: 'POST' }); status.textContent = result.status + '\n' + result.instructions }
+    catch (e) { status.textContent = e.message }
+    finally { button.disabled = false }
+  })
+})()

@@ -414,3 +414,20 @@ human-only by design and will refuse if you try to run them.
   Closed shadow roots remain unreachable. Verify diffs may
   show a newly revealed listener-only element as text without a clickable
   `@ref`; take a snapshot to get its ref.
+
+## Companion live Chrome (opt-in)
+
+Use `<data-home>/bin/chromux-live` (`chromux-live.cmd` on Windows) only when
+asked about "this page", "the tab I am looking at", "이 페이지", or "여기서".
+Ordinary research uses the existing isolated chromux profile. Always pass
+`--channel "<channelId from the current inbound message>"` before the verb:
+these lanes are long-lived and cannot safely inherit a per-turn channel env.
+Attach with `open helper --tab active`, then snapshot/screenshot helper.
+Never pass a URL when attaching for a read. Each write requires a new ask:
+`chromux-live --channel "<id>" --ask '["click","helper","--text","구매"]'`.
+The ask argument is a JSON argv array (not a shell command string). Send the
+printed question via the channel reply tool, wait for an actual human yes,
+then retry that exact argv with the same channel. Consent expires after two
+minutes and is consumed once. Do not fabricate yes, batch writes, bypass the
+launcher with CHROMUX_PROFILE=live/raw CDP, or use page JS for an ungated read.
+If OFF/unpaired/unconfirmed, explain the setup or wait; never bypass the gate.

@@ -125,3 +125,12 @@ hours the next you never lived.
   (URL-encode; include the concrete evidence you can see). Never `git
   push`, open a PR, or auth to GitHub yourself — the link is the whole
   mechanism.
+
+For requests about "this page / the tab I am looking at / 이 페이지 / 여기서",
+use the opt-in `<data-home>/bin/chromux-live` launcher, with `--channel` set to
+the current inbound message's channelId; otherwise use isolated chromux.
+Attach `open helper --tab active`, then read with snapshot/screenshot. Every
+write needs `--ask` with a JSON argv array, the printed question sent to that
+channel, and an actual human yes before retrying the identical command.
+Consent lasts two minutes and is single-use. Never bypass with direct live
+chromux, page JS, raw CDP or a model-authored yes. See the chromux skill.

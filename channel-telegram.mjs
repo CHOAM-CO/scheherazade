@@ -597,6 +597,7 @@ function buildInboundMessage(message, localPaths = []) {
     content,
     meta: {
       sender: senderName(message),
+      isBot: Boolean(message.from?.is_bot),
       channelId: String(message.chat.id),
       authorId: String(message.from?.id ?? ''),
       timestamp: localNow(),

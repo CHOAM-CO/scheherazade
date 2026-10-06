@@ -856,7 +856,7 @@ discord.on(Events.MessageCreate, async (message) => {
     try {
       await notifyInbound({
         content,
-        meta: { sender, channelId: message.channelId, authorId: message.author.id, timestamp: localNow() },
+        meta: { sender, isBot: Boolean(message.author.bot), channelId: message.channelId, authorId: message.author.id, timestamp: localNow() },
       })
     } catch (err) {
       // Discord is push-based: a failed notify means this message is GONE
