@@ -28,4 +28,9 @@ One seed, then an oath
 - Existing companions get a one-time "pick a seed" card in Settings; nothing changes until you pick.
 - When you are ready, take the oath in Settings: both names, a date, and the seed is locked. Only an explicit revoke can change it afterwards; the companion acknowledges the oath once, in its own words.
 
+Fixes
+- The daily-note reminder had been silently crashing every few minutes since it shipped; it runs again.
+- Browse live now ships the Chrome extension it asks you to load (Pair pointed at a folder that did not exist).
+- Boot follow-up picks a real open item from the checkpoint, not a lesson line from its tail.
+
 Verified live on 2026-10-06 with a DeepSeek-lane companion: version, user taste and a channel id were answered from memory without opening files.
