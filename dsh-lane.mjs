@@ -563,6 +563,7 @@ let consecutiveTurnErrors = 0
 function spawnEngine (patchPath) {
   const env = {
     ...process.env,
+    SCHZ_CHANNEL_ID: process.env.SCHZ_CHANNEL_ID || '',
     DSH_HOME: dshHome(),
     // The route's key env must resolve to SOMETHING or pi-ai refuses the
     // route (PI_AI_ERROR, measured); keyless local proxies get a dummy.

@@ -682,7 +682,7 @@ async function main() {
   // to stderr + a log FILE; ANTHROPIC_LOG=debug is deliberately NOT used —
   // it writes to stdout and corrupts the stream-json protocol
   // (anthropics/claude-agent-sdk-typescript#157).
-  const childEnv = { ...process.env }
+  const childEnv = { ...process.env, SCHZ_CHANNEL_ID: process.env.SCHZ_CHANNEL_ID || '' }
   if (process.env.SCHEHERAZADE_CLAUDE_DEBUG || fs.existsSync(path.join(MEM, '.claude-debug'))) {
     childEnv.CLAUDE_CODE_DEBUG = '1'
     childEnv.CLAUDE_CODE_DEBUG_LOG_LEVEL = 'debug'

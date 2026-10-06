@@ -201,7 +201,7 @@ const AVATAR_SLOTS = [
 
 function createRoutes(staticCtx) {
   const {
-    sendJson, readJsonBody, writeAgentConfig, DATA_HOME, getElectron, fs, path,
+    sendJson, readJsonBody, readAgentConfig, writeAgentConfig, DATA_HOME, getElectron, fs, path,
   } = staticCtx
 
   // Which slot, if any, is occupied. Returns null when none is (never throws:
@@ -217,6 +217,42 @@ function createRoutes(staticCtx) {
   }
 
   return [
+    {
+      method: 'GET', match: p => p === '/api/settings/browse-live',
+      handler: async (req, res) => sendJson(res, 200, { browseLive: readAgentConfig().BROWSE_LIVE === 'true', extensionPath: path.join(DATA_HOME, 'bin', 'chromux-portable', 'extension'), installDoc: '/api/settings/browse-live/install' }),
+    },
+    {
+      method: 'POST', match: p => p === '/api/settings/browse-live',
+      handler: async (req, res) => {
+        const body = await readJsonBody(req)
+        if (typeof body.browseLive !== 'boolean') return sendJson(res, 400, { error: 'browseLive must be boolean' })
+        writeAgentConfig({ BROWSE_LIVE: String(body.browseLive) })
+        sendJson(res, 200, { browseLive: body.browseLive })
+      },
+    },
+    {
+      method: 'GET', match: p => p === '/api/settings/browse-live/install',
+      handler: async (req, res) => {
+        try { res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }); res.end(fs.readFileSync(path.join(DATA_HOME, 'bin', 'chromux-portable', 'install.md'))) }
+        catch { res.end('Chromux install documentation is unavailable; restart the app to sync it.') }
+      },
+    },
+    {
+      method: 'POST', match: p => p === '/api/settings/browse-live/pair',
+      handler: async (req, res) => {
+        const result = await new Promise(resolve => {
+          let output = '', finished = false
+          const child = spawn(process.execPath, [path.join(DATA_HOME, 'bin', 'chromux-portable', 'chromux.mjs'), 'pair'], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: ['ignore', 'pipe', 'pipe'] })
+          const done = status => { if (finished) return; finished = true; clearTimeout(timer); resolve({ status, instructions: output.slice(-4000), extensionPath: path.join(DATA_HOME, 'bin', 'chromux-portable', 'extension') }) }
+          const timer = setTimeout(() => { child.kill(); done('timeout: install the extension, then retry') }, 60000)
+          child.stdout.on('data', b => { output = (output + b).slice(-4000) })
+          child.stderr.on('data', b => { output = (output + b).slice(-4000) })
+          child.on('error', e => { output = e.message; done('error') })
+          child.on('close', code => done(code === 0 ? 'paired' : 'error'))
+        })
+        sendJson(res, 200, result)
+      },
+    },
     {
       method: 'POST',
       match: (pathname) => pathname === '/api/settings/rename',

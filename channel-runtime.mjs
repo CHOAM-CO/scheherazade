@@ -837,6 +837,7 @@ export function createInboundNotifier({ dataHome, mcpNotify, log = console.log, 
   }
 
   return async function notifyInbound(params) {
+    try { require('./onboarding/chromux-live-consent.cjs').receive(dataHome, params.meta?.channelId, params.content, params.meta?.isBot === true || !params.meta?.authorId || /^(system|bot)$/i.test(params.meta?.sender || '')) } catch (err) { log(`[live-consent] ${err.message}`) }
     params = { ...params, content: prependMemoryContext(params.content, params.meta, { log }) }
     try {
       if (await postToLane(params)) return

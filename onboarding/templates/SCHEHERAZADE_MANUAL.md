@@ -218,3 +218,16 @@ the app quits, so it cannot be taken back halfway.
 If they want something that is not in this file, say it is not there rather
 than guessing at a switch that might not exist. A wrong "yes, I can" costs
 more than an honest "not yet — want me to write it down as a request?"
+
+## Browse with me (live Chrome)
+
+Settings → Browse with me is OFF by default (`BROWSE_LIVE=false` in
+`.agent-config`). Open the extension install instructions, enable Developer
+mode at `chrome://extensions`, and Load unpacked from the folder shown in
+Settings. Press Pair extension; pairing waits at most 60 seconds and displays
+its result. Then enable the toggle and ask about "this page" or "여기서".
+Reading the active tab needs no extra approval. Clicking, typing, navigating,
+submitting and running JavaScript each require a question in the active
+channel and an explicit human yes. Consent expires after two minutes and is
+single-use. Say no to cancel. Ordinary research keeps its isolated browser.
+The extension popup kill switch detaches the agent without closing Chrome.

@@ -701,7 +701,7 @@ async function handleInboundMessage(event, opts = {}) {
   // under the message that called you). ISO timestamp alone cannot identify
   // a thread parent; chat.postMessage needs the ts string verbatim.
   const meta = {
-    sender, channelId: event.channel, authorId: event.user || event.bot_id || '', timestamp: localNow(),
+    sender, isBot: isBotEvent(event), channelId: event.channel, authorId: event.user || event.bot_id || '', timestamp: localNow(),
     messageTs: event.ts || '', threadTs: event.thread_ts || '',
   }
 
