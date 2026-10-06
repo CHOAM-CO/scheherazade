@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict'
+import { DatabaseSync } from 'node:sqlite'
+import { DDL, memoryRecallMaterial } from '../memory/service.mjs'
+const db = new DatabaseSync(':memory:')
+db.exec(DDL)
+const insert = db.prepare('INSERT INTO user_facts(subject,predicate,value,source_session,created_at,last_confirmed_at,confidence) VALUES(?,?,?,?,?,?,?)')
+insert.run('user','home','서울 여행','test','2000','2000',1)
+insert.run('user','job','Coffee roaster','test','2001','2001',1)
+for(let i=0;i<25;i++) insert.run('user',`fact${i}`,'unrelated','test',`2025-${i}`,`2025-${i}`,0.5)
+let r = memoryRecallMaterial(db,{topic:'서울에서 여행'})
+assert.equal(r.user_facts[0].predicate,'home')
+assert.equal(r.user_facts[1].predicate,'job')
+assert.equal(r.user_facts.length,20)
+assert.equal(new Set(r.user_facts.map(x=>x.id)).size,20)
+r = memoryRecallMaterial(db,{topic:'COFFEE'})
+assert.equal(r.user_facts[0].predicate,'job')
+assert.equal(r.stable_essentials.length,2)
+assert.equal(memoryRecallMaterial(db,{}).user_facts[0].confidence,0.5)
+assert.deepEqual(r.preferences,[])
+db.close()
+console.log('topic recall ranking assertions passed')

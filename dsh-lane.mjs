@@ -26,6 +26,7 @@
 // crash-recovery pending FIFO IS ported (same file, same semantics:
 // persist before accept, clear on turn end).
 
+import { prependMemoryContext } from './memory/turn-context.mjs'
 import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
@@ -1215,7 +1216,7 @@ async function main () {
   // would hide the markers from the caption pass behind escaping. Image
   // parts (inline routes) ride AFTER the text part.
   async function renderInbound (content, meta) {
-    const built = await buildPromptContent(content)
+    const built = await buildPromptContent(prependMemoryContext(content, meta))
     return [{ type: 'text', text: renderChannelTag({ content: built.text, meta: meta || {} }) }, ...built.parts]
   }
 

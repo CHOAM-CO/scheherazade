@@ -1,3 +1,4 @@
+import { prependMemoryContext } from './memory/turn-context.mjs'
 // channel-runtime.mjs — protocol-neutral runtime layer shared by every
 // channel backend (channel.mjs / channel-slack.mjs / channel-telegram.mjs).
 //
@@ -836,6 +837,7 @@ export function createInboundNotifier({ dataHome, mcpNotify, log = console.log, 
   }
 
   return async function notifyInbound(params) {
+    params = { ...params, content: prependMemoryContext(params.content, params.meta, { log }) }
     try {
       if (await postToLane(params)) return
     } catch (err) {

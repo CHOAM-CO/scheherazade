@@ -328,7 +328,7 @@ console.log('\n3. createInboundNotifier routes by topology')
   // no endpoint file -> MCP fallback (attach topology)
   const n1 = createInboundNotifier({ dataHome, mcpNotify, log: () => {} })
   await n1({ content: 'a', meta: {} })
-  assert(mcpCalls.length === 1 && mcpCalls[0].content === 'a', 'no endpoint file -> MCP notification fallback')
+  assert(mcpCalls.length === 1 && mcpCalls[0].content.endsWith('a'), 'no endpoint file -> MCP notification fallback')
 
   // endpoint file present + live server -> POST, no MCP call
   const { createServer } = await import('node:http')
@@ -346,7 +346,7 @@ console.log('\n3. createInboundNotifier routes by topology')
   fs.writeFileSync(path.join(dataHome, '.ingest-endpoint.json'),
     JSON.stringify({ port: srv.address().port, token: 'tok123' }))
   await n1({ content: 'b', meta: { channelId: 'x' } })
-  assert(posts.length === 1 && posts[0].body.content === 'b' && posts[0].token === 'tok123',
+  assert(posts.length === 1 && posts[0].body.content.endsWith('b') && posts[0].token === 'tok123',
     'endpoint file present -> ingest POST with token')
   assert(mcpCalls.length === 1, 'MCP notification NOT also called on the ingest path')
   srv.close()
@@ -802,7 +802,7 @@ console.log('\n7. notifier pid-liveness (stale endpoint file after SIGKILL)')
     JSON.stringify({ port: 1, token: 't', pid: deadProc.pid }))
   let threwDead = false
   try { await notifier({ content: 'stale', meta: {} }) } catch { threwDead = true }
-  assert(!threwDead && mcpCalls.length === 1 && mcpCalls[0].content === 'stale',
+  assert(!threwDead && mcpCalls.length === 1 && mcpCalls[0].content.endsWith('stale'),
     'dead-pid endpoint file -> MCP fallback, no throw (attach topology unpoisoned)')
 
   // live pid but dead port -> still throws (headless mid-hiccup, no black hole)
