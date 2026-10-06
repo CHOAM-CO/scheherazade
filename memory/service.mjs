@@ -381,6 +381,12 @@ function logEvent(db, event, table, rowId, session) {
 }
 
 // ── memory_write: insert/upsert with read-back-verify ────────────────────
+function refreshStructuredEntities(db, table) {
+  if (!['user_facts', 'preferences', 'corrections'].includes(table)) return
+  try { entityIndex.rebuildEntityIndex(db) }
+  catch (err) { log(`entity index rebuild after ${table} mutation skipped: ${err.message}`) }
+}
+
 function memoryWrite(db, args) {
   const { table, data } = args || {}
   validateTable(table, WRITABLE_TABLES)
@@ -394,8 +400,10 @@ function memoryWrite(db, args) {
   const id = cleanData.id
   delete cleanData.id
 
-  if (hasId) return memoryWriteUpdateById(db, table, id, cleanData, cols)
-  return memoryWriteInsertOrUpsert(db, table, cleanData, cols)
+  const result = hasId ? memoryWriteUpdateById(db, table, id, cleanData, cols)
+    : memoryWriteInsertOrUpsert(db, table, cleanData, cols)
+  refreshStructuredEntities(db, table)
+  return result
 }
 
 function memoryWriteUpdateById(db, table, id, cleanData, cols) {
@@ -647,6 +655,8 @@ function memoryDelete(db, args) {
     return { deleted: true, id, table, session: session ?? null }
   })
 
+  refreshStructuredEntities(db, table)
+
   // v1 fix (secure delete): PRAGMA secure_delete=ON (set at DB open) zeroes
   // freed pages in the MAIN db file, but WAL-mode writes land in the -wal
   // file first — a deleted row's old bytes can still be sitting in
@@ -716,9 +726,18 @@ function memoryRecallMaterial(db, args) {
   const open_threads = db
     .prepare(`SELECT * FROM open_threads WHERE status = 'open' ORDER BY salience DESC, last_touched_at DESC LIMIT 5`)
     .all()
-  const user_facts = db
-    .prepare(`SELECT * FROM user_facts ORDER BY last_confirmed_at DESC LIMIT 20`)
-    .all()
+  const recentFacts = db.prepare('SELECT * FROM user_facts ORDER BY last_confirmed_at DESC, id DESC').all()
+  const tokens = text => new Set(String(text || '').toLowerCase().match(/[\p{L}\p{N}]+/gu) || [])
+  const topicTokens = tokens(topic)
+  const score = row => {
+    const words = tokens(`${row.subject} ${row.predicate} ${row.value}`)
+    return [...topicTokens].filter(t => [...words].some(w => w === t || (/[가-힣]/.test(t) && Math.min(w.length, t.length) >= 2 && (w.startsWith(t) || t.startsWith(w))))).length
+  }
+  const stable_essentials = recentFacts.filter(r => /^user(?:\.|$)/i.test(r.subject) && r.confidence >= 0.9)
+    .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id).slice(0, 5)
+  const relevant = topicTokens.size ? recentFacts.filter(r => score(r) > 0).sort((a, b) => score(b) - score(a)) : []
+  const ordered = topicTokens.size ? [...relevant, ...stable_essentials, ...recentFacts] : recentFacts
+  const user_facts = ordered.filter((r, i, rows) => rows.findIndex(x => x.id === r.id) === i).slice(0, 20)
   const corrections = db
     .prepare(`SELECT * FROM corrections WHERE still_active = 1 ORDER BY corrected_at DESC LIMIT ?`)
     .all(CORRECTIONS_RECALL_LIMIT)
@@ -744,7 +763,10 @@ function memoryRecallMaterial(db, args) {
     generated_at: nowISO(),
     open_threads,
     user_facts,
+    stable_essentials,
+    relevant_facts: relevant.slice(0, 20),
     corrections,
+    preferences: db.prepare("SELECT * FROM preferences ORDER BY updated_at DESC LIMIT 20").all(),
     counts,
     bloat_advisory,
   }

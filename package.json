@@ -122,6 +122,9 @@
     "asarUnpack": [
       "node_modules/**",
       "memory/**",
+      "memory/entity-index.mjs",
+      "memory/service.mjs",
+      "memory/turn-context.mjs",
       "channel.mjs",
       "channel-slack.mjs",
       "channel-telegram.mjs",

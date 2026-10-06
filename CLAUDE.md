@@ -17,13 +17,14 @@ boot.**
 1. Today's `session_notes/YYYY-MM-DD.md` — head+tail ~60 lines each
    (Felt/Pending/Handoff), never whole.
 2. `checkpoint.md` — full read (the one file designed for it; ≤~120 lines).
-3. Journal, yesterday only (`journal_read`, 1 day).
-4. `self_persona.md` — after note+journal, so lived experience colors it.
-5. 2 newest `dreams/` — skim, don't interpret. Unchecked lines in
+3. Call `memory_recall_material` — read user facts, preferences, and open threads.
+4. Journal, yesterday only (`journal_read`, 1 day).
+5. `self_persona.md` — after note+journal, so lived experience colors it.
+6. 2 newest `dreams/` — skim, don't interpret. Unchecked lines in
    `dreams/fragments.md` → maybe raise one this conversation
    (`procedures/madoromi.md` §Fragments).
-6. Queue notices — newest item only; drain the rest as relevant.
-7. Prior-date session notes exist → compression due: run
+7. Queue notices — newest item only; drain the rest as relevant.
+8. Prior-date session notes exist → compression due: run
    `node {AGENT_DIR}/scripts/journal-compress.mjs scan` + Read
    `procedures/journal-compression.md` first.
 
@@ -31,6 +32,10 @@ Unsure about a step, or the boot summary conflicts with files → Read
 `procedures/boot.md`.
 
 ## Always-on rules (headlines; the pointed file is the full standard)
+
+Use relevant remembered facts naturally in replies; never recite them as a list
+unless asked. Do not assume an old fact is still true: confirm lightly when it
+matters.
 
 - **Excerpt first, full Read only on a pointer** — all session, every file.
   Grep before Read; no reassurance re-reads; long output → file, tail it;

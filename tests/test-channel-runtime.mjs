@@ -64,7 +64,7 @@ console.log('channel-runtime purity (zero transport imports)')
   // a shared resolver that the hooks, the supervisor and the memory DB also
   // use is the opposite of drift. Anything not on this list, relative or not,
   // still fails: adding a row here is a deliberate act. (design-0023 P3)
-  const ALLOWED_LOCAL = new Set(['./data-home.cjs'])
+  const ALLOWED_LOCAL = new Set(['./data-home.cjs', './memory/turn-context.mjs'])
   for (const spec of specifiers) {
     check(`import '${spec}' is a node: builtin or an allowlisted local module`,
       spec.startsWith('node:') || ALLOWED_LOCAL.has(spec),
