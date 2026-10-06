@@ -16,7 +16,7 @@ works only if the agent can stand where the user is already logged in.
 
 | Approach | Verdict for a non-programmer macOS product |
 |---|---|
-| CDP-attach to the user's real Chrome | **DEAD.** Chrome 136 (2025-03) ignores --remote-debugging-port on the default profile — read at the primary source; Google names cookie-theft malware as the reason. Not coming back. |
+| CDP-attach to the user's real Chrome | **DEAD for the default-profile debugging switch** (2026-10-06 correction: consent-based attachment via extension or Chrome 144+ DevTools MCP still works, see MAGI_Memory/choam/research/cobrowsing_oss_20261006.md). Chrome 136 (2025-03) ignores --remote-debugging-port on the default profile — read at the primary source; Google names cookie-theft malware as the reason. Not coming back. |
 | Cookie import (read the browser's store) | **DEAD.** Chrome App-Bound Encryption arms race; Safari needs Full Disk Access (reads as malware); no mainstream product ships this. |
 | Extension relay into the user's real browser | Supplement, not foundation. MV3 walls, permanent "started debugging this browser" banner (unsolved even for Anthropic's own Claude-for-Chrome), and the scariest injection surface: Anthropic's red team measured 23.6% attack success unprotected → 1.4% after layered mitigations. |
 | OS automation (AX/AppleScript) | Supplement. TCC dialogs multiply per target app; fine for Finder/Calendar-class tasks, wrong as the web-session foundation. |
