@@ -28,6 +28,8 @@ function createRoutes(staticCtx) {
     path, DATA_HOME, HOST,
   } = staticCtx
 
+  const seedLib = require('../../cadence/seed.cjs')
+
   // ── live window material (design-0023 P4) ───────────────────────────────
   // ONE owner of "apply the saved blur to the running window", replacing two
   // inline `if (process.platform === ...)` blocks inside the PUT handler with
@@ -76,6 +78,34 @@ function createRoutes(staticCtx) {
     // just not claimed to have an effect here.
   }
   return [
+    {
+      method: 'POST', match: (pathname) => pathname === '/api/seed',
+      handler: async (req, res) => {
+        const body = await readJsonBody(req)
+        const cfg = readAgentConfig()
+        try {
+          if (body.action === 'dismiss') writeAgentConfig({ SEED_DISMISSED: 'yes' })
+          else if (body.action === 'revoke') {
+            if (body.confirm !== true) throw new Error('확인 필요')
+            if (!cfg.SEED) throw new Error('씨앗 없음')
+            seedLib.setSeedBlock(DATA_HOME, cfg.SEED, false)
+            writeAgentConfig({ SEED_OATH: '' })
+          } else if (body.action === 'oath') {
+            if (!cfg.SEED || body.confirm !== true) throw new Error('씨앗과 확인 필요')
+            if (!cfg.SEED_OATH) {
+              seedLib.setSeedBlock(DATA_HOME, cfg.SEED, true)
+              writeAgentConfig({ SEED_OATH: new Date().toISOString(), SEED_OATH_USER: cfg.USER_NAME || cfg.USER_DISPLAY_NAME || '사용자', SEED_OATH_COMPANION: cfg.DISPLAY_NAME || AGENT_NAME })
+            }
+          } else {
+            if (cfg.SEED_OATH) throw new Error('서약을 먼저 해제해 주세요')
+            seedLib.seedText(body.seed)
+            seedLib.setSeedBlock(DATA_HOME, body.seed, false)
+            writeAgentConfig({ SEED: body.seed.trim() })
+          }
+          sendJson(res, 200, { ok: true })
+        } catch (err) { sendJson(res, 400, { error: err.message }) }
+      },
+    },
     {
       // Claude CLI install-assist status (2026-08-04, the owner "2로 가자").
       // `present` is the live artifact truth (agentControls.resolveClaudeBin,
@@ -385,6 +415,7 @@ function createRoutes(staticCtx) {
         const userAvatar = slotState('user-avatar')
         sendJson(res, 200, {
           ...readAgentConfig(),
+          seedStep: seedLib.showSeedStep(readAgentConfig()),
           homeChannelId: readHomeChannelId(),
           routerWired: ROUTER_WIRED,
           availableProviders: computeAvailableProviders(),
@@ -483,6 +514,9 @@ function createRoutes(staticCtx) {
           sendJson(res, 400, { error: `${provider} 로그인이 완료되지 않았습니다 -- 1단계에서 로그인을 마친 뒤 설정을 완료해주세요` })
           return
         }
+        if (seedLib.showSeedStep(readAgentConfig())) {
+          try { seedLib.seedText(body.seed) } catch (err) { sendJson(res, 400, { error: err.message }); return }
+        }
         ensureMcpJsonAgentName()
         writeAgentConfig({
           AGENT_NAME,
@@ -523,6 +557,10 @@ function createRoutes(staticCtx) {
         })
         await writePersonaPreferences({ tone, primaryTask, proactiveEnabled, proactiveWindowStart, proactiveWindowEnd })
         renderAgentSubstrate({ displayName, tone, primaryTask })
+        if (body.seed && !readAgentConfig().SEED) {
+          seedLib.setSeedBlock(DATA_HOME, body.seed, false)
+          writeAgentConfig({ SEED: body.seed.trim() })
+        }
         sendJson(res, 200, { ok: true })
         return
       },

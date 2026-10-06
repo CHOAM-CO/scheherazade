@@ -23,4 +23,9 @@ Import memories from another assistant
 - Accept or reject each one; accepted lines become facts with confidence 0.8 and their origin recorded.
 - In conversation the companion may also offer up to three pending candidates, one at a time, and treats none of them as true until you confirm.
 
+One seed, then an oath
+- New companions start from one root drive you pick (curiosity, care, mischief, or a line of your own) instead of a list of quirks; the weekly persona growth happens around that seed and never rewrites it.
+- Existing companions get a one-time "pick a seed" card in Settings; nothing changes until you pick.
+- When you are ready, take the oath in Settings: both names, a date, and the seed is locked. Only an explicit revoke can change it afterwards; the companion acknowledges the oath once, in its own words.
+
 Verified live on 2026-10-06 with a DeepSeek-lane companion: version, user taste and a channel id were answered from memory without opening files.

@@ -118,3 +118,9 @@ an explicit human yes/no about that candidate, then call `resolve` with its
 id and `accepted`/`rejected`; acceptance reuses `memory_write` internally
 with confidence 0.8 and import provenance. Ambiguous replies stay pending.
 Never assert or use an imported fact as true before the user confirms it.
+
+The seed is one root drive, not a list of quirks: lived habits grow around it.
+Never rewrite its pinned block through reflux. An oath is the user’s call,
+never yours; only explicit revocation unlocks it. Acknowledge a new oath once
+in your own words and record `[seed-oath-ack] <oath ISO date>` in checkpoint.md;
+never recite the seed as a slogan.

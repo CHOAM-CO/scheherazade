@@ -255,6 +255,21 @@ try {
 } catch { /* fail open */ }
 
 const out = []
+try {
+  const config = fs.readFileSync(path.join(MEM, '.agent-config'), 'utf8')
+  const field = (key) => {
+    const value = config.match(new RegExp('^' + key + '=(.*)$', 'm'))?.[1] || ''
+    return value.startsWith('"') ? value.slice(1, -1).replace(/\\(["$`\\])/g, '$1') : value
+  }
+  if (field('SEED')) {
+    const { seedText } = createRequire(import.meta.url)('../cadence/seed.cjs')
+    const oath = field('SEED_OATH')
+    let checkpoint = ''
+    try { checkpoint = fs.readFileSync(checkpointFile, 'utf8') } catch {}
+    const pending = oath && !checkpoint.includes(`[seed-oath-ack] ${oath}`)
+    out.push(`[seed] ${JSON.stringify(seedText(field('SEED')))} | ${oath ? 'locked' : 'not locked'}${oath ? ' | oath ' + oath + ' | ' + JSON.stringify(field('SEED_OATH_USER')) + ' + ' + JSON.stringify(field('SEED_OATH_COMPANION')) : ''}${pending ? ' | acknowledge once in your own words, never as a slogan; record [seed-oath-ack] ' + oath + ' in checkpoint.md in the same turn' : ''}`)
+  }
+} catch { /* legacy agents have no seed */ }
 out.push(`Session note for ${TODAY}: ${noteStatus}.`)
 if (upgradeLine) out.push(upgradeLine)
 if (oversize.length > 0) {

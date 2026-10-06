@@ -98,6 +98,7 @@
       "scripts/journal-compress.mjs",
       "scripts/madoromi-solo.mjs",
       "scripts/persona-reflux.mjs",
+      "scripts/persona-apply.mjs",
       "autonomy/**/*",
       "cadence/**/*",
       "calendar/**/*",

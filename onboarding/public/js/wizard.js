@@ -1187,7 +1187,10 @@
       // UI-scope disabled, see EXPOSED_PROVIDERS) but structurally wired so
       // the direct-API path and a v1.1 chatgpt/ollama config UI need zero
       // backend-contract rework.
+      const chosenSeed = document.querySelector('input[name="seed"]:checked')?.value
+      const seed = chosenSeed === 'custom' ? $('seed-text').value.trim() : chosenSeed
       const completeBody = {
+        seed,
         displayName: state.displayName,
         provider: state.provider,
         tone: state.tone,
@@ -1619,6 +1622,7 @@
     const params = new URLSearchParams(window.location.search)
     const resumeStep = params.get('step')
     if (resumeStep === '4' && cfg) {
+      $('seed-choice').hidden = !cfg.seedStep
       state.displayName = cfg.DISPLAY_NAME || C.step2.defaultName
       state.provider = cfg.PROVIDER || null
       renderStep4()

@@ -14,8 +14,10 @@
 3. Bring the filled-in proposals to the human, one line each, self
    contained: claim + source + what you want to change. Not "see the file
    for details." Get APPROVE / REJECT / MODIFY per proposal.
-4. On APPROVE (or MODIFY, after rewriting to match direction): edit
-   `self_persona.md` yourself, then set that proposal's Status to
+4. On APPROVE (or MODIFY, after rewriting to match direction): write the approved full text to a proposal file, then run
+   `node {AGENT_DIR}/scripts/persona-apply.mjs <proposal-file>`; never write
+   `self_persona.md` directly. The writer preserves the pinned seed verbatim,
+   logs refused locked-seed changes, and permits habit additions/trimming. Then set that proposal's Status to
    `APPLIED` with today's date. On REJECT: set Status to `REJECTED` with
    the reason, and do not re-raise it without new evidence.
 5. If a proposal sits at PENDING through two review cycles with no
@@ -38,3 +40,11 @@ It is read by whoever wakes up after a model switch -- the session-start hook
 flags that boot. Origin: Girls' Frontline neural upgrades change a Doll's
 personality while keeping her memories; the letter makes that change visible
 to you and to the human instead of silent.
+
+## Seed and oath
+
+Grow habits around the seed, never rewrite or delete its pinned block. Only
+the user chooses an oath or explicitly revokes it in Settings. When boot
+reports a new oath, acknowledge once in your own words, then record its date
+in checkpoint.md as `[seed-oath-ack] <date>` in the same turn. Never recite
+the seed as a slogan or ask for an oath yourself.

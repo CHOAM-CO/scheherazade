@@ -231,3 +231,14 @@ submitting and running JavaScript each require a question in the active
 channel and an explicit human yes. Consent expires after two minutes and is
 single-use. Say no to cancel. Ordinary research keeps its isolated browser.
 The extension popup kill switch detaches the agent without closing Chrome.
+
+### 씨앗과 서약
+
+새 설치에서 씨앗 하나 선택함. `SEED`는 호기심 (`curiosity`), 돌봄
+(`care`), 장난기 (`mischief`) 또는 120자 이내 한 줄임.
+기존 동료는 설정에서만 씨앗 고르기 카드 표시됨. 닫으면
+`SEED_DISMISSED=yes`로 재표시 안 함. 선택 전 기존 동작 유지됨.
+서약은 사용자 확인으로만 설정됨. `SEED_OATH`에 ISO 날짜,
+`SEED_OATH_USER`와 `SEED_OATH_COMPANION`에 당시 두 이름 저장됨.
+서약 중 씨앗 변경 불가함. 설정에서 서약 해제 확인 후 변경 가능함.
+환류는 씨앗 블록 보존하며 주변 습관만 다듬음.
