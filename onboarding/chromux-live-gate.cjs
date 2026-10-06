@@ -6,7 +6,7 @@ const { spawnSync } = require('node:child_process')
 const { TTL, key, location, classify } = require('./chromux-live-consent.cjs')
 function gate({ home, entry, argv, channel, now = Date.now(), execute = (args) => spawnSync(process.execPath, [entry, ...args], { stdio: 'inherit', env: { ...process.env, CHROMUX_PROFILE: 'live' } }).status ?? 1 }) {
   let enabled = false
-  try { enabled = /^BROWSE_LIVE=(?:"true"|true)$/m.test(fs.readFileSync(path.join(home, '.agent-config'), 'utf8')) } catch {}
+  try { enabled = /^BROWSE_LIVE=(?:"true"|true)\r?$/m.test(fs.readFileSync(path.join(home, '.agent-config'), 'utf8')) } catch {}
   if (!enabled) return 4
   if (argv[0] === '--channel') { channel = argv[1]; argv = argv.slice(2) }
   if (!channel || !argv.length) return 3

@@ -634,9 +634,12 @@ function readAutonomyState() {
 
 function readAgentConfig() {
   if (!fs.existsSync(AGENT_CONFIG_PATH)) return {}
-  const text = fs.readFileSync(AGENT_CONFIG_PATH, 'utf8')
+  // BOM + CRLF tolerant: a user (or a PowerShell Set-Content) editing this file on
+  // Windows writes both, and a strict parser then reads ONBOARDING_COMPLETE as
+  // '"1"\r' and the app boots without its agent (10-06 on Mino's box).
+  const text = fs.readFileSync(AGENT_CONFIG_PATH, 'utf8').replace(/^\uFEFF/, '')
   const out = {}
-  for (const line of text.split('\n')) {
+  for (const line of text.split(/\r?\n/)) {
     const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/)
     if (!m) continue
     let value = m[2]

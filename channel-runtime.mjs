@@ -149,7 +149,7 @@ export async function readAgentConfig(dataHome) {
   } catch {
     return out
   }
-  for (const line of text.split('\n')) {
+  for (const line of text.replace(/^\uFEFF/, '').split(/\r?\n/)) {
     const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*"?([^"]*)"?\s*$/)
     if (m) out[m[1]] = m[2]
   }

@@ -81,7 +81,7 @@ function makeLog(now = () => Date.now()) {
 // escaping. test-supervisor.mjs round-trips shellQuote output through this.
 export function parseAgentConfig(text) {
   const out = {}
-  for (const line of text.split('\n')) {
+  for (const line of text.replace(/^\uFEFF/, '').split(/\r?\n/)) {
     const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/)
     if (!m) continue
     let value = m[2]
