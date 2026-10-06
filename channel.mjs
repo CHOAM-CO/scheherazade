@@ -42,6 +42,7 @@ import {
 import {
   LOCAL_CHANNEL_ID, handleToolCall as handleLocalToolCall, startLocalChatSurface,
 } from './channel-local.mjs'
+import { localDate } from './local-date.cjs'
 
 // autonomy/*.cjs are CommonJS on purpose: onboarding/http-server.cjs has to
 // read the same meter to show the user their own numbers, and it cannot import
