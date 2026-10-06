@@ -120,6 +120,8 @@
       }
     ],
     "asarUnpack": [
+      "memory/import-candidates.cjs",
+      "memory/migrate-import.cjs",
       "node_modules/**",
       "memory/**",
       "memory/entity-index.mjs",

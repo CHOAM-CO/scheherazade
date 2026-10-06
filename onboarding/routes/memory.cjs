@@ -18,9 +18,36 @@
 
 function createRoutes(staticCtx) {
   const {
-    fs, path, sendJson, getSessionEvents, getMemoryService, CATEGORY_TABLES, DATA_HOME,
+    fs, path, sendJson, readJsonBody, getSessionEvents, getMemoryService, CATEGORY_TABLES, DATA_HOME,
   } = staticCtx
   return [
+    {
+      method: 'POST', match: p => p === '/api/memory/ai-import',
+      handler: async (req, res) => {
+        try {
+          const body = await readJsonBody(req, 6 * 1024 * 1024)
+          const service = await getMemoryService()
+          sendJson(res, 200, service.stageImport(body))
+        } catch (err) { sendJson(res, 400, { error: err.message }) }
+      },
+    },
+    {
+      method: 'GET', match: p => p === '/api/memory/import-candidates',
+      handler: async (req, res) => {
+        const service = await getMemoryService()
+        sendJson(res, 200, service.listPendingImports({ limit: 200 }))
+      },
+    },
+    {
+      method: 'POST', match: p => p === '/api/memory/import-candidates',
+      handler: async (req, res) => {
+        try {
+          const body = await readJsonBody(req)
+          const service = await getMemoryService()
+          sendJson(res, 200, service.resolveImport(body))
+        } catch (err) { sendJson(res, 400, { error: err.message }) }
+      },
+    },
     {
       method: 'GET',
       match: (pathname) => pathname === '/api/memory/session-events',

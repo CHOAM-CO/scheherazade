@@ -21,6 +21,16 @@
       </div>
       <p class="subtitle" id="m-subtitle"></p>
 
+      <section class="category" aria-labelledby="ai-import-title">
+        <h2 id="ai-import-title">Import from another AI</h2>
+        <p>Bring a memory export. Nothing becomes a remembered fact until you confirm it.</p>
+        <label>Origin <select id="ai-import-source"><option value="chatgpt">ChatGPT</option><option value="claude">Claude</option><option value="other">Other / plain list</option></select></label>
+        <label>Memory file <input id="ai-import-file" type="file" accept=".txt,.md,.json"></label>
+        <button id="ai-import-submit" class="secondary">Import</button>
+        <p id="ai-import-status" role="status" aria-live="polite"></p>
+        <div id="ai-import-pending"></div>
+      </section>
+
       <!-- Folder view (0.3.8): tree left, reader right, like a notes app.
            Every section this page used to stack vertically is now either a
            real folder in the tree (DATA_HOME, via /api/agent-files/*) or a

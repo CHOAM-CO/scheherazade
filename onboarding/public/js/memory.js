@@ -639,7 +639,58 @@
     renderTree()
   }
 
+  async function loadImportCandidates() {
+    const { rows } = await api('/api/memory/import-candidates')
+    const container = $('ai-import-pending')
+    container.replaceChildren()
+    for (const row of rows) {
+      const item = document.createElement('div')
+      const text = document.createElement('p')
+      text.textContent = `${row.source}: “${row.text}” — is this right?`
+      item.append(text)
+      for (const [label, decision] of [['Accept', 'accepted'], ['Reject', 'rejected']]) {
+        const button = document.createElement('button')
+        button.className = 'secondary'
+        button.textContent = label
+        button.onclick = async () => {
+          const buttons = item.querySelectorAll('button')
+          buttons.forEach(b => { b.disabled = true })
+          try {
+            await api('/api/memory/import-candidates', { method: 'POST', body: JSON.stringify({ id: row.id, decision }) })
+            await loadImportCandidates()
+            if (decision === 'accepted') await renderView()
+          } catch (err) {
+            $('ai-import-status').textContent = err.message
+            buttons.forEach(b => { b.disabled = false })
+          }
+        }
+        item.append(button)
+      }
+      container.append(item)
+    }
+  }
+
+  function initImport() {
+    $('ai-import-submit').onclick = async () => {
+      const file = $('ai-import-file').files[0]
+      if (!file) { $('ai-import-status').textContent = 'Choose a memory file first.'; return }
+      const button = $('ai-import-submit')
+      button.disabled = true
+      try {
+        if (file.size > 5 * 1024 * 1024) throw new Error('Choose a file smaller than 5 MB.')
+        const result = await api('/api/memory/ai-import', { method: 'POST', body: JSON.stringify({
+          filename: file.name, content: await file.text(), source: $('ai-import-source').value,
+        }) })
+        $('ai-import-status').textContent = `${result.staged} candidates staged. Confirm each before it is remembered.`
+        await loadImportCandidates()
+      } catch (err) { $('ai-import-status').textContent = err.message }
+      finally { button.disabled = false }
+    }
+    loadImportCandidates().catch(err => { $('ai-import-status').textContent = err.message })
+  }
+
   async function init() {
+    initImport()
     try {
       const cfg = await api('/api/config')
       displayName = cfg.DISPLAY_NAME || displayName
@@ -658,7 +709,7 @@
     refreshBtn.onclick = async () => {
       refreshBtn.disabled = true
       try {
-        await Promise.all([loadTreeData(), renderView()])
+        await Promise.all([loadTreeData(), renderView(), loadImportCandidates()])
         showToast(C.refreshToast)
       } finally {
         refreshBtn.disabled = false

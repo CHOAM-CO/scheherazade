@@ -18,4 +18,9 @@ Browse with me (live Chrome)
 Boot follow-up
 - On a new session the companion picks one recent promise or open thread from its notes ("you said you'd check the report yesterday, did you?") and opens with it instead of a generic greeting. Records older than 7 days are ignored.
 
+Import memories from another assistant
+- Memory page: pick ChatGPT / Claude / other and a .txt, .md or .json export. Candidates are staged (duplicates skipped, 200 max), never stored as facts on their own.
+- Accept or reject each one; accepted lines become facts with confidence 0.8 and their origin recorded.
+- In conversation the companion may also offer up to three pending candidates, one at a time, and treats none of them as true until you confirm.
+
 Verified live on 2026-10-06 with a DeepSeek-lane companion: version, user taste and a channel id were answered from memory without opening files.

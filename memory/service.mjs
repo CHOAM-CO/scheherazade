@@ -1,3 +1,5 @@
+import candidateParser from './import-candidates.cjs'
+import { createHash } from 'node:crypto'
 // memory/service.mjs — the memory DATA LAYER (issue #9, PR-1).
 //
 // This file owns the SQLite connection, the DDL, and every table operation.
@@ -89,6 +91,13 @@ const nowISO = () => new Date().toISOString()
 // new-with-AUTOINCREMENT, copy rows, swap) rather than relying on
 // IF NOT EXISTS to upgrade it in place.
 const DDL = `
+CREATE TABLE IF NOT EXISTS import_candidates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','accepted','rejected')),
+  source TEXT NOT NULL, text TEXT NOT NULL,
+  normalized_text TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL
+);
+
 -- one current value per (subject,predicate); re-learning bumps last_confirmed
 CREATE TABLE IF NOT EXISTS user_facts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -325,14 +334,15 @@ function valuesEquivalent(intended, actual) {
 // re-thrown, so the caller still sees the exact same failure message as
 // before, but the db is left exactly as it was pre-call.
 function withTransaction(db, fn) {
-  db.exec('BEGIN IMMEDIATE')
+  const nested = db.isTransaction
+  db.exec(nested ? 'SAVEPOINT memory_write_nested' : 'BEGIN IMMEDIATE')
   try {
     const result = fn()
-    db.exec('COMMIT')
+    db.exec(nested ? 'RELEASE memory_write_nested' : 'COMMIT')
     return result
   } catch (err) {
     try {
-      db.exec('ROLLBACK')
+      db.exec(nested ? 'ROLLBACK TO memory_write_nested; RELEASE memory_write_nested' : 'ROLLBACK')
     } catch (rollbackErr) {
       throw new Error(
         `Transaction FAILED (${err.message}) and ROLLBACK itself failed (${rollbackErr.message}) — db may be in an inconsistent state.`,
@@ -382,7 +392,7 @@ function logEvent(db, event, table, rowId, session) {
 
 // ── memory_write: insert/upsert with read-back-verify ────────────────────
 function refreshStructuredEntities(db, table) {
-  if (!['user_facts', 'preferences', 'corrections'].includes(table)) return
+  if (db.isTransaction || !['user_facts', 'preferences', 'corrections'].includes(table)) return
   try { entityIndex.rebuildEntityIndex(db) }
   catch (err) { log(`entity index rebuild after ${table} mutation skipped: ${err.message}`) }
 }
@@ -1156,7 +1166,56 @@ function listActiveJournalDays(limit = 120) {
     .map((r) => r.d)
 }
 
+// Staging is deliberately absent from recallMaterial and generic memory_query.
+function stageImport(args, db = ensureDb()) {
+  const existing = [...db.prepare('SELECT value FROM user_facts').all(),
+    ...db.prepare('SELECT value FROM preferences').all(),
+    ...db.prepare('SELECT text FROM import_candidates').all()]
+  const stats = {}
+  const candidates = candidateParser.parseCandidates(args.content, { ...args, existing, stats })
+  return withTransaction(db, () => {
+    let staged = 0
+    const insert = db.prepare('INSERT OR IGNORE INTO import_candidates(source,text,normalized_text,created_at) VALUES(?,?,?,?)')
+    for (const c of candidates) staged += Number(insert.run(c.source, c.text, candidateParser.normalize(c.text), nowISO()).changes)
+    return { staged, skipped_duplicates: stats.skipped_duplicates || 0 }
+  })
+}
+async function importMemoryFile(filePath, source = 'other', db = ensureDb()) {
+  const fs = await import('node:fs/promises')
+  const stat = await fs.stat(filePath)
+  if (stat.size > 5 * 1024 * 1024) throw new Error('Oversized memory file')
+  return stageImport({ content: await fs.readFile(filePath, 'utf8'), filename: filePath, source }, db)
+}
+function listPendingImports({ limit = 3 } = {}, db = ensureDb()) {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new Error('Invalid candidate limit')
+  return { rows: db.prepare("SELECT id,source,text,created_at FROM import_candidates WHERE status='pending' ORDER BY id LIMIT ?").all(limit) }
+}
+function resolveImport({ id, decision } = {}, db = ensureDb()) {
+  if (!Number.isInteger(id) || id < 1 || !['accepted', 'rejected'].includes(decision)) throw new Error('Invalid candidate resolution')
+  const result = withTransaction(db, () => {
+    const row = db.prepare('SELECT * FROM import_candidates WHERE id=?').get(id)
+    if (!row) throw new Error('Candidate not found')
+    if (row.status !== 'pending') {
+      if (row.status !== decision) throw new Error('Candidate already resolved')
+      return { id, status: row.status }
+    }
+    if (decision === 'accepted') {
+      // Stable, collision-resistant upsert key: unrelated imported facts never overwrite one another.
+      const predicate = 'import_' + createHash('sha256').update(row.normalized_text).digest('hex')
+      memoryWrite(db, { table: 'user_facts', data: {
+        subject: 'user', predicate, value: row.text,
+        confidence: 0.8, source_session: 'import:' + row.source,
+      } })
+    }
+    db.prepare('UPDATE import_candidates SET status=? WHERE id=?').run(decision, id)
+    return { id, status: decision }
+  })
+  if (decision === 'accepted') refreshStructuredEntities(db, 'user_facts')
+  return result
+}
+
 export {
+  stageImport, importMemoryFile, listPendingImports, resolveImport,
   // shared constants + verify helpers
   DDL,
   DB_PATH,
