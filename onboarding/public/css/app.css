@@ -2077,7 +2077,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .qb-dot[hidden] { display: none; }
 .qb-tooltip { display: none; position: absolute; left: calc(100% + 8px); top: 0; white-space: nowrap; padding: 6px 10px; background: var(--panel); color: var(--fg); border: 1px solid var(--border); border-radius: var(--radius-s); z-index: 100; pointer-events: none; }
 .qb:hover .qb-tooltip, .qb:focus-visible .qb-tooltip { display: block; }
-.qb-popover { position: fixed; z-index: 110; width: 300px; max-height: calc(100vh - 180px); overflow: auto; padding: 16px; background: var(--panel); color: var(--fg); border: 1px solid var(--border); border-radius: var(--radius-s); }
+.qb-popover { position: fixed; z-index: 110; width: 320px; max-height: calc(100vh - 180px); overflow: auto; padding: 16px; background: rgb(var(--panel-rgb) / 0.97); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); color: var(--fg); border: 1px solid var(--border); border-radius: var(--radius-s); box-shadow: 0 12px 32px rgb(0 0 0 / 0.45); }
+.qb-popover label { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.qb-popover .qb-field { font-size: 12px; opacity: 0.7; margin: 10px 0 4px; }
 .qb-popover code { display: block; overflow-wrap: anywhere; }
 .qb-popover a, .qb-popover button { margin: 8px 8px 0 0; }
 .qb-popover p[role="status"] { white-space: pre-wrap; overflow-wrap: anywhere; }
