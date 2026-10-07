@@ -13,7 +13,7 @@ Your companion now uses what it remembers.
 Browse with me (live Chrome)
 - New setting with a one-time "Pair extension" step (unpacked extension from the chromux folder, Developer mode).
 - Say "on this page / the tab I am looking at" and the companion reads that tab directly.
-- Any change on the page (click, type, navigate, submit) is asked first in your channel; it runs once only after you answer yes, and expires after two minutes.
+- While it is on, the companion acts on pages without asking; there is no per-action confirmation. The eye button in the chat quick bar turns it on and off.
 
 Boot follow-up
 - On a new session the companion picks one recent promise or open thread from its notes ("you said you'd check the report yesterday, did you?") and opens with it instead of a generic greeting. Records older than 7 days are ignored.
@@ -27,6 +27,23 @@ One seed, then an oath
 - New companions start from one root drive you pick (curiosity, care, mischief, or a line of your own) instead of a list of quirks; the weekly persona growth happens around that seed and never rewrites it.
 - Existing companions get a one-time "pick a seed" card in Settings; nothing changes until you pick.
 - When you are ready, take the oath in Settings: both names, a date, and the seed is locked. Only an explicit revoke can change it afterwards; the companion acknowledges the oath once, in its own words.
+
+Chat quick bar
+- Five icon buttons in the chat header, left of the model chip. Hover shows what each does; pressing one makes the companion speak, it does not open a panel.
+- ! What's new: reads these notes, says whether an update exists, and runs through what it has piled up for you. The dot lights when any of that is waiting.
+- Brush, Look back: goes through recent notes and persona changes with you, live; nothing is written until you confirm.
+- Eye, See with the companion: browse-live on/off; opens the pairing popover when the extension is not paired yet.
+- Moon, Dream: tells one of its dreams; untold ones first.
+- Calendar, Today: a short rundown of today's calendar and what it remembers is due.
+
+Chat composer
+- The box grows with long text up to about 40% of the window, then scrolls inside.
+- Attached images show as thumbnails above the text, with a remove button; other files stay as chips.
+
+Providers and usage
+- Claude (subscription login): an expired Claude Code login is refreshed with its refresh token before the companion starts, and the rotated token is written back, so a terminal `claude` run is no longer needed after expiry.
+- Ollama usage: ollama.com now reports 7-day spend and request counts instead of a quota fraction; the gauge shows spend, today, and a daily strip.
+- DeepSeek lane: when a tool call fails to schedule mid-step, the pending calls get error results and the conversation continues instead of stalling (upstream fix #4595, applied as a patch on the pinned engine).
 
 Fixes
 - The daily-note reminder had been silently crashing every few minutes since it shipped; it runs again.
