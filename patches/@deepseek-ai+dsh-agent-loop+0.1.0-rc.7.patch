@@ -1,0 +1,40 @@
+diff --git a/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js b/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js
+index b172a4f..1a4d5f9 100644
+--- a/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js
+@@ -4,7 +4,7 @@ import z from "@deepseek-ai/schemastery";
+ import { Inbox, agentEvents, assembleContextFor, emitAgentEvent } from "@deepseek-ai/dsh-agent";
+ import { BlockAssembler, LlmError, assertNever, createAssistantMessage, createToolResultMessage, createUserMessage, deepFreeze, errorChain, markAgentLoopRequest } from "@deepseek-ai/dsh-llm";
+ import { installSettingsSection, settingsNamespace } from "@deepseek-ai/dsh-settings";
+-import { SessionId, SessionPreparation, canonicalHeader, headerEquals, isReplacementSurfaceEvent } from "@deepseek-ai/dsh-session";
++import { SessionId, SessionPreparation, ToolCallRecovery, canonicalHeader, headerEquals, isReplacementSurfaceEvent } from "@deepseek-ai/dsh-session";
+ import { createScope } from "@deepseek-ai/dsh-scope";
+ import { joinContextSections, renderContextSections, renderPrompt } from "@deepseek-ai/dsh-system-prompt";
+ import { TOOL_ABORTED_BEFORE_DISPATCH, TOOL_RUNTIME_SCHEDULER } from "@deepseek-ai/dsh-tools";
+@@ -550,11 +550,26 @@ var ReactLoopAgent = class {
+ 					step
+ 				});
+ 				phase.step = step;
++				const toolRecovery = new ToolCallRecovery();
++				const stopRecovery = this.ctx.on("session/event", (session, event) => {
++					if (session === this.session) toolRecovery.observe(event);
++				});
+ 				try {
+ 					for (const message of decision.messages) this.session.append("user/message", message, { surfaceOp: "append" });
+ 					const stepEnd = await this.step(decision.assembly);
+ 					if (turnEnds === null || turnEnds.kind !== "max-tokens") turnEnds = stepEnd;
++				} catch (error) {
++					try {
++						for (const event of toolRecovery.results()) this.session.append("tool/result", event.data, {
++							surfaceOp: "append",
++							...event.sourceEventSeqs === void 0 ? {} : { sourceEventSeqs: event.sourceEventSeqs }
++						});
++					} catch (recoveryError) {
++						throw new AggregateError([error, recoveryError], "Step failed and its pending tool results could not be recorded", { cause: error });
++					}
++					throw error;
+ 				} finally {
++					stopRecovery();
+ 					this.session.append("step/end", {
+ 						turn,
+ 						step

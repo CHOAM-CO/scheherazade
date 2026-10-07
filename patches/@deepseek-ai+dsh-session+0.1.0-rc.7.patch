@@ -1,0 +1,283 @@
+diff --git a/node_modules/@deepseek-ai/dsh-session/lib/index.js b/node_modules/@deepseek-ai/dsh-session/lib/index.js
+index 1102035..8a712ce 100644
+--- a/node_modules/@deepseek-ai/dsh-session/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-session/lib/index.js
+@@ -615,6 +615,14 @@ const TOOL_NOT_STARTED = "TOOL_NOT_STARTED";
+ /** Recovery code for a recorded tool call whose completed outcome was not durably recorded. */
+ const TOOL_OUTCOME_UNKNOWN = "TOOL_OUTCOME_UNKNOWN";
+ /**
++* Model-visible wording of synthetic error results, keyed by the close cause.
++* rc.7 ships only the interrupted cause (fork seeds arrive in a later release).
++*/
++const CLOSER_TEXT = { interrupted: {
++	started: "The tool call was interrupted after it was recorded, but no result was durably recorded. Its outcome is unknown. Decide whether to retry from the tool semantics: retry only if the operation is read-only or idempotent; if it may have side effects, first verify external state or ask the user. Do not retry blindly.",
++	notStarted: "The tool call was interrupted before the Harness recorded it as started. Retry it if it is still needed."
++} };
++/**
+ * Return deterministic synthetic events that close an open tail turn. Unmatched
+ * calls receive error results first, followed by an open `step/end` and an
+ * interrupted `turn/end`; sequences continue the log and timestamps reuse the
+@@ -626,83 +634,32 @@ const TOOL_OUTCOME_UNKNOWN = "TOOL_OUTCOME_UNKNOWN";
+ function interruptedTurnClosers(events) {
+ 	let openTurn = null;
+ 	let openStep = null;
+-	const pendingCalls = /* @__PURE__ */ new Map();
+-	for (const event of events) switch (event.type) {
+-		case "turn/start":
+-			openTurn = event.data.turn;
+-			openStep = null;
+-			pendingCalls.clear();
+-			break;
+-		case "turn/end":
+-			openTurn = null;
+-			openStep = null;
+-			pendingCalls.clear();
+-			break;
+-		case "step/start":
+-			openStep = event.data.step;
+-			break;
+-		case "step/end":
+-			pendingCalls.clear();
+-			openStep = null;
+-			break;
+-		case "assistant/message":
+-			for (const block of event.data.message.content) if (block.type === "tool-call") pendingCalls.set(block.id, { step: event.data.step });
+-			break;
+-		case "tool/call":
+-			{
+-				const entry = pendingCalls.get(event.data.callId);
+-				if (entry) entry.callSeq = event.seq;
+-			}
+-			break;
+-		case "tool/result":
+-			pendingCalls.delete(event.data.message.source.callId);
+-			break;
+-		default: break;
++	const recovery = new ToolCallRecovery({ kind: "interrupted" });
++	for (const event of events) {
++		recovery.observe(event);
++		switch (event.type) {
++			case "turn/start":
++				openTurn = event.data.turn;
++				openStep = null;
++				break;
++			case "turn/end":
++				openTurn = null;
++				openStep = null;
++				break;
++			case "step/start":
++				openStep = event.data.step;
++				break;
++			case "step/end":
++				openStep = null;
++				break;
++			default: break;
++		}
+ 	}
+ 	const last = events.at(-1);
+ 	if (openTurn === null || last === void 0) return [];
+-	let seq = last.seq + 1;
++	const closers = recovery.results();
++	let seq = last.seq + closers.length + 1;
+ 	const time = last.time;
+-	const closers = [];
+-	for (const [callId, { step, callSeq }] of pendingCalls) {
+-		const started = callSeq !== void 0;
+-		const message = freezeMessage({
+-			id: MessageId(`interrupted-tool-result-${callId}-${seq}`),
+-			role: "user",
+-			source: {
+-				kind: "tool",
+-				callId
+-			},
+-			content: [{
+-				type: "tool-result",
+-				toolCallId: callId,
+-				isError: true,
+-				content: [{
+-					type: "text",
+-					text: started ? "The tool call was interrupted after it was recorded, but no result was durably recorded. Its outcome is unknown. Decide whether to retry from the tool semantics: retry only if the operation is read-only or idempotent; if it may have side effects, first verify external state or ask the user. Do not retry blindly." : "The tool call was interrupted before the Harness recorded it as started. Retry it if it is still needed."
+-				}]
+-			}]
+-		});
+-		closers.push({
+-			type: "tool/result",
+-			seq: seq++,
+-			time,
+-			data: {
+-				turn: openTurn,
+-				step,
+-				message,
+-				error: started ? {
+-					name: "ToolOutcomeUnknownError",
+-					code: TOOL_OUTCOME_UNKNOWN
+-				} : {
+-					name: "ToolNotStartedError",
+-					code: TOOL_NOT_STARTED
+-				}
+-			},
+-			surfaceOp: "append",
+-			...started ? { sourceEventSeqs: [callSeq] } : {}
+-		});
+-	}
+ 	if (openStep !== null) closers.push({
+ 		type: "step/end",
+ 		seq: seq++,
+@@ -723,6 +680,108 @@ function interruptedTurnClosers(events) {
+ 	});
+ 	return closers;
+ }
++/**
++* Track unanswered assistant tool requests from one Session's committed events.
++* Observe from the start of the owned step or replay prefix, and recover before
++* its step closes. This state retains pending identities, not event history.
++* (Backport of deepseek-harness PR #4595 onto 0.1.0-rc.7.)
++*/
++var ToolCallRecovery = class {
++	pendingCalls = /* @__PURE__ */ new Map();
++	last;
++	cause;
++	/** @param cause - defaults to interrupted live/crash recovery. */
++	constructor(cause = { kind: "interrupted" }) {
++		this.cause = cause;
++	}
++	/**
++	* Consume the next committed event; closed steps and turn boundaries discard pending requests.
++	* @param event - the next event from the same Session, in sequence order.
++	*/
++	observe(event) {
++		this.last = {
++			seq: event.seq,
++			time: event.time
++		};
++		switch (event.type) {
++			case "turn/start":
++			case "turn/end":
++			case "step/end":
++				this.pendingCalls.clear();
++				break;
++			case "assistant/message":
++				for (const block of event.data.message.content) if (block.type === "tool-call") this.pendingCalls.set(block.id, {
++					turn: event.data.turn,
++					step: event.data.step
++				});
++				break;
++			case "tool/call": {
++				const entry = this.pendingCalls.get(event.data.callId);
++				if (entry) entry.callSeq = event.seq;
++				break;
++			}
++			case "tool/result": {
++				const callId = event.data.message.source.callId;
++				const entry = this.pendingCalls.get(callId);
++				if (event.surfaceOp === "append" && entry !== void 0 && entry.turn === event.data.turn && entry.step === event.data.step) this.pendingCalls.delete(callId);
++				break;
++			}
++			default: break;
++		}
++	}
++	/**
++	* Build conservative error results in assistant order without changing tracked state.
++	* Sequences follow the latest observed event and timestamps reuse its time.
++	* @returns pending tool-result events, empty when no request remains unanswered.
++	*/
++	results() {
++		if (this.last === void 0) return [];
++		let seq = this.last.seq + 1;
++		const time = this.last.time;
++		const results = [];
++		const text = CLOSER_TEXT[this.cause.kind] ?? CLOSER_TEXT.interrupted;
++		for (const [callId, { turn, step, callSeq }] of this.pendingCalls) {
++			const started = callSeq !== void 0;
++			const message = freezeMessage({
++				id: MessageId(`${this.cause.kind}-tool-result-${callId}-${seq}`),
++				role: "user",
++				source: {
++					kind: "tool",
++					callId
++				},
++				content: [{
++					type: "tool-result",
++					toolCallId: callId,
++					isError: true,
++					content: [{
++						type: "text",
++						text: started ? text.started : text.notStarted
++					}]
++				}]
++			});
++			results.push({
++				type: "tool/result",
++				seq: seq++,
++				time,
++				data: {
++					turn,
++					step,
++					message,
++					error: started ? {
++						name: "ToolOutcomeUnknownError",
++						code: TOOL_OUTCOME_UNKNOWN
++					} : {
++						name: "ToolNotStartedError",
++						code: TOOL_NOT_STARTED
++					}
++				},
++				surfaceOp: "append",
++				...started ? { sourceEventSeqs: [callSeq] } : {}
++			});
++		}
++		return results;
++	}
++};
+ //#endregion
+ //#region lib/types/chunk-rows.js
+ /**
+@@ -1883,4 +1942,4 @@ var SessionStore = class extends Service {
+ 	}
+ };
+ //#endregion
+-export { KNOWN_SESSION_EVENT_TYPES, SESSION_FORMAT_VERSION, Session, SessionForkError, SessionId, SessionPreparation, SessionStore, SessionStore as default, TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN, adoptSessionEvent, canonicalHeader, decodeStorageRecord, deriveEventMessage, foldRequestHeader, foldSurface, headerEquals, interruptedTurnClosers, isAppendSurfaceEvent, isJsonValue, isReplacementSurfaceEvent, isSurfaceEligibleType, isSurfaceEvent, packChunkRuns, snapshotJsonValue, snapshotSessionEvent };
++export { KNOWN_SESSION_EVENT_TYPES, SESSION_FORMAT_VERSION, Session, SessionForkError, SessionId, SessionPreparation, SessionStore, SessionStore as default, TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN, ToolCallRecovery, adoptSessionEvent, canonicalHeader, decodeStorageRecord, deriveEventMessage, foldRequestHeader, foldSurface, headerEquals, interruptedTurnClosers, isAppendSurfaceEvent, isJsonValue, isReplacementSurfaceEvent, isSurfaceEligibleType, isSurfaceEvent, packChunkRuns, snapshotJsonValue, snapshotSessionEvent };
+diff --git a/node_modules/@deepseek-ai/dsh-session/lib/types/index.d.ts b/node_modules/@deepseek-ai/dsh-session/lib/types/index.d.ts
+index 1e2f5ba..9e0d1e5 100644
+--- a/node_modules/@deepseek-ai/dsh-session/lib/types/index.d.ts
++++ b/node_modules/@deepseek-ai/dsh-session/lib/types/index.d.ts
+@@ -18,7 +18,8 @@ export type { SessionPreparationOptions } from './preparation.ts';
+ export type { AssistantMessage, ToolResultMessage, UserMessage } from '@deepseek-ai/dsh-llm';
+ export { isJsonValue, snapshotJsonValue } from './json.ts';
+ export type { JsonValue } from './json.ts';
+-export { interruptedTurnClosers, TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from './repair.ts';
++export { interruptedTurnClosers, ToolCallRecovery, TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from './repair.ts';
++export type { OpenTurnCloseCause } from './repair.ts';
+ export { decodeStorageRecord, packChunkRuns } from './chunk-rows.ts';
+ export type { ChunkRow, StorageRecord } from './chunk-rows.ts';
+ export type { SessionSurface, SurfaceFoldReplacement, SurfaceFoldResult } from './surface.ts';
+diff --git a/node_modules/@deepseek-ai/dsh-session/lib/types/repair.d.ts b/node_modules/@deepseek-ai/dsh-session/lib/types/repair.d.ts
+index 0cf7879..4716724 100644
+--- a/node_modules/@deepseek-ai/dsh-session/lib/types/repair.d.ts
++++ b/node_modules/@deepseek-ai/dsh-session/lib/types/repair.d.ts
+@@ -19,4 +19,23 @@ export declare const TOOL_OUTCOME_UNKNOWN = "TOOL_OUTCOME_UNKNOWN";
+  * @returns the synthetic closer events to append after `events`, in order; empty when the log is already balanced.
+  */
+ export declare function interruptedTurnClosers(events: readonly SessionEvent[]): SessionEvent[];
++/** Cause of an open-turn close; rc.7 ships only the interrupted cause. */
++export interface OpenTurnCloseCause {
++    readonly kind: "interrupted";
++}
++/**
++ * Track unanswered assistant tool requests from one Session's committed events.
++ * Observe from the start of the owned step or replay prefix, and recover before
++ * its step closes. This state retains pending identities, not event history.
++ */
++export declare class ToolCallRecovery {
++    private readonly cause;
++    private readonly pendingCalls;
++    private last;
++    constructor(cause?: OpenTurnCloseCause);
++    /** Consume the next committed event; closed steps and turn boundaries discard pending requests. */
++    observe(event: SessionEvent): void;
++    /** Build conservative error results in assistant order without changing tracked state. */
++    results(): SessionEvent<"tool/result">[];
++}
+ //# sourceMappingURL=repair.d.ts.map
+\ No newline at end of file
