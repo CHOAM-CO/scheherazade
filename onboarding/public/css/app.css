@@ -1288,7 +1288,7 @@ button.mem-node:focus-visible { outline: 2px solid var(--accent-ring); outline-o
      window edge; no extra spacing of its own. */
 }
 .chat-input-row textarea {
-  flex: 1;
+  flex: 0 0 auto; /* not flex:1 -- a 0% basis in the column ignores the inline height chat.js sets (verified 10-07 15:35: inline 300px, rendered 36px) */
   resize: none;
   /* composer-grow (the owner 2026-10-07 15:21 "글이 길어지면 채팅박스가
      커져야지, 디스코드처럼"): the box grows with the text up to ~40% of
