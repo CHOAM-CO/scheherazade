@@ -1010,48 +1010,80 @@
   //      in flight, so a double-click cannot inject two.
   // There is no toast, banner, list or panel. What the user sees after the
   // click is the system divider the inject produces and then her own words.
-  let pendingBusy = false
-  function setPendingMark(total) {
-    const btn = $('ct-pending')
-    if (!btn) return
-    const n = Number(total)
-    btn.hidden = !(Number.isFinite(n) && n > 0)
-  }
-  async function refreshPending() {
-    try {
-      const r = await window.api('/api/pending-signal')
-      setPendingMark(r && r.total)
-    } catch (err) {
-      console.error('pending signal failed:', err)
-      setPendingMark(0) // a failed read must never light the mark
+  function initQuickbar() {
+    const Q = document.documentElement.lang.startsWith('ko') ? C.quickbarKo : C
+    const whats = $('qb-whats-new'), look = $('qb-look-back'), browse = $('qb-browse')
+    let browseStatus = null, popover = null
+    function label(button, text) {
+      button.title = text; button.setAttribute('aria-label', text)
+      button.querySelector('.qb-tooltip').textContent = text
     }
-  }
-  async function recitePending() {
-    if (pendingBusy) return
-    const btn = $('ct-pending')
-    pendingBusy = true
-    if (btn) btn.disabled = true
-    try {
-      await window.api('/api/pending-signal/recite', { method: 'POST' })
-    } catch (err) {
-      // No error surface by design: `injected:false` leaves the mark lit, and
-      // a failed POST leaves the pile untouched. The re-read below says which.
-      console.error('pending recite failed:', err)
-    } finally {
-      pendingBusy = false
-      if (btn) btn.disabled = false
-      await refreshPending() // re-read once: the mark clears only if the pile is gone
+    label(whats, Q.qbWhatsNew); label(look, Q.qbLookBack)
+    function close() { if (popover) { popover.remove(); popover = null; browse.setAttribute('aria-expanded', 'false') } }
+    async function refresh() {
+      try {
+        const s = await window.api('/api/quickbar/whats-new/status')
+        const lit = !!(s.hasUpdate || s.unseenNotes || s.pending.total > 0)
+        whats.dataset.state = lit ? 'lit' : 'idle'; whats.querySelector('.qb-dot').hidden = !lit
+      } catch { whats.dataset.state = 'idle'; whats.querySelector('.qb-dot').hidden = true }
     }
-  }
-  function initPendingSignal() {
-    const btn = $('ct-pending')
-    if (!btn) return
-    btn.textContent = C.pendingSignalGlyph // static copy, never user data
-    btn.title = C.pendingSignalLabel
-    btn.setAttribute('aria-label', C.pendingSignalLabel)
-    btn.onclick = recitePending
-    refreshPending()
-    pendingTimer = setInterval(refreshPending, PENDING_MS)
+    async function refreshBrowse() {
+      try {
+        browseStatus = await window.api('/api/quickbar/browse/status')
+        browse.dataset.state = !browseStatus.enabled || !browseStatus.paired ? 'off' : browseStatus.sessionConsent ? 'free' : 'ask'
+      } catch { browseStatus = null; browse.dataset.state = 'off' }
+      label(browse, Q.qbSeeWith.replace('{name}', browseStatus?.agentName || agentName) + ' · ' + Q.qbSeeState[browse.dataset.state])
+    }
+    async function busy(button, action) {
+      if (button.disabled) return
+      const previous = button.dataset.state
+      button.disabled = true; button.dataset.state = 'busy'
+      try { await action() } catch (err) { console.error('quickbar:', err); window.showToast(err.message) }
+      finally { button.disabled = false; button.dataset.state = previous }
+    }
+    whats.onclick = () => busy(whats, async () => {
+      try { await window.api('/api/quickbar/whats-new', { method: 'POST' }) } finally { await refresh() }
+    }).then(refresh)
+    look.onclick = () => busy(look, () => window.api('/api/quickbar/look-back', { method: 'POST' }))
+    browse.setAttribute('aria-haspopup', 'dialog'); browse.setAttribute('aria-expanded', 'false')
+    function openPopover() {
+      close(); popover = document.createElement('div'); popover.className = 'qb-popover'; popover.setAttribute('role', 'dialog')
+      popover.setAttribute('aria-label', Q.qbSeeWith.replace('{name}', browseStatus?.agentName || agentName))
+      const toggleLabel = document.createElement('label'), toggle = document.createElement('input')
+      toggle.type = 'checkbox'; toggle.checked = !!browseStatus?.enabled
+      toggleLabel.append(toggle, document.createTextNode(' ' + Q.qbEnable)); popover.append(toggleLabel)
+      const pathLabel = document.createElement('p'); pathLabel.textContent = Q.qbExtensionPath; popover.append(pathLabel)
+      const pathText = document.createElement('code'); pathText.textContent = browseStatus?.extensionPath || ''; popover.append(pathText)
+      const copy = document.createElement('button'); copy.textContent = Q.qbCopy; copy.type = 'button'; popover.append(copy)
+      const guide = document.createElement('a'); guide.href = '/api/settings/browse-live/install'; guide.textContent = Q.qbInstall; guide.target = '_blank'; guide.rel = 'noopener'; popover.append(guide)
+      const pair = document.createElement('button'); pair.textContent = Q.qbPair; pair.type = 'button'; popover.append(pair)
+      const line = document.createElement('p'); line.setAttribute('role', 'status'); line.textContent = Q.qbSeeState.off; popover.append(line)
+      toggle.onchange = async () => {
+        toggle.disabled = true
+        try { await window.api('/api/settings/browse-live', { method: 'POST', body: JSON.stringify({ browseLive: toggle.checked }) }); await refreshBrowse() }
+        catch (e) { toggle.checked = !toggle.checked; line.textContent = e.message }
+        finally { toggle.disabled = false }
+      }
+      copy.onclick = async () => { try { await navigator.clipboard.writeText(pathText.textContent); copy.textContent = Q.qbCopied } catch (e) { line.textContent = e.message } }
+      pair.onclick = async () => {
+        pair.disabled = true; line.textContent = Q.qbPairing
+        try { const r = await window.api('/api/settings/browse-live/pair', { method: 'POST' }); line.textContent = (r.status === 'paired' ? Q.qbPaired : Q.qbPairFailed) + (r.instructions ? '\n' + r.instructions : '') }
+        catch (e) { line.textContent = Q.qbPairFailed + ': ' + e.message }
+        finally { pair.disabled = false; await refreshBrowse() }
+      }
+      document.body.append(popover)
+      const rect = browse.getBoundingClientRect(); popover.style.left = `${rect.right + 8}px`; popover.style.top = `${rect.top}px`
+      browse.setAttribute('aria-expanded', 'true'); toggle.focus()
+    }
+    browse.onclick = () => busy(browse, async () => {
+      await refreshBrowse()
+      if (browse.dataset.state === 'off') { if (popover) close(); else openPopover(); return }
+      await window.api('/api/quickbar/browse/session-consent', { method: 'POST', body: JSON.stringify({ on: browse.dataset.state !== 'free' }) })
+      close()
+    }).then(refreshBrowse)
+    document.addEventListener('pointerdown', e => { if (popover && !popover.contains(e.target) && !browse.contains(e.target)) close() })
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && popover) { close(); browse.focus() } })
+    refresh(); refreshBrowse(); pendingTimer = setInterval(() => { refresh(); refreshBrowse() }, PENDING_MS)
   }
 
   // 'user' passes through, anything else renders as the agent: the enum is
@@ -1730,7 +1762,7 @@
     const fileInput = $('ct-file')
     resolveVisionState() // async, best-effort; 'unknown' until it lands
     initModelSwitch() // async, best-effort; chip stays hidden on any failure
-    initPendingSignal() // async, best-effort; the "!" stays hidden on any failure
+    initQuickbar() // async, best-effort; the "!" stays hidden on any failure
     if (attachBtn && fileInput) {
       attachBtn.title = C.attachTitle
       attachBtn.onclick = () => fileInput.click()

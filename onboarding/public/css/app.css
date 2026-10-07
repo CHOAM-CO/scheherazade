@@ -2064,3 +2064,20 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   color: var(--fg-dim);
   border-color: var(--border-strong);
 }
+
+/* Quickbar shares secondary-button chrome; the transcript owns the remaining width. */
+.chat-layout { display: flex; flex: 1; min-height: 0; gap: 8px; }
+.chat-main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.chat-quickbar { width: 44px; flex: 0 0 44px; display: flex; flex-direction: column; align-items: center; gap: 8px; padding-top: 8px; }
+.qb { position: relative; width: 36px; height: 36px; padding: 6px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-s); }
+.qb[data-state="off"] { opacity: .45; }
+.qb[data-state="lit"], .qb[data-state="free"] { color: var(--accent); border-color: var(--accent); background: var(--accent-ring); }
+.qb[data-state="busy"] { opacity: .55; cursor: wait; }
+.qb-dot { position: absolute; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); right: 1px; top: 1px; }
+.qb-dot[hidden] { display: none; }
+.qb-tooltip { display: none; position: absolute; left: calc(100% + 8px); top: 0; white-space: nowrap; padding: 6px 10px; background: var(--panel); color: var(--fg); border: 1px solid var(--border); border-radius: var(--radius-s); z-index: 100; pointer-events: none; }
+.qb:hover .qb-tooltip, .qb:focus-visible .qb-tooltip { display: block; }
+.qb-popover { position: fixed; z-index: 110; width: 300px; max-height: calc(100vh - 180px); overflow: auto; padding: 16px; background: var(--panel); color: var(--fg); border: 1px solid var(--border); border-radius: var(--radius-s); }
+.qb-popover code { display: block; overflow-wrap: anywhere; }
+.qb-popover a, .qb-popover button { margin: 8px 8px 0 0; }
+.qb-popover p[role="status"] { white-space: pre-wrap; overflow-wrap: anywhere; }

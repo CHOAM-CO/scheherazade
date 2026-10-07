@@ -9,6 +9,13 @@
   <body>
     <div class="page-shell chat-shell">
       <div id="app-nav"></div>
+<div class="chat-layout">
+<nav class="chat-quickbar" id="ct-quickbar" aria-label="Chat quick menu">
+<button class="qb secondary" id="qb-whats-new" type="button" data-state="idle"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M12 4v10m0 4v2"/></svg><span class="qb-dot" hidden></span><span class="qb-tooltip" role="tooltip"></span></button>
+<button class="qb secondary" id="qb-look-back" type="button" data-state="idle"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m15 3 6 6-9 9-6-6Z"/><path d="M6 12c-4 0-4 9-4 9s9 0 9-4"/></svg><span class="qb-tooltip" role="tooltip"></span></button>
+<button class="qb secondary" id="qb-browse" type="button" data-state="off"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg><span class="qb-tooltip" role="tooltip"></span></button>
+</nav>
+<div class="chat-main">
 
       <div class="page-header">
         <h1 id="ct-title"></h1>
@@ -16,14 +23,6 @@
              actually riding and whether it can see images -- the 2026-08-11
              field bug would have been self-evident with this visible. -->
         <span class="chat-lane-chip" id="ct-lane-chip" hidden></span>
-        <!-- Pending signal (design-0024, 2026-09-28): the owner's own "!" —
-             she speaks first when something of hers has piled up that he has
-             not been shown. Ships HIDDEN: it lights only when GET
-             /api/pending-signal reports a pile, and a failed read hides it
-             rather than lighting it. One click injects one recital; the only
-             thing the user then sees is the divider it produces and her
-             words. No queue, no editor (chat.js). -->
-        <button class="chat-pending" id="ct-pending" type="button" hidden></button>
         <!-- "New conversation" clean break (2026-08-18): fresh session +
              empty transcript, no checkpoint handoff, memory kept. Irreversible,
              so it confirms first (chat.js). secondary like the other controls;
@@ -76,6 +75,8 @@
         </div>
       </div>
     </div>
+
+    </div></div>
 
     <div class="toast" id="ct-toast"></div>
 

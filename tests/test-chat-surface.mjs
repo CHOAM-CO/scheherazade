@@ -199,41 +199,23 @@ console.log('\n3f. pending signal (design-0024, 2026-09-28) — the "!" above th
 // route or never posts the click, and a failed read that lights the mark
 // instead of hiding it.
 const header = html.slice(html.indexOf('class="page-header"'), html.indexOf('class="subtitle"'))
-assert(header.includes('id="ct-pending"') && header.includes('class="chat-pending"'),
-  'the mark is a button in .page-header (chat.html)')
-assert(/<button class="chat-pending" id="ct-pending"[^>]*\bhidden\b/.test(header),
-  '...and it ships hidden — no phantom "!" before the first read answers')
-assert(header.indexOf('ct-lane-chip') < header.indexOf('ct-pending')
-  && header.indexOf('ct-pending') < header.indexOf('ct-new-convo'),
-  'it sits between the lane chip and the new-conversation button (the header order the owner asked for)')
-assert(copy.includes("pendingSignalGlyph: '!'") && js.includes('C.pendingSignalGlyph'),
-  'the glyph is the owner\'s own "!" and it comes from copy.js, set on the node by chat.js')
-assert(copy.includes('pendingSignalLabel'),
-  'its title/aria label lives in copy.js too (the mark is readable in words, not symbol only)')
-assert(/btn\.setAttribute\('aria-label', C\.pendingSignalLabel\)/.test(js) && /btn\.title = C\.pendingSignalLabel/.test(js),
-  'both the hover (title) and the screen-reader label (aria-label) read that one string')
-assert(js.includes("window.api('/api/pending-signal')"),
-  'chat.js reads the pile with GET /api/pending-signal (the mark is a read of the route, not a second calculation)')
-assert(js.includes("window.api('/api/pending-signal/recite'"),
-  'a click POSTs /api/pending-signal/recite (one recital per press)')
-assert(js.includes('if (pendingBusy) return') && /pendingBusy = true[\s\S]{0,120}?btn\.disabled = true/.test(js),
-  'the button is disabled while the request is in flight, so a double-click cannot inject two recitals')
-assert(/PENDING_MS = 30000/.test(js) && /setInterval\(refreshPending, PENDING_MS\)/.test(js),
-  'the read rides its own 30s interval, never the 1s transcript poll')
-assert(/catch \(err\) \{\s*console\.error\('pending signal failed:', err\)\s*setPendingMark\(0\)/.test(js),
-  'a failed read HIDES the mark rather than lighting it (fail toward silence)')
-assert(/setPendingMark[\s\S]{0,120}?btn\.hidden = !\(Number\.isFinite\(n\) && n > 0\)/.test(js),
-  'the mark is shown only when the total is a positive number — no truthy accident')
-assert(!/recitePending[\s\S]{0,700}?showToast/.test(js),
-  'a failed recite shows no toast: the divider the inject produces and her words are the only visible result')
-assert(/\.chat-pending \{[^}]*margin-left: 0\.6rem/s.test(css)
-  && /\.chat-pending \{[^}]*color: var\(--accent\)/s.test(css)
-  && /\.chat-pending \{[^}]*border: 1px solid var\(--accent-ring\)/s.test(css),
-  'the badge keeps the header gap and is accent-lit from the existing tokens (--accent, --accent-ring)')
-assert(css.includes('.chat-pending[hidden] { display: none; }'),
-  'the hidden attribute is honoured in CSS, so the mark cannot flash before its first read')
-assert(/\.chat-pending \{[^}]*border-radius: var\(--radius-s\)/s.test(css),
-  'square-ish (--radius-s), not the pill — it is a badge, not a chip')
+assert(!header.includes('ct-pending'), 'old pending mark removed from header')
+assert(header.includes('ct-lane-chip') && header.includes('ct-new-convo'), 'lane and new conversation remain in header')
+assert(html.includes('<nav class="chat-quickbar" id="ct-quickbar"'), 'quickbar nav present')
+for (const name of ['whats-new', 'look-back', 'browse']) assert(html.includes(`id="qb-${name}"`), `quickbar ${name} button present`)
+assert(html.includes('class="qb-dot" hidden'), 'dot starts hidden')
+assert(js.includes('initQuickbar()'), 'quickbar initialized')
+assert(js.includes("window.api('/api/quickbar/whats-new/status')"), 'status uses quickbar route')
+assert(js.includes("window.api('/api/quickbar/whats-new',"), 'click posts one system turn')
+assert(js.includes('if (button.disabled) return'), 'double-click guarded')
+assert(js.includes("button.dataset.state = 'busy'"), 'busy state exposed')
+assert(js.includes('s.hasUpdate || s.unseenNotes || s.pending.total > 0'), 'all dot sources included')
+assert(js.includes('setInterval(() => { refresh(); refreshBrowse() }, PENDING_MS)'), 'status uses existing polling cadence')
+assert(js.includes("button.setAttribute('aria-label', text)") && js.includes('button.title = text'), 'tooltip and accessible labels share copy')
+assert(copy.includes('quickbarKo:') && copy.includes('qbWhatsNew:'), 'Korean and English copy provided')
+assert(css.includes('flex: 0 0 44px') && css.includes('min-width: 0'), 'quickbar has fixed track; transcript can shrink')
+assert(css.includes('.qb-dot[hidden] { display: none; }'), 'hidden dot does not flash')
+assert(js.includes("e.key === 'Escape'") && js.includes("document.addEventListener('pointerdown'"), 'popover dismisses with Escape and outside click')
 
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)
