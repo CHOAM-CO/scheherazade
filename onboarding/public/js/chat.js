@@ -139,6 +139,13 @@
   let lastStepLabel = '' // the last activity item's label (the run fold's live summary text)
   let laneStatus = null // GET /api/agent/status, fetched only while a turn is in flight
   let lanePolledAt = 0
+  // Turn-error divider (Mino 2026-10-07 16:37, DeepSeek INVALID_REQUEST showed
+  // "nothing in the app"): the nav banner is a strip above the page; the chat
+  // pane itself gets a [system] divider line so the failed call annotates the
+  // conversation where the user was waiting. One divider per marker ts.
+  const TURN_ERROR_POLL_MS = 10000
+  let turnErrorPolledAt = 0
+  let turnErrorShownTs = 0
   // The rail: one line for the states where a turn is NOT being worked on
   // (다시 붙는 중 / 세션 끊김 / Stopping…) and the elapsed chip's home when no
   // run fold is on screen. The dots ride inside it -- same element and same
@@ -1163,6 +1170,22 @@
     }
   }
 
+  // GET /api/agent/turn-error, the same marker the nav banner polls. Rendered
+  // through the [system] divider path (parseSystemLine) so it reads as an
+  // event, not as the agent speaking. Throttled like the banner; a poll blip
+  // is not a fact about the lane.
+  async function pollTurnError() {
+    const now = Date.now()
+    if (now - turnErrorPolledAt < TURN_ERROR_POLL_MS) return
+    turnErrorPolledAt = now
+    let e
+    try { e = await window.api('/api/agent/turn-error') } catch { return }
+    if (!e || !e.present || !e.fresh || !Number(e.ts) || e.ts === turnErrorShownTs) return
+    turnErrorShownTs = e.ts
+    const Q = document.documentElement.lang.startsWith('ko') ? C.quickbarKo : C
+    appendMsg({ role: 'agent', seq: `turnerr-${e.ts}`, ts: e.ts, text: `[system] ${Q.turnErrorDivider(e.subtype, e.detail)}` })
+  }
+
   async function pollOnce() {
     // Re-entrancy guard: pollNow() can fire while a poll is awaiting its
     // fetch. Two concurrent drains would both read the same cursor and
@@ -1205,6 +1228,7 @@
       polling = false
     }
     await pollLaneStatus()
+    await pollTurnError()
     renderTurn()
     if (tick % STATUS_EVERY_TICKS === 0) await refreshStatus()
     tick++

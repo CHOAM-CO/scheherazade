@@ -27,6 +27,7 @@
 // persist before accept, clear on turn end).
 
 import { prependMemoryContext } from './memory/turn-context.mjs'
+import { writeTurnErrorMarker, clearTurnErrorMarker, turnErrorLogLine } from './turn-error-marker.mjs'
 import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
@@ -1006,7 +1007,27 @@ async function main () {
           const label = reason.kind === 'error' && code === 'EMPTY_RESPONSE'
             ? 'completed; silent final'
             : (reason.kind || '?') + (reason.kind === 'error' && code ? `: ${code}` : '')
-          log(`turn end (${label})`)
+          // A genuine error carries the provider's text (pi-ai errorMessage =
+          // HTTP status + body). Log it AND write the marker the UI reads
+          // (nav banner + chat divider) -- before 0.3.14 the dsh lane dropped
+          // the body and never wrote the marker, so a DeepSeek INVALID_REQUEST
+          // was one bare code in app.log and nothing in the app (Mino
+          // 2026-10-07 16:37). EMPTY_RESPONSE stays excluded, same as the
+          // recycle counter below: it is the silent finish, not a failure.
+          if (reason.kind === 'error' && code !== 'EMPTY_RESPONSE') {
+            const message = reason.error && (reason.error.message || reason.error.errorMessage)
+            errLog(turnErrorLogLine(code, message))
+            try {
+              writeTurnErrorMarker(MEM, { code, message, model: DSH_MODEL })
+            } catch (err) {
+              log(`turn-error marker write failed: ${err.message}`)
+            }
+          } else {
+            log(`turn end (${label})`)
+            // Recovery clears the banner immediately (headless-lane parity):
+            // a healthy turn must not sit under a 10-minute-old error strip.
+            clearTurnErrorMarker(MEM)
+          }
           // Terminal-shape self-detection -- see TURN_ERROR_RECYCLE above.
           if (reason.kind === 'error' && code !== 'EMPTY_RESPONSE') {
             consecutiveTurnErrors += 1

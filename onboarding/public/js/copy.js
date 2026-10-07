@@ -1032,7 +1032,11 @@ window.COPY = {
       qbEnable: '같이 보기 켜기', qbExtensionPath: '확장 경로', qbCopy: '복사', qbCopied: '복사됨',
       qbInstall: '설치 안내', qbPair: '연결', qbPairing: '연결 중…', qbPaired: '연결됨', qbPairFailed: '연결 실패',
       qbSettingsPointer: '같이 보기는 채팅 왼쪽 눈 아이콘에서',
+      // Turn-error divider: the raw provider text rides along unparaphrased,
+      // same rule as nav.turnError (the body is the only discriminator).
+      turnErrorDivider: (subtype, detail) => `모델이 거절했어: ${detail || subtype || '제공자가 내용을 안 보냈음'}`,
     },
+    turnErrorDivider: (subtype, detail) => `Model rejected the request: ${detail || subtype || 'no detail from the provider'}`,
     qbWhatsNew: "What's new?", qbLookBack: 'Look back', qbDream: 'Dream', qbToday: 'Today', qbSeeWith: 'See with {name}',
     qbSeeState: { unpaired: 'Not connected', off: 'Off', on: 'Browsing freely' },
     qbEnable: 'Enable live browsing', qbExtensionPath: 'Extension path', qbCopy: 'Copy', qbCopied: 'Copied',
