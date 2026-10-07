@@ -367,12 +367,46 @@
       laneNote(body, msg)
       return
     }
+    if (u.shape === 'totals') {
+      // Shape bound 2026-10-07 15:22 (real-key receipt): 7-day totals +
+      // daily buckets, NO quota fraction anywhere in the payload, so there
+      // is no percent bar to draw -- spend lines + a 7-bar daily strip.
+      const usd = (v) => (v == null ? '?' : v.toFixed(2))
+      const n = (v) => (v == null ? '?' : v)
+      laneNote(body, C.usageOllama7d(usd(u.weeklyUsd), n(u.weeklyRequests)))
+      laneNote(body, C.usageOllamaToday(usd(u.todayUsd), n(u.todayRequests)))
+      body.appendChild(dailyStrip(Array.isArray(u.buckets) ? u.buckets : []))
+      const notes = [C.usageOllamaNoQuota, staleNoteOf(u)].filter(Boolean)
+      laneNote(body, notes.join(' · '))
+      return
+    }
     // Shape bound 19:38 (real-key receipt): session/weekly 0-1 fractions
     // served as pct; no reset timestamps in the payload -- none shown.
     body.appendChild(gaugeSeg({ label: C.usageLaneSession, pctVal: u.sessionPct }))
     body.appendChild(gaugeSeg({ label: C.usageWinWeekly, pctVal: u.weeklyPct, meta: u.weeklyRequests != null ? C.usageOllamaReqs(u.weeklyRequests) : '' }))
     const stale = staleNoteOf(u)
     if (stale) laneNote(body, stale)
+  }
+
+  // Seven thin bars, one per daily bucket, height = usd relative to the
+  // busiest day. Reuses the usage-bar/usage-fill tokens (no new palette);
+  // the last bar (today, partial) gets the title with the exact figure.
+  function dailyStrip(buckets) {
+    const strip = document.createElement('div')
+    strip.className = 'usage-daily-strip'
+    const max = buckets.reduce((m, b) => Math.max(m, b && b.usd != null ? b.usd : 0), 0)
+    for (const b of buckets.slice(-7)) {
+      const col = document.createElement('div')
+      col.className = 'usage-daily-col'
+      const fill = document.createElement('div')
+      fill.className = 'usage-fill'
+      const v = b && b.usd != null ? b.usd : 0
+      fill.style.height = max > 0 ? `${Math.max(4, Math.round((v / max) * 100))}%` : '4%'
+      col.appendChild(fill)
+      col.title = `${b && b.day ? b.day : ''} $${v.toFixed(2)}${b && b.requests != null ? ` · ${b.requests}` : ''}`
+      strip.appendChild(col)
+    }
+    return strip
   }
 
   // force=true (the Refresh icon) rides ?force=1 through to the server so a

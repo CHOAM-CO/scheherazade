@@ -755,6 +755,11 @@ button.nav-ctl.is-busy::after {
 .usage-seg-pct { width: 4.6rem; flex: none; font-size: 0.72rem; color: var(--fg); font-variant-numeric: tabular-nums; }
 .usage-seg-meta { flex: none; font-size: 0.7rem; color: var(--fg-faint); white-space: nowrap; }
 .usage-lane-note { font-size: 0.72rem; color: var(--fg-faint); }
+/* Ollama 7-day spend strip (2026-10-07): one column per daily bucket,
+   bar height = usd relative to the busiest day. Same tokens as .usage-bar. */
+.usage-daily-strip { display: flex; align-items: flex-end; gap: 3px; height: 22px; max-width: 12rem; }
+.usage-daily-col { flex: 1; height: 100%; display: flex; align-items: flex-end; border-radius: 2px; background: var(--panel-raised); border: 1px solid var(--border); overflow: hidden; }
+.usage-daily-col .usage-fill { width: 100%; transition: height 0.3s ease; }
 .entry-delete:hover { color: var(--danger); background: none; }
 
 .empty-state { color: var(--fg-faint); font-size: 0.88rem; padding: 0.6rem 0; }
