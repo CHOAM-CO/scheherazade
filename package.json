@@ -104,6 +104,7 @@
       "calendar/**/*",
       "memory/**/*",
       "procedures/**/*",
+      "docs/release-notes-v*.md",
       "CLAUDE.md",
       "ONTOLOGY_GUIDE.md",
       "BUILD_INFO.json",

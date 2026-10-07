@@ -250,6 +250,7 @@ function createRoutes(staticCtx) {
           child.on('error', e => { output = e.message; done('error') })
           child.on('close', code => done(code === 0 ? 'paired' : 'error'))
         })
+        staticCtx.invalidateQuickbarPairing?.()
         sendJson(res, 200, result)
       },
     },

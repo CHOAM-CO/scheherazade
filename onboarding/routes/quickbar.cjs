@@ -12,6 +12,7 @@ function createRoutes(ctx) {
   fs.writeFileSync(path.join(consentDir, 'app-boot-id'), randomUUID(), { mode: 0o600 })
   const stampFile = path.join(DATA_HOME, '.gates', 'whats-new.json')
   let pairedCache = null
+  ctx.invalidateQuickbarPairing = () => { pairedCache = null }
   async function paired() {
     if (pairedCache && Date.now() - pairedCache.at < 60000) return pairedCache.value
     // paired is chromux's live /relay/status extensionConnected flag (no pairing token exists); read-only, 3s timeout, cached 60s.
@@ -60,7 +61,12 @@ function createRoutes(ctx) {
       fs.mkdirSync(path.dirname(stampFile), { recursive: true })
       const temp = `${stampFile}.${randomUUID()}.tmp`
       fs.writeFileSync(temp, JSON.stringify({ lastSeenVersion: APP_VERSION, seenAtISO: new Date().toISOString() }), { mode: 0o600 })
-      try { await post(content); fs.renameSync(temp, stampFile); pile.writeStamp(current) }
+      try {
+        await post(content)
+        // Delivery cannot be rolled back: never invite a duplicate turn after a stamp-only failure.
+        try { fs.renameSync(temp, stampFile); pile.writeStamp(current) }
+        catch (e) { ctx.log(`quickbar: delivered, stamp failed: ${e.message}`) }
+      }
       finally { try { fs.unlinkSync(temp) } catch {} }
       sendJson(res, 200, { ok: true })
     }),
