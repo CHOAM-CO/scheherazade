@@ -3500,19 +3500,23 @@ async function fetchOllamaCloudCatalog(opts = {}) {
   }
 }
 
-async function fetchOllamaUsage(opts = {}) {
-  const now = Date.now()
+async function fetchOllamaUsage(opts = {}, deps = {}) {
+  // deps: { fetch, readKey, now } -- injected by tests/test-ollama-usage.mjs;
+  // production callers pass nothing and get the globals.
+  const fetchFn = deps.fetch || fetch
+  const readKey = deps.readKey || readProviderKey
+  const now = typeof deps.now === 'function' ? deps.now() : Date.now()
   if (!opts.force && ollamaUsageCache && now - ollamaUsageCache.at < 60_000) return ollamaUsageCache.payload
   const failWith = (branch, detail) => {
     if (ollamaUsageCache) return { ...ollamaUsageCache.payload, stale: true, staleReason: detail || branch }
     return { ok: false, branch, ...(detail ? { detail } : {}) }
   }
   let key = null
-  try { key = readProviderKey('ollama') } catch (err) { return failWith('key_unreadable', err.message) }
+  try { key = readKey('ollama') } catch (err) { return failWith('key_unreadable', err.message) }
   if (!key) return failWith('no_key')
   let res, body
   try {
-    res = await fetch('https://ollama.com/api/usage', {
+    res = await fetchFn('https://ollama.com/api/usage', {
       headers: { Authorization: `Bearer ${key}`, 'User-Agent': `scheherazade/${APP_VERSION}` },
       signal: AbortSignal.timeout(8000),
     })
@@ -3522,12 +3526,60 @@ async function fetchOllamaUsage(opts = {}) {
   }
   if (!res.ok) return failWith('http_error', `HTTP ${res.status}`)
   if (!body || typeof body !== 'object') return failWith('empty_body')
-  // Shape BOUND from a real-key receipt (the owner's terminal, 2026-08-04
-  // 19:38): { activity: {cost, period, models}, limits: { session:
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+  const asOf = new Date(now).toISOString()
+
+  // Shape 2 ('totals'), BOUND from a real-key receipt 2026-10-07 15:22
+  // (status 200) after ollama.com changed its weekly accounting this month:
+  // { range:'7d', scope:'self', granularity:'day', from, until,
+  //   totals:{request_count, usage_usd, input_tokens, cached_input_tokens,
+  //   output_tokens}, buckets:[{from, until, request_count, usage_usd, ...}] }.
+  // No limits / fraction / quota field exists anywhere in the payload and no
+  // limits endpoint was found (/api/limits, /api/plan, /api/subscription all
+  // 404), so a percent gauge is NOT derivable -- the UI shows spend only.
+  const totals = body.totals && typeof body.totals === 'object' ? body.totals : null
+  if (totals && (num(totals.request_count) != null || num(totals.usage_usd) != null)) {
+    const rawBuckets = Array.isArray(body.buckets) ? body.buckets : []
+    const buckets = rawBuckets
+      .filter((b) => b && typeof b === 'object')
+      .map((b) => ({
+        day: typeof b.from === 'string' ? b.from.slice(0, 10) : null,
+        requests: num(b.request_count),
+        usd: num(b.usage_usd),
+      }))
+    const last = buckets.length ? buckets[buckets.length - 1] : null
+    const payload = {
+      ok: true,
+      shape: 'totals',
+      range: typeof body.range === 'string' ? body.range : null,
+      from: typeof body.from === 'string' ? body.from : null,
+      until: typeof body.until === 'string' ? body.until : null,
+      weeklyRequests: num(totals.request_count),
+      weeklyUsd: num(totals.usage_usd),
+      inputTokens: num(totals.input_tokens),
+      cachedInputTokens: num(totals.cached_input_tokens),
+      outputTokens: num(totals.output_tokens),
+      todayRequests: last ? last.requests : null,
+      todayUsd: last ? last.usd : null,
+      buckets,
+      // Legacy pct fields stay present-but-null so an older UI build on a
+      // cached page renders "unreadable" instead of throwing.
+      sessionPct: null,
+      weeklyPct: null,
+      asOf,
+    }
+    ollamaUsageCache = { at: now, payload }
+    return payload
+  }
+
+  // Shape 1 ('limits'), BOUND from a real-key receipt (the owner's terminal,
+  // 2026-08-04 19:38): { activity: {cost, period, models}, limits: { session:
   // {usage: 0.918, models:[{name, request_count}...]}, weekly: {usage:
   // 0.428, models:[...]} } }. usage is a 0-1 fraction; NO reset timestamps
   // in this payload (the dashboard's "Resets in 3 hours" comes from
   // elsewhere) -- so resets stay null-honest here, never computed.
+  // ollama.com stopped serving this shape 2026-10; kept so a rollback on
+  // their side keeps the gauge working.
   const frac = (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v * 1000) / 10 : null)
   const limits = body.limits && typeof body.limits === 'object' ? body.limits : null
   const sessionPct = frac(limits && limits.session && limits.session.usage)
@@ -3542,14 +3594,19 @@ async function fetchOllamaUsage(opts = {}) {
     : null
   const payload = {
     ok: true,
+    shape: 'limits',
     sessionPct,
     weeklyPct,
     weeklyRequests,
-    asOf: new Date(now).toISOString(),
+    asOf,
   }
   ollamaUsageCache = { at: now, payload }
   return payload
 }
+
+// Test seam (tests/test-ollama-usage.mjs): the cache is module-scope state,
+// so a test that exercises the stale branch needs a way to start clean.
+function _resetOllamaUsageCache() { ollamaUsageCache = null }
 
 // ── vision stand-in captioning (0.0.56, the owner 2026-08-04 20:03 "비전이
 // 없으면 fallback으로 작은 비전모델 붙여서 같이 지원하면 되는거 아니냐") ──
@@ -3780,6 +3837,8 @@ const API_ROUTES = [
 
 module.exports = {
   createOnboardingServer,
+  // Ollama usage gauge parser + its cache reset, for tests/test-ollama-usage.mjs
+  fetchOllamaUsage, _resetOllamaUsageCache,
   // Exported for tests/test-agent-status-read.mjs (sleep/wake false-fail
   // fix, 2026-08-15): the READ side of liveness (marker freshness + timeout
   // backstop) finally gets its own unit test. Pure fs/Date logic, no

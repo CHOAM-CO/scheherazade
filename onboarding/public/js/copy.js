@@ -1814,6 +1814,13 @@ window.COPY = {
     usageLaneOllama: 'Ollama',
     usageLaneSession: 'session',
     usageOllamaReqs: (n) => `${n} reqs this week`,
+    // 2026-10-07: ollama.com/api/usage now returns 7-day spend totals and
+    // daily buckets, no quota fraction anywhere (receipt 15:22, 200). The
+    // lane shows spend, not a percent. (ko: "7일 $X · N건", "오늘 $X · N건",
+    // "Ollama는 한도 대신 금액만 알려줘" -- this copy table is English-only.)
+    usageOllama7d: (usd, n) => `7d $${usd} · ${n} reqs`,
+    usageOllamaToday: (usd, n) => `today $${usd} · ${n} reqs`,
+    usageOllamaNoQuota: 'Ollama reports spend, not a quota',
     // Present in the settings section too — connectors.js reads ITS OWN copy
     // (the old code referenced a key that only existed in settings and
     // rendered "undefined" on the cli-session branch; latent until 08-05).
