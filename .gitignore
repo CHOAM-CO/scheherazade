@@ -6,3 +6,4 @@ release/
 dist/
 # Release-run stamp (tools/release-check.mjs stamp); written right before packaging, never committed.
 /BUILD_INFO.json
+onboarding/public/mock/
