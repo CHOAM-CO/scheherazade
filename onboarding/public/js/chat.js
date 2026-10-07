@@ -1030,9 +1030,12 @@
     async function refreshBrowse() {
       try {
         browseStatus = await window.api('/api/quickbar/browse/status')
-        browse.dataset.state = !browseStatus.enabled || !browseStatus.paired ? 'off' : browseStatus.sessionConsent ? 'free' : 'ask'
+        // Two states only (Mino 10-07 15:24): on = BROWSE_LIVE on and the extension paired, the agent browses
+        // on its own; anything else is off. No per-action ask, no session consent.
+        browse.dataset.state = browseStatus.enabled && browseStatus.paired ? 'on' : 'off'
       } catch { browseStatus = null; browse.dataset.state = 'off' }
-      label(browse, Q.qbSeeWith.replace('{name}', browseStatus?.agentName || agentName) + ' · ' + Q.qbSeeState[browse.dataset.state])
+      const state = browse.dataset.state === 'on' ? 'on' : browseStatus?.paired ? 'off' : 'unpaired'
+      label(browse, Q.qbSeeWith.replace('{name}', browseStatus?.agentName || agentName) + ' · ' + Q.qbSeeState[state])
     }
     async function busy(button, action) {
       if (button.disabled) return
@@ -1059,7 +1062,7 @@
       const copy = document.createElement('button'); copy.textContent = Q.qbCopy; copy.type = 'button'; popover.append(copy)
       const guide = document.createElement('a'); guide.href = '/api/settings/browse-live/install'; guide.textContent = Q.qbInstall; guide.target = '_blank'; guide.rel = 'noopener'; popover.append(guide)
       const pair = document.createElement('button'); pair.textContent = Q.qbPair; pair.type = 'button'; popover.append(pair)
-      const line = document.createElement('p'); line.setAttribute('role', 'status'); line.textContent = Q.qbSeeState.off; popover.append(line)
+      const line = document.createElement('p'); line.setAttribute('role', 'status'); line.textContent = Q.qbSeeState.unpaired; popover.append(line)
       toggle.onchange = async () => {
         toggle.disabled = true
         try { await window.api('/api/settings/browse-live', { method: 'POST', body: JSON.stringify({ browseLive: toggle.checked }) }); await refreshBrowse() }
@@ -1079,8 +1082,9 @@
     }
     browse.onclick = () => busy(browse, async () => {
       await refreshBrowse()
-      if (browse.dataset.state === 'off') { if (popover) close(); else openPopover(); return }
-      await window.api('/api/quickbar/browse/session-consent', { method: 'POST', body: JSON.stringify({ on: browse.dataset.state !== 'free' }) })
+      // Paired: the eye is the BROWSE_LIVE switch itself. Not paired: the pairing popover (extension path, guide, pair).
+      if (!browseStatus?.paired) { if (popover) close(); else openPopover(); return }
+      await window.api('/api/settings/browse-live', { method: 'POST', body: JSON.stringify({ browseLive: !browseStatus.enabled }) })
       close()
     }).then(refreshBrowse)
     document.addEventListener('pointerdown', e => { if (popover && !popover.contains(e.target) && !browse.contains(e.target)) close() })

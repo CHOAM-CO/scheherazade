@@ -1,3 +1,8 @@
+> 2026-10-07 15:24 (Mino): per-action ask and session consent are gone. BROWSE_LIVE on means the agent
+> browses freely; the eye has two states (off / on) and toggles BROWSE_LIVE when paired, opens the pairing
+> popover when not. `/api/quickbar/browse/status` no longer returns `sessionConsent`; `session-consent` route
+> removed. The consent sections below are history (branch fix/browse-consent-modes).
+
 # Chat quick bar (left) — spec, 2026-10-07
 
 Mino (idea home 13:56-14:12): the Chat tab gets a game-style quick menu on the LEFT.

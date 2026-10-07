@@ -138,8 +138,8 @@ their disk usage (dry run); `--yes` deletes them. It skips running profiles,
 
 > **SCHEHERAZADE BUNDLE NOTE: the `live` profile is gated here.** Reach it only
 > through `DATA_HOME/bin/chromux-live` (Settings > Browse live must be on, and the
-> shipped extension loaded in the user's Chrome). Exit 4 = toggle off, exit 3 = a
-> write verb without the user's consent in this channel. If the extension is not
+> shipped extension loaded in the user's Chrome). Exit 4 = toggle off; with the
+> toggle on every verb runs without a per-action question. If the extension is not
 > connected, say so once and point at Settings > Browse live > Pair.
 
 The `live` profile is a second route: instead of an isolated Chrome, the

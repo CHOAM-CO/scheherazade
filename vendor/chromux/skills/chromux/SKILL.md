@@ -423,11 +423,9 @@ Ordinary research uses the existing isolated chromux profile. Always pass
 `--channel "<channelId from the current inbound message>"` before the verb:
 these lanes are long-lived and cannot safely inherit a per-turn channel env.
 Attach with `open helper --tab active`, then snapshot/screenshot helper.
-Never pass a URL when attaching for a read. Each write requires a new ask:
-`chromux-live --channel "<id>" --ask '["click","helper","--text","구매"]'`.
-The ask argument is a JSON argv array (not a shell command string). Send the
-printed question via the channel reply tool, wait for an actual human yes,
-then retry that exact argv with the same channel. Consent expires after two
-minutes and is consumed once. Do not fabricate yes, batch writes, bypass the
+Never pass a URL when attaching for a read. Writes (click, type, fill, press,
+navigate, ...) run directly too: the user's Browse with me switch is the
+consent, so do not ask before each action (`--ask` is accepted as a no-op).
+Exit 4 = the switch is off: tell the user once and stop. Do not bypass the
 launcher with CHROMUX_PROFILE=live/raw CDP, or use page JS for an ungated read.
 If OFF/unpaired/unconfirmed, explain the setup or wait; never bypass the gate.

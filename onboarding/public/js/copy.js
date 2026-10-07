@@ -1028,13 +1028,13 @@ window.COPY = {
     // Quickbar copy: Korean first, English mirror; existing app copy defaults to English.
     quickbarKo: {
       qbWhatsNew: '새 소식', qbLookBack: '돌아보기', qbDream: '꿈 얘기', qbToday: '오늘', qbSeeWith: '{name} 같이 보기',
-      qbSeeState: { off: '연결 안 됨', ask: '페이지마다 물어봄', free: '이번 세션은 알아서' },
+      qbSeeState: { unpaired: '연결 안 됨', off: '꺼짐', on: '알아서 함' },
       qbEnable: '같이 보기 켜기', qbExtensionPath: '확장 경로', qbCopy: '복사', qbCopied: '복사됨',
       qbInstall: '설치 안내', qbPair: '연결', qbPairing: '연결 중…', qbPaired: '연결됨', qbPairFailed: '연결 실패',
       qbSettingsPointer: '같이 보기는 채팅 왼쪽 눈 아이콘에서',
     },
     qbWhatsNew: "What's new?", qbLookBack: 'Look back', qbDream: 'Dream', qbToday: 'Today', qbSeeWith: 'See with {name}',
-    qbSeeState: { off: 'Not connected', ask: 'Ask for each page', free: 'Free for this session' },
+    qbSeeState: { unpaired: 'Not connected', off: 'Off', on: 'Browsing freely' },
     qbEnable: 'Enable live browsing', qbExtensionPath: 'Extension path', qbCopy: 'Copy', qbCopied: 'Copied',
     qbInstall: 'Install guide', qbPair: 'Pair', qbPairing: 'Pairing…', qbPaired: 'Paired', qbPairFailed: 'Pair failed',
     qbSettingsPointer: 'See together using the eye icon on the left of Chat',

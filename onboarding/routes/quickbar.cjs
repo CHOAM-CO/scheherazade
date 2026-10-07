@@ -1,15 +1,13 @@
 'use strict'
 const os = require('node:os')
 const { randomUUID } = require('node:crypto')
-const { sessionValid, setSession } = require('../chromux-live-consent.cjs')
 const { createService } = require('./pending-signal.cjs')
 function createRoutes(ctx) {
-  const { fs, path, DATA_HOME, sendJson, readJsonBody, readAgentConfig, checkForUpdate, APP_VERSION } = ctx
+  const { fs, path, DATA_HOME, sendJson, readAgentConfig, checkForUpdate, APP_VERSION } = ctx
   const pile = createService(ctx)
-  const channel = 'in-app' // channel-local.mjs LOCAL_CHANNEL_ID, also passed as SCHZ_CHANNEL_ID to the local lane.
-  const consentDir = path.join(DATA_HOME, 'consent')
-  fs.mkdirSync(consentDir, { recursive: true, mode: 0o700 })
-  fs.writeFileSync(path.join(consentDir, 'app-boot-id'), randomUUID(), { mode: 0o600 })
+  // No consent state lives here any more: BROWSE_LIVE on means the agent browses freely (Mino 10-07 15:24).
+  // The old app-boot-id write at this spot ran on every require() of http-server.cjs, tests included, and
+  // voided the live app's session grant; nothing may write into DATA_HOME at route-binding time.
   const stampFile = path.join(DATA_HOME, '.gates', 'whats-new.json')
   let pairedCache = null
   ctx.invalidateQuickbarPairing = () => { pairedCache = null }
@@ -113,14 +111,7 @@ function createRoutes(ctx) {
       let agentName = process.env.AGENT_NAME || 'agent'
       const ep = pile.readChannelEndpoint()
       if (ep) try { const r = await fetch(`http://127.0.0.1:${ep.port}/health`, { headers: { authorization: `Bearer ${ep.token}` }, signal: AbortSignal.timeout(3000) }); if (r.ok) agentName = (await r.json()).agent || agentName } catch {}
-      sendJson(res, 200, { ok: true, enabled: config.BROWSE_LIVE === 'true', paired: await paired(), sessionConsent: sessionValid(DATA_HOME, channel), extensionPath: path.join(DATA_HOME, 'bin', 'chromux-portable', 'extension'), agentName })
-    }),
-    route('POST', '/api/quickbar/browse/session-consent', async (req, res) => {
-      const body = await readJsonBody(req)
-      if (typeof body.on !== 'boolean') return sendJson(res, 400, { ok: false, reason: 'on must be boolean' })
-      if (body.on && (readAgentConfig().BROWSE_LIVE !== 'true' || !await paired())) return sendJson(res, 409, { ok: false, reason: 'Live Chrome is not connected' })
-      setSession(DATA_HOME, channel, body.on)
-      sendJson(res, 200, { ok: true })
+      sendJson(res, 200, { ok: true, enabled: config.BROWSE_LIVE === 'true', paired: await paired(), extensionPath: path.join(DATA_HOME, 'bin', 'chromux-portable', 'extension'), agentName })
     }),
   ]
 }
