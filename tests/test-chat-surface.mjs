@@ -198,7 +198,9 @@ console.log('\n3f. pending signal (design-0024, 2026-09-28) — the "!" above th
 // "!" on a fresh install), a glyph not from copy, wiring that never reads the
 // route or never posts the click, and a failed read that lights the mark
 // instead of hiding it.
-const header = html.slice(html.indexOf('class="page-header"'), html.indexOf('class="subtitle"'))
+const header = html.slice(html.indexOf('class="page-header'), html.indexOf('class="subtitle"'))
+assert(header.includes('id="ct-quickbar"'), 'quickbar sits in the header row (Mino 2026-10-07: horizontal, same row as lane chip + New conversation)')
+assert(header.indexOf('id="ct-quickbar"') < header.indexOf('ct-lane-chip'), 'quickbar comes before the lane chip (left side)')
 assert(!header.includes('ct-pending'), 'old pending mark removed from header')
 assert(header.includes('ct-lane-chip') && header.includes('ct-new-convo'), 'lane and new conversation remain in header')
 assert(html.includes('<nav class="chat-quickbar" id="ct-quickbar"'), 'quickbar nav present')
@@ -213,7 +215,7 @@ assert(js.includes('s.hasUpdate || s.unseenNotes || s.pending.total > 0'), 'all 
 assert(js.includes('setInterval(() => { refresh(); refreshBrowse() }, PENDING_MS)'), 'status uses existing polling cadence')
 assert(js.includes("button.setAttribute('aria-label', text)") && js.includes('button.title = text'), 'tooltip and accessible labels share copy')
 assert(copy.includes('quickbarKo:') && copy.includes('qbWhatsNew:'), 'Korean and English copy provided')
-assert(css.includes('flex: 0 0 44px') && css.includes('min-width: 0'), 'quickbar has fixed track; transcript can shrink')
+assert(css.includes('.chat-quickbar { display: flex; flex-direction: row') && css.includes('.chat-page-header .chat-lane-chip { margin-left: auto; }'), 'quickbar is a horizontal row in the header; lane chip + New conversation pushed right')
 assert(css.includes('.qb-dot[hidden] { display: none; }'), 'hidden dot does not flash')
 assert(js.includes("e.key === 'Escape'") && js.includes("document.addEventListener('pointerdown'"), 'popover dismisses with Escape and outside click')
 

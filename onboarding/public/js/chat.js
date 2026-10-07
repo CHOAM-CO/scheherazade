@@ -1072,7 +1072,7 @@
         finally { pair.disabled = false; await refreshBrowse() }
       }
       document.body.append(popover)
-      const rect = browse.getBoundingClientRect(); popover.style.left = `${rect.right + 8}px`; popover.style.top = `${rect.top}px`
+      const rect = browse.getBoundingClientRect(); popover.style.left = `${rect.left}px`; popover.style.top = `${rect.bottom + 8}px`
       browse.setAttribute('aria-expanded', 'true'); toggle.focus()
     }
     browse.onclick = () => busy(browse, async () => {

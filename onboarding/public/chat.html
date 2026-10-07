@@ -9,16 +9,15 @@
   <body>
     <div class="page-shell chat-shell">
       <div id="app-nav"></div>
-<div class="chat-layout">
+
+      <div class="page-header chat-page-header">
+        <h1 id="ct-title"></h1>
+        <!-- quick menu (2026-10-07, Mino): same row as the lane chip and New conversation, on the LEFT. -->
 <nav class="chat-quickbar" id="ct-quickbar" aria-label="Chat quick menu">
 <button class="qb secondary" id="qb-whats-new" type="button" data-state="idle"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M12 4v10m0 4v2"/></svg><span class="qb-dot" hidden></span><span class="qb-tooltip" role="tooltip"></span></button>
 <button class="qb secondary" id="qb-look-back" type="button" data-state="idle"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m15 3 6 6-9 9-6-6Z"/><path d="M6 12c-4 0-4 9-4 9s9 0 9-4"/></svg><span class="qb-tooltip" role="tooltip"></span></button>
 <button class="qb secondary" id="qb-browse" type="button" data-state="off"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg><span class="qb-tooltip" role="tooltip"></span></button>
 </nav>
-<div class="chat-main">
-
-      <div class="page-header">
-        <h1 id="ct-title"></h1>
         <!-- lane status chip (0.1.4, PO item #3): which model this chat is
              actually riding and whether it can see images -- the 2026-08-11
              field bug would have been self-evident with this visible. -->
@@ -76,7 +75,6 @@
       </div>
     </div>
 
-    </div></div>
 
     <div class="toast" id="ct-toast"></div>
 
