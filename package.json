@@ -81,6 +81,7 @@
       "provider-env.cjs",
       "model-discovery.cjs",
       "codex-proxy-shim.cjs",
+      "route-proxy.cjs",
       "setup-token.cjs",
       "setup-token-session.cjs",
       "oauth-usage-session.cjs",
