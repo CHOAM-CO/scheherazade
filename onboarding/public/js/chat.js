@@ -1012,13 +1012,13 @@
   // click is the system divider the inject produces and then her own words.
   function initQuickbar() {
     const Q = document.documentElement.lang.startsWith('ko') ? C.quickbarKo : C
-    const whats = $('qb-whats-new'), look = $('qb-look-back'), browse = $('qb-browse')
+    const whats = $('qb-whats-new'), look = $('qb-look-back'), browse = $('qb-browse'), dream = $('qb-dream'), today = $('qb-today')
     let browseStatus = null, popover = null
     function label(button, text) {
       button.title = text; button.setAttribute('aria-label', text)
       button.querySelector('.qb-tooltip').textContent = text
     }
-    label(whats, Q.qbWhatsNew); label(look, Q.qbLookBack)
+    label(whats, Q.qbWhatsNew); label(look, Q.qbLookBack); label(dream, Q.qbDream); label(today, Q.qbToday)
     function close() { if (popover) { popover.remove(); popover = null; browse.setAttribute('aria-expanded', 'false') } }
     async function refresh() {
       try {
@@ -1045,6 +1045,8 @@
       try { await window.api('/api/quickbar/whats-new', { method: 'POST' }) } finally { await refresh() }
     }).then(refresh)
     look.onclick = () => busy(look, () => window.api('/api/quickbar/look-back', { method: 'POST' }))
+    dream.onclick = () => busy(dream, async () => { await window.api('/api/quickbar/dream', { method: 'POST' }); await refresh() })
+    today.onclick = () => busy(today, () => window.api('/api/quickbar/today', { method: 'POST' }))
     browse.setAttribute('aria-haspopup', 'dialog'); browse.setAttribute('aria-expanded', 'false')
     function openPopover() {
       close(); popover = document.createElement('div'); popover.className = 'qb-popover'; popover.setAttribute('role', 'dialog')

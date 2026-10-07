@@ -204,7 +204,7 @@ assert(header.indexOf('id="ct-quickbar"') < header.indexOf('ct-lane-chip'), 'qui
 assert(!header.includes('ct-pending'), 'old pending mark removed from header')
 assert(header.includes('ct-lane-chip') && header.includes('ct-new-convo'), 'lane and new conversation remain in header')
 assert(html.includes('<nav class="chat-quickbar" id="ct-quickbar"'), 'quickbar nav present')
-for (const name of ['whats-new', 'look-back', 'browse']) assert(html.includes(`id="qb-${name}"`), `quickbar ${name} button present`)
+for (const name of ['whats-new', 'look-back', 'browse', 'dream', 'today']) assert(html.includes(`id="qb-${name}"`), `quickbar ${name} button present`)
 assert(html.includes('class="qb-dot" hidden'), 'dot starts hidden')
 assert(js.includes('initQuickbar()'), 'quickbar initialized')
 assert(js.includes("window.api('/api/quickbar/whats-new/status')"), 'status uses quickbar route')
@@ -218,6 +218,10 @@ assert(copy.includes('quickbarKo:') && copy.includes('qbWhatsNew:'), 'Korean and
 assert(css.includes('.chat-quickbar { display: flex; flex-direction: row') && css.includes('.chat-page-header .chat-lane-chip { margin-left: auto; }'), 'quickbar is a horizontal row in the header; lane chip + New conversation pushed right')
 assert(css.includes('.qb-dot[hidden] { display: none; }'), 'hidden dot does not flash')
 assert(js.includes("e.key === 'Escape'") && js.includes("document.addEventListener('pointerdown'"), 'popover dismisses with Escape and outside click')
+
+
+const quickbarOrder = ['whats-new', 'look-back', 'browse', 'dream', 'today'].map(name => html.indexOf(`id="qb-${name}"`))
+assert(quickbarOrder.every((pos, i) => i === 0 || pos > quickbarOrder[i - 1]), 'quickbar button order')
 
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)
