@@ -1285,17 +1285,61 @@ button.mem-node:focus-visible { outline: 2px solid var(--accent-ring); outline-o
 .chat-input-row textarea {
   flex: 1;
   resize: none;
-  max-height: 9rem;
+  /* composer-grow (the owner 2026-10-07 15:21 "글이 길어지면 채팅박스가
+     커져야지, 디스코드처럼"): the box grows with the text up to ~40% of
+     the window, then scrolls inside. chat.js sets the height from
+     scrollHeight on input / paste / resize; this cap is the ceiling. */
+  max-height: min(40vh, 18rem);
   overflow-y: auto;
 }
 .chat-input-row button { flex: 0 0 auto; }
 .chat-backend-banner { border-color: var(--danger); }
 
-/* ── Image attachments (2026-08-04) ──────────────────────────────────────
-   Pending chips sit above the composer; thumbnails render inside bubbles
-   (blob-fetched -- see chat.js appendAttachmentImage). */
-.chat-attach-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-.chat-attach-chips:not(:empty) { margin-bottom: 0.5rem; }
+/* ── Image attachments (2026-08-04 / composer-grow 2026-10-07) ─────────
+   Pending strip sits INSIDE the composer card above the textarea; image
+   attachments show as real thumbnails (same blob fetch as sent bubbles --
+   see chat.js loadAttachmentBlob / appendAttachmentImage), other files
+   keep the chip look. The card grows with the strip, Discord-style. */
+.chat-attach-chips { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem; }
+.chat-attach-chips:empty { display: none; }
+.chat-attach-chips:not(:empty) { padding: 4px 4px 6px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.chat-attach-thumb {
+  position: relative;
+  display: inline-flex;
+  height: 72px;
+  max-width: 160px;
+  border-radius: var(--radius-m);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+}
+.chat-attach-thumb img {
+  display: block;
+  height: 72px;
+  width: auto;
+  max-width: 160px;
+  object-fit: cover;
+}
+.chat-attach-thumb .chat-attach-x {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgb(0 0 0 / 0.65);
+  color: #fff;
+  font-size: 0.9rem;
+  line-height: 20px;
+  text-align: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.chat-attach-thumb:hover .chat-attach-x,
+.chat-attach-thumb:focus-within .chat-attach-x { opacity: 1; }
 .chat-attach-chip {
   display: inline-flex;
   align-items: center;
@@ -1969,7 +2013,16 @@ html {
   font-size: 1rem;
   line-height: 1.5;
   padding: 8px 12px;
+  /* composer-grow: no fixed height here on purpose -- the base rule's
+     max-height is the only clamp, chat.js sets the inline height. */
+  min-height: 0;
 }
+/* composer-grow: the card is a flex child of .chat-shell (100vh column);
+   it must never shrink below its content, and the pane above (flex:1,
+   min-height:0) gives way instead, so a tall composer shrinks the
+   transcript rather than overlapping it or scrolling the page. */
+.chat-shell .chat-input-row { flex: 0 0 auto; }
+.chat-shell .chat-pane-wrap { min-height: 6rem; }
 .chat-shell .chat-input-row textarea:focus { outline: none; border: none; box-shadow: none; }
 .chat-shell #ct-send {
   border-radius: var(--radius-m);

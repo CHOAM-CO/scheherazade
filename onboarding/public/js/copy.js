@@ -1197,6 +1197,7 @@ window.COPY = {
     attachTooLarge: 'That image is over 10MB — too big to attach.',
     attachFailed: (msg) => `Couldn't upload the image: ${msg}`,
     attachMissing: (name) => `🖼 ${name} (file no longer available)`,
+    attachRemove: 'Remove attachment',
     // Soft warning, never a block: the vision table is a best-effort
     // binding (ollama.com library scrape 2026-08-04), and a false block
     // is worse than a warned attempt.

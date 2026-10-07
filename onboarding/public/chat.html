@@ -41,9 +41,6 @@
       </div>
       <p class="chat-status" id="ct-status"></p>
 
-      <!-- attachment chips (image upload, 2026-08-04): pending images shown
-           above the composer, removable until send. -->
-      <div class="chat-attach-chips" id="ct-attach-chips"></div>
       <!-- agent controls (0.2.12, the owner 08-23 22:28: "모델 드랍다운이랑
            에포트는 말풍선쪽에 넣지 말고 다른칸에(위에 정렬)") -- model
            quick-switch + effort pulled OUT of the composer card into their
@@ -58,6 +55,11 @@
            (The model chip lived here 0.2.6-0.2.11; moved to the row above.) -->
       <div class="chat-input-row">
         <input type="file" id="ct-file" accept="image/png,image/jpeg,image/gif,image/webp,.pdf,.txt,.md,.csv,.tsv,.json,.log,.xml,.yaml,.yml" multiple hidden />
+        <!-- pending attachments (composer-grow, 2026-10-07): the strip lives
+             INSIDE the card, above the textarea, Discord-style. Images are
+             real thumbnails (same blob fetch as sent bubbles), other files
+             keep the chip look. Removable until send; hidden when empty. -->
+        <div class="chat-attach-chips" id="ct-attach-chips"></div>
         <textarea id="ct-input" rows="1" autocomplete="off"></textarea>
         <!-- steering hint: only visible while a turn is running -->
         <p class="chat-steer-hint" id="ct-steer-hint" hidden></p>

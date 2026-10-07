@@ -59,6 +59,14 @@
   const pane = $('ct-pane')
   const input = $('ct-input')
   const sendBtn = $('ct-send')
+  // composer-grow (2026-10-07): the textarea's height follows its content.
+  // 'auto' first so a shrink is measured too; the CSS max-height (min(40vh,
+  // 18rem)) is the ceiling, past which the box scrolls inside itself.
+  function resizeInput() {
+    if (!input) return
+    input.style.height = 'auto'
+    input.style.height = `${input.scrollHeight}px`
+  }
   // Stop + steer (0.3.1). stopBtn only exists while a turn is in flight;
   // steerHint says what the (still live) textarea will do while it is.
   const stopBtn = $('ct-stop')
@@ -223,7 +231,7 @@
       b.type = 'button'
       b.className = 'chat-empty-item'
       b.textContent = example
-      b.onclick = () => { input.value = example; input.focus() }
+      b.onclick = () => { input.value = example; resizeInput(); input.focus() }
       emptyEl.appendChild(b)
     }
     pane.appendChild(emptyEl)
@@ -300,18 +308,25 @@
     el.appendChild(chip)
   }
 
+  // One fetch path for every rendered upload (bubble thumbnails AND the
+  // composer's pending strip, composer-grow 2026-10-07): the upload route
+  // needs the onboard token, so a plain <img src> cannot load it.
+  async function loadAttachmentBlobUrl(name) {
+    const res = await fetch(`/api/chat/upload/${encodeURIComponent(name)}`, {
+      headers: { 'X-Onboard-Token': window.getOnboardToken() || '' },
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return URL.createObjectURL(await res.blob())
+  }
+
   async function appendAttachmentImage(el, name, wantScroll) {
     try {
-      const res = await fetch(`/api/chat/upload/${encodeURIComponent(name)}`, {
-        headers: { 'X-Onboard-Token': window.getOnboardToken() || '' },
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const blob = await res.blob()
+      const url = await loadAttachmentBlobUrl(name)
       const img = document.createElement('img')
       img.className = 'chat-attach-img'
       img.alt = name
       img.onload = () => { if (wantScroll) pane.scrollTop = pane.scrollHeight }
-      img.src = URL.createObjectURL(blob)
+      img.src = url
       el.appendChild(img)
     } catch {
       // Deleted upload, or a transcript replayed on another machine: name
@@ -1371,16 +1386,39 @@
     return `[${noun} attached: ${att.path} — read it with the Read tool]`
   }
 
+  // Pending strip inside the composer card (composer-grow, the owner
+  // 2026-10-07 15:21 "이미지를 첨부하면 채팅박스가 커져야지, 디스코드처럼").
+  // Images render as real thumbnails via the same blob path the sent
+  // bubbles use; every other kind keeps the text chip. Either way the x
+  // drops the attachment from pendingAttachments, same as before.
   function renderAttachChip(att) {
     const box = $('ct-attach-chips')
     if (!box) return
+    const isImage = !att.kind || att.kind === 'image'
     const chip = document.createElement('span')
-    chip.className = 'chat-attach-chip'
-    chip.textContent = `${att.kind === 'text' ? '📄' : att.kind === 'pdf' ? '📕' : att.kind === 'file' ? '📎' : '🖼'} ${att.name} `
+    chip.className = isImage ? 'chat-attach-thumb' : 'chat-attach-chip'
+    if (isImage) {
+      chip.title = att.name
+      loadAttachmentBlobUrl(att.name).then((url) => {
+        const img = document.createElement('img')
+        img.alt = att.name
+        img.src = url
+        chip.insertBefore(img, chip.firstChild)
+      }).catch(() => {
+        // Thumbnail missing (upload vanished): fall back to the text chip
+        // so the attachment is still visible and removable.
+        chip.className = 'chat-attach-chip'
+        chip.insertBefore(document.createTextNode(`🖼 ${att.name} `), chip.firstChild)
+      })
+    } else {
+      chip.textContent = `${att.kind === 'text' ? '📄' : att.kind === 'pdf' ? '📕' : '📎'} ${att.name} `
+    }
     const x = document.createElement('button')
     x.type = 'button'
-    x.className = 'link'
+    x.className = isImage ? 'chat-attach-x' : 'link'
     x.textContent = '×'
+    x.title = C.attachRemove
+    x.setAttribute('aria-label', C.attachRemove)
     x.onclick = () => {
       pendingAttachments = pendingAttachments.filter((a) => a !== att)
       chip.remove()
@@ -1532,7 +1570,7 @@
       diedInFlight = false
       if (awaitingSince === null) beginTurnLatches()
       input.value = ''
-      input.style.height = 'auto'
+      resizeInput()
       pendingAttachments = []
       const box = $('ct-attach-chips')
       if (box) box.textContent = ''
@@ -1751,12 +1789,13 @@
         send()
       }
     })
-    // Grow the textarea with its content (up to the CSS max-height) so a
-    // multi-line thought doesn't scroll inside a one-line box.
-    input.addEventListener('input', () => {
-      input.style.height = 'auto'
-      input.style.height = `${input.scrollHeight}px`
-    })
+    // Grow the textarea with its content (up to the CSS max-height, ~40% of
+    // the window) so a multi-line thought doesn't scroll inside a one-line
+    // box. Also re-measured after programmatic value changes (example
+    // buttons, send clear, image paste) and on window resize, since the cap
+    // is viewport-relative (composer-grow 2026-10-07).
+    input.addEventListener('input', resizeInput)
+    window.addEventListener('resize', resizeInput)
     // Image attachments: the + button opens the picker; pasting an image
     // into the textarea uploads it too (screenshots land here). Uploads are
     // sequential on purpose -- each one is a chip the user can still remove.
@@ -1783,6 +1822,9 @@
         if (f) uploadImageFile(f)
       }
     })
+    // A plain text paste lands AFTER the paste event; measure on the next
+    // tick so a long paste opens the box immediately, not on the next key.
+    input.addEventListener('paste', () => setTimeout(resizeInput, 0))
     input.focus()
     pollOnce()
     window.addEventListener('beforeunload', () => {

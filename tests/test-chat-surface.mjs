@@ -223,5 +223,39 @@ assert(js.includes("e.key === 'Escape'") && js.includes("document.addEventListen
 const quickbarOrder = ['whats-new', 'look-back', 'browse', 'dream', 'today'].map(name => html.indexOf(`id="qb-${name}"`))
 assert(quickbarOrder.every((pos, i) => i === 0 || pos > quickbarOrder[i - 1]), 'quickbar button order')
 
+console.log('\ncomposer-grow (Mino 2026-10-07 15:21: image or long text makes the box grow, Discord-style)')
+// 1. text growth: cap at ~40% of the viewport, scroll past it; the
+//    .chat-shell override must not clamp the height; the pane yields.
+assert(/\.chat-input-row textarea \{[^}]*max-height: min\(40vh, 18rem\)/s.test(css), 'textarea grows up to min(40vh, 18rem)')
+assert(!css.includes('max-height: 9rem'), 'old 9rem cap is gone')
+assert(/\.chat-input-row textarea \{[^}]*overflow-y: auto/s.test(css), 'past the cap the textarea scrolls inside itself')
+assert(!/\.chat-shell \.chat-input-row textarea \{[^}]*\n\s*height:/s.test(css), 'the .chat-shell textarea override sets no fixed height')
+assert(css.includes('.chat-shell .chat-input-row { flex: 0 0 auto; }'), 'composer card never shrinks below its content')
+assert(css.includes('.chat-shell .chat-pane-wrap { min-height: 6rem; }') && /\.chat-pane-wrap \{[^}]*min-height: 0/s.test(css), 'transcript pane gives way to a tall composer (no overlap, no page scroll)')
+assert(js.includes('function resizeInput()') && js.includes("input.style.height = 'auto'") && js.includes('input.style.height = `${input.scrollHeight}px`'), 'one resize helper measures from scrollHeight after an auto reset')
+assert(js.includes("input.addEventListener('input', resizeInput)"), 'resize on typing')
+assert(js.includes("window.addEventListener('resize', resizeInput)"), 'resize on window resize (cap is viewport-relative)')
+assert(js.includes("input.addEventListener('paste', () => setTimeout(resizeInput, 0))"), 'resize after a text paste lands')
+assert(js.includes("input.value = example; resizeInput()"), 'programmatic value set re-measures')
+assert(js.includes("input.value = ''\n      resizeInput()"), 'send clear collapses the box through the same helper')
+// 2. pending attachments: thumbnail strip INSIDE the composer card, above
+//    the textarea; images via the same blob path as sent bubbles.
+const composer = html.slice(html.indexOf('class="chat-input-row"'), html.indexOf('chat-composer-bar'))
+assert(composer.includes('id="ct-attach-chips"'), 'pending strip lives inside the composer card')
+assert(composer.indexOf('id="ct-attach-chips"') < composer.indexOf('id="ct-input"'), 'strip sits above the textarea')
+assert(html.indexOf('id="ct-attach-chips"') === html.lastIndexOf('id="ct-attach-chips"'), 'strip exists once (old above-card copy removed)')
+assert(js.includes('async function loadAttachmentBlobUrl(name)'), 'shared blob-fetch helper')
+assert(js.includes('const url = await loadAttachmentBlobUrl(name)'), 'sent-bubble images use the shared helper')
+assert(js.includes('loadAttachmentBlobUrl(att.name).then((url) =>'), 'pending image thumbnails use the same helper')
+assert(js.includes("chip.className = isImage ? 'chat-attach-thumb' : 'chat-attach-chip'"), 'images are thumbs, other kinds keep the chip look')
+assert(js.includes("x.className = isImage ? 'chat-attach-x' : 'link'") && js.includes('pendingAttachments = pendingAttachments.filter((a) => a !== att)'), 'the x removes the pending attachment as before')
+assert(copy.includes("attachRemove: 'Remove attachment'") && js.includes("x.setAttribute('aria-label', C.attachRemove)"), 'remove control labelled from copy')
+assert(/\.chat-attach-thumb \{[^}]*height: 72px/s.test(css) && /\.chat-attach-thumb \{[^}]*border-radius: var\(--radius-m\)/s.test(css), 'thumbs are ~72px tall and rounded')
+assert(css.includes('.chat-attach-thumb:hover .chat-attach-x') && /\.chat-attach-thumb \.chat-attach-x \{[^}]*opacity: 0/s.test(css), 'x appears on hover')
+assert(css.includes('.chat-attach-chips:empty { display: none; }'), 'strip hidden when empty')
+// 3. marker contract untouched
+assert(js.includes('const IMG_MARKER_RE = /^\\[image attached: (.+?)(?: — [^\\]]*)?\\]$/'), 'IMG_MARKER_RE unchanged')
+assert(js.includes('const markers = pendingAttachments.map(markerFor).join(\'\\n\')'), 'send() still appends one marker per attachment')
+
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)
