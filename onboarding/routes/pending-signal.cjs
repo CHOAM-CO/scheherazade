@@ -63,7 +63,7 @@ const RECITAL_PROPOSAL_CHARS = 120
 const STAMP_BASENAME = 'pending-signal.json'
 const PROPOSALS_BASENAME = 'reflux-proposals.md'
 
-function createRoutes(staticCtx) {
+function createService(staticCtx) {
   const { fs, path, log, sendJson, DATA_HOME, getMemoryService } = staticCtx
 
   // ── readers: three counts, each failing to 0 on its own ───────────────────
@@ -309,7 +309,7 @@ function createRoutes(staticCtx) {
     }
   }
 
-  return [
+  const routes = [
     // GET /api/pending-signal -- the mark's only input. Reads and computes;
     // writes nothing, starts nothing, and answers 200 with zeros rather than
     // failing. `total` is the PENDING sum (what has not been recited), so the
@@ -390,6 +390,8 @@ function createRoutes(staticCtx) {
       },
     },
   ]
+  return { routes, readCurrent, pendingOf, readStamp, writeStamp, buildRecital, readChannelEndpoint, postSystemTurn }
 }
 
-module.exports = { createRoutes }
+function createRoutes(ctx) { return createService(ctx).routes }
+module.exports = { createRoutes, createService }

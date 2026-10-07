@@ -3,7 +3,7 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const { spawnSync } = require('node:child_process')
-const { TTL, key, location, classify } = require('./chromux-live-consent.cjs')
+const { TTL, key, location, classify, sessionValid } = require('./chromux-live-consent.cjs')
 function gate({ home, entry, argv, channel, now = Date.now(), execute = (args) => spawnSync(process.execPath, [entry, ...args], { stdio: 'inherit', env: { ...process.env, CHROMUX_PROFILE: 'live' } }).status ?? 1 }) {
   let enabled = false
   try { enabled = /^BROWSE_LIVE=(?:"true"|true)\r?$/m.test(fs.readFileSync(path.join(home, '.agent-config'), 'utf8')) } catch {}
@@ -13,6 +13,7 @@ function gate({ home, entry, argv, channel, now = Date.now(), execute = (args) =
   fs.mkdirSync(path.join(home, 'consent'), { recursive: true, mode: 0o700 })
   if (argv[0] === '--ask') {
     try { argv = JSON.parse(argv[1]); if (!Array.isArray(argv) || !argv.length || argv.some(x => typeof x !== 'string')) return 3 } catch { return 3 }
+    if (sessionValid(home, channel, now)) { console.log('Session consent is active; retry the command directly.'); return 0 }
     const pending = path.join(home, 'consent', 'pending-' + key(channel, []) + '.json')
     // A fresh request invalidates any previously granted identical operation.
     try { fs.unlinkSync(location(home, channel, argv)) } catch {}
@@ -20,7 +21,7 @@ function gate({ home, entry, argv, channel, now = Date.now(), execute = (args) =
     console.log(`이 페이지에서 ${JSON.stringify(argv).replace(/[\r\n]/g, ' ')} 실행해도 돼?`)
     return 0
   }
-  if (classify(argv) === 'write') {
+  if (classify(argv) === 'write' && !sessionValid(home, channel, now)) {
     const file = location(home, channel, argv)
     let consent
     try { consent = JSON.parse(fs.readFileSync(file, 'utf8')); fs.unlinkSync(file) } catch { return 3 }

@@ -33,4 +33,36 @@ function receive(home, channel, text, bot = false, now = Date.now()) {
   }
   return false
 }
-module.exports = { TTL, key, location, classify, matcher, receive, pendingConsent }
+const SESSION_TTL = 8 * 60 * 60 * 1000
+const sessionLocation = (home, channel) => path.join(home, 'consent', 'session-' + key(channel, []) + '.json')
+function bootId(home) {
+  try { return fs.readFileSync(path.join(home, 'consent', 'app-boot-id'), 'utf8').trim() } catch { return '' }
+}
+function sessionValid(home, channel, now = Date.now()) {
+  try {
+    const s = JSON.parse(fs.readFileSync(sessionLocation(home, channel), 'utf8'))
+    const granted = Date.parse(s.grantedAtISO), expires = Date.parse(s.expiresAtISO), boot = bootId(home)
+    return !!boot && s.bootId === boot && granted <= now && now < expires && expires - granted <= SESSION_TTL
+  } catch { return false }
+}
+function setSession(home, channel, on, now = Date.now()) {
+  const dir = path.join(home, 'consent')
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  if (on) {
+    const boot = bootId(home)
+    if (!boot) throw new Error('App boot identity unavailable')
+    fs.writeFileSync(sessionLocation(home, channel), JSON.stringify({ bootId: boot, grantedAtISO: new Date(now).toISOString(), expiresAtISO: new Date(now + SESSION_TTL).toISOString() }), { mode: 0o600 })
+  } else {
+    const remove = file => { try { fs.unlinkSync(file) } catch (e) { if (e.code !== 'ENOENT') throw e } }
+    remove(sessionLocation(home, channel))
+    remove(path.join(dir, 'pending-' + key(channel, []) + '.json'))
+    for (const name of fs.readdirSync(dir)) {
+      if (!/^[a-f0-9]{64}\.json$/.test(name)) continue
+      const file = path.join(dir, name)
+      let record
+      try { record = JSON.parse(fs.readFileSync(file, 'utf8')) } catch { continue }
+      if (record.channel === channel) remove(file)
+    }
+  }
+}
+module.exports = { SESSION_TTL, sessionLocation, sessionValid, setSession, bootId, TTL, key, location, classify, matcher, receive, pendingConsent }

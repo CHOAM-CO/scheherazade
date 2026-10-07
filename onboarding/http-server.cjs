@@ -3731,7 +3731,7 @@ const staticCtx = {
   // in-app Claude login for the agent lane (claude-subscription, no CLI)
   getLoginOAuthSession,
   // usage gauge + update check (2026-08-04 tester requests)
-  fetchClaudeSubscriptionUsage, fetchCodexUsage, fetchOllamaUsage, checkForUpdate,
+  fetchClaudeSubscriptionUsage, fetchCodexUsage, fetchOllamaUsage, checkForUpdate, APP_VERSION,
   extractClaudeModelsFromBin, fetchOllamaCloudCatalog,
   readAppearance, writeAppearance, AppearanceModel,
   // vision stand-in captioning (0.0.56)
@@ -3773,6 +3773,7 @@ const API_ROUTES = [
   ...require('./routes/oauth-usage.cjs').createRoutes(staticCtx), // G13 (usage-gauge full-scope OAuth)
   ...require('./routes/files.cjs').createRoutes(staticCtx), // G14 (recent-files ledger, 같이보기 batch 2026-08-19)
   ...require('./routes/oauth-login.cjs').createRoutes(staticCtx), // G15 (in-app Claude login → claude-subscription, drops CLI dep)
+  ...require('./routes/quickbar.cjs').createRoutes(staticCtx),
   ...require('./routes/pending-signal.cjs').createRoutes(staticCtx), // G16 (design-0024 pending signal "!")
   ...require('./routes/memory-files.cjs').createRoutes(staticCtx), // G17 (Memory page folder view: read-only DATA_HOME tree + file text, 0.3.8)
 ]
