@@ -676,30 +676,6 @@ button.nav-ctl.is-busy::after {
 .nav-tab:hover { color: var(--fg-dim); }
 .nav-tab.active { color: var(--fg); border-bottom-color: var(--accent); }
 
-/* Settings sub-nav (IA v2): a lighter second row shown only on the
-   config-family pages. Pill-shaped rather than underlined so it reads as a
-   sub-level of the primary tabs above, not a competing row. */
-.nav-subtabs {
-  display: flex;
-  gap: 0.3rem;
-  margin-top: 0.6rem;
-  flex-wrap: wrap;
-}
-.nav-subtab {
-  padding: 0.32rem 0.75rem;
-  color: var(--fg-faint);
-  text-decoration: none;
-  font-size: 0.82rem;
-  border-radius: var(--radius-pill);
-  border: 1px solid transparent;
-}
-.nav-subtab:hover { color: var(--fg-dim); background: var(--panel-raised); }
-.nav-subtab.active {
-  color: var(--fg);
-  background: var(--panel-raised);
-  border-color: var(--border);
-}
-
 .entry-row {
   display: flex;
   justify-content: space-between;
@@ -2148,7 +2124,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .settings-layout { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: var(--s6); align-items: start; }
 .settings-rail { position: sticky; top: var(--s4); display: flex; flex-direction: column; gap: 4px; }
 .settings-rail a { padding: 0.5rem 0.75rem; color: var(--fg-dim); text-decoration: none; border-radius: var(--radius-s); }
-.settings-rail a:hover, .settings-rail a:focus { background: rgb(var(--accent-rgb) / 0.14); color: var(--fg); }
+.settings-rail a:hover { background: var(--panel-raised); color: var(--fg-dim); }
+.settings-rail a.active { background: rgb(var(--accent-rgb) / 0.14); color: var(--fg); }
 .settings-content { display: flex; flex-direction: column; min-width: 0; }
 .settings-content .settings-group { min-width: 0; width: 100%; }
 .settings-content .category-label { text-transform: uppercase; letter-spacing: 0.06em; }
@@ -2191,3 +2168,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   .nav-tabs { flex-wrap: wrap; max-width: 100%; width: 100%; }
   .nav-status { flex-wrap: wrap; }
 }
+
+.settings-content .settings-group-label[hidden] { display: none; }
+.settings-content > .category { margin-bottom: var(--s4); }

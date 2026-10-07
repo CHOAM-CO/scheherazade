@@ -159,6 +159,7 @@
         lineEl.textContent = ''
         statusEl.textContent = result.detail || C.providerConnected
         showToast(C.ollamaKeySaved)
+        renderOllamaUsageLine(true)
         $('conn-ollama-flow').classList.add('hidden')
         input.value = ''
       } catch (err) {
@@ -193,6 +194,18 @@
   // null-not-zero contract survives the move from text to bars.
   const GAUGE_WARN = 80
   const GAUGE_HOT = 90
+  // Card status and its visible data share one authoritative probe result.
+  function setUsageStatus(provider, connected) {
+    setChip($(`conn-provider-${provider}-status`), connected ? 'ok' : '', connected ? C.providerConnected : C.providerNotConnected)
+    const button = $(`conn-provider-${provider}-btn`)
+    if (provider === 'claude') {
+      button.textContent = connected ? C.claudeSubRelogin : C.claudeSubLogin
+    } else {
+      button.classList.toggle('hidden', connected)
+      $(`conn-provider-${provider}-test`).classList.toggle('hidden', !connected)
+    }
+  }
+
   function gaugeSeg({ label, pctVal, meta }) {
     const seg = document.createElement('div')
     seg.className = 'usage-seg'
@@ -253,8 +266,10 @@
     laneNote(body, C.usageLoading)
     let u
     try { u = await api(`/api/usage/claude${force ? '?force=1' : ''}`) } catch (err) {
+      setUsageStatus('claude', false)
       body = laneBody('conn-usage-lane-claude', C.usageLaneClaude); laneNote(body, GEN(err.message)); return
     }
+    setUsageStatus('claude', u.ok === true)
     body = laneBody('conn-usage-lane-claude', C.usageLaneClaude)
     if (!u.ok) {
       laneNote(body, u.branch === 'no_token' ? C.usageNoToken : (u.detail || C.usageError))
@@ -328,8 +343,10 @@
     laneNote(body, C.usageLoading)
     let u
     try { u = await api(`/api/usage/codex${force ? '?force=1' : ''}`) } catch (err) {
+      setUsageStatus('chatgpt', false)
       body = laneBody('conn-usage-lane-codex', C.usageLaneCodex); laneNote(body, GEN(err.message)); return
     }
+    setUsageStatus('chatgpt', u.ok === true)
     body = laneBody('conn-usage-lane-codex', C.usageLaneCodex)
     if (!u.ok) {
       laneNote(body, u.branch === 'no_token' ? C.usageCodexNoLogin : (u.detail || C.usageError))
@@ -355,8 +372,10 @@
     laneNote(body, C.usageLoading)
     let u
     try { u = await api(`/api/usage/ollama${force ? '?force=1' : ''}`) } catch (err) {
+      setUsageStatus('ollama', false)
       body = laneBody('conn-usage-lane-ollama', C.usageLaneOllama); laneNote(body, GEN(err.message)); return
     }
+    setUsageStatus('ollama', u.ok === true)
     body = laneBody('conn-usage-lane-ollama', C.usageLaneOllama)
     if (!u.ok) {
       // unknown_shape carries the endpoint's field names -- the first
@@ -418,7 +437,7 @@
     const btn = $('conn-usage-refresh')
     if (!label || !btn) return
     label.textContent = C.usageLabel
-    btn.textContent = '↻'
+    btn.textContent = C.usageRefresh
     btn.title = C.usageRefresh
     btn.setAttribute('aria-label', C.usageRefresh)
     btn.onclick = () => renderUsage(true)
@@ -494,7 +513,7 @@
         // button: the caller can be the first-auth button OR the Re-login
         // button (2-1 fix), and renderProviderAuth() derives the correct
         // visibility for all three from live /api/config state.
-        renderProviderAuth().catch(() => {})
+        renderProviderAuth().then(() => renderUsage(true)).catch(() => {})
         return
       }
       if (status.state === 'failed') {
@@ -601,7 +620,7 @@
         cancelBtn.classList.add('hidden')
         btn.disabled = false
         btn.textContent = C.claudeSubRelogin
-        statusEl.textContent = C.providerConnected
+        renderClaudeUsageLine(true)
         showToast(C.claudeSubSuccess)
       } else if (st === 'failed' || st === 'cancelled') {
         stopSetupPoll()
@@ -990,7 +1009,7 @@
     const liveModel = spawn ? ((spawn.live && spawn.live.model) || spawn.model) : null
     const liveEffort = spawn ? ((spawn.live && spawn.live.effort) || spawn.effort) : null
     if (spawn && liveModel === intentModel && (liveEffort || EFFORT_DEFAULT) === intentEffort) {
-      el.textContent = S.applyApplied(liveModel, liveEffort || EFFORT_DEFAULT)
+      el.textContent = ''
     } else {
       el.textContent = S.applyMismatch(liveModel || '?')
     }
@@ -1650,6 +1669,11 @@
     const receipt = document.createElement('div')
     receipt.id = 'conn-route-receipt'
     receipt.className = 'route-receipt'
+    const receiptModel = document.createElement('div')
+    receiptModel.id = 'conn-route-model'
+    const receiptLane = document.createElement('div')
+    receiptLane.id = 'conn-route-lane'; receiptLane.className = 'field-hint'
+    receipt.append(receiptModel, receiptLane, $('set-apply-state'))
     model.appendChild(receipt)
     const note = document.createElement('p')
     note.className = 'field-hint'
@@ -1667,8 +1691,7 @@
       grid.insertBefore(card, providers)
     }
     providers.classList.add('hidden')
-    // Keep the refresh control accessible without a second usage card.
-    model.appendChild($('conn-usage-refresh'))
+    // Usage loads with the page; no loose refresh control beside the note.
     $('conn-usage-card').classList.add('hidden')
     const soon = document.createElement('div')
     soon.className = 'category coming-soon'
@@ -1688,8 +1711,10 @@
   }
 
   async function renderRouteReceipt() {
-    const el = $('conn-route-receipt')
+    const el = $('conn-route-model')
     if (!el) return
+    const lane = $('conn-route-lane')
+    lane.textContent = ''
     const model = $('set-model-select').value
     const effort = $('set-effort-select').value
     el.textContent = [model, effort].filter(Boolean).join(' · ')
@@ -1697,9 +1722,7 @@
       const r = await api('/api/agent/route-preview')
       if (r.vision === 'yes' || r.vision === 'no') el.textContent += ' · ' + (r.vision === 'yes' ? window.COPY.polish.visionOn : window.COPY.polish.visionOff)
       if (r.mode === 'live') {
-        const line = document.createElement('div')
-        line.className = 'field-hint'; line.textContent = window.COPY.polish.live
-        el.appendChild(line)
+        lane.textContent = window.COPY.polish.live
       }
     } catch (err) { console.error('route receipt:', err) }
   }

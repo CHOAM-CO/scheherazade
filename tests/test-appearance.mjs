@@ -160,7 +160,7 @@ for (const id of ['ap-glass-range', 'ap-fontsize-range', 'ap-fontfamily-options'
 }
 assert(page.includes('/js/appearance-model.cjs'), 'page loads the shared model')
 const nav = readFileSync(path.join(root, 'onboarding', 'public', 'js', 'nav.js'), 'utf8')
-assert(nav.includes("id: 'appearance', href: '/appearance'"), 'nav tab registered')
+assert(nav.includes("id: 'appearance', key: 'appearance', href: '/appearance'"), 'appearance registered in the shared settings rail')
 assert(nav.includes("startsWith('/appearance')"), 'active-tab derivation knows the page')
 const copy = readFileSync(path.join(root, 'onboarding', 'public', 'js', 'copy.js'), 'utf8')
 assert(copy.includes('appearance: {') && copy.includes("appearance: 'Appearance'"), 'copy strings + tab label present')

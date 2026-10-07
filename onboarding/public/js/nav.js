@@ -197,14 +197,6 @@
     { id: 'logs', href: '/logs', label: NAV.tabs.logs },
   ]
 
-  // The Settings cluster. When the current page is one of these, the primary
-  // "Settings" tab is active AND this second row renders beneath it. 'settings'
-  // itself is the "General" entry so the cluster always has a home to land on.
-  const SETTINGS_SUBTABS = [
-    { id: 'settings', href: '/settings', label: NAV.subGeneral },
-    { id: 'channels', href: '/channels', label: NAV.tabs.channels },
-    { id: 'appearance', href: '/appearance', label: NAV.tabs.appearance },
-  ]
   const SETTINGS_FAMILY = new Set(['settings', 'channels', 'appearance'])
 
   // The raw page identity from the URL (never hand-set, so it can't drift).
@@ -272,8 +264,7 @@
         '<div class="mute-banner-text" id="nav-turnerror-text"></div>' +
         '<button type="button" id="nav-turnerror-dismiss"></button>' +
       '</div>' +
-      '<div class="nav-tabs"></div>' +
-      '<div class="nav-subtabs" hidden></div>'
+      '<div class="nav-tabs"></div>'
     $('nav-agent-label').textContent = NAV.label
     const tabsEl = root.querySelector('.nav-tabs')
     for (const t of TABS) {
@@ -283,17 +274,35 @@
       a.textContent = t.label
       tabsEl.appendChild(a)
     }
-    // Settings sub-nav: only on the config-family pages, and the specific
-    // sub-page (not the rolled-up 'settings') is the one marked active.
+    // Shared rail: page layout owns its slot, the shell owns the links/state.
     if (SETTINGS_FAMILY.has(rawPage)) {
-      const subEl = root.querySelector('.nav-subtabs')
-      subEl.hidden = false
-      for (const t of SETTINGS_SUBTABS) {
+      const rail = document.querySelector('.settings-rail')
+      if (!rail) return
+      rail.replaceChildren()
+      rail.setAttribute('aria-label', NAV.tabs.settings)
+      const P = window.COPY.polish
+      const entries = [
+        { id: 'settings', key: 'general', href: '/settings#set-identity' },
+        { id: 'channels', key: 'channels', href: '/channels' },
+        { id: 'appearance', key: 'appearance', href: '/appearance' },
+        { id: 'system', key: 'system', href: '/settings#set-sudo' },
+        { id: 'permissions', key: 'permissions', href: '/settings#set-perms' },
+      ]
+      for (const t of entries) {
         const a = document.createElement('a')
         a.href = t.href
-        a.className = 'nav-subtab' + (t.id === rawPage ? ' active' : '')
-        a.textContent = t.label
-        subEl.appendChild(a)
+        a.textContent = P[t.key]
+        a.classList.toggle('active', t.id === rawPage)
+        if (t.id === rawPage) a.setAttribute('aria-current', 'page')
+        a.addEventListener('click', () => {
+          if (rawPage !== 'settings' || !t.href.startsWith('/settings#')) return
+          for (const link of rail.querySelectorAll('a')) {
+            link.classList.toggle('active', link === a)
+            if (link === a) link.setAttribute('aria-current', 'location')
+            else link.removeAttribute('aria-current')
+          }
+        })
+        rail.appendChild(a)
       }
     }
   }

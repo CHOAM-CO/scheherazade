@@ -33,18 +33,12 @@
            (요구 ⑧). DANGER always spans full width — it must never sit
            beside an innocent group. -->
       <div class="settings-layout">
-      <nav class="settings-rail" aria-label="Settings">
-        <a href="#set-identity" data-polish="general"></a>
-        <a href="/channels" data-polish="channels"></a>
-        <a href="/appearance" data-polish="appearance"></a>
-        <a href="#set-sudo" data-polish="system"></a>
-        <a href="#set-perms" data-polish="permissions"></a>
-      </nav>
+      <nav class="settings-rail"></nav>
       <div class="page-grid settings-content">
 
       <!-- ── AGENT ───────────────────────────────────────────────────────── -->
       <section class="settings-group">
-        <h2 class="settings-group-label" id="set-group-agent"></h2>
+        <h2 hidden class="settings-group-label" id="set-group-agent"></h2>
 
         <div class="category" id="set-identity">
           <div class="category-label" data-polish="identity"></div>
@@ -135,7 +129,7 @@
 
       <!-- ── SYSTEM ──────────────────────────────────────────────────────── -->
       <section class="settings-group">
-        <h2 class="settings-group-label" id="set-group-system"></h2>
+        <h2 hidden class="settings-group-label" id="set-group-system"></h2>
 
         <!-- sudo askpass (0.1.0 prep, P4 spec). Ships OFF. The password field
              is write-only: the page never reads the stored value back, only
@@ -179,7 +173,7 @@
            manual check: current version + Check-now button, force=1
            bypassing the 6h cache.) ──────────────────────────────────── -->
       <section class="settings-group">
-        <h2 class="settings-group-label" id="set-group-migrate"></h2>
+        <h2 hidden class="settings-group-label" id="set-group-migrate"></h2>
         <div class="category" id="set-migrate">
           <div class="category-label" id="set-migrate-label"></div>
           <p class="subtitle" id="set-migrate-hint"></p>
@@ -213,7 +207,7 @@
           </div>
         </div>
 
-        <h2 class="settings-group-label" id="set-group-about"></h2>
+        <h2 hidden class="settings-group-label" id="set-group-about"></h2>
         <div class="category" id="set-about">
           <div class="category-label" id="set-about-label"></div>
           <p class="subtitle" id="set-about-version"></p>
@@ -229,7 +223,7 @@
 
       <!-- ── DANGER (v0.0.35: in-app clean uninstall) ────────────────────── -->
       <section class="settings-group span-2">
-        <h2 class="settings-group-label" id="set-group-danger"></h2>
+        <h2 hidden class="settings-group-label" id="set-group-danger"></h2>
         <div class="category" id="seed-settings"></div>
         <div class="category danger-zone" id="set-danger">
           <div class="category-label" id="set-danger-label"></div>
