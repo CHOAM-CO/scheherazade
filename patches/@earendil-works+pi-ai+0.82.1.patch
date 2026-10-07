@@ -1,0 +1,25 @@
+diff --git a/node_modules/@earendil-works/pi-ai/dist/api/openai-completions.js b/node_modules/@earendil-works/pi-ai/dist/api/openai-completions.js
+index ed81baa..4fb4555 100644
+--- a/node_modules/@earendil-works/pi-ai/dist/api/openai-completions.js
++++ b/node_modules/@earendil-works/pi-ai/dist/api/openai-completions.js
+@@ -1142,10 +1142,19 @@ function detectCompat(model) {
+     const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
+     const isDeepSeek = provider === "deepseek" || baseUrl.includes("deepseek.com");
+     const isOpenRouterDeveloperRoleModel = isOpenRouter && (model.id.startsWith("anthropic/") || model.id.startsWith("openai/"));
++    // scheherazade patch (2026-10-07): the `developer` role is an OpenAI-only
++    // spelling. Third-party OpenAI-compatible servers (ollama.com/v1 for
++    // mistral-large-4 -> HTTP 400 "Input tag 'developer' ... expected tags:
++    // system, user, assistant, tool"; LM Studio, llama.cpp, vLLM, ...) accept
++    // only `system`. Upstream treats every unknown base URL as OpenAI; we
++    // treat only api.openai.com (plus the explicit OpenRouter pass-through) as
++    // developer-capable. A model-level `compat.supportsDeveloperRole` override
++    // (getCompat) still wins over this detection.
++    const isOpenAIProper = baseUrl.includes("api.openai.com");
+     const cacheControlFormat = provider === "openrouter" && model.id.startsWith("anthropic/") ? "anthropic" : undefined;
+     return {
+         supportsStore: !isNonStandard,
+-        supportsDeveloperRole: isOpenRouterDeveloperRoleModel || (!isNonStandard && !isOpenRouter),
++        supportsDeveloperRole: isOpenRouterDeveloperRoleModel || (!isNonStandard && !isOpenRouter && isOpenAIProper),
+         supportsReasoningEffort: !isGrok && !isZai && !isMoonshot && !isTogether && !isCloudflareAiGateway && !isNvidia && !isAntLing,
+         supportsUsageInStreaming: true,
+         maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
