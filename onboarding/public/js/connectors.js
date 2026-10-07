@@ -87,7 +87,7 @@
         testBtn.textContent = C.providerTestButton
         reloginBtn.textContent = C.providerReloginButton
         testBtn.classList.toggle('hidden', !connected)
-        reloginBtn.classList.toggle('hidden', !connected)
+        reloginBtn.classList.add('hidden')
         testBtn.onclick = () => runProviderTest(provider, statusEl, testBtn)
         reloginBtn.onclick = () => startAuth(provider, statusEl, reloginBtn, true)
       }
@@ -543,6 +543,7 @@
 
   function initClaudeSubRow(available) {
     $('conn-provider-claude-name').textContent = C.claudeSubName
+    $('conn-provider-claude-test').classList.add('polish-secondary-action')
     const statusEl = $('conn-provider-claude-status')
     // null available = config read failed -> neutral, not a false "Not
     // connected" (same fix as the provider rows above).
@@ -957,6 +958,7 @@
   async function renderApplyState() {
     const el = $('set-apply-state')
     if (!el) return
+    renderRouteReceipt()
     el.textContent = S.applyChecking
     let status = null
     let spawn = null
@@ -1048,6 +1050,7 @@
       if (model === CUSTOM_MODEL_SENTINEL) {
         e.target.value = currentModel
         const section = $('set-custom')
+        if (section) $('conn-add-provider').open = true
         if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' })
         return
       }
@@ -1637,7 +1640,72 @@
     }
   }
 
+  function polishLayout() {
+    const P = window.COPY.polish
+    const grid = document.querySelector('.page-grid')
+    grid.classList.add('providers-grid')
+    const model = $('set-agent-config')
+    grid.prepend(model)
+    model.classList.add('span-2', 'model-effort-card')
+    const receipt = document.createElement('div')
+    receipt.id = 'conn-route-receipt'
+    receipt.className = 'route-receipt'
+    model.appendChild(receipt)
+    const note = document.createElement('p')
+    note.className = 'field-hint'
+    note.textContent = P.next
+    model.appendChild(note)
+    const providers = $('conn-providers')
+    for (const [provider, lane] of [['claude', 'claude'], ['chatgpt', 'codex'], ['ollama', 'ollama']]) {
+      const row = $(`conn-provider-${provider}-name`).closest('.entry-row')
+      const card = document.createElement('div')
+      card.className = 'category provider-card'
+      card.appendChild(row)
+      card.appendChild($(`conn-usage-lane-${lane}`))
+      if (provider === 'claude') card.appendChild($('conn-claude-flow'))
+      if (provider === 'ollama') card.appendChild($('conn-ollama-flow'))
+      grid.insertBefore(card, providers)
+    }
+    providers.classList.add('hidden')
+    // Keep the refresh control accessible without a second usage card.
+    model.appendChild($('conn-usage-refresh'))
+    $('conn-usage-card').classList.add('hidden')
+    const soon = document.createElement('div')
+    soon.className = 'category coming-soon'
+    const heading = document.createElement('div')
+    heading.className = 'category-label'; heading.textContent = P.soon
+    const body = document.createElement('p')
+    body.className = 'field-hint'; body.textContent = P.soonNote
+    soon.append(heading, body)
+    grid.insertBefore(soon, providers)
+    const custom = $('set-custom')
+    const panel = document.createElement('details')
+    panel.className = 'category span-2 add-provider'
+    panel.id = 'conn-add-provider'
+    const summary = document.createElement('summary')
+    summary.textContent = P.add
+    custom.before(panel); panel.append(summary, custom)
+  }
+
+  async function renderRouteReceipt() {
+    const el = $('conn-route-receipt')
+    if (!el) return
+    const model = $('set-model-select').value
+    const effort = $('set-effort-select').value
+    el.textContent = [model, effort].filter(Boolean).join(' · ')
+    try {
+      const r = await api('/api/agent/route-preview')
+      if (r.vision === 'yes' || r.vision === 'no') el.textContent += ' · ' + (r.vision === 'yes' ? window.COPY.polish.visionOn : window.COPY.polish.visionOff)
+      if (r.mode === 'live') {
+        const line = document.createElement('div')
+        line.className = 'field-hint'; line.textContent = window.COPY.polish.live
+        el.appendChild(line)
+      }
+    } catch (err) { console.error('route receipt:', err) }
+  }
+
   async function init() {
+    polishLayout()
     await window.SCHZ_CATALOG.refresh()
     const actions = MODEL_CATALOG.filter((m) => m.id === CUSTOM_MODEL_SENTINEL || m.id === OLLAMA_URL_SENTINEL)
     MODEL_CATALOG.splice(0, MODEL_CATALOG.length, ...window.SCHZ_MODEL_CATALOG.map((m) => ({ ...m })))
@@ -1662,6 +1730,7 @@
     // surface, hidden rather than rendered empty on Windows -- same rule
     // its settings.js home applied (the owner, first win install 2026-08-03).
     renderAgentConfig(cfg)
+    $('set-agent-config-label').textContent = window.COPY.polish.model
     renderCustomProvider(cfg).catch((err) => console.error(err))
     renderDoctor().catch((err) => console.error(err))
     // design-0023 P4: attachTopology is the server's capability, and it is a

@@ -34,6 +34,19 @@ function createRoutes(staticCtx) {
         return
       },
     },
+    // Open only the server-owned log sink, never a client-supplied path.
+    {
+      method: 'POST',
+      match: pathname => pathname === '/api/logs/open',
+      handler: async (req, res) => {
+        const file = logBuffer.getSince(0).file
+        const electron = getElectron()
+        if (!file || !electron?.shell?.openPath) { sendJson(res, 503, { error: 'Log file unavailable' }); return }
+        const error = await electron.shell.openPath(file)
+        if (error) { sendJson(res, 500, { error }); return }
+        sendJson(res, 200, { ok: true })
+      },
+    },
     // ── sudo askpass lane ─────────────────────────────────────────────────
     // Containment contract: the password lives ONLY as a safeStorage blob
     // (Keychain-backed, same vault mechanism as the Discord bot token) and is

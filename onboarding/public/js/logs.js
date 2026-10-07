@@ -1,139 +1,110 @@
-// logs.js — /logs session log viewer (v0.0.20, the owner 07-16 "로그 터미널 창").
-//
-// Cursor-polls GET /api/logs?since=N every second and appends only NEW
-// entries (never re-renders the pane -- at 3000 lines a full re-render every
-// second would burn the CPU the agent needs). Client keeps its own line
-// array as the copy source, capped to the same 3000 the server ring holds.
-//
-// Follow mode: checkbox ON = pane pinned to bottom on every append. Scrolling
-// up flips it OFF automatically (reading old lines must not fight the tail);
-// re-checking or scrolling back to the bottom flips it ON.
-
+// Cursor feed is already secret-masked by log-buffer.cjs. Never fetch raw disk bytes.
 ;(function () {
   const L = window.COPY.logs
-
-  const POLL_MS = 1000
-  const MAX_CLIENT_LINES = 3000
-
-  function $(id) { return document.getElementById(id) }
-
+  const P = window.COPY.polish
+  const $ = id => document.getElementById(id)
   const pane = $('lg-pane')
   const followBox = $('lg-follow')
-
-  let nextSeq = 0
-  let lines = [] // copy-source mirror of what the pane shows
-  let pollTimer = null
-  let emptyEl = null
-  let errNoted = false
-
-  function setStatics() {
-    $('lg-title').textContent = L.title
-    $('lg-subtitle').textContent = L.subtitle
-    $('lg-copy').textContent = L.copyButton
-    $('lg-follow-label').textContent = L.followOn
-    $('lg-file-note').textContent = ''
+  let nextSeq = 0, lines = [], pollTimer, paused = false, pending = 0, file = '', errNoted = false
+  let source = 'all'
+  const levels = new Set(['info', 'warn', 'error'])
+  const chips = {}
+  function classify(e) {
+    const stream = e.stream || 'main'
+    const source = stream.startsWith('engine') || /\[dsh-lane\] engine:|\[engine\]/i.test(e.line) ? 'engine' : stream.startsWith('agent') ? 'agent' : 'app'
+    const level = stream.endsWith('!') || /\b(error|failed|failure|exception|fatal)\b/i.test(e.line) ? 'error' : /\b(warn|warning)\b/i.test(e.line) ? 'warn' : 'info'
+    const t = new Date(e.ts)
+    const clock = isNaN(t) ? e.ts : t.toTimeString().slice(0, 8)
+    return { ...e, source, level, clock, text: `${clock} [${stream}] ${e.line}` }
   }
-
-  function atBottom() {
-    return pane.scrollHeight - pane.scrollTop - pane.clientHeight < 8
+  function matcher() {
+    const q = $('lg-search').value
+    if (!q) return () => true
+    try { const re = new RegExp(q, 'i'); return e => re.test(e.text) }
+    catch { return e => e.text.toLowerCase().includes(q.toLowerCase()) }
   }
-
-  function showEmpty() {
-    if (emptyEl || lines.length) return
-    emptyEl = document.createElement('div')
-    emptyEl.className = 'log-line log-empty'
-    emptyEl.textContent = L.empty
-    pane.appendChild(emptyEl)
-  }
-
-  function clearEmpty() {
-    if (!emptyEl) return
-    emptyEl.remove()
-    emptyEl = null
-  }
-
-  function appendLine(text, cssClass) {
-    clearEmpty()
-    const el = document.createElement('div')
-    el.className = `log-line ${cssClass}`
-    el.textContent = text
-    pane.appendChild(el)
-    lines.push(text)
-    // Trim DOM + mirror together so copy always matches what's visible.
-    while (lines.length > MAX_CLIENT_LINES) {
-      lines.shift()
-      if (pane.firstChild) pane.firstChild.remove()
+  function refreshCounts() {
+    for (const [key, el] of Object.entries(chips)) {
+      const count = key === 'all' ? lines.length : lines.filter(e => e.source === key || e.level === key).length
+      el.textContent = `${P[key]} ${count}`
+      const active = ['all', 'app', 'agent', 'engine'].includes(key) ? source === key : levels.has(key)
+      el.classList.toggle('active', active)
+      el.setAttribute('aria-pressed', String(active))
     }
+    $('lg-new').textContent = P.newLines(pending)
+    $('lg-new').classList.toggle('hidden', !paused || !pending)
+    $('lg-pause').textContent = paused ? P.resume : P.pause
+    $('lg-pause').classList.toggle('is-paused', paused)
   }
-
-  const STREAM_CLASS = {
-    main: 'log-main',
-    'main!': 'log-err',
-    agent: 'log-agent',
-    'agent!': 'log-err',
-  }
-
-  function renderEntries(result) {
-    if (result.dropped) appendLine(L.gapMarker, 'log-gap')
-    for (const e of result.entries) {
-      // ts arrives as ISO; show the local clock part only -- the full stamp
-      // lives in the disk file for forensic grabs.
-      const t = new Date(e.ts)
-      const clock = isNaN(t) ? e.ts : t.toTimeString().slice(0, 8)
-      appendLine(`${clock} [${e.stream}] ${e.line}`, STREAM_CLASS[e.stream] || 'log-main')
+  function render() {
+    const match = matcher()
+    const visible = lines.filter(e => (source === 'all' || source === e.source) && levels.has(e.level) && match(e))
+    const fragment = document.createDocumentFragment()
+    for (const e of visible) {
+      const row = document.createElement('div')
+      row.className = `log-line log-${e.level}`
+      for (const [cls, text] of [['log-time', e.clock], ['log-source', P[e.source]], ['log-text', e.line]]) {
+        const span = document.createElement('span'); span.className = cls; span.textContent = text; row.appendChild(span)
+      }
+      fragment.appendChild(row)
     }
-    if (followBox.checked && result.entries.length) pane.scrollTop = pane.scrollHeight
+    if (!visible.length) { const empty = document.createElement('div'); empty.className = 'log-empty'; empty.textContent = L.empty; fragment.appendChild(empty) }
+    pane.replaceChildren(fragment)
+    if (followBox.checked && !paused) pane.scrollTop = pane.scrollHeight
   }
-
+  function setPaused(value) {
+    paused = value; followBox.checked = !value
+    if (!value) { pending = 0; render(); pane.scrollTop = pane.scrollHeight }
+    refreshCounts()
+  }
   async function pollOnce() {
     try {
       const result = await window.api(`/api/logs?since=${nextSeq}`)
-      renderEntries(result)
+      const entries = Array.isArray(result.entries) ? result.entries : []
+      if (result.dropped) lines.push(classify({ ts: new Date().toISOString(), stream: 'main', line: L.gapMarker }))
+      lines.push(...entries.map(classify)); lines = lines.slice(-3000)
       nextSeq = result.nextSeq
-      $('lg-file-note').textContent = result.file ? L.fileNote(result.file) : L.fileNoteMissing
-      showEmpty()
-      errNoted = false
+      if (paused) pending += entries.length
+      else if (entries.length || result.dropped || !pane.childNodes.length) render()
+      file = result.file || ''
+      $('lg-open').disabled = !file
+      $('lg-file-note').textContent = file ? P.file(file) : L.fileNoteMissing
+      refreshCounts(); errNoted = false
     } catch (err) {
-      // Note once per outage, keep polling -- the app coming back should
-      // resume the tail without a reload.
-      if (!errNoted) {
-        console.error('log poll failed:', err)
-        window.showToast(L.pollError)
-        errNoted = true
-      }
+      if (!errNoted) { console.error('log poll failed:', err); window.showToast(L.pollError); errNoted = true }
     }
-    pollTimer = setTimeout(pollOnce, POLL_MS)
+    pollTimer = setTimeout(pollOnce, 1000)
   }
-
   function init() {
-    setStatics()
-
-    $('lg-copy').onclick = async () => {
-      try {
-        await navigator.clipboard.writeText(lines.join('\n'))
-        window.showToast(L.copied)
-      } catch (err) {
-        console.error('clipboard write failed:', err)
-        window.showToast(L.copyFailed)
+    $('lg-title').textContent = L.title; $('lg-subtitle').textContent = L.subtitle
+    $('lg-copy').textContent = P.copy; $('lg-open').textContent = P.open
+    $('lg-follow-label').textContent = L.followOn; $('lg-wrap-label').textContent = P.wrap
+    $('lg-search').placeholder = P.search; $('lg-search').setAttribute('aria-label', P.search)
+    for (const [id, keys] of [['lg-sources', ['all', 'app', 'agent', 'engine']], ['lg-levels', ['info', 'warn', 'error']]]) {
+      for (const key of keys) {
+        const button = document.createElement('button'); button.className = 'log-chip'; chips[key] = button
+        button.onclick = () => { if (id === 'lg-sources') source = key; else if (levels.has(key)) levels.delete(key); else levels.add(key); render(); refreshCounts() }
+        $(id).appendChild(button)
       }
     }
-
-    // Scroll-driven follow: user scrolling up = stop chasing; returning to
-    // the bottom = resume. The checkbox stays the visible state of record.
+    $('lg-search').oninput = render
+    $('lg-wrap').onchange = () => pane.classList.toggle('nowrap', !$('lg-wrap').checked)
+    $('lg-pause').onclick = () => setPaused(!paused)
+    $('lg-new').onclick = () => setPaused(false)
+    $('lg-copy').onclick = async () => {
+      try { await navigator.clipboard.writeText(lines.map(e => e.text).join('\n')); window.showToast(L.copied) }
+      catch (err) { console.error(err); window.showToast(L.copyFailed) }
+    }
+    $('lg-open').onclick = async () => {
+      try { await window.api('/api/logs/open', { method: 'POST' }) }
+      catch (err) { window.showToast(window.COPY.genericError(err.message)) }
+    }
     pane.addEventListener('scroll', () => {
-      if (atBottom()) {
-        if (!followBox.checked) followBox.checked = true
-      } else if (followBox.checked) {
-        followBox.checked = false
-      }
+      if (!paused && pane.scrollHeight - pane.scrollTop - pane.clientHeight > 8) setPaused(true)
     })
-    followBox.addEventListener('change', () => {
-      if (followBox.checked) pane.scrollTop = pane.scrollHeight
-    })
-
-    pollOnce()
-    window.addEventListener('beforeunload', () => { if (pollTimer) clearTimeout(pollTimer) })
+    followBox.onchange = () => setPaused(!followBox.checked)
+    refreshCounts(); pollOnce()
+    window.addEventListener('beforeunload', () => clearTimeout(pollTimer))
   }
-
   document.addEventListener('DOMContentLoaded', init)
 })()

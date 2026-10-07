@@ -959,3 +959,7 @@
 })()
 
 document.getElementById('browse-live-pointer').textContent = window.COPY.chat.qbSettingsPointer
+
+// The rail links to existing pages and anchors; no parallel settings state.
+for (const el of document.querySelectorAll('[data-polish]')) el.textContent = window.COPY.polish[el.dataset.polish]
+for (const id of ['set-avatar-choose', 'set-user-avatar-choose', 'set-handover-discover', 'set-handover-check', 'set-handover-discover-copy', 'set-handover-start']) document.getElementById(id)?.classList.add('secondary')

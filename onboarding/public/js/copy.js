@@ -1951,3 +1951,10 @@ window.COPY = {
   // separate from the scripted BYOK/Discord failure copy above.
   genericError: (message) => `Error: ${message}`,
 }
+
+// 0.4.0 UI chrome. Keep both locales together; route/server messages stay verbatim.
+window.UI_POLISH_COPY = {
+  en: { model: 'Model & Effort', soon: 'Coming soon', soonNote: 'More providers will show up here.', add: 'Add a provider · custom OpenAI-compatible proxy', live: 'live lane, served via route proxy', next: 'Applies on the next message. A restart is announced only when the protocol changes.', visionOn: 'vision on', visionOff: 'vision off', general: 'General', channels: 'Channels', appearance: 'Appearance', system: 'System', permissions: 'Permissions', identity: 'Identity', identityNote: 'Choose the name and pictures shown in chat.', all: 'All', app: 'App', agent: 'Agent', engine: 'Engine', info: 'Info', warn: 'Warn', error: 'Error', search: 'Search lines (text or regex)', wrap: 'Wrap', pause: 'Pause', resume: 'Resume', copy: 'Copy all', open: 'Open file', newLines: n => `${n} new lines`, file: p => `Full record file: ${p}` },
+  ko: { model: '모델과 추론 강도', soon: '준비 중', soonNote: '새 공급자가 여기에 추가될 예정', add: '공급자 추가 · OpenAI 호환 프록시', live: '라이브 경로, 라우트 프록시로 제공 중', next: '다음 메시지부터 적용. 프로토콜 변경 시에만 재시작 안내.', visionOn: '이미지 지원', visionOff: '이미지 미지원', general: '일반', channels: '채널', appearance: '화면', system: '시스템', permissions: '권한', identity: '프로필', identityNote: '채팅에 표시할 이름과 사진 설정', all: '전체', app: '앱', agent: '에이전트', engine: '엔진', info: '정보', warn: '경고', error: '오류', search: '로그 검색 (텍스트 또는 정규식)', wrap: '줄바꿈', pause: '일시 정지', resume: '계속', copy: '전체 복사', open: '파일 열기', newLines: n => `새 로그 ${n}줄`, file: p => `전체 기록 파일: ${p}` }
+}
+window.COPY.polish = window.UI_POLISH_COPY[(document.documentElement?.lang || 'en').startsWith('ko') ? 'ko' : 'en']

@@ -743,7 +743,7 @@ button.nav-ctl.is-busy::after {
   margin-bottom: var(--s3);
 }
 .usage-lane-body { display: flex; flex-direction: column; gap: 0.55rem; min-width: 0; }
-.usage-seg { display: flex; align-items: center; gap: 0.5rem; }
+.usage-seg { display: grid; grid-template-columns: 3.4rem minmax(0, 1fr) 4.6rem 7rem; align-items: center; gap: 0.5rem; }
 .usage-seg-label { width: 3.4rem; flex: none; color: var(--fg-faint); font-size: 0.72rem; text-align: right; }
 .usage-bar { flex: 1; height: 10px; border-radius: var(--radius-pill); background: var(--panel-raised); border: 1px solid var(--border); overflow: hidden; min-width: 4rem; }
 .usage-bar.unreadable {
@@ -753,7 +753,7 @@ button.nav-ctl.is-busy::after {
 .usage-fill.warn { background: var(--warn); }
 .usage-fill.hot { background: var(--danger); }
 .usage-seg-pct { width: 4.6rem; flex: none; font-size: 0.72rem; color: var(--fg); font-variant-numeric: tabular-nums; }
-.usage-seg-meta { flex: none; font-size: 0.7rem; color: var(--fg-faint); white-space: nowrap; }
+.usage-seg-meta { flex: none; font-size: 0.7rem; color: var(--fg-faint); white-space: normal; overflow-wrap: anywhere; }
 .usage-lane-note { font-size: 0.72rem; color: var(--fg-faint); }
 /* Ollama 7-day spend strip (2026-10-07): one column per daily bucket,
    bar height = usd relative to the busiest day. Same tokens as .usage-bar. */
@@ -1579,12 +1579,6 @@ button.mem-node:focus-visible { outline: 2px solid var(--accent-ring); outline-o
 }
 
 /* ── /logs session log viewer (v0.0.20) ─────────────────────────────────── */
-.log-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  margin-bottom: 0.6rem;
-}
 .log-follow {
   display: flex;
   align-items: center;
@@ -1596,8 +1590,8 @@ button.mem-node:focus-visible { outline: 2px solid var(--accent-ring); outline-o
 .log-pane {
   /* terminal register on purpose: this pane is the one place raw process
      output shows, and it should read as such, not as app chrome */
-  background: #0a0b0d;
-  border: 1px solid #26282c;
+  background: var(--panel);
+  border: 1px solid var(--border);
   border-radius: var(--radius-s);
   height: 60vh;
   overflow-y: auto;
@@ -1606,10 +1600,7 @@ button.mem-node:focus-visible { outline: 2px solid var(--accent-ring); outline-o
   font-size: 0.78rem;
   line-height: 1.5;
 }
-.log-line { white-space: pre-wrap; word-break: break-all; }
-.log-main { color: var(--fg-faint); }
-.log-agent { color: var(--fg); }
-.log-err { color: #e07a7a; }
+
 .log-gap { color: var(--fg-dim); font-style: italic; text-align: center; padding: 0.3rem 0; }
 .log-empty { color: var(--fg-faint); font-style: italic; }
 .log-file-note { margin-top: 0.5rem; font-size: 0.78rem; color: var(--fg-faint); word-break: break-all; }
@@ -2141,3 +2132,62 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .qb-popover code { display: block; overflow-wrap: anywhere; }
 .qb-popover a, .qb-popover button { margin: 8px 8px 0 0; }
 .qb-popover p[role="status"] { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* 0.4.0 UI polish: provider cards, settings rail, filtered log toolbar. */
+.providers-grid > .category { min-width: 0; }
+.provider-card .entry-row { border: 0; padding-top: 0; align-items: start; }
+.provider-card .usage-lane-name { display: none; }
+.provider-card .usage-lane { border: 0; padding: 0; }
+.polish-secondary-action { display: none !important; }
+.model-effort-card { position: relative; }
+.model-effort-card .agent-control-row { max-width: 65%; }
+.route-receipt { position: absolute; right: var(--s4); top: var(--s4); max-width: 32%; border: 1px solid var(--border); border-radius: var(--radius); padding: var(--s3); overflow-wrap: anywhere; font-size: 0.8rem; }
+.coming-soon { display: flex; flex-direction: column; justify-content: center; }
+.add-provider > summary { cursor: pointer; color: var(--fg-dim); }
+.add-provider #set-custom { border: 0; margin-bottom: 0; padding: var(--s4) 0 0; }
+.settings-layout { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: var(--s6); align-items: start; }
+.settings-rail { position: sticky; top: var(--s4); display: flex; flex-direction: column; gap: 4px; }
+.settings-rail a { padding: 0.5rem 0.75rem; color: var(--fg-dim); text-decoration: none; border-radius: var(--radius-s); }
+.settings-rail a:hover, .settings-rail a:focus { background: rgb(var(--accent-rgb) / 0.14); color: var(--fg); }
+.settings-content { display: flex; flex-direction: column; min-width: 0; }
+.settings-content .settings-group { min-width: 0; width: 100%; }
+.settings-content .category-label { text-transform: uppercase; letter-spacing: 0.06em; }
+.settings-content #set-perms-rows .agent-control-row { border-bottom: 1px solid var(--border); padding: 0.65rem 0; }
+.log-toolbar { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.6rem 0; background: var(--panel); }
+.log-chips { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: var(--radius-pill); }
+.log-chip { background: transparent; border: 0; color: var(--fg-faint); padding: 0.3rem 0.6rem; font-size: 0.78rem; border-radius: var(--radius-pill); }
+.log-chip.active { background: rgb(var(--accent-rgb) / 0.18); color: var(--fg); }
+#lg-search { flex: 1; min-width: 10rem; width: auto; }
+.log-pane-wrap { position: relative; min-width: 0; }
+.log-line { display: grid; grid-template-columns: 4.5rem 3.5rem minmax(0, 1fr); gap: 0.6rem; padding: 0.15rem 0; }
+.log-time { color: var(--fg-faint); font-variant-numeric: tabular-nums; }
+.log-source { align-self: start; font-size: 0.68rem; border: 1px solid var(--border); border-radius: 4px; text-align: center; color: var(--fg-dim); }
+.log-text { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.nowrap .log-text { white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+.log-warn { background: rgb(217 161 95 / 0.08); color: var(--warn); }
+.log-error { background: rgb(217 105 95 / 0.1); color: var(--danger); }
+.log-new { position: absolute; bottom: var(--s4); left: 50%; transform: translateX(-50%); border-radius: var(--radius-pill); }
+#lg-pause.is-paused { color: var(--warn); border-color: var(--warn); }
+@media (max-width: 860px) {
+  .providers-grid { grid-template-columns: minmax(0, 1fr); }
+  .providers-grid > .span-2 { grid-column: auto; }
+  .settings-layout { grid-template-columns: minmax(0, 1fr); gap: var(--s3); }
+  .settings-rail { position: static; flex-direction: row; flex-wrap: wrap; }
+  .log-toolbar { gap: 0.4rem; }
+}
+@media (max-width: 600px) {
+  .model-effort-card .agent-control-row { max-width: 100%; }
+  .route-receipt { position: static; max-width: none; margin-top: var(--s3); }
+  .usage-seg { grid-template-columns: 2.7rem minmax(0, 1fr) 3rem 4.5rem; gap: 0.3rem; }
+  .usage-seg-label, .usage-seg-pct { width: auto; }
+  .usage-bar { min-width: 0; }
+  .settings-content .agent-control-row { flex-wrap: wrap; }
+  .settings-content input, .settings-content select { min-width: 0; max-width: 100%; }
+  .log-line { grid-template-columns: 3.9rem 2.8rem minmax(0, 1fr); gap: 0.3rem; }
+  .log-chips { max-width: 100%; }
+  #lg-search { flex-basis: 100%; }
+}
+@media (max-width: 600px) {
+  .nav-tabs { flex-wrap: wrap; max-width: 100%; width: 100%; }
+  .nav-status { flex-wrap: wrap; }
+}

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Scheherazade — Logs</title>
+    <title>Scheherazade - Logs</title>
     <link rel="stylesheet" href="/css/app.css" />
   </head>
   <body>
@@ -16,12 +16,19 @@
       <p class="subtitle" id="lg-subtitle"></p>
 
       <div class="log-toolbar">
+        <div class="log-chips" id="lg-sources"></div>
+        <div class="log-chips" id="lg-levels"></div>
+        <input id="lg-search" type="search" />
+        <label class="log-follow"><input type="checkbox" id="lg-wrap" checked /> <span id="lg-wrap-label"></span></label>
+        <button class="secondary" id="lg-pause"></button>
         <button class="secondary" id="lg-copy"></button>
-        <label class="log-follow"><input type="checkbox" id="lg-follow" checked /> <span id="lg-follow-label"></span></label>
+        <button class="secondary" id="lg-open" disabled></button>
+        <label class="log-follow hidden"><input type="checkbox" id="lg-follow" checked /> <span id="lg-follow-label"></span></label>
       </div>
-
-      <!-- aria-live off on purpose: a firehose pane must not narrate itself -->
-      <div class="log-pane" id="lg-pane"></div>
+      <div class="log-pane-wrap">
+        <div class="log-pane" id="lg-pane"></div>
+        <button class="log-new hidden" id="lg-new"></button>
+      </div>
       <p class="log-file-note" id="lg-file-note"></p>
     </div>
 

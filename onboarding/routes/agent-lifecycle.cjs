@@ -160,7 +160,7 @@ function createRoutes(staticCtx) {
           r = { mode: 'restart', reason: 'preview threw' }
         }
         const mode = r && r.mode === 'live' ? 'live' : 'restart'
-        sendJson(res, 200, { mode, reason: (r && r.reason) || '' })
+        sendJson(res, 200, { mode, reason: (r && r.reason) || '', ...(r?.vision ? { vision: r.vision } : {}) })
         return
       },
     },

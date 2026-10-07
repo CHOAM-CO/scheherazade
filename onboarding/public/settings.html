@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Scheherazade — Settings</title>
+    <title>Scheherazade - Settings</title>
     <link rel="stylesheet" href="/css/app.css" />
   </head>
   <body>
@@ -32,13 +32,23 @@
       <!-- 대공사 2026-08-05: groups reflow into two columns on wide windows
            (요구 ⑧). DANGER always spans full width — it must never sit
            beside an innocent group. -->
-      <div class="page-grid">
+      <div class="settings-layout">
+      <nav class="settings-rail" aria-label="Settings">
+        <a href="#set-identity" data-polish="general"></a>
+        <a href="/channels" data-polish="channels"></a>
+        <a href="/appearance" data-polish="appearance"></a>
+        <a href="#set-sudo" data-polish="system"></a>
+        <a href="#set-perms" data-polish="permissions"></a>
+      </nav>
+      <div class="page-grid settings-content">
 
       <!-- ── AGENT ───────────────────────────────────────────────────────── -->
       <section class="settings-group">
         <h2 class="settings-group-label" id="set-group-agent"></h2>
 
         <div class="category" id="set-identity">
+          <div class="category-label" data-polish="identity"></div>
+          <p class="subtitle" data-polish="identityNote"></p>
           <div class="agent-control-row">
             <label for="set-rename-input" id="set-rename-label"></label>
             <input type="text" id="set-rename-input" />
@@ -231,6 +241,7 @@
       </section>
 
       </div><!-- /.page-grid -->
+      </div>
     </div>
 
     <div class="toast" id="set-toast"></div>

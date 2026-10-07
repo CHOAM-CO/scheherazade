@@ -1204,7 +1204,7 @@ function previewRoute(overrides = {}) {
   if (typeof overrides.provider === 'string' && overrides.provider) config.PROVIDER = overrides.provider
   if (typeof overrides.effort === 'string' && overrides.effort) config.EFFORT_LEVEL = overrides.effort
   const { decision } = routeDecisionFor(config)
-  return { mode: decision.mode, reason: decision.reason }
+  return { mode: decision.mode, reason: decision.reason, vision: laneVision({ provider: config.PROVIDER, model: config.MODEL }) }
 }
 
 async function applyRouteInner() {
