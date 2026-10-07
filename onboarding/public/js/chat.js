@@ -1725,6 +1725,22 @@
     resolveVisionState()
   }
 
+  // Non-blocking cue after a LIVE switch (0.3.15): the status row carries one
+  // short line for a few seconds, then hands itself back to setStatus (its
+  // dedupe key is reset so the next probe repaints). No modal, no toast.
+  let liveCueTimer = null
+  function flashLiveCue(text) {
+    const el = $('ct-status')
+    if (!el) return
+    clearTimeout(liveCueTimer)
+    el.textContent = text
+    el.classList.remove('chat-status-down')
+    el.classList.add('chat-status-up')
+    liveCueTimer = setTimeout(() => {
+      if (el.textContent === text) { el.textContent = ''; lastStatus = null }
+    }, 4000)
+  }
+
   async function initModelSwitch() {
     if (!modelSel || !window.SCHZ_MODEL_CATALOG || !SET) return
     await window.SCHZ_CATALOG.refresh()
@@ -1747,9 +1763,14 @@
       if (model === msModel || msBusy) { e.target.value = msModel; return }
       const provider = msProviderFor(model)
       if (!provider) { e.target.value = msModel; return } // fail closed
+      // Live switch (0.3.15, Mino 10-07 19:12): no dialog -- the proxy takes
+      // the pick on the next message, so there is nothing to warn about.
+      // The confirm stays ONLY for a restart (the existing wording).
       const mode = await window.routeSwitchPreview(provider !== msProvider ? { model, provider } : { model })
-      const ok = await window.confirmDialog(mode === 'live' ? SET.switchConfirmLive(model) : SET.switchConfirm(model), SET.switchOk, SET.cancel)
-      if (!ok) { e.target.value = msModel; return }
+      if (mode !== 'live') {
+        const ok = await window.confirmDialog(SET.switchConfirm(model), SET.switchOk, SET.cancel)
+        if (!ok) { e.target.value = msModel; return }
+      }
       const prevModel = msModel
       const prevProvider = msProvider
       msModel = model
@@ -1764,7 +1785,7 @@
         })
         // mode 'live' (route proxy): nothing restarted, the chip can re-read
         // spawn-info at once; otherwise follow the restart settle as before.
-        if (r && r.mode === 'live') resolveVisionState()
+        if (r && r.mode === 'live') { resolveVisionState(); flashLiveCue(SET.switchedLive(model, msEffort)) }
         else msSettle()
       } catch (err) {
         console.error('model swap failed:', err)
@@ -1792,8 +1813,10 @@
         const effort = e.target.value
         if (effort === msEffort || msBusy) { e.target.value = msEffort; return }
         const mode = await window.routeSwitchPreview({ effort })
-        const ok = await window.confirmDialog(mode === 'live' ? SET.effortConfirmLive(effort) : SET.effortConfirm(effort), SET.switchOk, SET.cancel)
-        if (!ok) { e.target.value = msEffort; return }
+        if (mode !== 'live') {
+          const ok = await window.confirmDialog(SET.effortConfirm(effort), SET.switchOk, SET.cancel)
+          if (!ok) { e.target.value = msEffort; return }
+        }
         const prevEffort = msEffort
         msEffort = effort
         msBusy = true
@@ -1805,7 +1828,7 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ effort }),
           })
-          if (r && r.mode === 'live') resolveVisionState()
+          if (r && r.mode === 'live') { resolveVisionState(); flashLiveCue(SET.switchedLive(msModel, effort)) }
           else msSettle()
         } catch (err) {
           console.error('effort swap failed:', err)

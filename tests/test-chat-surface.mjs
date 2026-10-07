@@ -257,5 +257,26 @@ assert(css.includes('.chat-attach-chips:empty { display: none; }'), 'strip hidde
 assert(js.includes('const IMG_MARKER_RE = /^\\[image attached: (.+?)(?: — [^\\]]*)?\\]$/'), 'IMG_MARKER_RE unchanged')
 assert(js.includes('const markers = pendingAttachments.map(markerFor).join(\'\\n\')'), 'send() still appends one marker per attachment')
 
+console.log('\nN. live switches skip the confirm dialog (0.3.15, Mino 10-07 19:12)')
+{
+  const connectors = readFileSync(path.join(root, 'onboarding', 'public', 'js', 'connectors.js'), 'utf8')
+  assert(!js.includes('switchConfirmLive') && !js.includes('effortConfirmLive') && !connectors.includes('switchConfirmLive') && !connectors.includes('effortConfirmLive') && !copy.includes('ConfirmLive'), 'the live confirm wordings are gone from chat.js, connectors.js and copy.js')
+  const modelBlock = js.slice(js.indexOf('modelSel.onchange = async'), js.indexOf('effortSel.onchange = async'))
+  const effortBlock = js.slice(js.indexOf('effortSel.onchange = async'), js.indexOf('async function initModelSwitch') > 0 ? js.length : js.length)
+  for (const [name, block] of [['chat model chip', modelBlock], ['chat effort chip', effortBlock]]) {
+    assert(/if \(mode !== 'live'\) \{\s*\n\s*const ok = await window\.confirmDialog\(SET\.(switch|effort)Confirm\(/.test(block), `${name}: confirmDialog is reached ONLY when the preview is not live (restart wording)`)
+    assert((block.match(/confirmDialog/g) || []).length === 1, `${name}: exactly one confirmDialog call (no live variant)`)
+  }
+  assert(js.includes('function flashLiveCue(') && /r\.mode === 'live'\) \{ resolveVisionState\(\); flashLiveCue\(SET\.switchedLive\(/.test(js), 'chat: a live apply flashes a short status-row cue (no modal, no toast)')
+  assert(copy.includes('switchedLive:') && /Takes effect on the next message/.test(copy), 'copy: switchedLive wording names the next-message semantics')
+  const connModel = connectors.slice(connectors.indexOf("const mode = await window.routeSwitchPreview(provider !== currentProvider"), connectors.indexOf("$('set-ollama-url-hint')"))
+  const connUrl = connectors.slice(connectors.indexOf("const mode = await window.routeSwitchPreview(currentProvider !== 'ollama'"), connectors.indexOf("$('set-effort-select').onchange"))
+  const connEffort = connectors.slice(connectors.indexOf("$('set-effort-select').onchange"), connectors.indexOf('settleApplyState()', connectors.indexOf("$('set-effort-select').onchange")) + 'settleApplyState()'.length)
+  for (const [name, block] of [['engine model select', connModel], ['engine ollama-by-URL apply', connUrl], ['engine effort select', connEffort]]) {
+    assert(/if \(mode !== 'live'\) \{[\s\S]{0,200}window\.confirmDialog\(/.test(block) && (block.match(/confirmDialog/g) || []).length === 1, `${name}: confirm only on restart, exactly one confirmDialog call`)
+    assert(/accepted\.mode === 'live'\) renderApplyState\(\)/.test(block), `${name}: live apply re-renders the existing apply-state line as the cue`)
+  }
+}
+
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)

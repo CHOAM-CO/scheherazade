@@ -1130,7 +1130,9 @@ function routeConfigFor(env) {
 // Best-effort: tell the lane's session about the new model/effort so the
 // engine's context window / compaction / vision gating follow the proxied
 // model on the CATALOG route (dsh-lane.mjs POST /select-model; declared
-// routes answer applied:false and keep the spawn window). Never throws.
+// routes answer applied:false for the MODEL and keep the spawn window).
+// Effort rides every call, effort-only switches included: the lane applies
+// it on any route and moves its own DSH_EFFORT (0.3.15). Never throws.
 async function notifyLaneSelectModel(model, effort) {
   let ep
   try {

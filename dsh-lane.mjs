@@ -77,7 +77,9 @@ const DSH_ROUTE_API = process.env.DSH_ROUTE_API || 'openai-completions'
 const DSH_ROUTE_BASE_URL = process.env.DSH_ROUTE_BASE_URL || process.env.OLLAMA_BASE_URL || 'http://localhost:11434/v1'
 const DSH_ROUTE_KEY_ENV = process.env.DSH_ROUTE_KEY_ENV || 'OLLAMA_API_KEY'
 const DSH_MODEL = process.env.DSH_MODEL || 'glm-5.2:cloud'
-const DSH_EFFORT = process.env.DSH_EFFORT || 'max'
+// `let`: POST /select-model moves it on a live effort switch (and mirrors it
+// into process.env.DSH_EFFORT) so the lane's own view never lags the proxy.
+let DSH_EFFORT = process.env.DSH_EFFORT || 'max'
 // `let`: POST /select-model (route proxy live switch, catalog route) re-reads
 // the new model's modalities from the engine and updates this in place.
 let DSH_MODEL_VISION = process.env.DSH_MODEL_VISION === '1'
@@ -130,6 +132,17 @@ function renderChannelTag ({ content, meta = {} }) {
 if (!MEM) { errLog('MEM is required'); process.exit(2) }
 
 const endpointFile = () => path.join(MEM, '.ingest-endpoint.json')
+// DATA_HOME/.live-route.json {model, effort, since} (0.3.15): the model +
+// effort in force RIGHT NOW, written at session start and on every
+// /select-model. The agent's $DSH_EFFORT is the spawn value and goes stale
+// after a live switch (Mino 10-07 19:12 screenshot: UI low, agent "env says
+// high"); this file is what it reads instead. Best-effort, never throws.
+const liveRouteFile = () => path.join(MEM, '.live-route.json')
+function writeLiveRoute (model, effort) {
+  try {
+    fs.writeFileSync(liveRouteFile(), JSON.stringify({ model: model || null, effort: effort || null, since: new Date().toISOString() }) + '\n')
+  } catch (e) { log(`live-route file write failed: ${e.message.slice(0, 120)}`) }
+}
 const pendingFile = () => path.join(MEM, '.pending-inbound.json')
 const heartbeatFile = () => path.join(MEM, '.lane-heartbeat.json')
 const dshHome = () => path.join(MEM, '.dsh-lane-home')
@@ -626,6 +639,7 @@ async function main () {
   try { await client.selectModel(sessionId, DSH_PROVIDER, DSH_MODEL, DSH_EFFORT === 'off' ? undefined : DSH_EFFORT) } catch (e) {
     log(`selectModel skipped: ${e.message.slice(0, 120)}`)
   }
+  writeLiveRoute(DSH_MODEL, DSH_EFFORT)
 
   // Skill-catalog nudge (0.2.4, measured 2026-08-20): the session is created
   // above BEFORE skill-filesystem finishes its first discovery, and
@@ -1298,9 +1312,13 @@ async function main () {
     // POST /select-model {model, effort} (2026-10-07, route proxy live
     // switch): main.cjs already moved the proxy's live config; this moves the
     // ENGINE's session to the same model so its context window / compaction
-    // / vision gating follow it. Catalog route only -- a declared route's
-    // model rows are fixed in the patch at boot, so it answers applied:false
-    // and keeps the spawn window (main logs the mismatch). Same token gate.
+    // / vision gating follow it. Model: catalog route only -- a declared
+    // route's model rows are fixed in the patch at boot, so it answers
+    // applied:false for the model and keeps the spawn window (main logs the
+    // mismatch). Effort (0.3.15): applied on EVERY route -- selectModel on
+    // the session's current model with the new level, DSH_EFFORT +
+    // process.env.DSH_EFFORT moved so the lane's view matches the wire.
+    // .live-route.json is rewritten on every call. Same token gate.
     if (req.url === '/select-model') {
       if (!tokenOk(req.headers['x-ingest-token'])) return send(403, { error: 'bad token' })
       if (childExited) return send(503, { error: 'agent not running' })
@@ -1312,13 +1330,32 @@ async function main () {
         const model = String(payload.model == null ? '' : payload.model).trim()
         const effort = String(payload.effort == null ? '' : payload.effort).trim()
         if (!model) return send(400, { error: 'model required' })
-        if (DSH_ROUTE !== 'anthropic-catalog') return send(200, { ok: true, applied: false, reason: 'declared route keeps its spawn model rows' })
+        const effortChanged = Boolean(effort) && effort !== DSH_EFFORT
+        if (DSH_ROUTE !== 'anthropic-catalog') {
+          // Declared route: the proxy serves `model` on the wire, the engine
+          // keeps its spawn rows. Effort still moves the session.
+          if (effortChanged) {
+            try {
+              await client.selectModel(sessionId, DSH_PROVIDER, DSH_MODEL, effort !== 'off' ? effort : undefined)
+            } catch (e) {
+              errLog(`select-model effort ${DSH_EFFORT} -> ${effort} (declared ${DSH_PROVIDER}/${DSH_MODEL}) failed: ${e.message.slice(0, 160)}`)
+              return send(502, { error: `selectModel failed: ${e.message.slice(0, 160)}` })
+            }
+            DSH_EFFORT = effort
+            process.env.DSH_EFFORT = effort
+            log(`select-model: declared route, effort now ${effort} (model rows keep ${DSH_MODEL}; wire serves ${model})`)
+          }
+          writeLiveRoute(model, effort || DSH_EFFORT)
+          return send(200, { ok: true, applied: false, effortApplied: effortChanged, effort: effort || DSH_EFFORT, reason: 'declared route keeps its spawn model rows' })
+        }
         try {
           await client.selectModel(sessionId, 'anthropic', model, effort && effort !== 'off' ? effort : undefined)
         } catch (e) {
           errLog(`select-model ${model}/${effort || '-'} failed: ${e.message.slice(0, 160)}`)
           return send(502, { error: `selectModel failed: ${e.message.slice(0, 160)}` })
         }
+        if (effort) { DSH_EFFORT = effort; process.env.DSH_EFFORT = effort }
+        writeLiveRoute(model, effort || DSH_EFFORT)
         // Vision follows the new model: ask the engine what it declares.
         // Fail-soft -- an unreadable list leaves the spawn-time answer.
         let vision = null
@@ -1330,7 +1367,7 @@ async function main () {
           if (Array.isArray(input)) { vision = input.includes('image'); DSH_MODEL_VISION = vision }
         } catch (e) { log(`select-model: model list unreadable (${e.message.slice(0, 120)}); vision gate unchanged`) }
         log(`select-model: session now ${model}/${effort || '-'} (vision ${vision === null ? 'unchanged' : vision})`)
-        return send(200, { ok: true, applied: true, model, effort: effort || null, vision })
+        return send(200, { ok: true, applied: true, effortApplied: effortChanged, model, effort: effort || null, vision })
       })
       return
     }

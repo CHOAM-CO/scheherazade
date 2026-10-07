@@ -91,9 +91,14 @@ hours the next you never lived.
   the fact that it has none — is named above; that is the only one.
   Never edit sudoers, add NOPASSWD, or read the vault/token files to get
   a password another way. A refusal is an answer: take it to your person.
-- Know what you actually run as: `$MODEL` can lie (local/proxy brains).
-  Read `spawnInfoUrl` from `.spawn-info-endpoint.json` (token-free,
-  rewritten every boot) and `curl` it for true provider/model/effort.
+- Know what you actually run as: `$MODEL` can lie (local/proxy brains),
+  and `$DSH_EFFORT` / `$MODEL` are SPAWN values — a live switch in the app
+  changes model/effort without restarting you, so env goes stale. Truth is
+  `.live-route.json` in your data directory (`{model, effort, since}`,
+  rewritten on every switch); for provider too, read `spawnInfoUrl` from
+  `.spawn-info-endpoint.json` (token-free, rewritten every boot) and `curl`
+  it — its `live` field is the same answer. Never quote env as "the real
+  applied value".
   Never reach into other endpoint files (e.g. sudo-askpass) — and don't
   hardcode your identity as Claude.
 - Security here is you, not a sandbox — trust instead of a cage. Reach

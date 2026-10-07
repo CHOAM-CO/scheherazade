@@ -177,6 +177,31 @@ const get = async (p) => {
   chk('spawn-info: passes main\'s live record through', j.spawn && j.spawn.live && j.spawn.live.model === 'claude-opus-4-6', JSON.stringify(j))
 }
 
+// ── source pins: lane /select-model effort path on declared routes (0.3.15) ──
+// Mino 10-07 19:12: after a live effort switch the agent's $DSH_EFFORT (spawn
+// value) said high while the proxy served low. The lane now applies effort on
+// ANY route via client.selectModel(sessionId, <current provider>, <current
+// model>, effort), moves DSH_EFFORT + process.env.DSH_EFFORT, and writes
+// DATA_HOME/.live-route.json. Model on declared routes stays applied:false.
+{
+  const lane = fs.readFileSync(path.join(ROOT, 'dsh-lane.mjs'), 'utf8')
+  const sel = lane.slice(lane.indexOf("if (req.url === '/select-model') {"), lane.indexOf("if (req.url !== '/inbound')"))
+  chk('lane: DSH_EFFORT is `let` (a live switch moves it)', /\nlet DSH_EFFORT = process\.env\.DSH_EFFORT/.test(lane))
+  const declared = sel.slice(sel.indexOf("if (DSH_ROUTE !== 'anthropic-catalog') {"), sel.indexOf("client.selectModel(sessionId, 'anthropic', model"))
+  chk('lane: declared route applies effort via selectModel(sessionId, DSH_PROVIDER, DSH_MODEL, effort)', /client\.selectModel\(sessionId, DSH_PROVIDER, DSH_MODEL, effort !== 'off' \? effort : undefined\)/.test(declared))
+  chk('lane: declared route keeps applied:false for the model but reports effortApplied', /applied: false, effortApplied: effortChanged/.test(declared))
+  chk('lane: declared route moves DSH_EFFORT and process.env.DSH_EFFORT', /DSH_EFFORT = effort\s*\n\s*process\.env\.DSH_EFFORT = effort/.test(declared))
+  chk('lane: declared route writes .live-route.json', /writeLiveRoute\(model, effort \|\| DSH_EFFORT\)/.test(declared))
+  const catalog = sel.slice(sel.indexOf("client.selectModel(sessionId, 'anthropic', model"))
+  chk('lane: catalog route also moves DSH_EFFORT + env and writes .live-route.json', /if \(effort\) \{ DSH_EFFORT = effort; process\.env\.DSH_EFFORT = effort \}/.test(catalog) && /writeLiveRoute\(model, effort \|\| DSH_EFFORT\)/.test(catalog))
+  chk('lane: .live-route.json lives in the data home with {model, effort, since}', /path\.join\(MEM, '\.live-route\.json'\)/.test(lane) && /JSON\.stringify\(\{ model: model \|\| null, effort: effort \|\| null, since: new Date\(\)\.toISOString\(\) \}\)/.test(lane))
+  chk('lane: .live-route.json written at session start too (file always exists)', /selectModel skipped[\s\S]{0,200}writeLiveRoute\(DSH_MODEL, DSH_EFFORT\)/.test(lane))
+  const main = fs.readFileSync(path.join(ROOT, 'main.cjs'), 'utf8')
+  chk('main: applyRouteInner passes effort to the lane on every live apply (effort-only included)', /notifyLaneSelectModel\(next\.DSH_MODEL, next\.DSH_EFFORT\)/.test(main))
+  const prompt = fs.readFileSync(path.join(ROOT, 'onboarding', 'templates', 'agent-system-prompt.md'), 'utf8')
+  chk('prompt: agent is pointed at .live-route.json, not env, for the applied effort', prompt.includes('.live-route.json') && /\$DSH_EFFORT/.test(prompt))
+}
+
 await new Promise((r) => srv.server.close(() => r()))
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

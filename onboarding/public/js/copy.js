@@ -1452,10 +1452,10 @@ window.COPY = {
     effortLabel: 'Effort',
     switchConfirm: (m) => `Switch model to ${m}? The agent will restart.`,
     effortConfirm: (e) => `Switch effort to ${e}? The agent will restart.`,
-    // Live variants (0.3.14): shown when /api/agent/route-preview says the
-    // route proxy absorbs the pick -- no restart, the next message uses it.
-    switchConfirmLive: (m) => `Switch model to ${m}? Takes effect on the next message.`,
-    effortConfirmLive: (e) => `Switch effort to ${e}? Takes effect on the next message.`,
+    // Live switch cue (0.3.15): when /api/agent/route-preview says the route
+    // proxy absorbs the pick there is NO dialog; this one line sits in the
+    // chat status row for a few seconds after the apply.
+    switchedLive: (m, e) => `Switched to ${m} / ${e}. Takes effect on the next message.`,
     switchOk: 'Switch',
     cancel: 'Cancel',
 
