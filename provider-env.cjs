@@ -583,30 +583,131 @@ function anthropicRouteEnv(key, config) {
 // (un-namespaced slot -- CLAUDE_CONFIG_DIR namespacing note in the old row
 // comment, git history); elsewhere ~/.claude/.credentials.json. Returns
 // { token } or { error: reason }.
-function readClaudeCliToken() {
+// --- Claude Code CLI credential store: read / refresh / write-back ---------
+// 2026-10-07 (Mino, idea home 12:58): "세라에서 클로드 토큰 만료됐을때 재로그인으로
+// 토큰 리프레시 안되는거같음. 터미널 열고 클로드코드 -> 로그인 해줘야 다시 되더라고".
+// The old promise ("no refresh here, writing into the CLI's store is not ours
+// to do") is REVISED: the CLI store carries a refreshToken, and Anthropic's
+// OAuth token endpoint rotates the pair on refresh. Refreshing without
+// writing back would strand the CLI's own copy, so we refresh AND write the
+// new pair into the same store (keychain item on macOS, ~/.claude/.credentials.json
+// elsewhere), keeping `claude` and Sera on one login. Only the three rotated
+// fields change; every other field in the store is preserved verbatim.
+const CLAUDE_CLI_OAUTH_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token'
+// Claude Code's public OAuth client id (same value pi-ai ships, base64-decoded).
+const CLAUDE_CLI_OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
+const CLAUDE_CLI_KEYCHAIN_SERVICE = 'Claude Code-credentials'
+// Row id of the CLI-login route; main.cjs compares against this (the packaging
+// test forbids the raw literal in main.cjs so the bundled-CLI era cannot creep back).
+const CLAUDE_CLI_PROVIDER_ID = 'claude-cli'
+const CLAUDE_CLI_TOKEN_HEADROOM_MS = 5 * 60 * 1000
+
+function readClaudeCliStore() {
   const fsMod = require('node:fs')
   const pathMod = require('node:path')
   const osMod = require('node:os')
-  let raw = null
   const fileP = pathMod.join(osMod.homedir(), '.claude', '.credentials.json')
-  try { raw = fsMod.readFileSync(fileP, 'utf8') } catch {}
+  let raw = null
+  let source = null
+  try { raw = fsMod.readFileSync(fileP, 'utf8'); source = { kind: 'file', path: fileP } } catch {}
   if (raw == null && process.platform === 'darwin') {
     try {
       const { execFileSync } = require('node:child_process')
-      raw = execFileSync('security', ['find-generic-password', '-s', 'Claude Code-credentials', '-w'], { encoding: 'utf8', timeout: 5000 })
+      raw = execFileSync('security', ['find-generic-password', '-s', CLAUDE_CLI_KEYCHAIN_SERVICE, '-w'], { encoding: 'utf8', timeout: 5000 })
+      let account = osMod.userInfo().username
+      try {
+        const meta = execFileSync('security', ['find-generic-password', '-s', CLAUDE_CLI_KEYCHAIN_SERVICE], { encoding: 'utf8', timeout: 5000 })
+        const m = /"acct"<blob>="([^"]*)"/.exec(meta)
+        if (m) account = m[1]
+      } catch {}
+      source = { kind: 'keychain', account }
     } catch {}
   }
   if (raw == null) return { error: 'no Claude Code CLI login found (no ~/.claude/.credentials.json and no keychain item)' }
   let parsed
   try { parsed = JSON.parse(raw) } catch { return { error: 'the Claude Code CLI credential store could not be parsed' } }
+  return { parsed, source }
+}
+
+function writeClaudeCliStore(source, parsed) {
+  const json = JSON.stringify(parsed)
+  if (source.kind === 'file') {
+    const fsMod = require('node:fs')
+    const tmp = source.path + '.tmp-' + process.pid
+    fsMod.writeFileSync(tmp, json, { mode: 0o600 })
+    fsMod.renameSync(tmp, source.path)
+    return
+  }
+  const { execFileSync } = require('node:child_process')
+  // -U updates the existing item in place (same service + account).
+  execFileSync('security', ['add-generic-password', '-U', '-a', source.account, '-s', CLAUDE_CLI_KEYCHAIN_SERVICE, '-w', json], { encoding: 'utf8', timeout: 5000 })
+}
+
+// Refresh the CLI login if its access token is expired or about to expire.
+// Resolves { refreshed: false } when still valid, { refreshed: true } after a
+// successful rotate + write-back, or { error } (never throws). deps lets tests
+// inject readStore / writeStore / fetchFn / now.
+async function refreshClaudeCliToken(deps) {
+  const d = deps || {}
+  const readStore = d.readStore || readClaudeCliStore
+  const writeStore = d.writeStore || writeClaudeCliStore
+  const fetchFn = d.fetchFn || globalThis.fetch
+  const now = d.now || Date.now
+  const st = readStore()
+  if (st.error) return { error: st.error }
+  const parsed = st.parsed
+  const holder = parsed && parsed.claudeAiOauth ? parsed.claudeAiOauth : parsed
+  if (!holder || typeof holder !== 'object') return { error: 'the Claude Code CLI credential store holds no OAuth block' }
+  const expiresAt = Number(holder.expiresAt)
+  if (holder.accessToken && Number.isFinite(expiresAt) && expiresAt >= now() + CLAUDE_CLI_TOKEN_HEADROOM_MS) {
+    return { refreshed: false }
+  }
+  if (!holder.refreshToken || typeof holder.refreshToken !== 'string') {
+    return { error: 'the Claude Code CLI login is expired and holds no refresh token; run `claude` once to log in again' }
+  }
+  if (typeof fetchFn !== 'function') return { error: 'no fetch available for the OAuth refresh' }
+  let res
+  try {
+    res = await fetchFn(CLAUDE_CLI_OAUTH_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({ grant_type: 'refresh_token', client_id: CLAUDE_CLI_OAUTH_CLIENT_ID, refresh_token: holder.refreshToken }),
+    })
+  } catch (e) {
+    return { error: `Claude Code login refresh request failed: ${e && e.message ? e.message : String(e)}` }
+  }
+  let body = ''
+  try { body = await res.text() } catch {}
+  if (!res.ok) {
+    return { error: `Claude Code login refresh rejected (HTTP ${res.status}); run \`claude\` once to log in again${body ? `: ${body.slice(0, 200)}` : ''}` }
+  }
+  let data
+  try { data = JSON.parse(body) } catch { return { error: 'Claude Code login refresh returned invalid JSON' } }
+  if (!data || typeof data.access_token !== 'string' || !data.access_token) {
+    return { error: 'Claude Code login refresh returned no access token' }
+  }
+  holder.accessToken = data.access_token
+  if (typeof data.refresh_token === 'string' && data.refresh_token) holder.refreshToken = data.refresh_token
+  const expiresIn = Number(data.expires_in)
+  holder.expiresAt = now() + (Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn * 1000 : 60 * 60 * 1000)
+  try { writeStore(st.source, parsed) } catch (e) {
+    return { error: `Claude Code login refreshed but the credential store could not be written: ${e && e.message ? e.message : String(e)}` }
+  }
+  return { refreshed: true, expiresAt: holder.expiresAt }
+}
+
+function readClaudeCliToken() {
+  const st = readClaudeCliStore()
+  if (st.error) return { error: st.error }
+  const parsed = st.parsed
   const oauth = parsed && (parsed.claudeAiOauth || parsed)
   const token = oauth && oauth.accessToken
   if (!token || typeof token !== 'string') return { error: 'the Claude Code CLI credential store holds no access token' }
   const expiresAt = Number(oauth.expiresAt)
   // 5-minute headroom: a token that dies mid-first-turn is worse than an
-  // honest not_ready. No refresh here (writing into the CLI's store is not
-  // ours to do) -- running `claude` once refreshes it in place.
-  if (Number.isFinite(expiresAt) && expiresAt < Date.now() + 5 * 60 * 1000) {
+  // honest not_ready. Refresh lives in refreshClaudeCliToken() (async, called
+  // by main.cjs right before this sync read on the claude-cli route).
+  if (Number.isFinite(expiresAt) && expiresAt < Date.now() + CLAUDE_CLI_TOKEN_HEADROOM_MS) {
     return { error: 'the Claude Code CLI login token is expired (or about to expire)' }
   }
   return { token }
@@ -706,7 +807,7 @@ const PROVIDER_ROWS = [
           error: {
             kind: 'not_ready',
             reason: `onboarding says PROVIDER=claude-cli but ${r.error}`,
-            fix: 'Open a terminal and run `claude` once (it refreshes the login), or switch Settings > Model to the setup-token mode.',
+            fix: 'Open a terminal and run `claude` once (it logs in again), or switch Settings > Model to the setup-token mode.',
           },
         }
       }
@@ -1112,6 +1213,8 @@ for (const row of PROVIDER_ROWS) {
 
 module.exports = {
   buildProviderEnv,
+  refreshClaudeCliToken,
+  CLAUDE_CLI_PROVIDER_ID,
   resolveChatgptProxyPort,
   resolveCustomBaseUrl,
   parseCustomProviderJson,

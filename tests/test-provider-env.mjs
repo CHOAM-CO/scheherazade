@@ -22,7 +22,7 @@
 // convention.
 
 import { spawnSync } from 'node:child_process'
-import { buildProviderEnv, parseCustomProviderJson, PROVIDERS_REQUIRING_STORED_CREDENTIAL, CHATGPT_PROXY_DEFAULT_PORT, CHATGPT_PLACEHOLDER_KEY, OLLAMA_CLOUD_BASE_URL, normalizeOllamaCloudModel } from '../provider-env.cjs'
+import { buildProviderEnv, refreshClaudeCliToken, parseCustomProviderJson, PROVIDERS_REQUIRING_STORED_CREDENTIAL, CHATGPT_PROXY_DEFAULT_PORT, CHATGPT_PLACEHOLDER_KEY, OLLAMA_CLOUD_BASE_URL, normalizeOllamaCloudModel } from '../provider-env.cjs'
 
 let pass = 0
 let fail = 0
@@ -659,6 +659,45 @@ assert(!!parseCustomProviderJson(JSON.stringify({ baseUrl: 'ftp://nope', model: 
   const notReady = buildProviderEnv('claude', {}, { readProviderKey: () => null })
   const keyError = buildProviderEnv('claude', {}, { readProviderKey: throwingRead })
   assert(notReady.error.fix !== keyError.error.fix, 'claude: a missing credential and an unreadable one give different instructions')
+}
+
+
+// 1c. refreshClaudeCliToken (2026-10-07): an expired CLI login is rotated via
+// its refresh token and the NEW pair is written back to the same store so
+// `claude` and Sera stay on one login. Everything injected; no network.
+{
+  const T0 = 1_000_000_000_000
+  const mkStore = (oauth) => ({ parsed: { claudeAiOauth: { ...oauth, subscriptionType: 'max' } }, source: { kind: 'file', path: '/dev/null' } })
+  let written = null
+  const writeStore = (_src, parsed) => { written = parsed }
+  const okFetch = async (url, init) => {
+    const b = JSON.parse(init.body)
+    assert(b.grant_type === 'refresh_token' && b.refresh_token === 'rt-old' && typeof b.client_id === 'string', 'refresh: posts grant_type=refresh_token with the stored refresh token')
+    return { ok: true, status: 200, text: async () => JSON.stringify({ access_token: 'sk-ant-oat01-new', refresh_token: 'rt-new', expires_in: 3600 }) }
+  }
+  // still valid -> untouched
+  let r = await refreshClaudeCliToken({ readStore: () => mkStore({ accessToken: 'sk-ant-oat01-old', refreshToken: 'rt-old', expiresAt: T0 + 3_600_000 }), writeStore, fetchFn: okFetch, now: () => T0 })
+  assert(r.refreshed === false && written === null, 'refresh: a token with >5 min left is not refreshed and nothing is written')
+  // expired -> rotated + written back, other fields preserved
+  r = await refreshClaudeCliToken({ readStore: () => mkStore({ accessToken: 'sk-ant-oat01-old', refreshToken: 'rt-old', expiresAt: T0 - 1 }), writeStore, fetchFn: okFetch, now: () => T0 })
+  assert(r.refreshed === true && r.expiresAt === T0 + 3_600_000, 'refresh: expired token is rotated, expiresAt = now + expires_in')
+  assert(written && written.claudeAiOauth.accessToken === 'sk-ant-oat01-new' && written.claudeAiOauth.refreshToken === 'rt-new', 'refresh: new access+refresh pair written back to the store')
+  assert(written.claudeAiOauth.subscriptionType === 'max', 'refresh: unrelated store fields preserved verbatim')
+  // about to expire (inside 5 min headroom) -> also refreshed
+  written = null
+  r = await refreshClaudeCliToken({ readStore: () => mkStore({ accessToken: 'a', refreshToken: 'rt-old', expiresAt: T0 + 60_000 }), writeStore, fetchFn: okFetch, now: () => T0 })
+  assert(r.refreshed === true && written !== null, 'refresh: a token inside the 5-minute headroom is refreshed too')
+  // server rejects -> error, nothing written
+  written = null
+  r = await refreshClaudeCliToken({ readStore: () => mkStore({ accessToken: 'a', refreshToken: 'rt-old', expiresAt: T0 - 1 }), writeStore, fetchFn: async () => ({ ok: false, status: 401, text: async () => 'invalid_grant' }), now: () => T0 })
+  assert(r.error && /401/.test(r.error) && written === null, 'refresh: HTTP 401 -> error naming the status, store untouched')
+  // no refresh token -> error, no fetch
+  let fetched = false
+  r = await refreshClaudeCliToken({ readStore: () => mkStore({ accessToken: 'a', expiresAt: T0 - 1 }), writeStore, fetchFn: async () => { fetched = true }, now: () => T0 })
+  assert(r.error && !fetched, 'refresh: expired with no refresh token -> error without calling the endpoint')
+  // store unreadable -> passes the read error through
+  r = await refreshClaudeCliToken({ readStore: () => ({ error: 'no Claude Code CLI login found' }), writeStore, fetchFn: okFetch, now: () => T0 })
+  assert(r.error === 'no Claude Code CLI login found', 'refresh: unreadable store -> its error, untouched')
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

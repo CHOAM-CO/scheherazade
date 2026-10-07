@@ -145,7 +145,7 @@ const { killOllamaDaemon } = require('./onboarding/ollama-daemon.cjs') // ensure
 // log-buffer.cjs's own header on the require-cycle this avoids.
 const logBuffer = require('./onboarding/log-buffer.cjs')
 logBuffer.initSink(path.join(DATA_HOME, 'logs'))
-const { buildProviderEnv, resolveChatgptProxyPort } = require('./provider-env.cjs')
+const { buildProviderEnv, resolveChatgptProxyPort, refreshClaudeCliToken, CLAUDE_CLI_PROVIDER_ID } = require('./provider-env.cjs')
 const { probeUserFolders } = require('./tcc-probe.cjs')
 
 // Fix C, closing the residual gap (code-review pass, 2026-07-03): the
@@ -1357,6 +1357,19 @@ async function spawnRealAgentChildLocked() {
   // comment on `buildProviderEnv` for the full contract (env fields to
   // spread over the base env, and the 3 error.kind values below).
   const provider = config.PROVIDER || 'claude'
+  // CLI-login route: rotate an expired/expiring Claude Code login via its
+  // refresh token BEFORE the sync read below (2026-10-07, Mino: re-login in
+  // Sera did not refresh; only running `claude` did). Failure is logged and
+  // falls through to buildProviderEnv's honest not_ready.
+  if (provider === CLAUDE_CLI_PROVIDER_ID) {
+    try {
+      const r = await refreshClaudeCliToken()
+      if (r.refreshed) console.log(`[scheherazade/main] ${provider}: login token refreshed (expires ${new Date(r.expiresAt).toISOString()})`)
+      else if (r.error) console.warn(`[scheherazade/main] ${provider}: login refresh skipped: ${r.error}`)
+    } catch (e) {
+      console.warn(`[scheherazade/main] ${provider}: login refresh threw: ${e && e.message ? e.message : String(e)}`)
+    }
+  }
   const providerEnvResult = buildProviderEnv(provider, config, { readProviderKey })
   if (providerEnvResult.error) {
     const { kind, reason, fix } = providerEnvResult.error
