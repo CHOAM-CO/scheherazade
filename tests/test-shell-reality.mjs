@@ -36,7 +36,9 @@ const server = read('onboarding/routes/agent-lifecycle.cjs')
 // ── the reality source exists end to end ────────────────────────────────────
 check('main.cjs records the child birth config at the spawn moment',
   /agentSupervisorPid = child\.pid[\s\S]{0,900}lastSpawnInfo = \{/.test(main))
-check('...and spawn-info rides agentControls', main.includes('spawnInfo: () => lastSpawnInfo'))
+// 2026-10-07 route proxy: spawn-info carries `live` (what the proxy sends
+// now) on top of the birth record -- still read from lastSpawnInfo.
+check('...and spawn-info rides agentControls', /spawnInfo: \(\) => \(lastSpawnInfo \? \{ \.\.\.lastSpawnInfo, live: liveRoute \} : null\)/.test(main))
 check('route table serves GET /api/agent/spawn-info (routes/agent-lifecycle.cjs)', server.includes("'/api/agent/spawn-info'"))
 // 2026-09-28: the shell's name slot must show what the USER named the agent,
 // not the build's default. AGENT_NAME is a constant the installer never
@@ -61,7 +63,7 @@ check('nav.js no longer hand-writes previousModel after a mute revert',
 check('a state transition refetches the birth record (restart = new child)',
   /state !== lastPolledState.*refreshSpawnInfo/.test(nav.replace(/\n/g, ' ')))
 check('stopped agents show BLANK model, not config',
-  nav.includes("running && spawnInfo ? (spawnInfo.model || '') : ''"))
+  nav.includes("running && spawnInfo ? ((live && live.model) || spawnInfo.model || '') : ''"))
 
 // ── autonomy visibility (red-team fold #3, scoped to the TRUE claim) ────────
 check('autonomy badge renders in the shell when AUTONOMY=yes', nav.includes('autonomyBadge') && nav.includes('nav-status-autonomy'))

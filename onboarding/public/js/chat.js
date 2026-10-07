@@ -1356,12 +1356,21 @@
   function renderLaneChip(spawn) {
     const chip = $('ct-lane-chip')
     if (!chip) return
-    const model = String((spawn && spawn.model) || '').replace(/:.*$/, '')
+    // spawn.live (route proxy, 2026-10-07): the model the proxy sends NOW,
+    // which a live switch moves without a respawn; spawn.model is the birth
+    // pick and the fallback.
+    const model = String(liveModelOf(spawn)).replace(/:.*$/, '')
     if (!model) { chip.hidden = true; return }
     const provider = String((spawn && spawn.provider) || '')
     const vis = visionState === 'yes' ? C.laneChipVisionYes : C.laneChipVisionNo
     chip.textContent = `${model}${provider ? ` · ${provider}` : ''} · ${vis}`
     chip.hidden = false
+  }
+  // Prefer the proxied live model over the spawn pick (same field as
+  // http-server.cjs laneVision and nav.js -- change all together).
+  function liveModelOf(spawn) {
+    if (!spawn) return ''
+    return (spawn.live && spawn.live.model) || spawn.model || ''
   }
   async function resolveVisionState() {
     let spawnSeen = null
@@ -1369,7 +1378,7 @@
       const spawn = (await window.api('/api/agent/spawn-info')).spawn
       spawnSeen = spawn
       const provider = String((spawn && spawn.provider) || '')
-      const model = String((spawn && spawn.model) || '').replace(/:.*$/, '') // strip :tag
+      const model = String(liveModelOf(spawn)).replace(/:.*$/, '') // strip :tag
       // Mirror of http-server.cjs's laneVision -- change both together.
       // 0.1.4 policy (the owner): first-party (Claude/Codex) = yes; everything
       // else defaults to NO (server attaches a Gemma caption) unless the
@@ -1747,12 +1756,15 @@
       msBusy = true
       modelSel.disabled = true
       try {
-        await window.api('/api/agent/model', {
+        const r = await window.api('/api/agent/model', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(provider !== prevProvider ? { model, provider } : { model }),
         })
-        msSettle()
+        // mode 'live' (route proxy): nothing restarted, the chip can re-read
+        // spawn-info at once; otherwise follow the restart settle as before.
+        if (r && r.mode === 'live') resolveVisionState()
+        else msSettle()
       } catch (err) {
         console.error('model swap failed:', err)
         window.showToast(window.COPY.genericError(err.message))
@@ -1786,12 +1798,13 @@
         modelSel.disabled = true
         effortSel.disabled = true
         try {
-          await window.api('/api/agent/effort', {
+          const r = await window.api('/api/agent/effort', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ effort }),
           })
-          msSettle()
+          if (r && r.mode === 'live') resolveVisionState()
+          else msSettle()
         } catch (err) {
           console.error('effort swap failed:', err)
           window.showToast(window.COPY.genericError(err.message))

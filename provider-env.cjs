@@ -1211,8 +1211,121 @@ for (const row of PROVIDER_ROWS) {
   }
 }
 
+// ── route proxy helpers (2026-10-07, live model/effort switching) ───────
+// Pure readers over a BUILT env (buildProviderEnv().env). main.cjs points
+// every row's DSH_ROUTE_BASE_URL at route-proxy.cjs after the build; these
+// decide which proxy class a row rides and whether a config change can be
+// absorbed by the proxy (live) or needs the agent cycled (restart). The rows
+// above are untouched: their upstream fields stay the truth the proxy
+// forwards to.
+const ROUTE_PROXY_DUMMY_KEY = 'sera-proxy'
+// Rows whose key env carries a placeholder rather than a secret. The proxy
+// forwards those verbatim (passthrough): there is nothing to inject.
+const ROUTE_PLACEHOLDER_KEYS = [CHATGPT_PLACEHOLDER_KEY, CUSTOM_PLACEHOLDER_KEY, 'ollama-local']
+
+// 'anthropic' for the pi-ai catalog route and every declared
+// anthropic-messages route; 'openai' for openai-completions.
+function routeClassOf (env) {
+  if (!env) return null
+  return env.DSH_ROUTE === 'anthropic-catalog' || env.DSH_ROUTE_API === 'anthropic-messages' ? 'anthropic' : 'openai'
+}
+
+// 'oauth' (sk-ant-oat -- pi-ai flips native OAuth mode in the lane; the
+// proxy must stay passthrough), 'api-key' (a real secret the proxy injects),
+// 'none' (placeholder or absent -- passthrough).
+function credentialClassOf (env) {
+  if (!env) return null
+  const keyEnv = env.DSH_ROUTE_KEY_ENV
+  const value = keyEnv ? env[keyEnv] : undefined
+  if (typeof value !== 'string' || !value.trim()) return 'none'
+  if (value.includes('sk-ant-oat')) return 'oauth'
+  if (ROUTE_PLACEHOLDER_KEYS.includes(value)) return 'none'
+  return 'api-key'
+}
+
+function routeKindOf (env) {
+  return env && env.DSH_ROUTE === 'anthropic-catalog' ? 'catalog' : 'declared'
+}
+
+// pi-ai's anthropic catalog: adaptive-thinking models take thinking
+// {type:'adaptive'} + output_config.effort, older ones thinking.budget_tokens.
+// The proxy rewrites fields on a body the lane shaped for ITS session model,
+// so a live switch across that line would 400 -- phase 1 restarts instead.
+// Returns 'adaptive' | 'budget' | null (unknown model or catalog unreadable;
+// null on either side means restart, never a guess).
+let anthropicCatalogCache
+function loadAnthropicCatalog () {
+  if (anthropicCatalogCache !== undefined) return anthropicCatalogCache
+  anthropicCatalogCache = null
+  const fs = require('node:fs')
+  const path = require('node:path')
+  const rel = path.join('@earendil-works', 'pi-ai', 'dist', 'providers', 'data', 'anthropic.json')
+  const candidates = [
+    path.join(__dirname, 'node_modules', rel),
+    path.join(__dirname, 'node_modules', '@deepseek-ai', 'dsh-llm-pi-ai', 'node_modules', rel),
+  ]
+  for (const file of candidates) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'))
+      const models = parsed && parsed['anthropic-messages']
+      if (models && typeof models === 'object') { anthropicCatalogCache = models; break }
+    } catch { /* next candidate */ }
+  }
+  return anthropicCatalogCache
+}
+function anthropicThinkingShape (modelId, catalog = loadAnthropicCatalog()) {
+  if (!catalog || !modelId) return null
+  const row = catalog[String(modelId)]
+  if (!row || typeof row !== 'object') return null
+  return row.compat && row.compat.forceAdaptiveThinking === true ? 'adaptive' : 'budget'
+}
+
+// { mode: 'live' | 'restart', reason }. Phase 1 (Mino 2026-10-07): live only
+// when the protocol class, credential class and route kind all hold, the
+// lane's vision wiring is unchanged, neither side is the chatgpt row (its
+// codex proxy is rebuilt per model, which kills in-flight streams), and an
+// anthropic catalog switch stays on one thinking shape. Everything else the
+// proxy absorbs: model, effort, a same-class base URL or key swap.
+function decideRouteChange (prevEnv, nextEnv, opts = {}) {
+  if (!prevEnv || !nextEnv) return { mode: 'restart', reason: 'no previous route to compare against' }
+  if (prevEnv.LANE_KIND !== nextEnv.LANE_KIND) return { mode: 'restart', reason: `lane kind ${prevEnv.LANE_KIND} -> ${nextEnv.LANE_KIND}` }
+  if (prevEnv.DSH_PROVIDER === 'codex' || nextEnv.DSH_PROVIDER === 'codex') return { mode: 'restart', reason: 'chatgpt row: the codex proxy is rebuilt per model (phase 1 keeps the restart)' }
+  const prevClass = routeClassOf(prevEnv)
+  const nextClass = routeClassOf(nextEnv)
+  if (prevClass !== nextClass) return { mode: 'restart', reason: `protocol class ${prevClass} -> ${nextClass}` }
+  const prevCred = credentialClassOf(prevEnv)
+  const nextCred = credentialClassOf(nextEnv)
+  if (prevCred !== nextCred) return { mode: 'restart', reason: `credential class ${prevCred} -> ${nextCred}` }
+  const prevKind = routeKindOf(prevEnv)
+  const nextKind = routeKindOf(nextEnv)
+  if (prevKind !== nextKind) return { mode: 'restart', reason: `route kind ${prevKind} -> ${nextKind}` }
+  if ((prevEnv.DSH_MODEL_VISION || '') !== (nextEnv.DSH_MODEL_VISION || '')) return { mode: 'restart', reason: 'DSH_MODEL_VISION changed (lane marker wiring is spawn-time)' }
+  if ((prevEnv.DSH_VISION_SIDECAR || '') !== (nextEnv.DSH_VISION_SIDECAR || '')) return { mode: 'restart', reason: 'DSH_VISION_SIDECAR changed (lane caption wiring is spawn-time)' }
+  if (nextKind === 'catalog' && prevEnv.DSH_MODEL !== nextEnv.DSH_MODEL) {
+    const a = anthropicThinkingShape(prevEnv.DSH_MODEL, opts.catalog)
+    const b = anthropicThinkingShape(nextEnv.DSH_MODEL, opts.catalog)
+    if (!a || !b) return { mode: 'restart', reason: `thinking shape unknown for ${!a ? prevEnv.DSH_MODEL : nextEnv.DSH_MODEL} (not in the pi-ai anthropic catalog)` }
+    if (a !== b) return { mode: 'restart', reason: `thinking shape ${a} -> ${b} (${prevEnv.DSH_MODEL} -> ${nextEnv.DSH_MODEL})` }
+  }
+  const changed = []
+  if (prevEnv.DSH_MODEL !== nextEnv.DSH_MODEL) changed.push(`model ${prevEnv.DSH_MODEL} -> ${nextEnv.DSH_MODEL}`)
+  if ((prevEnv.DSH_EFFORT || '') !== (nextEnv.DSH_EFFORT || '')) changed.push(`effort ${prevEnv.DSH_EFFORT || '-'} -> ${nextEnv.DSH_EFFORT || '-'}`)
+  if ((prevEnv.DSH_ROUTE_BASE_URL || '') !== (nextEnv.DSH_ROUTE_BASE_URL || '')) changed.push('base url')
+  const prevKey = prevEnv.DSH_ROUTE_KEY_ENV ? prevEnv[prevEnv.DSH_ROUTE_KEY_ENV] : undefined
+  const nextKey = nextEnv.DSH_ROUTE_KEY_ENV ? nextEnv[nextEnv.DSH_ROUTE_KEY_ENV] : undefined
+  if (prevKey !== nextKey || prevEnv.DSH_ROUTE_KEY_ENV !== nextEnv.DSH_ROUTE_KEY_ENV) changed.push('key')
+  if (prevEnv.DSH_PROVIDER !== nextEnv.DSH_PROVIDER) changed.push(`provider ${prevEnv.DSH_PROVIDER} -> ${nextEnv.DSH_PROVIDER}`)
+  return { mode: 'live', reason: changed.length ? changed.join(', ') : 'no route-relevant change' }
+}
+
 module.exports = {
   buildProviderEnv,
+  routeClassOf,
+  credentialClassOf,
+  routeKindOf,
+  anthropicThinkingShape,
+  decideRouteChange,
+  ROUTE_PROXY_DUMMY_KEY,
   refreshClaudeCliToken,
   CLAUDE_CLI_PROVIDER_ID,
   resolveChatgptProxyPort,

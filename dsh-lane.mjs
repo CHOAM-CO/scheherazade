@@ -78,7 +78,9 @@ const DSH_ROUTE_BASE_URL = process.env.DSH_ROUTE_BASE_URL || process.env.OLLAMA_
 const DSH_ROUTE_KEY_ENV = process.env.DSH_ROUTE_KEY_ENV || 'OLLAMA_API_KEY'
 const DSH_MODEL = process.env.DSH_MODEL || 'glm-5.2:cloud'
 const DSH_EFFORT = process.env.DSH_EFFORT || 'max'
-const DSH_MODEL_VISION = process.env.DSH_MODEL_VISION === '1'
+// `let`: POST /select-model (route proxy live switch, catalog route) re-reads
+// the new model's modalities from the engine and updates this in place.
+let DSH_MODEL_VISION = process.env.DSH_MODEL_VISION === '1'
 // Declared window, in precedence order: an explicit DSH_MODEL_CONTEXT wins
 // (hand-tuned lane), then the catalog's number for THIS model, then the
 // catalog's floor -- which is the 131072 this line carried as a blanket
@@ -316,9 +318,15 @@ function buildPatch () {
     // context windows, vision modality, anthropic-messages protocol). Only
     // the credential env is ours. An sk-ant-oat value in that env flips
     // pi-ai's native OAuth mode -- see the route contract comment above.
+    // DSH_ROUTE_BASE_URL on the catalog route (2026-10-07): main.cjs points
+    // it at its loopback route proxy. dsh honours a route-level baseURL
+    // without dropping the catalog's per-model metadata (dsh-llm-pi-ai
+    // lib/index.js `request.baseURL ?? base?.baseUrl ?? providerBaseUrl`).
+    // Unset (bare lane boot) -> pi-ai's own api.anthropic.com, as before.
     providerBlock = [
       '      anthropic:',
       `        apiKeyEnv: ${DSH_ROUTE_KEY_ENV}`,
+      ...(process.env.DSH_ROUTE_BASE_URL ? [`        baseURL: ${yamlQuote(process.env.DSH_ROUTE_BASE_URL)}`] : []),
       ...retryPolicyBlock
     ].join('\n')
   } else {
@@ -1286,6 +1294,45 @@ async function main () {
       log('user STOP: cancelling the in-flight turn via session.cancel (pending FIFO cleared)')
       client.cancel(sessionId).catch((e) => errLog(`session.cancel failed: ${e.message}`))
       return send(200, { ok: true, stopped: true })
+    }
+    // POST /select-model {model, effort} (2026-10-07, route proxy live
+    // switch): main.cjs already moved the proxy's live config; this moves the
+    // ENGINE's session to the same model so its context window / compaction
+    // / vision gating follow it. Catalog route only -- a declared route's
+    // model rows are fixed in the patch at boot, so it answers applied:false
+    // and keeps the spawn window (main logs the mismatch). Same token gate.
+    if (req.url === '/select-model') {
+      if (!tokenOk(req.headers['x-ingest-token'])) return send(403, { error: 'bad token' })
+      if (childExited) return send(503, { error: 'agent not running' })
+      let raw = ''
+      req.on('data', (chunk) => { raw += chunk; if (raw.length > 64 * 1024) req.destroy() })
+      req.on('end', async () => {
+        let payload
+        try { payload = JSON.parse(raw) } catch { return send(400, { error: 'invalid json' }) }
+        const model = String(payload.model == null ? '' : payload.model).trim()
+        const effort = String(payload.effort == null ? '' : payload.effort).trim()
+        if (!model) return send(400, { error: 'model required' })
+        if (DSH_ROUTE !== 'anthropic-catalog') return send(200, { ok: true, applied: false, reason: 'declared route keeps its spawn model rows' })
+        try {
+          await client.selectModel(sessionId, 'anthropic', model, effort && effort !== 'off' ? effort : undefined)
+        } catch (e) {
+          errLog(`select-model ${model}/${effort || '-'} failed: ${e.message.slice(0, 160)}`)
+          return send(502, { error: `selectModel failed: ${e.message.slice(0, 160)}` })
+        }
+        // Vision follows the new model: ask the engine what it declares.
+        // Fail-soft -- an unreadable list leaves the spawn-time answer.
+        let vision = null
+        try {
+          const listed = await client.models()
+          const rows = Array.isArray(listed) ? listed : (listed && (listed.models || listed.items)) || []
+          const row = rows.find((m) => m && (m.id === model || m.model === model) && (!m.provider || m.provider === 'anthropic'))
+          const input = row && (row.input || row.modalities || (row.capabilities && row.capabilities.input))
+          if (Array.isArray(input)) { vision = input.includes('image'); DSH_MODEL_VISION = vision }
+        } catch (e) { log(`select-model: model list unreadable (${e.message.slice(0, 120)}); vision gate unchanged`) }
+        log(`select-model: session now ${model}/${effort || '-'} (vision ${vision === null ? 'unchanged' : vision})`)
+        return send(200, { ok: true, applied: true, model, effort: effort || null, vision })
+      })
+      return
     }
     if (req.url !== '/inbound') return send(404, { error: 'not found' })
     if (!tokenOk(req.headers['x-ingest-token'])) return send(403, { error: 'bad token' })

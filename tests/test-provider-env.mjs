@@ -22,7 +22,7 @@
 // convention.
 
 import { spawnSync } from 'node:child_process'
-import { buildProviderEnv, refreshClaudeCliToken, parseCustomProviderJson, PROVIDERS_REQUIRING_STORED_CREDENTIAL, CHATGPT_PROXY_DEFAULT_PORT, CHATGPT_PLACEHOLDER_KEY, OLLAMA_CLOUD_BASE_URL, normalizeOllamaCloudModel } from '../provider-env.cjs'
+import { buildProviderEnv, refreshClaudeCliToken, parseCustomProviderJson, PROVIDERS_REQUIRING_STORED_CREDENTIAL, CHATGPT_PROXY_DEFAULT_PORT, CHATGPT_PLACEHOLDER_KEY, OLLAMA_CLOUD_BASE_URL, normalizeOllamaCloudModel, routeClassOf, credentialClassOf, routeKindOf, anthropicThinkingShape, decideRouteChange, ROUTE_PROXY_DUMMY_KEY } from '../provider-env.cjs'
 
 let pass = 0
 let fail = 0
@@ -698,6 +698,72 @@ assert(!!parseCustomProviderJson(JSON.stringify({ baseUrl: 'ftp://nope', model: 
   // store unreadable -> passes the read error through
   r = await refreshClaudeCliToken({ readStore: () => ({ error: 'no Claude Code CLI login found' }), writeStore, fetchFn: okFetch, now: () => T0 })
   assert(r.error === 'no Claude Code CLI login found', 'refresh: unreadable store -> its error, untouched')
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────
+// 2. Route proxy helpers (2026-10-07 live model/effort switching):
+//    routeClassOf / credentialClassOf for every row, and the
+//    decideRouteChange table main.cjs applyRoute acts on.
+// ─────────────────────────────────────────────────────────────────────────
+{
+  const store = { claude: 'sk-ant-api03-byok', 'claude-subscription': 'sk-ant-oat01-sub', ollama: 'ollama-key', custom: null }
+  const deps = { readProviderKey: fakeReadProviderKey(store), readClaudeCliToken: () => ({ token: 'sk-ant-oat01-cli' }) }
+  const env = (provider, config) => {
+    const r = buildProviderEnv(provider, config, deps)
+    assert(!r.error, `route helpers: ${provider} builds (${r.error && r.error.reason})`)
+    return r.env
+  }
+  const claude = env('claude', { MODEL: 'claude-opus-4-6', EFFORT_LEVEL: 'high' })
+  const claudeSonnet = env('claude', { MODEL: 'claude-sonnet-4-6', EFFORT_LEVEL: 'high' })
+  const claudeEffort = env('claude', { MODEL: 'claude-opus-4-6', EFFORT_LEVEL: 'low' })
+  const claudeBudget = env('claude', { MODEL: 'claude-opus-4-5', EFFORT_LEVEL: 'high' })
+  const sub = env('claude-subscription', { MODEL: 'claude-opus-4-6', EFFORT_LEVEL: 'high' })
+  const cli = env('claude-cli', { MODEL: 'claude-opus-4-6' })
+  const chatgpt = env('chatgpt', { MODEL: 'gpt-6-astra' })
+  const ollama = env('ollama', { MODEL: 'kimi-k3', EFFORT_LEVEL: 'high' })
+  const ollama2 = env('ollama', { MODEL: 'glm-5.3', EFFORT_LEVEL: 'high' })
+  const customOpenai = env('custom', { MODEL: 'x', CUSTOM_BASE_URL: 'http://localhost:8080/v1', CUSTOM_ROUTE_API: 'openai-completions' })
+  const customAnthropic = env('custom', { MODEL: 'x', CUSTOM_BASE_URL: 'http://localhost:8080' })
+  const customKeyed = buildProviderEnv('custom', { MODEL: 'x', CUSTOM_BASE_URL: 'http://localhost:8080/v1', CUSTOM_ROUTE_API: 'openai-completions' }, { readProviderKey: fakeReadProviderKey({ custom: 'custom-secret' }) }).env
+  const dsh = env('dsh', { MODEL: 'glm-5.2:cloud' })
+  const dshEffort = env('dsh', { MODEL: 'glm-5.2:cloud', DSH_EFFORT: 'high' })
+
+  // routeClassOf
+  assert(routeClassOf(claude) === 'anthropic' && routeClassOf(sub) === 'anthropic' && routeClassOf(cli) === 'anthropic', 'routeClassOf: claude / claude-subscription / claude-cli -> anthropic (catalog)')
+  assert(routeClassOf(chatgpt) === 'anthropic' && routeClassOf(customAnthropic) === 'anthropic', 'routeClassOf: chatgpt / custom(anthropic-messages) -> anthropic (declared)')
+  assert(routeClassOf(ollama) === 'openai' && routeClassOf(customOpenai) === 'openai' && routeClassOf(dsh) === 'openai', 'routeClassOf: ollama / custom(openai) / dsh -> openai')
+  assert(routeKindOf(claude) === 'catalog' && routeKindOf(ollama) === 'declared' && routeKindOf(chatgpt) === 'declared', 'routeKindOf: catalog only for the anthropic catalog rows')
+  // credentialClassOf
+  assert(credentialClassOf(claude) === 'api-key', 'credentialClassOf: claude BYOK -> api-key')
+  assert(credentialClassOf(sub) === 'oauth' && credentialClassOf(cli) === 'oauth', 'credentialClassOf: claude-subscription / claude-cli (sk-ant-oat) -> oauth')
+  assert(credentialClassOf(ollama) === 'api-key', 'credentialClassOf: ollama -> api-key')
+  assert(credentialClassOf(customKeyed) === 'api-key', 'credentialClassOf: custom with a stored key -> api-key')
+  assert(credentialClassOf(customOpenai) === 'none' && credentialClassOf(chatgpt) === 'none' && credentialClassOf(dsh) === 'none', 'credentialClassOf: placeholder rows (custom keyless / chatgpt / dsh) -> none')
+  assert(credentialClassOf({ DSH_ROUTE_KEY_ENV: 'K' }) === 'none' && credentialClassOf({ DSH_ROUTE_KEY_ENV: 'K', K: '' }) === 'none', 'credentialClassOf: missing/empty key -> none')
+  assert(typeof ROUTE_PROXY_DUMMY_KEY === 'string' && ROUTE_PROXY_DUMMY_KEY && !ROUTE_PROXY_DUMMY_KEY.includes('sk-ant-oat'), 'ROUTE_PROXY_DUMMY_KEY: non-empty and never looks like an OAuth token')
+  // anthropicThinkingShape (pi-ai catalog)
+  assert(anthropicThinkingShape('claude-opus-4-6') === 'adaptive' && anthropicThinkingShape('claude-opus-4-5') === 'budget' && anthropicThinkingShape('no-such-model') === null, 'anthropicThinkingShape: adaptive / budget / null from the installed pi-ai catalog')
+  assert(anthropicThinkingShape('m', { m: { compat: { forceAdaptiveThinking: true } } }) === 'adaptive' && anthropicThinkingShape('m', null) === null, 'anthropicThinkingShape: injected catalog honored; unreadable catalog -> null')
+
+  // decideRouteChange table
+  const d = (a, b) => decideRouteChange(a, b)
+  assert(d(claude, claudeSonnet).mode === 'live', 'decide: claude -> claude (model, adaptive -> adaptive) = live')
+  assert(d(claude, claudeEffort).mode === 'live', 'decide: claude -> claude (effort) = live')
+  assert(d(claude, claude).mode === 'live', 'decide: identical env = live (no-op)')
+  assert(d(claude, claudeBudget).mode === 'restart' && /thinking shape/.test(d(claude, claudeBudget).reason), 'decide: claude adaptive -> budget-thinking model = restart')
+  assert(d(claude, sub).mode === 'restart' && /credential/.test(d(claude, sub).reason), 'decide: claude -> claude-subscription (api-key -> oauth) = restart')
+  assert(d(sub, cli).mode === 'live', 'decide: claude-subscription -> claude-cli (oauth -> oauth, same model) = live')
+  assert(d(claude, chatgpt).mode === 'restart' && d(chatgpt, claude).mode === 'restart' && d(chatgpt, chatgpt).mode === 'restart', 'decide: chatgpt on either side = restart (phase 1)')
+  assert(d(ollama, ollama2).mode === 'live', 'decide: ollama -> ollama (model) = live')
+  assert(d(ollama, customKeyed).mode === 'live', 'decide: ollama -> custom(openai, keyed) = live (same class, same credential class)')
+  assert(d(ollama, customOpenai).mode === 'restart' && /credential/.test(d(ollama, customOpenai).reason), 'decide: ollama -> custom(openai, keyless placeholder) = restart (api-key -> none)')
+  assert(d(ollama, customAnthropic).mode === 'restart' && /protocol class/.test(d(ollama, customAnthropic).reason), 'decide: ollama -> custom(anthropic) = restart (openai -> anthropic)')
+  assert(d(claude, customAnthropic).mode === 'restart' && /credential|route kind/.test(d(claude, customAnthropic).reason), 'decide: claude (catalog) -> custom(anthropic, declared) = restart')
+  assert(d(dsh, dshEffort).mode === 'live' && /effort max -> high/.test(d(dsh, dshEffort).reason), 'decide: dsh effort max -> high = live')
+  const dshVision = env('dsh', { MODEL: 'qwen3.5:cloud' })
+  assert(d(dsh, dshVision).mode === 'restart' && /SIDECAR/.test(d(dsh, dshVision).reason), 'decide: dsh glm -> qwen (sidecar wiring changes) = restart')
+  assert(d(null, claude).mode === 'restart' && d(claude, undefined).mode === 'restart', 'decide: missing side = restart')
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

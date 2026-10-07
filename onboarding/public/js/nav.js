@@ -316,8 +316,12 @@
     // not "AGENT" — whenever the spawn carries a name (dev-serve-ui has no
     // agentControls, so the copy label stays the fallback there).
     if (spawnInfo && spawnInfo.name) $('nav-agent-label').textContent = spawnInfo.name
-    $('nav-status-model').textContent = running && spawnInfo ? (spawnInfo.model || '') : ''
-    $('nav-status-effort').textContent = running && spawnInfo ? (spawnInfo.effort || '') : ''
+    // spawn.live (route proxy, 2026-10-07): the model/effort the proxy sends
+    // NOW; a live switch moves it without a respawn. Falls back to the birth
+    // pick when main has no live record.
+    const live = spawnInfo && spawnInfo.live ? spawnInfo.live : null
+    $('nav-status-model').textContent = running && spawnInfo ? ((live && live.model) || spawnInfo.model || '') : ''
+    $('nav-status-effort').textContent = running && spawnInfo ? ((live && live.effort) || spawnInfo.effort || '') : ''
     renderContextGauge(state)
   }
 

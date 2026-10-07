@@ -56,6 +56,7 @@ const { spawn } = require('node:child_process')
 const proc = require('./proc.cjs')
 const attachTopology = require('./attach-topology.cjs')
 const { startShimmedProxy } = require('./codex-proxy-shim.cjs')
+const { createRouteProxy } = require('./route-proxy.cjs')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 const fs = require('node:fs')
@@ -145,7 +146,7 @@ const { killOllamaDaemon } = require('./onboarding/ollama-daemon.cjs') // ensure
 // log-buffer.cjs's own header on the require-cycle this avoids.
 const logBuffer = require('./onboarding/log-buffer.cjs')
 logBuffer.initSink(path.join(DATA_HOME, 'logs'))
-const { buildProviderEnv, resolveChatgptProxyPort, refreshClaudeCliToken, CLAUDE_CLI_PROVIDER_ID } = require('./provider-env.cjs')
+const { buildProviderEnv, resolveChatgptProxyPort, refreshClaudeCliToken, CLAUDE_CLI_PROVIDER_ID, routeClassOf, credentialClassOf, decideRouteChange, ROUTE_PROXY_DUMMY_KEY } = require('./provider-env.cjs')
 const { probeUserFolders } = require('./tcc-probe.cjs')
 
 // Fix C, closing the residual gap (code-review pass, 2026-07-03): the
@@ -692,6 +693,16 @@ let agentSupervisorPid = null
 // moment in spawnRealAgentChild, served via agentControls.spawnInfo() for
 // GET /api/agent/spawn-info. null until the first spawn of this app run.
 let lastSpawnInfo = null
+// Route proxy state (route-proxy.cjs, 2026-10-07 live model/effort switching).
+// lastSpawnEnv: the provider env the proxy's live config currently mirrors --
+// the buildProviderEnv() result BEFORE main rewrote DSH_ROUTE_BASE_URL/key
+// to point the lane at the proxy. decideRouteChange compares the next build
+// against it. liveRoute: what the proxy sends RIGHT NOW {model, effort,
+// since}; reset to the spawn pick at every spawn/attach stamp and served as
+// spawn-info.live so the lane chip and nav show the proxied truth.
+let routeProxy = null
+let lastSpawnEnv = null
+let liveRoute = null
 
 let codexProxyServer = null
 // The MODEL the live in-process proxy was built for (null = proxy default).
@@ -999,6 +1010,144 @@ function killCodexProxy() {
   codexProxyServer = null
   codexProxyModel = null
   codexProxyPort = null
+}
+
+// ── route proxy (route-proxy.cjs) ─────────────────────────────────────────
+// The agent's LLM route ALWAYS targets this loopback proxy (every provider
+// row); model/effort picks update its live config instead of cycling the
+// agent when decideRouteChange says the switch stays in one protocol +
+// credential class. Bound once per app run, kernel-assigned port, torn down
+// in quitTeardown. Same NO AUTO-RESTART posture as ensureCodexProxy: if it
+// dies, the next spawn re-creates it and the log says so.
+const ANTHROPIC_DEFAULT_BASE_URL = 'https://api.anthropic.com'
+async function ensureRouteProxy() {
+  if (routeProxy && routeProxy.server && routeProxy.server.listening) return routeProxy
+  routeProxy = null
+  routeProxy = await createRouteProxy({ log: (m) => log(m) })
+  routeProxy.server.on('error', (err) => {
+    console.error('[scheherazade/main] route-proxy: server error:', err)
+  })
+  log(`ensureRouteProxy: route proxy up at 127.0.0.1:${routeProxy.port}`)
+  return routeProxy
+}
+
+function killRouteProxy() {
+  if (!routeProxy) return
+  try {
+    routeProxy.close()
+    log('killRouteProxy: route proxy closed')
+  } catch (err) {
+    log(`killRouteProxy: close failed (${err.message}) -- proceeding`)
+  }
+  routeProxy = null
+}
+
+// Route config the proxy needs for a BUILT provider env, and the rewrite the
+// lane gets instead. Pure over `env`; the caller applies `laneEnv`.
+//   keyMode 'api-key'     real secret -> proxy injects it; lane gets a dummy
+//                         (spawnEngine tolerates any non-empty value).
+//   keyMode 'passthrough' OAuth (sk-ant-oat: pi-ai's OAuth mode is decided IN
+//                         the lane from the prefix and the proxy must not touch
+//                         the headers/system block) and placeholder rows.
+function routeConfigFor(env) {
+  const cls = routeClassOf(env)
+  const cred = credentialClassOf(env)
+  const keyMode = cred === 'api-key' ? 'api-key' : 'passthrough'
+  const keyEnv = env.DSH_ROUTE_KEY_ENV
+  return {
+    cls,
+    route: {
+      upstreamBase: env.DSH_ROUTE_BASE_URL || ANTHROPIC_DEFAULT_BASE_URL,
+      model: env.DSH_MODEL,
+      effort: env.DSH_EFFORT,
+      key: keyMode === 'api-key' && keyEnv ? env[keyEnv] : null,
+      keyMode,
+      protocol: cls === 'anthropic' ? 'anthropic-messages' : 'openai-completions',
+    },
+    laneEnv: (port) => ({
+      DSH_ROUTE_BASE_URL: `http://127.0.0.1:${port}${cls === 'anthropic' ? '/anthropic' : '/openai/v1'}`,
+      ...(keyMode === 'api-key' && keyEnv ? { [keyEnv]: ROUTE_PROXY_DUMMY_KEY } : {}),
+    }),
+  }
+}
+
+// Best-effort: tell the lane's session about the new model/effort so the
+// engine's context window / compaction / vision gating follow the proxied
+// model on the CATALOG route (dsh-lane.mjs POST /select-model; declared
+// routes answer applied:false and keep the spawn window). Never throws.
+async function notifyLaneSelectModel(model, effort) {
+  let ep
+  try {
+    ep = JSON.parse(fs.readFileSync(path.join(DATA_HOME, '.ingest-endpoint.json'), 'utf8'))
+    if (!Number.isInteger(ep.port) || typeof ep.token !== 'string' || !ep.token) return { ok: false, reason: 'no endpoint' }
+  } catch (err) {
+    return { ok: false, reason: `endpoint file: ${err.message}` }
+  }
+  try {
+    const res = await fetch(`http://127.0.0.1:${ep.port}/select-model`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-ingest-token': ep.token },
+      body: JSON.stringify({ model, effort }),
+      signal: AbortSignal.timeout(5000),
+    })
+    const body = await res.json().catch(() => ({}))
+    if (!res.ok) return { ok: false, reason: `HTTP ${res.status} ${body.error || ''}` }
+    return { ok: true, ...body }
+  } catch (err) {
+    return { ok: false, reason: err.message }
+  }
+}
+
+// applyRoute (agentControls): the model/effort routes call this INSTEAD of
+// restartAgent. Rebuilds the provider env from the config just written,
+// asks decideRouteChange whether the proxy can absorb it, and either updates
+// the proxy's live config (mode 'live', resolves at once) or fires the
+// existing restartAgent (mode 'restart', the restart itself is not awaited --
+// same fire-and-forget the routes always had). Serialized among its own
+// calls; restartAgent's spawn is already guarded by agentSpawning.
+let routeApplyChain = Promise.resolve()
+function applyRoute() {
+  const run = routeApplyChain.then(() => applyRouteInner())
+  routeApplyChain = run.catch(() => {})
+  return run
+}
+async function applyRouteInner() {
+  const fallback = (reason) => {
+    log(`applyRoute: restart (${reason})`)
+    restartAgent().catch((err) => console.error('[scheherazade/main] applyRoute: restartAgent threw:', err))
+    return { mode: 'restart', reason }
+  }
+  if (shuttingDown) return { mode: 'restart', reason: 'app is shutting down' }
+  if (!routeProxy || !routeProxy.server.listening || !lastSpawnEnv) return fallback('no proxied agent to update')
+  if (!agentChild && !agentSupervisorPid) return fallback('agent not running')
+  const config = readAgentConfig()
+  const provider = config.PROVIDER || 'claude'
+  if (provider === CLAUDE_CLI_PROVIDER_ID) {
+    try { await refreshClaudeCliToken() } catch (e) { log(`applyRoute: login refresh threw: ${e && e.message ? e.message : String(e)}`) }
+  }
+  const built = buildProviderEnv(provider, config, { readProviderKey })
+  if (built.error) return fallback(`buildProviderEnv(${provider}) ${built.error.kind}: ${built.error.reason}`)
+  const next = built.env
+  const decision = decideRouteChange(lastSpawnEnv, next)
+  if (decision.mode !== 'live') return fallback(decision.reason)
+  const { cls, route } = routeConfigFor(next)
+  routeProxy.setRoute(cls, route)
+  // Declared routes keep the spawn-time contextWindow (the engine read it
+  // from the patch at boot); say so when the catalog disagrees so a wrong
+  // compaction window is a logged fact, not a surprise.
+  try {
+    const { dshContextWindowFor } = require('./onboarding/public/js/model-catalog.cjs')
+    if (next.DSH_ROUTE !== 'anthropic-catalog' && dshContextWindowFor(next.DSH_MODEL) !== dshContextWindowFor(lastSpawnEnv.DSH_MODEL)) {
+      log(`applyRoute: WARNING declared route keeps the spawn model's context window (${lastSpawnEnv.DSH_MODEL}: ${dshContextWindowFor(lastSpawnEnv.DSH_MODEL)}) while serving ${next.DSH_MODEL} (${dshContextWindowFor(next.DSH_MODEL)}); restart to re-declare`)
+    }
+  } catch { /* catalog unreadable: nothing to warn with */ }
+  lastSpawnEnv = { ...next }
+  liveRoute = { model: next.DSH_MODEL || null, effort: next.DSH_EFFORT || null, provider, since: new Date().toISOString() }
+  log(`applyRoute: live (${decision.reason})`)
+  notifyLaneSelectModel(next.DSH_MODEL, next.DSH_EFFORT).then((r) => {
+    log(r.ok ? `applyRoute: lane select-model ${r.applied ? 'applied' : 'not applied'}${r.reason ? ` (${r.reason})` : ''}` : `applyRoute: lane select-model skipped (${r.reason})`)
+  })
+  return { mode: 'live', reason: decision.reason }
 }
 
 // Reentrancy sentinel: the awaited chatgpt proxy gate inside the locked body
@@ -1433,6 +1582,26 @@ async function spawnRealAgentChildLocked() {
     providerEnvResult.env.DSH_ROUTE_BASE_URL = `http://localhost:${proxy.port}`
   }
 
+  // Route proxy (2026-10-07): every row's route now targets route-proxy.cjs,
+  // whose live config starts EQUAL to this spawn's (same model, effort,
+  // upstream, key) so requests pass through unchanged until a UI pick moves
+  // it (applyRoute). DSH_MODEL stays the REAL model id: the catalog lookup,
+  // compaction window, vision list, thinking shape, cost rows and subagent
+  // options all key on it. lastSpawnEnv keeps the pre-rewrite build for
+  // decideRouteChange. Proxy failure is loud and falls back to the direct
+  // route (every later pick then restarts, as before).
+  lastSpawnEnv = null
+  try {
+    const rp = await ensureRouteProxy()
+    const { cls, route, laneEnv } = routeConfigFor(providerEnvResult.env)
+    lastSpawnEnv = { ...providerEnvResult.env }
+    rp.setRoute(cls, route)
+    Object.assign(providerEnvResult.env, laneEnv(rp.port))
+    log(`route proxy: ${provider} rides ${cls} class via ${providerEnvResult.env.DSH_ROUTE_BASE_URL} (key ${route.keyMode}) -> ${route.upstreamBase}`)
+  } catch (err) {
+    console.error('[scheherazade/main] route proxy unavailable -- agent spawns on the direct route; model/effort picks will restart it:', err)
+  }
+
   // ollama provider: NO local gate anymore (2026-08-04, the owner "ollama ->
   // API키"). The lane is ollama.com CLOUD via ANTHROPIC_BASE_URL + a stored
   // API key (provider-env.cjs's ollama row) -- there is no local daemon to
@@ -1587,6 +1756,7 @@ async function spawnRealAgentChildLocked() {
     name: config.DISPLAY_NAME || config.AGENT_NAME || null,
     at: new Date().toISOString(),
   }
+  liveRoute = { model: lastSpawnInfo.model, effort: lastSpawnInfo.effort, provider: lastSpawnInfo.provider, since: lastSpawnInfo.at }
   // Timeout backstop (Step 5 onboarding-wiring fix, 2026-07-03, PIECE 2):
   // this is the SPAWN ATTEMPT moment -- agent-status.cjs's setAgentStatus()
   // re-stamps `since` on every call, so calling it here (not once at
@@ -1755,6 +1925,10 @@ function stampAttachSpawnInfo(config, lane = 'attach') {
     at: new Date().toISOString(),
     lane,
   }
+  // An attached/adopted supervisor was not spawned through the route proxy:
+  // nothing to update live, so every pick restarts (applyRoute fallback).
+  lastSpawnEnv = null
+  liveRoute = { model: lastSpawnInfo.model, effort: lastSpawnInfo.effort, provider: lastSpawnInfo.provider, since: lastSpawnInfo.at }
 }
 
 // Attach-mode start path (called from spawnRealAgentChildLocked when
@@ -2268,7 +2442,10 @@ const agentControls = {
   restartAgent,
   newConversation,
   proxyHealth,
-  spawnInfo: () => lastSpawnInfo,
+  // live: what the route proxy sends right now (model/effort), reset to the
+  // spawn pick at every stamp -- readers prefer spawn.live over spawn.model.
+  spawnInfo: () => (lastSpawnInfo ? { ...lastSpawnInfo, live: liveRoute } : null),
+  applyRoute,
   channelStatus,
   resolveClaudeBin: () => { const r = resolveClaudeBin(); return r ? r.bin : null },
   // Install-assist info (2026-08-04, the owner "2로 가자"): the wizard's CLI
@@ -2502,6 +2679,7 @@ async function quitTeardown() {
   })
   step('killAgentSupervisor', () => killAgentSupervisor('SIGTERM'))
   step('killCodexProxy', () => killCodexProxy()) // OUR in-process proxy server only; external/reused proxies are untouchable by construction
+  step('killRouteProxy', () => killRouteProxy())
   step('killAllLoginChildren', () => killAllLoginChildren('SIGTERM')) // detached login children must not outlive the app (Codex finding #3)
   step('killOllamaDaemon', () => killOllamaDaemon('SIGTERM')) // OUR managed daemon child only; a reused external daemon is never ours to touch
   await closeOnboardingServer()
