@@ -40,6 +40,10 @@ Chat composer
 - The box grows with long text up to about 40% of the window, then scrolls inside.
 - Attached images show as thumbnails above the text, with a remove button; other files stay as chips.
 
+Switching models without a restart
+- The companion's model route now goes through a small in-app proxy. Changing the model or the effort level takes effect on the next message; the agent is not restarted and the conversation keeps going.
+- A restart still happens when the switch crosses protocol or login type (for example Claude login to an OpenAI-compatible server, or API key to subscription login); the app says which happened.
+
 Providers and usage
 - Claude (subscription login): an expired Claude Code login is refreshed with its refresh token before the companion starts, and the rotated token is written back, so a terminal `claude` run is no longer needed after expiry.
 - Ollama usage: ollama.com now reports 7-day spend and request counts instead of a quota fraction; the gauge shows spend, today, and a daily strip.
