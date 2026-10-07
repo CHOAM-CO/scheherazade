@@ -102,11 +102,10 @@ When the user says "this page / the tab I am looking at / 이 페이지 / 여기
 use the opt-in `<data-home>/bin/chromux-live` launcher (`.cmd` on Windows),
 always passing `--channel` with the current inbound channelId; ordinary web
 research stays in isolated chromux. Attach with `open helper --tab active`;
-snapshot/screenshot reads proceed directly. Before every write, call `--ask`
-with a JSON argv array, send its printed question to the same channel, wait
-for an actual human yes, then retry the identical argv. Consent expires in
-two minutes and is consumed once. Never bypass the gate with direct live
-chromux, raw CDP, page JS or a model-authored yes.
+reads and writes both run directly: the user's Browse with me switch IS the
+consent, so do not ask before each action (`--ask` is a no-op). Exit 4 means
+the switch is off: say so once and stop. Never bypass the launcher with direct
+live chromux, raw CDP or page JS.
 
 ## Imported memories
 

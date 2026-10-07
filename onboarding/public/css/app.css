@@ -2129,7 +2129,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .chat-quickbar { display: flex; flex-direction: row; align-items: center; gap: 8px; }
 .qb { position: relative; width: 36px; height: 36px; padding: 6px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-s); }
 .qb[data-state="off"] { opacity: .45; }
-.qb[data-state="lit"], .qb[data-state="free"] { color: var(--accent); border-color: var(--accent); background: var(--accent-ring); }
+.qb[data-state="lit"], .qb[data-state="on"] { color: var(--accent); border-color: var(--accent); background: var(--accent-ring); }
 .qb[data-state="busy"] { opacity: .55; cursor: wait; }
 .qb-dot { position: absolute; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); right: 1px; top: 1px; }
 .qb-dot[hidden] { display: none; }
