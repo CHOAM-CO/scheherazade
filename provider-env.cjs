@@ -1319,25 +1319,30 @@ function codexModelKnown (modelId, known = loadCodexKnownModels()) {
   return known.has(String(modelId))
 }
 
-// { mode: 'live' | 'restart', reason }. Live only when the protocol class,
-// credential class and route kind all hold, the lane's vision wiring is
-// unchanged, the chatgpt row is on BOTH sides or neither (its codex proxy is
-// spawn-bound), a codex model change names an id codex-as-api itself knows
-// (see loadCodexKnownModels), and an anthropic catalog switch stays on one
-// thinking shape. Everything else the proxy absorbs: model, effort, a
-// same-class base URL or key swap.
+// { mode: 'live' | 'restart', reason, handover? }. Live only when the
+// protocol class, credential class and route kind all hold, the lane's
+// vision wiring is unchanged, the chatgpt row is on BOTH sides or neither
+// (its codex proxy is spawn-bound), and an anthropic catalog switch stays
+// on one thinking shape. Everything else the proxy absorbs: model, effort,
+// a same-class base URL or key swap. handover:true marks a codex model
+// change onto an id the codex-as-api table lacks (see loadCodexKnownModels):
+// live, but main.cjs must stand up a new codex proxy instance first.
 function decideRouteChange (prevEnv, nextEnv, opts = {}) {
   if (!prevEnv || !nextEnv) return { mode: 'restart', reason: 'no previous route to compare against' }
   if (prevEnv.LANE_KIND !== nextEnv.LANE_KIND) return { mode: 'restart', reason: `lane kind ${prevEnv.LANE_KIND} -> ${nextEnv.LANE_KIND}` }
   const prevCodex = prevEnv.DSH_PROVIDER === 'codex'
   const nextCodex = nextEnv.DSH_PROVIDER === 'codex'
   if (prevCodex !== nextCodex) return { mode: 'restart', reason: `chatgpt row ${prevCodex ? 'left' : 'entered'}: the codex proxy is spawn-bound` }
+  // codex -> codex model change: an id the table knows rides the pure body
+  // rewrite; any other id (the gpt-6 family on 0.6.5, or an unreadable
+  // table) needs a NEW codex proxy instance whose fallback IS that id --
+  // main.cjs applyRoute's handover (spawn beside, repoint, retire). Still
+  // live: the lane never restarts. Same model = the live instance's own
+  // fallback, so effort-only switches need neither.
+  let handover = false
   if (prevCodex && nextCodex && prevEnv.DSH_MODEL !== nextEnv.DSH_MODEL) {
-    // Same model = the proxy's own fallback, served whether or not the table
-    // knows it (effort-only switches stay live on any codex id).
     const known = codexModelKnown(nextEnv.DSH_MODEL, opts.codexModels)
-    if (known === null) return { mode: 'restart', reason: `unknown codex model ${nextEnv.DSH_MODEL} (codex-as-api model table unreadable)` }
-    if (!known) return { mode: 'restart', reason: `unknown codex model ${nextEnv.DSH_MODEL} (not in codex-as-api's model table; the proxy would serve ${prevEnv.DSH_MODEL} instead)` }
+    if (known !== true) handover = known === null ? 'codex-as-api model table unreadable' : `${nextEnv.DSH_MODEL} not in codex-as-api's model table`
   }
   const prevClass = routeClassOf(prevEnv)
   const nextClass = routeClassOf(nextEnv)
@@ -1364,6 +1369,7 @@ function decideRouteChange (prevEnv, nextEnv, opts = {}) {
   const nextKey = nextEnv.DSH_ROUTE_KEY_ENV ? nextEnv[nextEnv.DSH_ROUTE_KEY_ENV] : undefined
   if (prevKey !== nextKey || prevEnv.DSH_ROUTE_KEY_ENV !== nextEnv.DSH_ROUTE_KEY_ENV) changed.push('key')
   if (prevEnv.DSH_PROVIDER !== nextEnv.DSH_PROVIDER) changed.push(`provider ${prevEnv.DSH_PROVIDER} -> ${nextEnv.DSH_PROVIDER}`)
+  if (handover) return { mode: 'live', reason: `codex proxy handover (${handover}): ${changed.join(', ')}`, handover: true }
   return { mode: 'live', reason: changed.length ? changed.join(', ') : 'no route-relevant change' }
 }
 

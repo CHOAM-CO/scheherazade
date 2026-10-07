@@ -235,6 +235,36 @@ const lastBody = () => JSON.parse(last().body.toString('utf8'))
   ok('rewrite: JSON array body passes through untouched', rewriteRequestBody('anthropic', arr, { model: 'b' }) === arr)
 }
 
+// ---------- (e2) setRoute onto a NEW upstream (codex handover, 0.3.14) ----------
+// Two stub upstreams: after setRoute with a new upstreamBase the NEXT request
+// lands on the second server, nothing reconnects, the first stops seeing traffic.
+{
+  const seen2 = []
+  const upstream2 = http.createServer((req, res) => {
+    const chunks = []
+    req.on('data', (c) => chunks.push(c))
+    req.on('end', () => {
+      seen2.push({ url: req.url, body: Buffer.concat(chunks) })
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: true, from: 'upstream2' }))
+    })
+  })
+  await new Promise((r) => upstream2.listen(0, '127.0.0.1', r))
+  const upBase2 = `http://127.0.0.1:${upstream2.address().port}`
+  const body = { model: 'gpt-6-luna', thinking: { type: 'enabled', budget_tokens: 4096 }, messages: [] }
+  proxy.setRoute('anthropic', { upstreamBase: upBase, model: 'gpt-6-luna', effort: 'high', key: null, keyMode: 'passthrough', effortAlwaysSupported: true })
+  const seenBefore = seen.length
+  await post(`${proxy.baseUrlFor('anthropic')}/v1/messages`, body)
+  ok('handover: before setRoute the request lands on upstream 1', seen.length === seenBefore + 1 && seen2.length === 0)
+  proxy.setRoute('anthropic', { upstreamBase: upBase2, model: 'gpt-6-sol', effort: 'high', key: null, keyMode: 'passthrough', effortAlwaysSupported: true })
+  const r2 = await post(`${proxy.baseUrlFor('anthropic')}/v1/messages`, body)
+  ok('handover: after setRoute the NEXT request lands on upstream 2 (same proxy port, no reconnect)', r2.json && r2.json.from === 'upstream2' && seen2.length === 1 && seen.length === seenBefore + 1, JSON.stringify(r2.json))
+  const b2 = JSON.parse(seen2[0].body.toString('utf8'))
+  ok('handover: new model + effort rewritten on the way to upstream 2', b2.model === 'gpt-6-sol' && b2.output_config && b2.output_config.effort === 'high' && seen2[0].url === '/v1/messages', JSON.stringify(b2))
+  ok('handover: /health reports the new upstream', (await (await fetch(`http://127.0.0.1:${proxy.port}/health`)).json()).anthropic.upstream === upBase2)
+  upstream2.close()
+}
+
 // ---------- (f) source pins on dsh-lane.mjs ----------
 {
   const src = fs.readFileSync(path.join(ROOT, 'dsh-lane.mjs'), 'utf8')
@@ -252,6 +282,22 @@ const lastBody = () => JSON.parse(last().body.toString('utf8'))
   ok('pin: main.cjs keeps the real model id in DSH_MODEL (route config reads env.DSH_MODEL, lane env rewrite touches only base url + key env)',
     /model: env\.DSH_MODEL/.test(mainSrc) && /DSH_ROUTE_BASE_URL: `http:\/\/127\.0\.0\.1:\$\{port\}/.test(mainSrc) && !/DSH_MODEL: ROUTE_PROXY/.test(mainSrc))
   ok('pin: main.cjs has no raw claude-cli literal (uses CLAUDE_CLI_PROVIDER_ID)', !/'claude-cli'/.test(mainSrc))
+  // codex handover (0.3.14): applyRouteInner spawns a SECOND instance, repoints
+  // the route proxy, and only then retires the old one -- never
+  // killCodexProxy before setRoute (that cuts the in-flight stream).
+  const apply = mainSrc.slice(mainSrc.indexOf('async function applyRouteInner()'), mainSrc.indexOf('\n}\n', mainSrc.indexOf('async function applyRouteInner()')))
+  ok('pin: main.cjs defines spawnCodexProxyInstance over the shared startCodexProxyInstance (port 0, never installs itself)',
+    /async function spawnCodexProxyInstance\(model\)/.test(mainSrc) && /startCodexProxyInstance\(\{ model, port: 0 \}\)/.test(mainSrc) && /async function startCodexProxyInstance\(/.test(mainSrc))
+  ok('pin: ensureCodexProxy builds through the same startCodexProxyInstance', /await startCodexProxyInstance\(\{ model: desiredModel, port: requestedPort \}\)/.test(mainSrc))
+  ok('pin: applyRouteInner handles decision.handover by spawning a new instance BEFORE setRoute',
+    apply.includes('if (decision.handover)') && apply.indexOf('await spawnCodexProxyInstance(next.DSH_MODEL)') > -1 && apply.indexOf('await spawnCodexProxyInstance(next.DSH_MODEL)') < apply.indexOf('routeProxy.setRoute(cls, route)'))
+  ok('pin: applyRouteInner never calls killCodexProxy; the old instance goes through retireCodexProxy (grace period, in-flight streams finish)',
+    !apply.includes('killCodexProxy(') && apply.includes('retireCodexProxy(old.server, old.port, old.model)') && /function retireCodexProxy\(server, port, model, graceMs = CODEX_PROXY_RETIRE_GRACE_MS\)/.test(mainSrc) && /setTimeout\(/.test(mainSrc.slice(mainSrc.indexOf('function retireCodexProxy('), mainSrc.indexOf('\n}\n', mainSrc.indexOf('function retireCodexProxy(')))))
+  ok('pin: handover repoints the route at the new port and records it as the proxy to reuse on the next spawn',
+    apply.includes('next.DSH_ROUTE_BASE_URL = `http://localhost:${inst.port}`') && apply.includes('codexProxyPort = inst.port') && apply.includes('codexProxyModel = next.DSH_MODEL'))
+  ok('pin: handover health failure falls back to restart', /if \(!inst\.ok\) return fallback\(`codex proxy handover failed/.test(apply))
+  ok('pin: applyRouteInner never calls ensureCodexProxy (that rebuild kills in-flight streams)', !apply.includes('ensureCodexProxy('))
+  ok('pin: killCodexProxy closes retiring instances too (quit / fatal)', /function killCodexProxy\(\) \{\s*for \(const entry of retiringCodexProxies\)/.test(mainSrc))
 }
 
 await proxy.close()

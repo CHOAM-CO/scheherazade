@@ -121,7 +121,7 @@ ok('a model swap rebuilds the live proxy (codexProxyModel compared on ensure)', 
 // server is what takes the requested port.)
 ok('the default bind is ephemeral, not a fixed port', mainSrc.includes("const requestedPort = explicitPort ? Number(portResult.port) : 0"))
 ok('the ephemeral request reaches the shim\'s outer server', /startShimmedProxy\(\{ app: createApp\(\), port: requestedPort/.test(mainSrc))
-ok('the bound port is read back from the socket, never assumed', /const bound = codexProxyServer\.address\(\)/.test(mainSrc) && mainSrc.includes('port = bound.port'))
+ok('the bound port is read back from the socket, never assumed', /const bound = server\.address\(\)/.test(mainSrc) && mainSrc.includes('const port = bound.port') && mainSrc.includes('port = inst.port'))
 ok('ensureCodexProxy hands the caller the port it actually bound', /return \{ ok: true, port \}/.test(mainSrc))
 ok('the caller fills DSH_ROUTE_BASE_URL with that port', mainSrc.includes('providerEnvResult.env.DSH_ROUTE_BASE_URL = `http://localhost:${proxy.port}`'))
 ok('the caller refuses to spawn on a port it cannot use', mainSrc.includes('Number.isInteger(proxy.port)'))
@@ -222,7 +222,10 @@ console.log('\n-- ensureCodexProxy reuse: explicit port change rebuilds')
   }
   const ensureSrc = fnSrc('ensureCodexProxy')
   const killSrc = fnSrc('killCodexProxy')
-  ok('ensureCodexProxy/killCodexProxy lift cleanly out of main.cjs', Boolean(ensureSrc && killSrc))
+  // 0.3.14: the create/health-check half lives in startCodexProxyInstance
+  // (shared with applyRoute's codex handover); lifted alongside.
+  const instanceSrc = fnSrc('startCodexProxyInstance')
+  ok('ensureCodexProxy/killCodexProxy/startCodexProxyInstance lift cleanly out of main.cjs', Boolean(ensureSrc && killSrc && instanceSrc))
 
   const { resolveChatgptProxyPort } = require_(path.join(ROOT, 'provider-env.cjs'))
   const logs = []
@@ -258,7 +261,7 @@ console.log('\n-- ensureCodexProxy reuse: explicit port change rebuilds')
   }
   vm.createContext(ctx)
   vm.runInContext(
-    `let codexProxyServer = null\nlet codexProxyModel = null\nlet codexProxyPort = null\n${ensureSrc}\n${killSrc}\n` +
+    `let codexProxyServer = null\nlet codexProxyModel = null\nlet codexProxyPort = null\nconst retiringCodexProxies = new Set()\n${instanceSrc}\n${ensureSrc}\n${killSrc}\n` +
     'globalThis.__ensure = ensureCodexProxy',
     ctx,
   )

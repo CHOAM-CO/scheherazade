@@ -822,6 +822,114 @@ function stopFailurePoll() {
 //     does not know the answer. buildProviderEnv() runs before this and
 //     CLEARS DSH_ROUTE_BASE_URL for exactly that reason; see the caller for
 //     the fill-in.
+// One codex-as-api app + shim on `port` (0 = kernel-assigned), /health-verified
+// for `model`. Does NOT touch codexProxyServer/Port/Model -- the caller owns
+// the handle: ensureCodexProxy installs it as THE proxy, applyRoute's
+// handover (0.3.14) runs a second instance beside the live one. Model
+// passthrough: codex-as-api's anthropic route sends its MODULE-LEVEL default
+// model for any body.model its table does not know (resolveAnthropicBackend
+// Model) -- the module reads CODEX_AS_API_MODEL once at load, hence env set
+// BEFORE require and the require-cache evicted per instance so each one's
+// fallback is its own model. That is how gpt-6 ids (absent from the 0.6.5
+// table) are served at all. Fail-closed: /health must report `model`.
+// Returns { ok, server, port } or { ok: false, err?, reason }.
+async function startCodexProxyInstance({ model, port: requestedPort = 0 }) {
+  const desiredModel = model || null
+  let createApp
+  try {
+    // Installed CLI/cache versions prevent new models being rejected as old clients.
+    const cliVersion = require('./model-discovery.cjs').resolveCodexVersion()
+    if (cliVersion) process.env.CODEX_AS_API_CODEX_CLI_VERSION = cliVersion
+    if (desiredModel) process.env.CODEX_AS_API_MODEL = desiredModel
+    else delete process.env.CODEX_AS_API_MODEL
+    // Evict so the module-level MODEL constant re-reads the env we just set;
+    // the bundle re-requires only cached stateless deps (express et al).
+    try { delete require.cache[require.resolve('codex-as-api')] } catch {}
+    ;({ createApp } = require('codex-as-api'))
+  } catch (err) {
+    console.error('[scheherazade/main] codex proxy: codex-as-api package failed to load (bundling problem?):', err)
+    return { ok: false, reason: 'codex-as-api failed to load' }
+  }
+  let server
+  try {
+    // Loopback-only bind, deliberately narrower than the CLI's default.
+    // Shimmed (codex-proxy-shim.cjs): pi-ai stamps eager_input_streaming:true
+    // on every tool and codex-as-api 0.6.5 400s on it -- the shim strips the
+    // hint fields in front of the real app. close() closes both servers (the
+    // shim wraps close). 2026-08-20 cto field-test fix.
+    //
+    // requestedPort is 0 unless the user configured one; the shim's OUTER
+    // server is the one that takes it, so an ephemeral request lands on the
+    // server the agent actually talks to (the inner codex-as-api app has
+    // always bound its own ephemeral port).
+    server = await startShimmedProxy({ app: createApp(), port: requestedPort, log: (m) => log(m) })
+  } catch (err) {
+    if (!(err && err.code === 'EADDRINUSE')) console.error('[scheherazade/main] codex proxy: in-process proxy failed to start:', err)
+    return { ok: false, err, reason: err && err.message ? err.message : String(err) }
+  }
+  // The kernel's answer, not our request. Everything downstream -- the
+  // /health receipt, the log line, the URL handed to the agent -- reads
+  // this, so an ephemeral bind can never be described by a number nobody
+  // is listening on.
+  const bound = server.address()
+  if (!bound || typeof bound.port !== 'number' || bound.port <= 0) {
+    console.error(`[scheherazade/main] codex proxy: bound but address() reports no usable port (${JSON.stringify(bound)}) -- refusing to route the agent at a guess`)
+    try { server.close() } catch {}
+    return { ok: false, reason: 'no usable port' }
+  }
+  const port = bound.port
+  const url = `http://localhost:${port}`
+  // Track post-listen errors loudly (NO AUTO-RESTART rule above).
+  server.on('error', (err) => {
+    console.error('[scheherazade/main] codex proxy: in-process proxy server error:', err)
+  })
+  // RECEIPT, not hope: the proxy's own /health reports the model it will
+  // actually send. If the passthrough didn't take (env read too late, a
+  // future codex-as-api changing its config surface), serving a silently
+  // different model than the dropdown shows is the exact defect this lane
+  // just had -- fail closed and loud instead.
+  if (desiredModel) {
+    let reported = null
+    try {
+      const health = await (await fetch(`${url}/health`, { signal: AbortSignal.timeout(2000) })).json()
+      reported = health && health.model ? String(health.model) : null
+    } catch (err) {
+      log(`codex proxy: /health probe failed (${err.message}) -- cannot verify model passthrough`)
+    }
+    if (reported !== desiredModel) {
+      console.error(`[scheherazade/main] codex proxy: model passthrough FAILED -- picked ${desiredModel}, proxy /health reports ${reported ?? 'unknown'}. Not routing the agent at a silently different model.`)
+      try { server.close() } catch {}
+      return { ok: false, reason: `model passthrough failed (/health reports ${reported ?? 'unknown'})` }
+    }
+  }
+  return { ok: true, server, port }
+}
+
+// Handover instance (applyRoute, 0.3.14): a NEW codex proxy for `model` on
+// a fresh ephemeral port, beside the live one, which keeps serving in-flight
+// streams until retireCodexProxy closes it. Never installs itself.
+async function spawnCodexProxyInstance(model) {
+  return startCodexProxyInstance({ model, port: 0 })
+}
+
+// Old handover instances waiting out their grace period. Closed early by
+// killCodexProxy (quit / fatal) so nothing outlives the app.
+const CODEX_PROXY_RETIRE_GRACE_MS = 60_000
+const retiringCodexProxies = new Set()
+function retireCodexProxy(server, port, model, graceMs = CODEX_PROXY_RETIRE_GRACE_MS) {
+  if (!server) return
+  const entry = { server, port, model, timer: null }
+  retiringCodexProxies.add(entry)
+  // http.Server.close(): stops accepting, lets in-flight responses (the SSE
+  // stream the lane may still be reading) finish, closes idle keep-alives.
+  entry.timer = setTimeout(() => {
+    retiringCodexProxies.delete(entry)
+    try { server.close(); log(`retireCodexProxy: old codex proxy :${port} (model ${model || 'default'}) closed after ${graceMs}ms grace`) } catch (err) { log(`retireCodexProxy: close failed (${err.message})`) }
+  }, graceMs)
+  if (entry.timer.unref) entry.timer.unref()
+  log(`retireCodexProxy: old codex proxy :${port} (model ${model || 'default'}) retiring in ${graceMs}ms`)
+}
+
 async function ensureCodexProxy(config) {
   const rawPort = config.CHATGPT_PROXY_PORT
   const explicitPort = rawPort != null && String(rawPort).trim() !== ''
@@ -904,47 +1012,9 @@ async function ensureCodexProxy(config) {
     killCodexProxy()
   }
 
-  let createApp
-  try {
-    // Installed CLI/cache versions prevent new models being rejected as old clients.
-    const cliVersion = require('./model-discovery.cjs').resolveCodexVersion()
-    if (cliVersion) process.env.CODEX_AS_API_CODEX_CLI_VERSION = cliVersion
-    if (desiredModel) process.env.CODEX_AS_API_MODEL = desiredModel
-    else delete process.env.CODEX_AS_API_MODEL
-    // Evict so the module-level MODEL constant re-reads the env we just set;
-    // the bundle re-requires only cached stateless deps (express et al).
-    try { delete require.cache[require.resolve('codex-as-api')] } catch {}
-    ;({ createApp } = require('codex-as-api'))
-  } catch (err) {
-    console.error('[scheherazade/main] ensureCodexProxy: codex-as-api package failed to load (bundling problem?):', err)
-    return { ok: false, port: null }
-  }
-
-  try {
-    // Loopback-only bind, deliberately narrower than the CLI's default.
-    // Shimmed (codex-proxy-shim.cjs): pi-ai stamps eager_input_streaming:true
-    // on every tool and codex-as-api 0.6.5 400s on it -- the shim strips the
-    // hint fields in front of the real app. killCodexProxy's close() closes
-    // both servers (the shim wraps close). 2026-08-20 cto field-test fix.
-    //
-    // requestedPort is 0 unless the user configured one; the shim's OUTER
-    // server is the one that takes it, so an ephemeral request lands on the
-    // server the agent actually talks to (the inner codex-as-api app has
-    // always bound its own ephemeral port).
-    codexProxyServer = await startShimmedProxy({ app: createApp(), port: requestedPort, log: (m) => log(m) })
-    // The kernel's answer, not our request. Everything downstream -- the
-    // /health receipt, the log line, the URL handed to the agent -- reads
-    // this, so an ephemeral bind can never be described by a number nobody
-    // is listening on.
-    const bound = codexProxyServer.address()
-    if (!bound || typeof bound.port !== 'number' || bound.port <= 0) {
-      console.error(`[scheherazade/main] ensureCodexProxy: bound but address() reports no usable port (${JSON.stringify(bound)}) -- refusing to route the agent at a guess`)
-      killCodexProxy()
-      return { ok: false, port: null }
-    }
-    port = bound.port
-    url = `http://localhost:${port}`
-  } catch (err) {
+  const inst = await startCodexProxyInstance({ model: desiredModel, port: requestedPort })
+  if (!inst.ok) {
+    const err = inst.err
     if (err && err.code === 'EADDRINUSE') {
       // Only reachable with an explicit port now. An ephemeral bind cannot
       // collide, so the old "default port is occupied, refuse to spawn"
@@ -964,34 +1034,11 @@ async function ensureCodexProxy(config) {
       console.error('[scheherazade/main] ensureCodexProxy: EADDRINUSE on an EPHEMERAL bind -- this should be impossible; not routing the agent anywhere')
       return { ok: false, port: null }
     }
-    console.error('[scheherazade/main] ensureCodexProxy: in-process proxy failed to start:', err)
     return { ok: false, port: null }
   }
-
-  // Track post-listen errors loudly (NO AUTO-RESTART rule above).
-  codexProxyServer.on('error', (err) => {
-    console.error('[scheherazade/main] ensureCodexProxy: in-process proxy server error:', err)
-  })
-
-  // RECEIPT, not hope: the proxy's own /health reports the model it will
-  // actually send. If the passthrough didn't take (env read too late, a
-  // future codex-as-api changing its config surface), serving a silently
-  // different model than the dropdown shows is the exact defect this lane
-  // just had -- fail closed and loud instead.
-  if (desiredModel) {
-    let reported = null
-    try {
-      const health = await (await fetch(`${url}/health`, { signal: AbortSignal.timeout(2000) })).json()
-      reported = health && health.model ? String(health.model) : null
-    } catch (err) {
-      log(`ensureCodexProxy: /health probe failed (${err.message}) -- cannot verify model passthrough`)
-    }
-    if (reported !== desiredModel) {
-      console.error(`[scheherazade/main] ensureCodexProxy: model passthrough FAILED -- picked ${desiredModel}, proxy /health reports ${reported ?? 'unknown'}. Not spawning the agent on a silently different model.`)
-      killCodexProxy()
-      return { ok: false, port: null }
-    }
-  }
+  codexProxyServer = inst.server
+  port = inst.port
+  url = `http://localhost:${port}`
 
   codexProxyModel = desiredModel
   codexProxyPort = port
@@ -1000,6 +1047,11 @@ async function ensureCodexProxy(config) {
 }
 
 function killCodexProxy() {
+  for (const entry of retiringCodexProxies) {
+    clearTimeout(entry.timer)
+    try { entry.server.close() } catch { /* already down */ }
+  }
+  retiringCodexProxies.clear()
   if (!codexProxyServer) return // in-process only -- an external/reused proxy is never ours to touch
   try {
     codexProxyServer.close()
@@ -1167,6 +1219,24 @@ async function applyRouteInner() {
   }
   const { decision, next } = routeDecisionFor(config)
   if (decision.mode !== 'live' || !next) return fallback(decision.reason)
+  if (decision.handover) {
+    // codex -> codex onto an id codex-as-api's table does not know: the live
+    // instance would serve its own fallback (the OLD model), so a second
+    // instance is started for the new one and the route proxy is pointed at
+    // it. The old instance is NOT killed here -- killCodexProxy before
+    // setRoute would cut the stream the lane may be mid-way through; it
+    // retires after a grace period (retireCodexProxy). Health failure ->
+    // the restart this pick always had.
+    const inst = await spawnCodexProxyInstance(next.DSH_MODEL)
+    if (!inst.ok) return fallback(`codex proxy handover failed for ${next.DSH_MODEL}: ${inst.reason || 'unknown'}`)
+    const old = { server: codexProxyServer, port: codexProxyPort, model: codexProxyModel }
+    codexProxyServer = inst.server
+    codexProxyPort = inst.port
+    codexProxyModel = next.DSH_MODEL
+    next.DSH_ROUTE_BASE_URL = `http://localhost:${inst.port}`
+    log(`applyRoute: codex handover ${old.model || 'default'}@${old.port} -> ${next.DSH_MODEL}@${inst.port} (/health-verified)`)
+    retireCodexProxy(old.server, old.port, old.model)
+  }
   const { cls, route } = routeConfigFor(next)
   routeProxy.setRoute(cls, route)
   // Declared routes keep the spawn-time contextWindow (the engine read it
