@@ -43,6 +43,8 @@ Chat composer
 Providers and usage
 - Claude (subscription login): an expired Claude Code login is refreshed with its refresh token before the companion starts, and the rotated token is written back, so a terminal `claude` run is no longer needed after expiry.
 - Ollama usage: ollama.com now reports 7-day spend and request counts instead of a quota fraction; the gauge shows spend, today, and a daily strip.
+- Ollama cloud and other OpenAI-compatible servers: the leading instruction message is sent as `system` (OpenAI's `developer` role was rejected by Mistral models on ollama.com with a 400).
+- A failed model call now shows its reason in the chat as a one-line divider and in the top banner, instead of only `turn end (error: ...)` in the log.
 - DeepSeek lane: when a tool call fails to schedule mid-step, the pending calls get error results and the conversation continues instead of stalling (upstream fix #4595, applied as a patch on the pinned engine).
 
 Fixes
