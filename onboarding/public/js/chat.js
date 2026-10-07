@@ -1747,7 +1747,8 @@
       if (model === msModel || msBusy) { e.target.value = msModel; return }
       const provider = msProviderFor(model)
       if (!provider) { e.target.value = msModel; return } // fail closed
-      const ok = await window.confirmDialog(SET.switchConfirm(model), SET.switchOk, SET.cancel)
+      const mode = await window.routeSwitchPreview(provider !== msProvider ? { model, provider } : { model })
+      const ok = await window.confirmDialog(mode === 'live' ? SET.switchConfirmLive(model) : SET.switchConfirm(model), SET.switchOk, SET.cancel)
       if (!ok) { e.target.value = msModel; return }
       const prevModel = msModel
       const prevProvider = msProvider
@@ -1790,7 +1791,8 @@
       effortSel.onchange = async (e) => {
         const effort = e.target.value
         if (effort === msEffort || msBusy) { e.target.value = msEffort; return }
-        const ok = await window.confirmDialog(SET.effortConfirm(effort), SET.switchOk, SET.cancel)
+        const mode = await window.routeSwitchPreview({ effort })
+        const ok = await window.confirmDialog(mode === 'live' ? SET.effortConfirmLive(effort) : SET.effortConfirm(effort), SET.switchOk, SET.cancel)
         if (!ok) { e.target.value = msEffort; return }
         const prevEffort = msEffort
         msEffort = effort

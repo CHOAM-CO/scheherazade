@@ -1280,16 +1280,65 @@ function anthropicThinkingShape (modelId, catalog = loadAnthropicCatalog()) {
   return row.compat && row.compat.forceAdaptiveThinking === true ? 'adaptive' : 'budget'
 }
 
-// { mode: 'live' | 'restart', reason }. Phase 1 (Mino 2026-10-07): live only
-// when the protocol class, credential class and route kind all hold, the
-// lane's vision wiring is unchanged, neither side is the chatgpt row (its
-// codex proxy is rebuilt per model, which kills in-flight streams), and an
-// anthropic catalog switch stays on one thinking shape. Everything else the
-// proxy absorbs: model, effort, a same-class base URL or key swap.
+// codex-as-api's known model set (0.3.14, chatgpt live switch). The in-process
+// codex proxy (main.cjs ensureCodexProxy) is built ONCE per spawn with
+// CODEX_AS_API_MODEL = the spawn model, and that env is only the FALLBACK:
+// dist/index.cjs resolveAnthropicBackendModel(body.model, fallback) serves
+// body.model itself whenever KNOWN_CODEX_MODELS has it, else the fallback.
+// So a live model switch reaches the engine iff the new id is in that set;
+// an unknown id would be silently served as the spawn model. The set is
+// built from the package's bundled model-capabilities table, which tsup
+// inlines into the bundle (no json file ships), hence the text scan below
+// over the one constant path. Unreadable -> null -> restart, never a guess.
+const CODEX_AS_API_BUNDLE = require('node:path').join('codex-as-api', 'dist', 'index.cjs')
+const CODEX_CAPABILITIES_MARKER = 'var model_capabilities_default = {'
+let codexKnownModelsCache
+function loadCodexKnownModels () {
+  if (codexKnownModelsCache !== undefined) return codexKnownModelsCache
+  codexKnownModelsCache = null
+  const fs = require('node:fs')
+  const path = require('node:path')
+  const candidates = [path.join(__dirname, 'node_modules', CODEX_AS_API_BUNDLE)]
+  try { candidates.unshift(require.resolve('codex-as-api')) } catch { /* not installed here */ }
+  for (const file of candidates) {
+    try {
+      const src = fs.readFileSync(file, 'utf8')
+      const start = src.indexOf(CODEX_CAPABILITIES_MARKER)
+      if (start < 0) continue
+      const end = src.indexOf('\n};', start)
+      const block = src.slice(start, end < 0 ? undefined : end)
+      const ids = new Set()
+      for (const m of block.matchAll(/^ {4}"([^"]+)":\s*\{/gm)) ids.add(m[1])
+      if (ids.size) { codexKnownModelsCache = ids; break }
+    } catch { /* next candidate */ }
+  }
+  return codexKnownModelsCache
+}
+function codexModelKnown (modelId, known = loadCodexKnownModels()) {
+  if (!known || !modelId) return null
+  return known.has(String(modelId))
+}
+
+// { mode: 'live' | 'restart', reason }. Live only when the protocol class,
+// credential class and route kind all hold, the lane's vision wiring is
+// unchanged, the chatgpt row is on BOTH sides or neither (its codex proxy is
+// spawn-bound), a codex model change names an id codex-as-api itself knows
+// (see loadCodexKnownModels), and an anthropic catalog switch stays on one
+// thinking shape. Everything else the proxy absorbs: model, effort, a
+// same-class base URL or key swap.
 function decideRouteChange (prevEnv, nextEnv, opts = {}) {
   if (!prevEnv || !nextEnv) return { mode: 'restart', reason: 'no previous route to compare against' }
   if (prevEnv.LANE_KIND !== nextEnv.LANE_KIND) return { mode: 'restart', reason: `lane kind ${prevEnv.LANE_KIND} -> ${nextEnv.LANE_KIND}` }
-  if (prevEnv.DSH_PROVIDER === 'codex' || nextEnv.DSH_PROVIDER === 'codex') return { mode: 'restart', reason: 'chatgpt row: the codex proxy is rebuilt per model (phase 1 keeps the restart)' }
+  const prevCodex = prevEnv.DSH_PROVIDER === 'codex'
+  const nextCodex = nextEnv.DSH_PROVIDER === 'codex'
+  if (prevCodex !== nextCodex) return { mode: 'restart', reason: `chatgpt row ${prevCodex ? 'left' : 'entered'}: the codex proxy is spawn-bound` }
+  if (prevCodex && nextCodex && prevEnv.DSH_MODEL !== nextEnv.DSH_MODEL) {
+    // Same model = the proxy's own fallback, served whether or not the table
+    // knows it (effort-only switches stay live on any codex id).
+    const known = codexModelKnown(nextEnv.DSH_MODEL, opts.codexModels)
+    if (known === null) return { mode: 'restart', reason: `unknown codex model ${nextEnv.DSH_MODEL} (codex-as-api model table unreadable)` }
+    if (!known) return { mode: 'restart', reason: `unknown codex model ${nextEnv.DSH_MODEL} (not in codex-as-api's model table; the proxy would serve ${prevEnv.DSH_MODEL} instead)` }
+  }
   const prevClass = routeClassOf(prevEnv)
   const nextClass = routeClassOf(nextEnv)
   if (prevClass !== nextClass) return { mode: 'restart', reason: `protocol class ${prevClass} -> ${nextClass}` }
@@ -1324,6 +1373,9 @@ module.exports = {
   credentialClassOf,
   routeKindOf,
   anthropicThinkingShape,
+  loadCodexKnownModels,
+  codexModelKnown,
+  CODEX_AS_API_BUNDLE,
   decideRouteChange,
   ROUTE_PROXY_DUMMY_KEY,
   refreshClaudeCliToken,

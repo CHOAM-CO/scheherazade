@@ -22,7 +22,7 @@
 // convention.
 
 import { spawnSync } from 'node:child_process'
-import { buildProviderEnv, refreshClaudeCliToken, parseCustomProviderJson, PROVIDERS_REQUIRING_STORED_CREDENTIAL, CHATGPT_PROXY_DEFAULT_PORT, CHATGPT_PLACEHOLDER_KEY, OLLAMA_CLOUD_BASE_URL, normalizeOllamaCloudModel, routeClassOf, credentialClassOf, routeKindOf, anthropicThinkingShape, decideRouteChange, ROUTE_PROXY_DUMMY_KEY } from '../provider-env.cjs'
+import { buildProviderEnv, refreshClaudeCliToken, parseCustomProviderJson, PROVIDERS_REQUIRING_STORED_CREDENTIAL, CHATGPT_PROXY_DEFAULT_PORT, CHATGPT_PLACEHOLDER_KEY, OLLAMA_CLOUD_BASE_URL, normalizeOllamaCloudModel, routeClassOf, credentialClassOf, routeKindOf, anthropicThinkingShape, decideRouteChange, loadCodexKnownModels, codexModelKnown, CODEX_AS_API_BUNDLE, ROUTE_PROXY_DUMMY_KEY } from '../provider-env.cjs'
 
 let pass = 0
 let fail = 0
@@ -754,7 +754,26 @@ assert(!!parseCustomProviderJson(JSON.stringify({ baseUrl: 'ftp://nope', model: 
   assert(d(claude, claudeBudget).mode === 'restart' && /thinking shape/.test(d(claude, claudeBudget).reason), 'decide: claude adaptive -> budget-thinking model = restart')
   assert(d(claude, sub).mode === 'restart' && /credential/.test(d(claude, sub).reason), 'decide: claude -> claude-subscription (api-key -> oauth) = restart')
   assert(d(sub, cli).mode === 'live', 'decide: claude-subscription -> claude-cli (oauth -> oauth, same model) = live')
-  assert(d(claude, chatgpt).mode === 'restart' && d(chatgpt, claude).mode === 'restart' && d(chatgpt, chatgpt).mode === 'restart', 'decide: chatgpt on either side = restart (phase 1)')
+  // chatgpt row (0.3.14): live within the row, restart across it. The known
+  // set is read from the installed codex-as-api bundle; gpt-5.5 is its own
+  // DEFAULT_MODEL so it is always there, and the gpt-6 family is not (the
+  // proxy would serve the spawn model for those -- restart, never a guess).
+  const known = loadCodexKnownModels()
+  assert(known instanceof Set && known.has('gpt-5.5') && !known.has('gpt-6-astra'), `loadCodexKnownModels: parsed from ${CODEX_AS_API_BUNDLE} (${known ? [...known].join(',') : 'null'})`)
+  assert(codexModelKnown('gpt-5.5') === true && codexModelKnown('gpt-6-astra') === false && codexModelKnown('gpt-5.5', null) === null && codexModelKnown('x', new Set(['x'])) === true, 'codexModelKnown: true / false / null when the table is unreadable / injected set honored')
+  const chatgptKnown = env('chatgpt', { MODEL: 'gpt-5.5', EFFORT_LEVEL: 'high' })
+  const chatgptKnown2 = env('chatgpt', { MODEL: 'gpt-5.4', EFFORT_LEVEL: 'high' })
+  const chatgptKnownLow = env('chatgpt', { MODEL: 'gpt-5.5', EFFORT_LEVEL: 'low' })
+  const chatgptEffort = env('chatgpt', { MODEL: 'gpt-6-astra', EFFORT_LEVEL: 'low' })
+  assert(d(claude, chatgpt).mode === 'restart' && /chatgpt row entered/.test(d(claude, chatgpt).reason), 'decide: claude -> chatgpt = restart (entered the codex row)')
+  assert(d(chatgpt, claude).mode === 'restart' && /chatgpt row left/.test(d(chatgpt, claude).reason), 'decide: chatgpt -> claude = restart (left the codex row)')
+  assert(d(chatgptKnown, chatgptKnown2).mode === 'live' && /model gpt-5.5 -> gpt-5.4/.test(d(chatgptKnown, chatgptKnown2).reason), 'decide: chatgpt -> chatgpt (known codex model) = live')
+  assert(d(chatgptKnown, chatgptKnownLow).mode === 'live' && /effort high -> low/.test(d(chatgptKnown, chatgptKnownLow).reason), 'decide: chatgpt effort on a known model = live')
+  assert(d(chatgpt, chatgptEffort).mode === 'live' && /effort/.test(d(chatgpt, chatgptEffort).reason), 'decide: chatgpt effort on an UNKNOWN model (same id = the proxy fallback) = live')
+  assert(d(chatgptKnown, chatgpt).mode === 'restart' && /unknown codex model gpt-6-astra/.test(d(chatgptKnown, chatgpt).reason), 'decide: chatgpt -> chatgpt (unknown codex model) = restart')
+  assert(decideRouteChange(chatgptKnown, chatgpt, { codexModels: new Set(['gpt-6-astra']) }).mode === 'live', 'decide: injected codex set makes the same switch live')
+  assert(decideRouteChange(chatgptKnown, chatgptKnown2, { codexModels: null }).mode === 'restart' && /table unreadable/.test(decideRouteChange(chatgptKnown, chatgptKnown2, { codexModels: null }).reason), 'decide: unreadable codex table = restart, never a guess')
+  assert(d(chatgpt, chatgpt).mode === 'live', 'decide: identical chatgpt env = live (no-op)')
   assert(d(ollama, ollama2).mode === 'live', 'decide: ollama -> ollama (model) = live')
   assert(d(ollama, customKeyed).mode === 'live', 'decide: ollama -> custom(openai, keyed) = live (same class, same credential class)')
   assert(d(ollama, customOpenai).mode === 'restart' && /credential/.test(d(ollama, customOpenai).reason), 'decide: ollama -> custom(openai, keyless placeholder) = restart (api-key -> none)')

@@ -7,7 +7,10 @@
 //   - applyRoute -> {mode:'restart'}: 202 {mode:'restart'} (main fires the
 //     restart itself; the route does not double-fire);
 //   - applyRoute absent: the old unconditional restartAgent, called once;
-//   - applyRoute throws: reported as restart, restartAgent fired once.
+//   - applyRoute throws: reported as restart, restartAgent fired once;
+//   - GET /api/agent/route-preview (0.3.14): previewRoute's {mode, reason}
+//     with the query overrides, config NOT written, nothing restarted;
+//     absent previewRoute -> mode restart; bad query -> 400.
 // Hermetic: env-before-import discipline as test-chat-proxy.mjs.
 // Run: node tests/test-live-route-switch.mjs
 
@@ -45,12 +48,15 @@ const readConfig = () => {
 }
 
 // Mutable stub: each section swaps its behaviour.
-const calls = { applyRoute: 0, restartAgent: 0 }
+const calls = { applyRoute: 0, restartAgent: 0, previewRoute: 0 }
 let applyRouteImpl = null // null = absent
+let previewRouteImpl = null // null = absent
+let previewSeen = null
 let restartImpl = async () => { throw new Error('restartAgent must not be called on a live apply') }
 const agentControls = {
   get applyRoute() { return applyRouteImpl ? (...a) => { calls.applyRoute++; return applyRouteImpl(...a) } : undefined },
   restartAgent: (...a) => { calls.restartAgent++; return restartImpl(...a) },
+  get previewRoute() { return previewRouteImpl ? (o) => { calls.previewRoute++; previewSeen = o; return previewRouteImpl(o) } : undefined },
   stopAgent: async () => {},
   startAgent: async () => {},
   newConversation: async () => false,
@@ -69,7 +75,11 @@ const post = async (p, body) => {
   return { status: res.status, json: await res.json().catch(() => null) }
 }
 const settle = () => new Promise((r) => setTimeout(r, 30))
-const reset = () => { calls.applyRoute = 0; calls.restartAgent = 0 }
+const reset = () => { calls.applyRoute = 0; calls.restartAgent = 0; calls.previewRoute = 0; previewSeen = null }
+const get = async (p) => {
+  const res = await fetch(base + p, { headers: { 'x-onboard-token': SERVER_TOKEN } })
+  return { status: res.status, json: await res.json().catch(() => null) }
+}
 
 // ── live ──────────────────────────────────────────────────────────────────
 {
@@ -131,6 +141,33 @@ const reset = () => { calls.applyRoute = 0; calls.restartAgent = 0 }
   const r = await post('/api/agent/effort', { effort: 'max' })
   await settle()
   chk('effort (applyRoute throws): 202 mode:restart, restartAgent once, no 500', r.status === 202 && r.json.mode === 'restart' && calls.restartAgent === 1, `${r.status} ${JSON.stringify(r.json)} ${calls.restartAgent}`)
+}
+
+// ── route-preview: decision only, nothing written ─────────────────────────
+{
+  reset()
+  restartImpl = async () => { throw new Error('restartAgent must not be called by a preview') }
+  const before = JSON.stringify(readConfig())
+  previewRouteImpl = (o) => (o.model === 'gpt-5.4' ? { mode: 'live', reason: 'model gpt-5.5 -> gpt-5.4' } : { mode: 'restart', reason: 'unknown codex model gpt-6-astra' })
+  const live = await get('/api/agent/route-preview?model=gpt-5.4&provider=chatgpt')
+  chk('preview (live): 200 {mode:live, reason}', live.status === 200 && live.json && live.json.mode === 'live' && /gpt-5.4/.test(live.json.reason), JSON.stringify(live.json))
+  chk('preview: overrides reach previewRoute', previewSeen && previewSeen.model === 'gpt-5.4' && previewSeen.provider === 'chatgpt' && !('effort' in previewSeen), JSON.stringify(previewSeen))
+  const restart = await get('/api/agent/route-preview?model=gpt-6-astra')
+  chk('preview (restart): 200 {mode:restart, reason}', restart.status === 200 && restart.json.mode === 'restart' && /unknown codex model/.test(restart.json.reason), JSON.stringify(restart.json))
+  const eff = await get('/api/agent/route-preview?effort=low')
+  chk('preview (effort only): effort override alone', eff.status === 200 && previewSeen && previewSeen.effort === 'low' && !('model' in previewSeen), JSON.stringify(previewSeen))
+  chk('preview: config NOT written', JSON.stringify(readConfig()) === before, `${before} -> ${JSON.stringify(readConfig())}`)
+  chk('preview: applyRoute and restartAgent never called', calls.applyRoute === 0 && calls.restartAgent === 0 && calls.previewRoute === 3, JSON.stringify(calls))
+  const badEffort = await get('/api/agent/route-preview?effort=ultra')
+  const badModel = await get('/api/agent/route-preview?model=bad%20id!!')
+  const badProvider = await get('/api/agent/route-preview?provider=nope')
+  chk('preview: invalid effort / model / provider -> 400', badEffort.status === 400 && badModel.status === 400 && badProvider.status === 400, `${badEffort.status} ${badModel.status} ${badProvider.status}`)
+  previewRouteImpl = () => { throw new Error('boom') }
+  const threw = await get('/api/agent/route-preview?effort=low')
+  chk('preview: previewRoute throws -> 200 mode:restart (dialog falls back to the restart wording)', threw.status === 200 && threw.json.mode === 'restart', JSON.stringify(threw.json))
+  previewRouteImpl = null
+  const absent = await get('/api/agent/route-preview?effort=low')
+  chk('preview: previewRoute absent -> 200 mode:restart', absent.status === 200 && absent.json.mode === 'restart' && /not wired/.test(absent.json.reason), JSON.stringify(absent.json))
 }
 
 // ── spawn-info carries live ────────────────────────────────────────────────

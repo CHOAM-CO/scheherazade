@@ -89,6 +89,22 @@ const lastBody = () => JSON.parse(last().body.toString('utf8'))
   await post(`${proxy.baseUrlFor('anthropic')}/v1/messages`, { model: 'm', thinking: { type: 'enabled', budget_tokens: 4096 }, messages: [] })
   ok('anthropic: budget_tokens body gets no output_config and keeps its budget', !('output_config' in lastBody()) && lastBody().thinking.budget_tokens === 4096, JSON.stringify(lastBody()))
 
+  // effortAlwaysSupported (chatgpt row, 0.3.14): the lane shapes a BUDGET
+  // thinking block for the declared codex model (pi-ai: no
+  // forceAdaptiveThinking on a hand-declared model -> thinking {type:
+  // 'enabled', budget_tokens}); codex-as-api reads output_config.effort on
+  // any body, so the proxy sets it regardless of thinking shape.
+  const codexBody = { model: 'gpt-5.5', max_tokens: 16000, thinking: { type: 'enabled', budget_tokens: 4096, display: 'summarized' }, messages: [{ role: 'user', content: 'hi' }], tools: [] }
+  proxy.setRoute('anthropic', { upstreamBase: upBase, model: 'gpt-5.4', effort: 'low', key: null, keyMode: 'passthrough', protocol: 'anthropic-messages', effortAlwaysSupported: true })
+  await post(`${proxy.baseUrlFor('anthropic')}/v1/messages`, codexBody)
+  ok('codex flag: output_config.effort set on a budget-thinking body', lastBody().output_config && lastBody().output_config.effort === 'low' && lastBody().model === 'gpt-5.4', JSON.stringify(lastBody()))
+  ok('codex flag: budget thinking block kept as the lane shaped it', lastBody().thinking && lastBody().thinking.type === 'enabled' && lastBody().thinking.budget_tokens === 4096)
+  proxy.setRoute('anthropic', { upstreamBase: upBase, model: 'gpt-5.4', effort: 'off', key: null, keyMode: 'passthrough', protocol: 'anthropic-messages', effortAlwaysSupported: true })
+  await post(`${proxy.baseUrlFor('anthropic')}/v1/messages`, codexBody)
+  ok("codex flag: effort 'off' -> thinking {type:'disabled'} (codex reads 'none'), no output_config", lastBody().thinking && lastBody().thinking.type === 'disabled' && !('output_config' in lastBody()), JSON.stringify(lastBody()))
+  ok('no flag: same budget body still gets no output_config (pure rewrite)', !('output_config' in JSON.parse(rewriteRequestBody('anthropic', Buffer.from(JSON.stringify(codexBody)), { model: 'gpt-5.4', effort: 'low' }).toString())))
+  ok('flag: pure rewrite sets output_config.effort on the budget body', JSON.parse(rewriteRequestBody('anthropic', Buffer.from(JSON.stringify(codexBody)), { model: 'gpt-5.4', effort: 'max', effortAlwaysSupported: true }).toString()).output_config.effort === 'max')
+
   // effort off deletes thinking + output_config
   proxy.setRoute('anthropic', { upstreamBase: upBase, model: 'claude-sonnet-4-6', effort: 'off', key: 'real-key', keyMode: 'api-key' })
   await post(`${proxy.baseUrlFor('anthropic')}/v1/messages`, { model: 'm', thinking: { type: 'adaptive' }, output_config: { effort: 'high' }, messages: [] })

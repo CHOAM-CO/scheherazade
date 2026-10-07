@@ -1063,6 +1063,10 @@ function routeConfigFor(env) {
       key: keyMode === 'api-key' && keyEnv ? env[keyEnv] : null,
       keyMode,
       protocol: cls === 'anthropic' ? 'anthropic-messages' : 'openai-completions',
+      // chatgpt row (0.3.14): codex-as-api honours output_config.effort on
+      // any body, so the proxy sets it even though the lane shapes a
+      // budget thinking block for this declared model (route-proxy.cjs).
+      effortAlwaysSupported: env.DSH_PROVIDER === 'codex',
     },
     laneEnv: (port) => ({
       DSH_ROUTE_BASE_URL: `http://127.0.0.1:${port}${cls === 'anthropic' ? '/anthropic' : '/openai/v1'}`,
@@ -1111,6 +1115,44 @@ function applyRoute() {
   routeApplyChain = run.catch(() => {})
   return run
 }
+// Shared by applyRouteInner and previewRoute: build the candidate env for
+// `config` and ask decideRouteChange. Pure over state -- writes nothing,
+// restarts nothing. Returns { decision, next, provider }; `next` is null when
+// the decision was made before an env existed.
+function routeDecisionFor(config) {
+  const restart = (reason) => ({ decision: { mode: 'restart', reason }, next: null, provider: null })
+  if (shuttingDown) return restart('app is shutting down')
+  if (!routeProxy || !routeProxy.server.listening || !lastSpawnEnv) return restart('no proxied agent to update')
+  if (!agentChild && !agentSupervisorPid) return restart('agent not running')
+  const provider = config.PROVIDER || 'claude'
+  const built = buildProviderEnv(provider, config, { readProviderKey })
+  if (built.error) return restart(`buildProviderEnv(${provider}) ${built.error.kind}: ${built.error.reason}`)
+  const next = built.env
+  // chatgpt row: buildProviderEnv CLEARS the route base URL (the port is
+  // only known once ensureCodexProxy bound, see spawnRealAgentChild). The
+  // live codex proxy from THIS spawn is the upstream -- fill it in exactly
+  // as the spawn did, or refuse: an empty base would fall to
+  // api.anthropic.com in routeConfigFor and send GPT traffic there.
+  if (provider === 'chatgpt') {
+    if (!codexProxyServer || !Number.isInteger(codexProxyPort) || codexProxyPort <= 0) return restart('chatgpt row: no live codex proxy to keep (rebuild on restart)')
+    next.DSH_ROUTE_BASE_URL = `http://localhost:${codexProxyPort}`
+  }
+  return { decision: decideRouteChange(lastSpawnEnv, next), next, provider }
+}
+
+// Confirm-dialog preview (GET /api/agent/route-preview, 0.3.14): what
+// applyRoute WOULD decide for the current config with these overrides.
+// Reads only; never writes config, never restarts, never moves the proxy.
+function previewRoute(overrides = {}) {
+  let config
+  try { config = { ...readAgentConfig() } } catch (err) { return { mode: 'restart', reason: `config unreadable: ${err.message}` } }
+  if (typeof overrides.model === 'string' && overrides.model) config.MODEL = overrides.model
+  if (typeof overrides.provider === 'string' && overrides.provider) config.PROVIDER = overrides.provider
+  if (typeof overrides.effort === 'string' && overrides.effort) config.EFFORT_LEVEL = overrides.effort
+  const { decision } = routeDecisionFor(config)
+  return { mode: decision.mode, reason: decision.reason }
+}
+
 async function applyRouteInner() {
   const fallback = (reason) => {
     log(`applyRoute: restart (${reason})`)
@@ -1118,18 +1160,13 @@ async function applyRouteInner() {
     return { mode: 'restart', reason }
   }
   if (shuttingDown) return { mode: 'restart', reason: 'app is shutting down' }
-  if (!routeProxy || !routeProxy.server.listening || !lastSpawnEnv) return fallback('no proxied agent to update')
-  if (!agentChild && !agentSupervisorPid) return fallback('agent not running')
   const config = readAgentConfig()
   const provider = config.PROVIDER || 'claude'
   if (provider === CLAUDE_CLI_PROVIDER_ID) {
     try { await refreshClaudeCliToken() } catch (e) { log(`applyRoute: login refresh threw: ${e && e.message ? e.message : String(e)}`) }
   }
-  const built = buildProviderEnv(provider, config, { readProviderKey })
-  if (built.error) return fallback(`buildProviderEnv(${provider}) ${built.error.kind}: ${built.error.reason}`)
-  const next = built.env
-  const decision = decideRouteChange(lastSpawnEnv, next)
-  if (decision.mode !== 'live') return fallback(decision.reason)
+  const { decision, next } = routeDecisionFor(config)
+  if (decision.mode !== 'live' || !next) return fallback(decision.reason)
   const { cls, route } = routeConfigFor(next)
   routeProxy.setRoute(cls, route)
   // Declared routes keep the spawn-time contextWindow (the engine read it
@@ -2446,6 +2483,7 @@ const agentControls = {
   // spawn pick at every stamp -- readers prefer spawn.live over spawn.model.
   spawnInfo: () => (lastSpawnInfo ? { ...lastSpawnInfo, live: liveRoute } : null),
   applyRoute,
+  previewRoute,
   channelStatus,
   resolveClaudeBin: () => { const r = resolveClaudeBin(); return r ? r.bin : null },
   // Install-assist info (2026-08-04, the owner "2로 가자"): the wizard's CLI

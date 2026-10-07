@@ -1062,7 +1062,8 @@
       if (model === currentModel) return
       const provider = providerForModel(model)
       if (!provider) { e.target.value = currentModel; return } // fail closed: no authed provider serves it
-      const ok = await window.confirmDialog(S.switchConfirm(model), S.switchOk, S.cancel)
+      const mode = await window.routeSwitchPreview(provider !== currentProvider ? { model, provider } : { model })
+      const ok = await window.confirmDialog(mode === 'live' ? S.switchConfirmLive(model) : S.switchConfirm(model), S.switchOk, S.cancel)
       if (!ok) { e.target.value = currentModel; return }
       const prevModel = currentModel
       const prevProvider = currentProvider
@@ -1130,8 +1131,9 @@
         }
         if (v.modelPresent === false) warnLine = S.ollamaUrlModelWarn(parsed)
       } catch (err) { /* validate blip: proceed, the turn-error banner backstops */ }
+      const mode = await window.routeSwitchPreview(currentProvider !== 'ollama' ? { model: parsed, provider: 'ollama' } : { model: parsed })
       const ok = await window.confirmDialog(
-        (warnLine ? warnLine + ' ' : '') + S.switchConfirm(parsed), S.switchOk, S.cancel)
+        (warnLine ? warnLine + ' ' : '') + (mode === 'live' ? S.switchConfirmLive(parsed) : S.switchConfirm(parsed)), S.switchOk, S.cancel)
       if (!ok) { applyBtn.disabled = false; statusLine.textContent = ''; return }
       const prevModel = currentModel
       const prevProvider = currentProvider
@@ -1156,7 +1158,8 @@
     $('set-effort-select').onchange = async (e) => {
       const effort = e.target.value
       if (effort === currentEffort) return
-      const ok = await window.confirmDialog(S.effortConfirm(effort), S.switchOk, S.cancel)
+      const mode = await window.routeSwitchPreview({ effort })
+      const ok = await window.confirmDialog(mode === 'live' ? S.effortConfirmLive(effort) : S.effortConfirm(effort), S.switchOk, S.cancel)
       if (!ok) { e.target.value = currentEffort; return }
       const prevEffort = currentEffort
       currentEffort = effort

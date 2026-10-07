@@ -33,6 +33,13 @@
 //   anthropic: effort 'off' -> delete thinking + output_config; else when
 //              body.thinking.type === 'adaptive' -> output_config = { effort }.
 //              Never invents a thinking block for budget models.
+//              effortAlwaysSupported (the chatgpt row, 0.3.14): the upstream
+//              is codex-as-api, which reads output_config.effort on ANY
+//              body (low|medium|high|xhigh|max) and maps a budget
+//              thinking block to a flat "high" -- so effort is set
+//              regardless of thinking shape, and 'off' becomes
+//              thinking {type:'disabled'} (-> reasoning "none") instead
+//              of a deletion the backend would read as "default".
 //   openai:    effort 'off' -> delete reasoning_effort; else set it.
 //              Non-standard hosts (pi-ai detectCompat keys on the base URL host,
 //              which from the lane is now 127.0.0.1): delete `store`, rename
@@ -83,7 +90,7 @@ function isNonStandardOpenAIHost (upstreamBase) {
  * object (nothing to rewrite) or when nothing changed.
  * @param {'anthropic'|'openai'} cls
  * @param {Buffer} bodyBuf
- * @param {{ model?: string, effort?: string, upstreamBase?: string }} live
+ * @param {{ model?: string, effort?: string, upstreamBase?: string, effortAlwaysSupported?: boolean }} live
  */
 function rewriteRequestBody (cls, bodyBuf, live) {
   let parsed
@@ -94,9 +101,10 @@ function rewriteRequestBody (cls, bodyBuf, live) {
   const effort = live.effort ? String(live.effort) : ''
   if (cls === 'anthropic') {
     if (effort === 'off') {
-      delete parsed.thinking
+      if (live.effortAlwaysSupported) parsed.thinking = { type: 'disabled' }
+      else delete parsed.thinking
       delete parsed.output_config
-    } else if (effort && parsed.thinking && parsed.thinking.type === 'adaptive') {
+    } else if (effort && (live.effortAlwaysSupported || (parsed.thinking && parsed.thinking.type === 'adaptive'))) {
       parsed.output_config = { ...(parsed.output_config || {}), effort }
     }
   } else {
@@ -141,9 +149,10 @@ function createRouteProxy ({ log = () => {}, host = '127.0.0.1' } = {}) {
       key: keyMode === 'api-key' ? (cfg.key ? String(cfg.key) : '') : null,
       keyMode,
       protocol: cfg.protocol || (cls === 'anthropic' ? 'anthropic-messages' : 'openai-completions'),
+      effortAlwaysSupported: cfg.effortAlwaysSupported === true,
       since: new Date().toISOString(),
     }
-    log(`route-proxy: ${cls} -> ${routes[cls].upstreamBase} model=${routes[cls].model || '(passthrough)'} effort=${routes[cls].effort || '(passthrough)'} key=${keyMode}`)
+    log(`route-proxy: ${cls} -> ${routes[cls].upstreamBase} model=${routes[cls].model || '(passthrough)'} effort=${routes[cls].effort || '(passthrough)'}${routes[cls].effortAlwaysSupported ? ' (always set)' : ''} key=${keyMode}`)
     return getRoute(cls)
   }
   const getRoute = (cls) => (routes[cls] ? { ...routes[cls] } : null)

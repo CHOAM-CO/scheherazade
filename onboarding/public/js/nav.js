@@ -94,6 +94,23 @@
     return body
   }
 
+  // routeSwitchPreview (0.3.14): ask main what a model/effort pick WOULD do
+  // (GET /api/agent/route-preview) so the confirm dialog says "takes effect
+  // on the next message" only when the route proxy really absorbs it.
+  // Resolves 'live' | 'restart'; any failure is 'restart' -- the wording the
+  // dialog always had, never a promise the app cannot keep.
+  window.routeSwitchPreview = async function routeSwitchPreview(params) {
+    try {
+      const q = new URLSearchParams()
+      for (const [k, v] of Object.entries(params || {})) if (v) q.set(k, v)
+      const r = await window.api(`/api/agent/route-preview?${q.toString()}`)
+      return r && r.mode === 'live' ? 'live' : 'restart'
+    } catch (err) {
+      console.error('route preview failed (falling back to restart wording):', err)
+      return 'restart'
+    }
+  }
+
   // ── window.showToast (consolidated; was duplicated in memory.js + settings.js) ──
   // Targets whichever `.toast` element the current page declares -- every
   // page still owns its own toast <div> (unchanged), only the function moved.

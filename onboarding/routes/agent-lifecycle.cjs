@@ -121,6 +121,49 @@ function createRoutes(staticCtx) {
         return
       },
     },
+    // GET /api/agent/route-preview?model=&effort=&provider= (0.3.14): what a
+    // model/effort pick WOULD do -- {mode:'live'|'restart', reason} from
+    // main's decideRouteChange over the current config plus these
+    // overrides. Writes nothing, restarts nothing; the confirm dialog reads
+    // it so "the agent will restart" is only said when it is true. Absent
+    // controls (dev-serve harness, older main) -> restart, the wording the
+    // dialog always had.
+    {
+      method: 'GET',
+      match: (pathname) => pathname === '/api/agent/route-preview',
+      handler: async (req, res, callCtx) => {
+        const { agentControls } = callCtx // per-call value from createOnboardingServer, never staticCtx
+        if (!agentControls || typeof agentControls.previewRoute !== 'function') {
+          sendJson(res, 200, { mode: 'restart', reason: 'route preview not wired' })
+          return
+        }
+        const q = new URL(req.url, 'http://127.0.0.1').searchParams
+        const overrides = {}
+        const model = (q.get('model') || '').trim()
+        if (model) {
+          if (model.length > 200 || !MODEL_ID_PATTERN.test(model)) { sendJson(res, 400, { error: 'invalid model id' }); return }
+          overrides.model = model
+        }
+        const effort = (q.get('effort') || '').trim()
+        if (effort) {
+          if (!EFFORT_LEVELS.includes(effort)) { sendJson(res, 400, { error: `invalid effort level (expected one of: ${EFFORT_LEVELS.join(', ')})` }); return }
+          overrides.effort = effort
+        }
+        const provider = (q.get('provider') || '').trim()
+        if (provider) {
+          if (!PROVIDERS.includes(provider)) { sendJson(res, 400, { error: `invalid provider: ${provider.slice(0, 80)}` }); return }
+          overrides.provider = provider
+        }
+        let r
+        try { r = agentControls.previewRoute(overrides) } catch (err) {
+          console.error('[scheherazade/onboarding] previewRoute threw:', err)
+          r = { mode: 'restart', reason: 'preview threw' }
+        }
+        const mode = r && r.mode === 'live' ? 'live' : 'restart'
+        sendJson(res, 200, { mode, reason: (r && r.reason) || '' })
+        return
+      },
+    },
     // ── control panel: agent lifecycle (2026-07-09) ─────────────────────────
     // #5 on/off + #4 restart/model-swap. Delegate to main.cjs's serialized
     // lifecycle fns (passed in as agentControls; the pkill-race + intentional-
