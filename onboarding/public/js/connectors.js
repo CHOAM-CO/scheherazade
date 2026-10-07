@@ -855,16 +855,19 @@
   // (pollAgentStatusOnce lives solely in nav.js now), and the real safety net
   // either way is server-side (main.cjs awaits confirmed process death before
   // any respawn) -- the client disable here is UX-only, same as before.
+  // Returns the route's JSON body (truthy) on acceptance, false otherwise.
+  // Model/effort callers read `.mode` ('live' = route proxy moved, no
+  // restart; otherwise settle on the restart as before).
   async function fireControl(action, body) {
     if (agentConfigBusy) return false
     setAgentConfigDisabled(true)
     try {
-      await api(`/api/agent/${action}`, {
+      const r = await api(`/api/agent/${action}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: body ? JSON.stringify(body) : undefined,
       })
-      return true
+      return r && typeof r === 'object' ? r : true
     } catch (err) {
       console.error(`agent ${action} failed:`, err)
       showToast(GEN(err.message))
@@ -977,13 +980,17 @@
       el.textContent = S.applyPending(spawn && spawn.model ? spawn.model : '?')
       return
     }
-    // live: compare reality against the current selects' intent.
+    // live: compare reality against the current selects' intent. Reality is
+    // spawn.live (what the route proxy sends now) when main has it, else
+    // the spawn pick.
     const intentModel = $('set-model-select').value
     const intentEffort = $('set-effort-select').value
-    if (spawn && spawn.model === intentModel && (spawn.effort || EFFORT_DEFAULT) === intentEffort) {
-      el.textContent = S.applyApplied(spawn.model, spawn.effort || EFFORT_DEFAULT)
+    const liveModel = spawn ? ((spawn.live && spawn.live.model) || spawn.model) : null
+    const liveEffort = spawn ? ((spawn.live && spawn.live.effort) || spawn.effort) : null
+    if (spawn && liveModel === intentModel && (liveEffort || EFFORT_DEFAULT) === intentEffort) {
+      el.textContent = S.applyApplied(liveModel, liveEffort || EFFORT_DEFAULT)
     } else {
-      el.textContent = S.applyMismatch(spawn && spawn.model ? spawn.model : '?')
+      el.textContent = S.applyMismatch(liveModel || '?')
     }
   }
 
@@ -1068,7 +1075,8 @@
         e.target.value = prevModel
         return
       }
-      settleApplyState()
+      if (accepted.mode === 'live') renderApplyState()
+      else settleApplyState()
     }
 
     // ── ollama by-URL apply (the owner 19:17: "URL 입력받아서 ...
@@ -1141,7 +1149,8 @@
       statusLine.className = 'status-line success'
       statusLine.textContent = S.ollamaUrlApplied(parsed)
       populateModelSelect(parsed)
-      settleApplyState()
+      if (accepted.mode === 'live') renderApplyState()
+      else settleApplyState()
     }
 
     $('set-effort-select').onchange = async (e) => {
@@ -1157,7 +1166,8 @@
         e.target.value = prevEffort
         return
       }
-      settleApplyState()
+      if (accepted.mode === 'live') renderApplyState()
+      else settleApplyState()
     }
 
     renderApplyState()

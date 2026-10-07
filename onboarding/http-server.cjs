@@ -3648,7 +3648,10 @@ const OLLAMA_CAPTION_MODEL = 'gemma4:31b'
 
 function laneVision(spawn) {
   const provider = String((spawn && spawn.provider) || '')
-  const model = String((spawn && spawn.model) || '')
+  // spawn.live.model (route proxy, 2026-10-07): the model the proxy sends
+  // NOW -- a live switch moves it without a respawn. Mirror of chat.js
+  // liveModelOf; change both together.
+  const model = String((spawn && ((spawn.live && spawn.live.model) || spawn.model)) || '')
   const base = model.replace(/:.*$/, '') // strip :tag (deepseek-v4-flash:0731)
   // First-party frontier lanes (Claude subscription/API, Codex proxy) all
   // ship vision. Everything else -- ollama, custom, null spawn-info -- is

@@ -12,6 +12,30 @@
 // order exactly.
 'use strict'
 
+// Model/effort apply seam (route proxy, 2026-10-07). agentControls.applyRoute
+// resolves { mode: 'live' | 'restart', reason } promptly -- a live apply is a
+// config move in main's proxy, a restart is fired (not awaited) by main
+// exactly as these routes used to fire restartAgent. Without applyRoute the
+// old unconditional restart stands. Never throws: a throwing applyRoute is
+// reported as a restart attempt so the UI settles instead of hanging.
+async function applyRouteOrRestart(agentControls, label) {
+  if (typeof agentControls.applyRoute === 'function') {
+    try {
+      const r = await agentControls.applyRoute()
+      if (r && (r.mode === 'live' || r.mode === 'restart')) return { mode: r.mode, reason: r.reason || '' }
+      return { mode: 'restart', reason: 'applyRoute returned no mode' }
+    } catch (err) {
+      console.error(`[scheherazade/onboarding] applyRoute (${label}) threw:`, err)
+      if (typeof agentControls.restartAgent === 'function') {
+        agentControls.restartAgent().catch((e) => console.error(`[scheherazade/onboarding] restartAgent (${label}) threw:`, e))
+      }
+      return { mode: 'restart', reason: 'applyRoute threw' }
+    }
+  }
+  agentControls.restartAgent().catch((err) => console.error(`[scheherazade/onboarding] restartAgent (${label}) threw:`, err))
+  return { mode: 'restart', reason: 'applyRoute not wired' }
+}
+
 function createRoutes(staticCtx) {
   const {
     sendJson, readJsonBody, computeAgentStatus, fs, path, DATA_HOME, contextCapForModel,
@@ -191,7 +215,7 @@ function createRoutes(staticCtx) {
       match: (pathname) => pathname === '/api/agent/model',
       handler: async (req, res, callCtx) => {
         const { agentControls } = callCtx // per-call value from createOnboardingServer, never staticCtx
-        if (!agentControls || typeof agentControls.restartAgent !== 'function') {
+        if (!agentControls || (typeof agentControls.restartAgent !== 'function' && typeof agentControls.applyRoute !== 'function')) {
           sendJson(res, 500, { error: 'agent controls not wired' })
           return
         }
@@ -232,8 +256,11 @@ function createRoutes(staticCtx) {
         // statement about a model that is no longer running -- carrying them
         // forward would fire a revert prompt against the innocent new model.
         clearMuteStrikes()
-        agentControls.restartAgent().catch((err) => console.error('[scheherazade/onboarding] restartAgent (model swap) threw:', err))
-        sendJson(res, 202, { ok: true, model: value, ...(providerValue ? { provider: providerValue } : {}) })
+        // Route proxy (2026-10-07): applyRoute decides live (proxy config
+        // moved, no restart) vs restart (it fires restartAgent itself).
+        // Absent (older main / dev-serve harness) -> the restart it always was.
+        const applied = await applyRouteOrRestart(agentControls, 'model swap')
+        sendJson(res, 202, { ok: true, mode: applied.mode, reason: applied.reason, model: value, ...(providerValue ? { provider: providerValue } : {}) })
         return
       },
     },
@@ -276,7 +303,7 @@ function createRoutes(staticCtx) {
       match: (pathname) => pathname === '/api/agent/effort',
       handler: async (req, res, callCtx) => {
         const { agentControls } = callCtx // per-call value from createOnboardingServer, never staticCtx
-        if (!agentControls || typeof agentControls.restartAgent !== 'function') {
+        if (!agentControls || (typeof agentControls.restartAgent !== 'function' && typeof agentControls.applyRoute !== 'function')) {
           sendJson(res, 500, { error: 'agent controls not wired' })
           return
         }
@@ -287,8 +314,8 @@ function createRoutes(staticCtx) {
           return
         }
         writeAgentConfig({ EFFORT_LEVEL: effortValue })
-        agentControls.restartAgent().catch((err) => console.error('[scheherazade/onboarding] restartAgent (effort swap) threw:', err))
-        sendJson(res, 202, { ok: true, effort: effortValue })
+        const applied = await applyRouteOrRestart(agentControls, 'effort swap')
+        sendJson(res, 202, { ok: true, mode: applied.mode, reason: applied.reason, effort: effortValue })
         return
       },
     },
