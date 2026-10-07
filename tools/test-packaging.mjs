@@ -731,20 +731,14 @@ if (IS_PREDIST) {
 //                    A config that looks right and an artifact that is right
 //                    are different claims; only the second one ships.
 //
-// SHIPPED_DOCS is the escape hatch, deliberately narrow and deliberately
-// explicit. Nothing under docs/ is read at runtime today -- grepped across
-// main.cjs, onboarding/, channel*, memory/, hooks/ and the templates: every
-// docs/ mention in shipped code is a comment pointing a DEVELOPER at history,
-// and the one document the AGENT actually reads (SCHEHERAZADE_MANUAL.md) was
-// moved to onboarding/templates/ and harness-rendered into the data dir long
-// ago, precisely because a doc inside app.asar exists and cannot be opened.
-// If a doc ever must ship, name it here and in build.files; the gate then
-// requires both, so the two lists cannot drift apart.
-const SHIPPED_DOCS = []
+// The quickbar reads versioned release notes at runtime, inside app.asar.
+// This one narrow glob is the only docs payload allowed; developer docs stay excluded.
+const SHIPPED_DOCS = ['docs/release-notes-v*.md']
+const isShippedDoc = rel => /^docs\/release-notes-v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?\.md$/.test(rel)
 const FORBIDDEN_DIRS = ['tests', 'tools']
 const FORBIDDEN_FILES = ['main-v2.cjs']
 const isTestFilename = (rel) => /(^|\/)[^/]*\.test\.[^/]*$/.test(rel)
-const isForbiddenDoc = (rel) => rel === 'docs' || (rel.startsWith('docs/') && !SHIPPED_DOCS.includes(rel))
+const isForbiddenDoc = (rel) => rel === 'docs' || (rel.startsWith('docs/') && !isShippedDoc(rel))
 
 console.log('\n-- payload: the dev harness is NOT in the bundle (config half)')
 {
