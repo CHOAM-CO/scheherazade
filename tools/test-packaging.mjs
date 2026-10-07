@@ -738,7 +738,8 @@ const isShippedDoc = rel => /^docs\/release-notes-v[0-9]+\.[0-9]+\.[0-9]+(?:[-+]
 const FORBIDDEN_DIRS = ['tests', 'tools']
 const FORBIDDEN_FILES = ['main-v2.cjs']
 const isTestFilename = (rel) => /(^|\/)[^/]*\.test\.[^/]*$/.test(rel)
-const isForbiddenDoc = (rel) => rel === 'docs' || (rel.startsWith('docs/') && !isShippedDoc(rel))
+// the bare 'docs' directory entry is fine (it holds the shipped release notes); every FILE under it must be a versioned release note
+const isForbiddenDoc = (rel) => rel.startsWith('docs/') && !isShippedDoc(rel)
 
 console.log('\n-- payload: the dev harness is NOT in the bundle (config half)')
 {
