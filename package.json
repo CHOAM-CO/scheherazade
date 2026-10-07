@@ -105,6 +105,7 @@
       "memory/**/*",
       "procedures/**/*",
       "docs/release-notes-v*.md",
+      "!docs/release-notes-v*.ko.md",
       "CLAUDE.md",
       "ONTOLOGY_GUIDE.md",
       "BUILD_INFO.json",
