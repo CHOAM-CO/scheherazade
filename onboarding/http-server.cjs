@@ -115,6 +115,7 @@ let askpassToken = null
 // Electron safeStorage, so it cannot read the ollama key itself) can ask
 // THIS process for a vision stand-in caption -- the key never leaves here.
 let captionToken = null
+let usageToken = null // per-boot Bearer for GET /api/agent/usage (.usage-endpoint.json)
 // Permission probes, bound to THIS host (design-0023 P4). The route bodies in
 // routes/permissions.cjs are deliberately platform-blind -- they call
 // probeAll/probeAutomation and serve DEEP_LINKS -- so the platform selection
@@ -2767,7 +2768,7 @@ async function handleApi(req, res, pathname, onOnboardingComplete, agentControls
     sendJson(res, 200, { models: await discoverCatalog() })
     return
   }
-  const callCtx = { agentControls, onOnboardingComplete, getAskpassToken: () => askpassToken, getCaptionToken: () => captionToken }
+  const callCtx = { agentControls, onOnboardingComplete, getAskpassToken: () => askpassToken, getCaptionToken: () => captionToken, getUsageToken: () => usageToken }
   for (const entry of API_ROUTES) {
     if (entry.method && entry.method !== req.method) continue
     const m = entry.match(pathname)
@@ -2874,7 +2875,11 @@ function createOnboardingServer(onOnboardingComplete, agentControls) {
         // per-boot token (.caption-endpoint.json, 0600), checked fail-closed
         // in the route body.
         const isCaptionFetch = req.method === 'POST' && pathname === '/api/agent/caption-image'
-        if ((isMutating || pathname.startsWith('/api/')) && !isAskpassFetch && !isCaptionFetch) {
+        // /api/agent/usage: read-only quota meter for the in-app agent (agent
+        // tree, no served-page token). Own per-boot token (.usage-endpoint.json,
+        // 0600), checked fail-closed in the route body.
+        const isUsageFetch = req.method === 'GET' && pathname === '/api/agent/usage'
+        if ((isMutating || pathname.startsWith('/api/')) && !isAskpassFetch && !isCaptionFetch && !isUsageFetch) {
           const origin = req.headers.origin
           if (origin) {
             const originHost = safeOriginHost(origin)
@@ -2995,6 +3000,17 @@ function createOnboardingServer(onOnboardingComplete, agentControls) {
       } catch (err) {
         captionToken = null // fail closed: route refuses everything
         console.error('[scheherazade/onboarding] failed to write caption endpoint file (Slack vision stand-in disabled this boot):', err.message)
+      }
+      // usage endpoint file: the agent's usage-budget helper reads {url, token}
+      // here. Failure just disables the route this boot (403 for everyone).
+      try {
+        usageToken = crypto.randomBytes(32).toString('hex')
+        const usePath = path.join(DATA_HOME, '.usage-endpoint.json')
+        try { fs.unlinkSync(usePath) } catch { /* absent = first boot */ }
+        fs.writeFileSync(usePath, JSON.stringify({ url: `http://127.0.0.1:${port}/api/agent/usage`, token: usageToken }) + '\n', { mode: 0o600 })
+      } catch (err) {
+        usageToken = null // fail closed
+        console.error('[scheherazade/onboarding] failed to write usage endpoint file (agent usage meter disabled this boot):', err.message)
       }
       resolve({ server, url })
     })

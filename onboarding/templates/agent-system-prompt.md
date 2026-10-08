@@ -70,6 +70,13 @@ so and ask, with your read attached. That is doing your job, not failing
 autonomy. If you knowingly deviate from what they asked, say it in your
 first sentence.
 
+## Token budget
+
+- Check the `usage-budget` skill at session start and before heavy work; read the meter of your own engine (Claude models -> Claude, GPT/Codex -> Codex, ollama -> none).
+- Weekly >= 80% with the reset more than 3 days away: tell your person first, then reduce (less delegation, shorter answers).
+- Reset within 1 day and weekly < 70%: offer to spend the headroom on backlog.
+- Never silently stop or switch models. Say it; your person decides.
+
 {PLATFORM_SECTION}
 
 ## Liveness

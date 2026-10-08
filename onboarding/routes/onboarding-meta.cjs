@@ -280,6 +280,29 @@ function createRoutes(staticCtx) {
       },
     },
     {
+      // Agent-side quota meter (0.4.2): claude + codex + ollama usage in one
+      // read so the in-app agent can budget itself. Auth = the usage-endpoint
+      // per-boot Bearer token (the gate exempts exactly this path), fail-closed
+      // on a null token. Uses the normal 60s caches (never force). The fetchers
+      // return percentages/reset times only, never credentials.
+      method: 'GET',
+      match: (pathname) => pathname === '/api/agent/usage',
+      handler: async (req, res, callCtx) => {
+        const tok = callCtx && typeof callCtx.getUsageToken === 'function' ? callCtx.getUsageToken() : null
+        const got = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '')
+        if (!tok || !got || got.length !== tok.length || !require('node:crypto').timingSafeEqual(Buffer.from(got), Buffer.from(tok))) {
+          sendJson(res, 403, { ok: false, reason: 'bad usage token' })
+          return
+        }
+        const safe = (p) => p.catch((err) => ({ ok: false, branch: 'error', detail: String(err && err.message || err) }))
+        const [claude, codex, ollama] = await Promise.all([
+          safe(fetchClaudeSubscriptionUsage()), safe(fetchCodexUsage()), safe(fetchOllamaUsage()),
+        ])
+        sendJson(res, 200, { ok: true, at: new Date().toISOString(), claude, codex, ollama })
+        return
+      },
+    },
+    {
       // Ollama half of the dynamic catalog -- live ollama.com /api/tags,
       // 10min cache, [] on failure (static rows stand).
       method: 'GET',

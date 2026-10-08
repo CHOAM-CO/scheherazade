@@ -1717,6 +1717,8 @@ function createHarnessRender(ctx) {
           fs.rmSync(path.join(DATA_HOME, 'bin', stale), { force: true })
         }
       }
+      // usage-budget (0.4.2): not host-gated, reads the app's own endpoint.
+      writeLauncher(path.join(DATA_HOME, 'bin'), 'usage-budget', path.join(dst, 'usage-budget.cjs'), ['--data-home', DATA_HOME])
       return true
     } catch (err) {
       console.error('[scheherazade/onboarding] agent-tools sync failed (windowshot skill may miss its CLI):', err.message)
