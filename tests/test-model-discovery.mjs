@@ -111,9 +111,12 @@ try {
   assert.equal(d.claudeWindowRule('claude-fable-5-1'), 1000000)
   assert.equal(d.claudeWindowRule('claude-haiku-4-5-20251001'), 200000)
   const page1 = { data: [
+    { id: 'claude-opus-5', line: 'opus', created_at: '2026-08-01T00:00:00Z' }, { id: 'claude-opus-5-5', line: 'opus', created_at: '2026-09-20T00:00:00Z' },
+    { id: 'claude-opus-4-8', line: 'opus', created_at: '2026-06-01T00:00:00Z' },
+    { id: 'claude-nova-1-0', line: 'nova', created_at: '2026-01-01T00:00:00Z' }, { id: 'claude-nova-2-0', line: 'nova', created_at: '2026-05-01T00:00:00Z' },
     { id: 'claude-future-6-0', display_name: 'Claude Future 6', lifecycle: 'active', deprecated_at: null, retires_at: null },
     { id: 'claude-haiku-5-5', display_name: 'Claude Haiku 5.5 (api)', max_input_tokens: 555 },
-    { id: 'claude-old-4-1', display_name: 'Old 4.1', max_input_tokens: null },
+    { id: 'claude-old-4-1', line: 'olden', created_at: '2025-01-01T00:00:00Z', display_name: 'Old 4.1', max_input_tokens: null },
     { id: 'claude-dep-4-0', lifecycle: 'deprecated' }, { id: 'claude-ret-4-0', retires_at: '2026-12-01T00:00:00Z' },
     { id: 'not-claude' }], has_more: true, last_id: 'claude-old-4-1' }
   const page2 = { data: [{ id: 'claude-page2-5-0' }], has_more: false }
@@ -124,10 +127,11 @@ try {
   }
   const crows = await d.fetchClaudeModels({ fetch: fakeFetch, token: 't0k' })
   assert.ok(urls[1].includes('after_id=claude-old-4-1'))
-  assert.deepEqual(crows.map((m) => m.id), ['claude-future-6-0', 'claude-haiku-5-5', 'claude-old-4-1', 'claude-page2-5-0'])
-  assert.equal(crows[0].contextWindow, 1000000)
-  assert.equal(crows[0].contextWindowSource, 'claude-discovery-rule')
-  assert.equal(crows[2].contextWindow, 200000)
+  assert.deepEqual(crows.map((m) => m.id), ['claude-opus-5', 'claude-opus-5-5', 'claude-opus-4-8', 'claude-nova-1-0', 'claude-nova-2-0', 'claude-future-6-0', 'claude-haiku-5-5', 'claude-old-4-1', 'claude-page2-5-0'])
+  const byc = (id) => crows.find((m) => m.id === id)
+  assert.equal(byc('claude-future-6-0').contextWindow, 1000000)
+  assert.equal(byc('claude-future-6-0').contextWindowSource, 'claude-discovery-rule')
+  assert.equal(byc('claude-old-4-1').contextWindow, 200000)
   assert.equal(crows[0].group, 'Claude')
   assert.deepEqual(await d.fetchClaudeModels({ fetch: fakeFetch }), [])
   assert.deepEqual(await d.fetchClaudeModels({ fetch: async () => { throw Error('net') }, token: 't' }), [])
@@ -137,6 +141,10 @@ try {
   assert.equal(catalog.byId('claude-haiku-5-5').contextWindow, 1000000) // bundled window wins
   assert.equal(catalog.byId('claude-haiku-5-5').label, 'Claude Haiku 5.5')
   assert.equal(catalog.byId('claude-dep-4-0'), null)
+  // Pruning: bundled opus line supersedes every discovered opus id; per other line only the newest survives.
+  for (const id of ['claude-opus-5', 'claude-opus-4-8', 'claude-nova-1-0']) assert.equal(catalog.byId(id), null, id)
+  assert.equal(catalog.byId('claude-opus-5-5').contextWindow, 1000000)
+  assert.equal(catalog.byId('claude-nova-2-0').group, 'Claude')
   console.log('PASS model discovery: merge, fixture, context, snapshot, persisted lane, browser, endpoint, version')
 } finally {
   fs.rmSync(data, { recursive: true, force: true })

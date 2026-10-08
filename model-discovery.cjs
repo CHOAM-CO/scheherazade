@@ -101,11 +101,29 @@ function claudeRows(body) {
     .filter((m) => (m.lifecycle == null || m.lifecycle === 'active') && !m.deprecated_at && !m.retires_at)
     .map((m) => {
       const api = Number.isInteger(m.max_input_tokens) && m.max_input_tokens > 0 ? m.max_input_tokens : null
-      return { id: m.id, label: m.display_name || m.id, group: 'Claude', providers: [...CLAUDE_PROVIDERS],
+      return { id: m.id, line: typeof m.line === 'string' ? m.line : undefined, created_at: m.created_at, label: m.display_name || m.id, group: 'Claude', providers: [...CLAUDE_PROVIDERS],
         contextWindow: api || claudeWindowRule(m.id), contextWindowSource: api ? 'claude-models-api' : 'claude-discovery-rule' }
     })
 }
 // The token is injected: this file is asarUnpack'd and read by plain node, so it must not require provider-env.
+function claudeLine(m) {
+  return m.line || /^claude-([a-z]+)-/.exec(m.id)?.[1] || m.id
+}
+// The catalog prunes superseded in-family ids: per line keep only the newest created_at, and drop
+// every discovered id on a line a bundled row already covers (bundled rows carry no created_at, so
+// they count as newest). The bundled row itself is untouched.
+function pruneClaudeRows(rows, bundled) {
+  const bundledIds = new Set(bundled.map((m) => m.id))
+  const bundledLines = new Set(bundled.filter((m) => /^claude-/.test(m.id)).map(claudeLine))
+  const newest = new Map()
+  const claude = rows.filter((m) => m && /^claude-/.test(m.id) && !bundledIds.has(m.id) && !bundledLines.has(claudeLine(m)))
+  for (const m of claude) {
+    const k = claudeLine(m), cur = newest.get(k)
+    if (!cur || String(m.created_at || '') > String(cur.created_at || '')) newest.set(k, m)
+  }
+  const keep = new Set(newest.values())
+  return rows.filter((m) => !(m && /^claude-/.test(m.id) && !bundledIds.has(m.id)) || keep.has(m))
+}
 async function fetchClaudeModels({ token, fetch: fetchImpl = fetch, timeoutMs = 5000 } = {}) {
   try {
     if (!token || typeof token !== 'string') return []
@@ -148,4 +166,4 @@ async function discoverModels({ fetchImpl = fetch, claudeToken } = {}) {
   await Promise.all(tasks)
   return rows
 }
-module.exports = { readCodexCache, codexRows, mergeModels, initialRows, saveModels, pickCodexVersion, resolveCodexVersion, discoverModels, claudeRows, fetchClaudeModels, claudeWindowRule }
+module.exports = { readCodexCache, codexRows, mergeModels, initialRows, saveModels, pickCodexVersion, resolveCodexVersion, discoverModels, claudeRows, pruneClaudeRows, fetchClaudeModels, claudeWindowRule }

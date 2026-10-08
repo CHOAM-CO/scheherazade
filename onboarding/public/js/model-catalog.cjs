@@ -181,7 +181,7 @@
     const candidates = [...MODELS.filter((m) => !bundledIds.has(m.id)), ...rows]
       .filter((m) => m && ((/^gpt-/.test(m.id) && !/^gpt-reserve/.test(m.id) && m.providers?.includes('chatgpt')) ||
         (/^claude-/.test(m.id) && m.providers?.some((p) => CLAUDE_PROVIDERS.includes(p)))))
-    const merged = discovery.mergeModels(BUNDLED_MODELS, candidates, SEEN_AT_BUILD)
+    const merged = discovery.mergeModels(BUNDLED_MODELS, discovery.pruneClaudeRows(candidates, BUNDLED_MODELS), SEEN_AT_BUILD)
     MODELS.splice(0, MODELS.length, ...merged)
     BY_ID.clear()
     for (const m of MODELS) BY_ID.set(m.id, m)
