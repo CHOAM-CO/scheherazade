@@ -81,7 +81,7 @@ try {
   await win.SCHZ_CATALOG.refresh()
   assert.equal(win.SCHZ_CATALOG.byId('gpt-6.1-sol').contextWindow, 200000)
   fs.writeFileSync(process.env.CODEX_AS_API_AUTH_PATH, JSON.stringify({ tokens: { access_token: 'fixture-token', account_id: 'fixture-account' } }))
-  const discovered = await d.discoverModels({ claudeToken: () => ({ error: 'none' }), fetchImpl: async (url, options) => {
+  const discovered = await d.discoverModels({ fetchImpl: async (url, options) => {
     assert.ok(url.startsWith('https://chatgpt.com/backend-api/codex/models?client_version='))
     assert.equal(options.headers.authorization, 'Bearer fixture-token')
     return { ok: true, json: async () => fixture }
@@ -122,15 +122,15 @@ try {
     urls.push(u); assert.equal(o.headers.authorization, 'Bearer t0k'); assert.equal(o.headers['anthropic-version'], '2023-06-01')
     return { ok: true, json: async () => (urls.length === 1 ? page1 : page2) }
   }
-  const crows = await d.fetchClaudeModels({ fetchImpl: fakeFetch, tokenReader: () => ({ token: 't0k' }) })
+  const crows = await d.fetchClaudeModels({ fetch: fakeFetch, token: 't0k' })
   assert.ok(urls[1].includes('after_id=claude-old-4-1'))
   assert.deepEqual(crows.map((m) => m.id), ['claude-future-6-0', 'claude-haiku-5-5', 'claude-old-4-1', 'claude-page2-5-0'])
   assert.equal(crows[0].contextWindow, 1000000)
   assert.equal(crows[0].contextWindowSource, 'claude-discovery-rule')
   assert.equal(crows[2].contextWindow, 200000)
   assert.equal(crows[0].group, 'Claude')
-  assert.deepEqual(await d.fetchClaudeModels({ fetchImpl: fakeFetch, tokenReader: () => ({ error: 'x' }) }), [])
-  assert.deepEqual(await d.fetchClaudeModels({ fetchImpl: async () => { throw Error('net') }, tokenReader: () => ({ token: 't' }) }), [])
+  assert.deepEqual(await d.fetchClaudeModels({ fetch: fakeFetch }), [])
+  assert.deepEqual(await d.fetchClaudeModels({ fetch: async () => { throw Error('net') }, token: 't' }), [])
   catalog.mergeDiscovered(crows)
   assert.equal(catalog.byId('claude-future-6-0').label, 'Claude Future 6')
   assert.equal(catalog.byId('claude-old-4-1').contextWindow, 200000)

@@ -2753,7 +2753,9 @@ function discoverCatalog() {
   if (!modelDiscoveryPromise) {
     const discovery = require('../model-discovery.cjs')
     const catalog = require('./public/js/model-catalog.cjs')
-    modelDiscoveryPromise = discovery.discoverModels()
+    let claudeToken
+    try { claudeToken = require('../provider-env.cjs').readClaudeCliToken().token } catch { /* no CLI login */ }
+    modelDiscoveryPromise = discovery.discoverModels({ claudeToken })
       .then((rows) => catalog.mergeDiscovered(rows))
       .catch(() => catalog.MODELS)
   }

@@ -105,17 +105,16 @@ function claudeRows(body) {
         contextWindow: api || claudeWindowRule(m.id), contextWindowSource: api ? 'claude-models-api' : 'claude-discovery-rule' }
     })
 }
-async function fetchClaudeModels({ fetchImpl = fetch, tokenReader } = {}) {
+// The token is injected: this file is asarUnpack'd and read by plain node, so it must not require provider-env.
+async function fetchClaudeModels({ token, fetch: fetchImpl = fetch, timeoutMs = 5000 } = {}) {
   try {
-    const read = tokenReader || require('./provider-env.cjs').readClaudeCliToken
-    const { token } = read() || {}
-    if (!token) return []
+    if (!token || typeof token !== 'string') return []
     const rows = []
     let after = null
     for (let page = 0; page < 10; page++) {
       const url = `https://api.anthropic.com/v1/models?limit=100${after ? `&after_id=${encodeURIComponent(after)}` : ''}`
       const r = await fetchImpl(url, { headers: { authorization: `Bearer ${token}`, 'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'oauth-2025-04-20' }, signal: AbortSignal.timeout(5000) })
+        'anthropic-beta': 'oauth-2025-04-20' }, signal: AbortSignal.timeout(timeoutMs) })
       if (!r.ok) break
       const body = await r.json()
       rows.push(...claudeRows(body))
@@ -145,7 +144,7 @@ async function discoverModels({ fetchImpl = fetch, claudeToken } = {}) {
       ...(auth.tokens.account_id ? { 'ChatGPT-Account-Id': auth.tokens.account_id } : {}),
     }).then((body) => rows.push(...codexRows(body))))
   }
-  tasks.push(fetchClaudeModels({ fetchImpl, tokenReader: claudeToken }).then((r) => rows.push(...r)))
+  tasks.push(fetchClaudeModels({ token: claudeToken, fetch: fetchImpl }).then((r) => rows.push(...r)))
   await Promise.all(tasks)
   return rows
 }
