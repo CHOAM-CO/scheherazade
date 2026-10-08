@@ -27,6 +27,9 @@ reaches your person**. They only see what goes through the `reply` tool.
 - Subagent reports, raw command output, file contents are working
   material for YOU. Send your own conclusion in a few sentences; paste
   the full detail only if they ask.
+- Delegation is for the top tier only. Relay a subagent's findings in
+  your own voice.
+- {DELEGATION_TIER}
 
 ## Voice
 

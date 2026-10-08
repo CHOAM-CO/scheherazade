@@ -863,7 +863,25 @@ function createHarnessRender(ctx) {
   // and get real fs. Needed because the two failures worth pinning here (a
   // template that cannot be READ, and a harness file that cannot be WRITTEN)
   // are otherwise only reachable by breaking the repo or the disk.
-  function renderHarnessFiles({ displayName, tone, primaryTask }, opts = {}) {
+  // Model-tier delegation paragraph (Mino 2026-10-08). TOP = claude-opus-*, claude-fable-*,
+  // gpt-*-sol, gpt-*-astra; everything else (sonnet, haiku, luna, ollama/local) is LOWER.
+  // An unset model means the supervisor's own default (claude-opus-4-6), i.e. TOP.
+  function isTopTierModel(model) {
+    const id = String(model || 'claude-opus-4-6').trim().toLowerCase()
+    return /^claude-(opus|fable)-/.test(id) || /^gpt-.+-(sol|astra)$/.test(id)
+  }
+  function delegationTierText(model) {
+    return isTopTierModel(model)
+      ? [
+        'Delegate by default. Reading many files, broad searches, bulk edits and long research go to a',
+        'background subagent; you keep only the conclusion. One main-loop tool call costs a full-context',
+        'reread, a subagent does not. Report subagent results in your own words, never paste their output.',
+      ].join('\n')
+      : [
+        'Do the work yourself. Do not spawn subagents: at this tier they would cost more than they save.',
+      ].join('\n')
+  }
+  function renderHarnessFiles({ displayName, tone, primaryTask, model }, opts = {}) {
     const readFileFn = opts.readFileFn || fs.readFileSync
     const writeFileFn = opts.writeFileFn || fs.writeFileSync
     const agentDir = toUnpackedPath(REPO_ROOT)
@@ -979,6 +997,7 @@ function createHarnessRender(ctx) {
         .replaceAll('{PREDECESSOR_NOTE}', predecessorNote)
         .replaceAll('{UPDATE_BRIEF}', updateBrief.block)
         .replaceAll('{PLATFORM_SECTION}', platformSection())
+        .replaceAll('{DELEGATION_TIER}', delegationTierText(model))
         .replaceAll('{KOREAN_VOICE}', koreanVoice),
     })
 
@@ -1448,6 +1467,7 @@ function createHarnessRender(ctx) {
         displayName: config.DISPLAY_NAME || AGENT_NAME,
         tone: config.TONE || 'casual',
         primaryTask: config.PRIMARY_TASK || '',
+        model: config.MODEL,
       }, opts)
       // Success clears any previous failure: the whole point of re-rendering at
       // every boot is that a shipped fix repairs an install without the user
@@ -1709,7 +1729,7 @@ function createHarnessRender(ctx) {
       fs.mkdirSync(path.join(DATA_HOME, dir), { recursive: true })
     }
 
-    renderHarnessFiles({ displayName, tone, primaryTask })
+    renderHarnessFiles({ displayName, tone, primaryTask, model: readAgentConfig().MODEL })
 
     const personaPath = path.join(DATA_HOME, 'self_persona.md')
     if (!fs.existsSync(personaPath)) {
@@ -1775,6 +1795,8 @@ function createHarnessRender(ctx) {
     writeLauncher,
     ensureClaudeOnboardingDone,
     refreshHarnessIfOnboarded,
+    isTopTierModel,
+    delegationTierText,
     renderAgentSubstrate,
     // Exported for tools/test-packaging.mjs: the manual's option surface gate
     // has to read the WHOLE manual, and since design-0023 P4's tail part of it

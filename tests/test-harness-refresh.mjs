@@ -167,6 +167,25 @@ assert(/setAgentStatus\('failed', 'harness_stale'/.test(mainSrc), "the gate repo
 assert(readFileSync(path.join(import.meta.dirname, '..', 'onboarding', 'public', 'js', 'copy.js'), 'utf8').includes('harness_stale'),
   'the UI has copy for harness_stale, so the failure is actionable and not just a code')
 
+console.log('\n5b. delegation paragraph follows the engine model tier')
+{
+  const TOP_TXT = 'Delegate by default.'
+  const LOW_TXT = 'Do not spawn subagents'
+  const cfgPath = path.join(SANDBOX, '.agent-config')
+  const base = readFileSync(cfgPath, 'utf8').replace(/^MODEL=.*\n/m, '')
+  for (const [model, top] of [['claude-opus-5-5', true], ['claude-fable-5-1', true], ['gpt-6-sol', true], ['gpt-6.1-sol', true],
+    ['gpt-6-astra', true], ['claude-sonnet-5-5', false], ['claude-haiku-5-5', false], ['gpt-6-luna', false], ['kimi-k3', false]]) {
+    writeFileSync(cfgPath, `${base}MODEL=${model}\n`)
+    assert(refreshHarnessIfOnboarded() === true, `render with MODEL=${model}`)
+    const p = readFileSync(PROMPT, 'utf8')
+    assert(p.includes(TOP_TXT) === top && p.includes(LOW_TXT) === !top, `${model} -> ${top ? 'TOP' : 'LOWER'} paragraph only`)
+    assert(p.includes('Delegation is for the top tier only.') && p.includes("Relay a subagent's findings in\n  your own voice."), `${model}: persona lines present`)
+    assert(!/\{[A-Z_]+\}/.test(p), `${model}: no placeholder left`)
+  }
+  writeFileSync(cfgPath, base)
+  assert(refreshHarnessIfOnboarded() === true && readFileSync(PROMPT, 'utf8').includes(TOP_TXT), 'unset MODEL = supervisor default (opus) = TOP')
+}
+
 console.log('\n6. an unreadable marker still means failure')
 writeFileSync(HARNESS_FAILURE_PATH, '{ this is not json')
 const corrupt = readHarnessFailure()
