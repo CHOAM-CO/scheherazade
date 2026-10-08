@@ -113,6 +113,8 @@
     { id: 'claude-fable-5-1', label: 'Claude Fable 5.1', group: 'Claude', providers: CLAUDE_PROVIDERS, contextWindow: 1000000, contextWindowSource: 'claude-cli-table' },
     { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', group: 'Claude', providers: CLAUDE_PROVIDERS, contextWindow: 1000000, contextWindowSource: 'claude-cli-table' },
     { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', group: 'Claude', providers: CLAUDE_PROVIDERS, contextWindow: 1000000, contextWindowSource: 'claude-cli-table' },
+    // Haiku 5.5 (released 2026-10-07; platform.claude.com/docs/en/models/haiku-5-5/overview: 1M window, 128K output).
+    { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5', group: 'Claude', providers: CLAUDE_PROVIDERS, contextWindow: 1000000, contextWindowSource: 'claude-cli-table' },
     // GPT: 200000 for all four, MEASURED not assumed (2026-09-28) by booting
     // the proxy in-process with an EMPTY CODEX_HOME — the number a fresh
     // install gets, which is the one we ship. Raw /health, one line per id
@@ -175,9 +177,10 @@
   function mergeDiscovered(rows) {
     const discovery = require('../../../model-discovery.cjs')
     const bundledIds = new Set(BUNDLED_MODELS.map((m) => m.id))
-    // Only post-build GPT ids are discoverable in this release, including from old caches.
+    // Discoverable: post-build GPT ids (chatgpt provider) and claude- ids (a Claude provider), including from old caches.
     const candidates = [...MODELS.filter((m) => !bundledIds.has(m.id)), ...rows]
-      .filter((m) => m && /^gpt-/.test(m.id) && !/^gpt-reserve/.test(m.id) && m.providers?.includes('chatgpt'))
+      .filter((m) => m && ((/^gpt-/.test(m.id) && !/^gpt-reserve/.test(m.id) && m.providers?.includes('chatgpt')) ||
+        (/^claude-/.test(m.id) && m.providers?.some((p) => CLAUDE_PROVIDERS.includes(p)))))
     const merged = discovery.mergeModels(BUNDLED_MODELS, candidates, SEEN_AT_BUILD)
     MODELS.splice(0, MODELS.length, ...merged)
     BY_ID.clear()

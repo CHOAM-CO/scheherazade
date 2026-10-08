@@ -87,7 +87,46 @@ function resolveCodexVersion({ cache = readCodexCache(), run = execFileSync } = 
   return pickCodexVersion([cli, cache?.client_version])
 }
 
-async function discoverModels({ fetchImpl = fetch } = {}) {
+// Claude ids from GET /v1/models (receipt 2026-10-08, subscription OAuth token: 200, fields
+// id/display_name/max_input_tokens/lifecycle/deprecated_at/retires_at, paginated via has_more/last_id).
+// Same CLAUDE_PROVIDERS value as model-catalog.cjs.
+const CLAUDE_PROVIDERS = ['claude', 'claude-cli', 'claude-subscription']
+function claudeWindowRule(id) {
+  const major = Number(/^claude-[a-z]+-(\d+)/.exec(id)?.[1])
+  return major >= 5 ? 1000000 : 200000
+}
+function claudeRows(body) {
+  return (Array.isArray(body?.data) ? body.data : [])
+    .filter((m) => m && typeof m.id === 'string' && /^claude-/.test(m.id))
+    .filter((m) => (m.lifecycle == null || m.lifecycle === 'active') && !m.deprecated_at && !m.retires_at)
+    .map((m) => {
+      const api = Number.isInteger(m.max_input_tokens) && m.max_input_tokens > 0 ? m.max_input_tokens : null
+      return { id: m.id, label: m.display_name || m.id, group: 'Claude', providers: [...CLAUDE_PROVIDERS],
+        contextWindow: api || claudeWindowRule(m.id), contextWindowSource: api ? 'claude-models-api' : 'claude-discovery-rule' }
+    })
+}
+async function fetchClaudeModels({ fetchImpl = fetch, tokenReader } = {}) {
+  try {
+    const read = tokenReader || require('./provider-env.cjs').readClaudeCliToken
+    const { token } = read() || {}
+    if (!token) return []
+    const rows = []
+    let after = null
+    for (let page = 0; page < 10; page++) {
+      const url = `https://api.anthropic.com/v1/models?limit=100${after ? `&after_id=${encodeURIComponent(after)}` : ''}`
+      const r = await fetchImpl(url, { headers: { authorization: `Bearer ${token}`, 'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'oauth-2025-04-20' }, signal: AbortSignal.timeout(5000) })
+      if (!r.ok) break
+      const body = await r.json()
+      rows.push(...claudeRows(body))
+      if (!body?.has_more || !body.last_id) break
+      after = body.last_id
+    }
+    return rows
+  } catch { return [] }
+}
+
+async function discoverModels({ fetchImpl = fetch, claudeToken } = {}) {
   const rows = codexRows(readCodexCache())
   const get = async (url, headers) => {
     try {
@@ -106,7 +145,8 @@ async function discoverModels({ fetchImpl = fetch } = {}) {
       ...(auth.tokens.account_id ? { 'ChatGPT-Account-Id': auth.tokens.account_id } : {}),
     }).then((body) => rows.push(...codexRows(body))))
   }
+  tasks.push(fetchClaudeModels({ fetchImpl, tokenReader: claudeToken }).then((r) => rows.push(...r)))
   await Promise.all(tasks)
   return rows
 }
-module.exports = { readCodexCache, codexRows, mergeModels, initialRows, saveModels, pickCodexVersion, resolveCodexVersion, discoverModels }
+module.exports = { readCodexCache, codexRows, mergeModels, initialRows, saveModels, pickCodexVersion, resolveCodexVersion, discoverModels, claudeRows, fetchClaudeModels, claudeWindowRule }

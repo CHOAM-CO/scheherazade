@@ -1385,6 +1385,7 @@ module.exports = {
   decideRouteChange,
   ROUTE_PROXY_DUMMY_KEY,
   refreshClaudeCliToken,
+  readClaudeCliToken,
   CLAUDE_CLI_PROVIDER_ID,
   resolveChatgptProxyPort,
   resolveCustomBaseUrl,

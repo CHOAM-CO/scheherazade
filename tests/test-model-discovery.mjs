@@ -46,9 +46,9 @@ try {
   d.saveModels([...rows, { id: 'claude-old-cache', label: 'Old', group: 'Claude', providers: ['claude'] },
     { id: 'local-old-cache', label: 'Old', group: 'Ollama', providers: ['dsh'] }])
   const catalog = require('../onboarding/public/js/model-catalog.cjs')
-  assert.deepEqual(catalog.MODELS.map((m) => m.id), [...catalog.BUNDLED_MODELS.map((m) => m.id), 'gpt-7-test'])
+  assert.deepEqual(catalog.MODELS.map((m) => m.id), [...catalog.BUNDLED_MODELS.map((m) => m.id), 'gpt-7-test', 'claude-old-cache'])
   assert.equal(catalog.byId('gpt-5.6-sol'), null)
-  assert.equal(catalog.byId('claude-old-cache'), null)
+  assert.equal(catalog.byId('claude-old-cache').providers[0], 'claude') // claude- rows are discoverable since 0.4.1
   assert.equal(catalog.byId('local-old-cache'), null)
   assert.equal(catalog.byId('gpt-6.1-sol').label, 'GPT 6.1 Sol')
   const actualCache = d.readCodexCache(path.join(os.homedir(), '.codex/models_cache.json'))
@@ -81,7 +81,7 @@ try {
   await win.SCHZ_CATALOG.refresh()
   assert.equal(win.SCHZ_CATALOG.byId('gpt-6.1-sol').contextWindow, 200000)
   fs.writeFileSync(process.env.CODEX_AS_API_AUTH_PATH, JSON.stringify({ tokens: { access_token: 'fixture-token', account_id: 'fixture-account' } }))
-  const discovered = await d.discoverModels({ fetchImpl: async (url, options) => {
+  const discovered = await d.discoverModels({ claudeToken: () => ({ error: 'none' }), fetchImpl: async (url, options) => {
     assert.ok(url.startsWith('https://chatgpt.com/backend-api/codex/models?client_version='))
     assert.equal(options.headers.authorization, 'Bearer fixture-token')
     return { ok: true, json: async () => fixture }
@@ -104,6 +104,39 @@ try {
     server.closeAllConnections()
     await new Promise((resolve) => server.close(resolve))
   }
+  // 0.4.1: Haiku 5.5 bundled; Claude discovery from a fake /v1/models payload.
+  assert.equal(catalog.byId('claude-haiku-5-5').contextWindow, 1000000)
+  assert.equal(catalog.BUNDLED_MODELS.find((m) => m.id === 'claude-haiku-5-5').label, 'Claude Haiku 5.5')
+  assert.equal(d.claudeWindowRule('claude-haiku-5-5'), 1000000)
+  assert.equal(d.claudeWindowRule('claude-fable-5-1'), 1000000)
+  assert.equal(d.claudeWindowRule('claude-haiku-4-5-20251001'), 200000)
+  const page1 = { data: [
+    { id: 'claude-future-6-0', display_name: 'Claude Future 6', lifecycle: 'active', deprecated_at: null, retires_at: null },
+    { id: 'claude-haiku-5-5', display_name: 'Claude Haiku 5.5 (api)', max_input_tokens: 555 },
+    { id: 'claude-old-4-1', display_name: 'Old 4.1', max_input_tokens: null },
+    { id: 'claude-dep-4-0', lifecycle: 'deprecated' }, { id: 'claude-ret-4-0', retires_at: '2026-12-01T00:00:00Z' },
+    { id: 'not-claude' }], has_more: true, last_id: 'claude-old-4-1' }
+  const page2 = { data: [{ id: 'claude-page2-5-0' }], has_more: false }
+  const urls = []
+  const fakeFetch = async (u, o) => {
+    urls.push(u); assert.equal(o.headers.authorization, 'Bearer t0k'); assert.equal(o.headers['anthropic-version'], '2023-06-01')
+    return { ok: true, json: async () => (urls.length === 1 ? page1 : page2) }
+  }
+  const crows = await d.fetchClaudeModels({ fetchImpl: fakeFetch, tokenReader: () => ({ token: 't0k' }) })
+  assert.ok(urls[1].includes('after_id=claude-old-4-1'))
+  assert.deepEqual(crows.map((m) => m.id), ['claude-future-6-0', 'claude-haiku-5-5', 'claude-old-4-1', 'claude-page2-5-0'])
+  assert.equal(crows[0].contextWindow, 1000000)
+  assert.equal(crows[0].contextWindowSource, 'claude-discovery-rule')
+  assert.equal(crows[2].contextWindow, 200000)
+  assert.equal(crows[0].group, 'Claude')
+  assert.deepEqual(await d.fetchClaudeModels({ fetchImpl: fakeFetch, tokenReader: () => ({ error: 'x' }) }), [])
+  assert.deepEqual(await d.fetchClaudeModels({ fetchImpl: async () => { throw Error('net') }, tokenReader: () => ({ token: 't' }) }), [])
+  catalog.mergeDiscovered(crows)
+  assert.equal(catalog.byId('claude-future-6-0').label, 'Claude Future 6')
+  assert.equal(catalog.byId('claude-old-4-1').contextWindow, 200000)
+  assert.equal(catalog.byId('claude-haiku-5-5').contextWindow, 1000000) // bundled window wins
+  assert.equal(catalog.byId('claude-haiku-5-5').label, 'Claude Haiku 5.5')
+  assert.equal(catalog.byId('claude-dep-4-0'), null)
   console.log('PASS model discovery: merge, fixture, context, snapshot, persisted lane, browser, endpoint, version')
 } finally {
   fs.rmSync(data, { recursive: true, force: true })
