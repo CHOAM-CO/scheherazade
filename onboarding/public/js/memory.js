@@ -671,17 +671,34 @@
   }
 
   function initImport() {
+    const I = C.aiImport
+    $('ai-import-title').textContent = I.title
+    $('ai-import-intro').textContent = I.intro
+    $('ai-import-source-label').textContent = I.origin
+    $('ai-import-file-label').textContent = I.file
+    $('ai-import-choose').textContent = I.chooseFile
+    $('ai-import-submit').textContent = I.submit
+    for (const [value, label] of I.origins) {
+      const option = document.createElement('option')
+      option.value = value
+      option.textContent = label
+      $('ai-import-source').append(option)
+    }
+    const showName = () => { $('ai-import-file-name').textContent = $('ai-import-file').files[0]?.name || I.noFile }
+    showName()
+    $('ai-import-choose').onclick = () => $('ai-import-file').click()
+    $('ai-import-file').onchange = showName
     $('ai-import-submit').onclick = async () => {
       const file = $('ai-import-file').files[0]
-      if (!file) { $('ai-import-status').textContent = 'Choose a memory file first.'; return }
+      if (!file) { $('ai-import-status').textContent = I.chooseFirst; return }
       const button = $('ai-import-submit')
       button.disabled = true
       try {
-        if (file.size > 5 * 1024 * 1024) throw new Error('Choose a file smaller than 5 MB.')
+        if (file.size > 5 * 1024 * 1024) throw new Error(I.tooBig)
         const result = await api('/api/memory/ai-import', { method: 'POST', body: JSON.stringify({
           filename: file.name, content: await file.text(), source: $('ai-import-source').value,
         }) })
-        $('ai-import-status').textContent = `${result.staged} candidates staged. Confirm each before it is remembered.`
+        $('ai-import-status').textContent = I.staged(result.staged)
         await loadImportCandidates()
       } catch (err) { $('ai-import-status').textContent = err.message }
       finally { button.disabled = false }

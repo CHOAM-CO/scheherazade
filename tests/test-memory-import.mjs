@@ -104,3 +104,19 @@ await route('POST', '/api/memory/ai-import').handler({ body: { filename: 'bad.js
 assert.equal(response.status, 400)
 routeDb.close()
 console.log('Memory page staging/list/accept/reject route bodies passed')
+
+// Memory page "Import from another AI" markup: themed controls, ids memory.js depends on, copy via copy.js.
+{
+  const { readFileSync } = await import('node:fs')
+  const html = readFileSync(new URL('../onboarding/public/memory.html', import.meta.url), 'utf8')
+  const js = readFileSync(new URL('../onboarding/public/js/memory.js', import.meta.url), 'utf8')
+  const copy = readFileSync(new URL('../onboarding/public/js/copy.js', import.meta.url), 'utf8')
+  for (const id of ['ai-import-source', 'ai-import-file', 'ai-import-submit', 'ai-import-status', 'ai-import-pending']) assert.ok(html.includes(`id="${id}"`), id)
+  assert.match(html, /class="agent-control-row">\s*<label for="ai-import-source"/)
+  assert.match(html, /<input id="ai-import-file" type="file"[^>]* hidden>/)
+  assert.match(html, /class="field-hint" id="ai-import-file-name"/)
+  assert.match(html, /class="step-actions">\s*<button class="secondary" id="ai-import-choose"/)
+  assert.ok(!html.includes('Import from another AI') && !html.includes('Choose file'), 'no hardcoded English in memory.html')
+  assert.ok(copy.includes('aiImport:') && js.includes("C.aiImport") && js.includes("$('ai-import-file').click()"))
+  console.log('Memory page import markup passed')
+}

@@ -824,6 +824,19 @@ window.COPY = {
 
   memoryPane: {
     title: 'Memory',
+    aiImport: {
+      title: 'Import from another AI',
+      intro: 'Bring a memory export. Nothing becomes a remembered fact until you confirm it.',
+      origin: 'Origin',
+      origins: [['chatgpt', 'ChatGPT'], ['claude', 'Claude'], ['other', 'Other / plain list']],
+      file: 'Memory file',
+      chooseFile: 'Choose file',
+      noFile: 'No file selected',
+      submit: 'Import',
+      chooseFirst: 'Choose a memory file first.',
+      tooBig: 'Choose a file smaller than 5 MB.',
+      staged: (n) => `${n} candidates staged. Confirm each before it is remembered.`,
+    },
     subtitle: (name) => `Everything ${name} knows about you. Anything not here, it doesn't remember.`,
     sessionGroupTitle: 'Remembered this session',
     categories: {
