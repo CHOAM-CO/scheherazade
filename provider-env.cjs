@@ -548,6 +548,7 @@ function snip(value, limit = 80) {
 function dshCommonEnv(config) {
   return {
     LANE_KIND: 'dsh',
+    DSH_LANE_REGISTERED: undefined,
     // EFFORT_LEVEL (low/medium/high/max) passes through; the lane's
     // selectModel is fail-soft on a level the route's model doesn't offer.
     DSH_EFFORT: (config.EFFORT_LEVEL && String(config.EFFORT_LEVEL).trim()) || 'high',
@@ -1134,6 +1135,36 @@ const PROVIDER_IDS_FOR_MESSAGE = ['claude', 'claude-cli', 'claude-subscription',
 function buildProviderEnv(provider, config, deps) {
   const { readProviderKey } = deps
 
+  if (typeof provider === 'string' && provider.startsWith('lane:')) {
+    try {
+      const { laneHome, resolveLaneModel } = require('./lane-providers.cjs')
+      const selected = resolveLaneModel(provider, config.MODEL)
+      if (!selected) throw new Error('lane provider/model is no longer declared')
+      const { spec, model } = selected
+      const url = resolveCustomBaseUrl(spec.baseURL)
+      if (url.error) throw new Error('lane provider needs a valid http(s) baseURL')
+      const api = spec.api || 'openai-completions'
+      if (!['openai-completions', 'anthropic-messages'].includes(api)) throw new Error('lane provider protocol is not supported by the app route proxy')
+      let key = CUSTOM_PLACEHOLDER_KEY
+      if (spec.apiKeyEnv !== undefined) {
+        if (typeof spec.apiKeyEnv !== 'string' || !spec.apiKeyEnv) throw new Error('lane apiKeyEnv must name a credential')
+        key = process.env[spec.apiKeyEnv] || require('./onboarding/key-file.cjs').readKeyFile(require('node:path').join(laneHome(), '.credentials.yaml'), spec.apiKeyEnv)
+      }
+      return { env: {
+        ...dshCommonEnv(config), DSH_LANE_REGISTERED: '1',
+        DSH_ROUTE: 'declared', DSH_PROVIDER: selected.provider, DSH_ROUTE_API: api,
+        DSH_ROUTE_BASE_URL: url.url, DSH_ROUTE_KEY_ENV: 'SCHZ_LANE_PROVIDER_KEY', SCHZ_LANE_PROVIDER_KEY: key,
+        DSH_MODEL: model.id, MODEL: model.id,
+        DSH_MODEL_CONTEXT: String(model.contextWindow || spec.defaultContextWindow || 131072),
+        DSH_MODEL_MAXTOK: String(model.maxTokens || spec.defaultMaxTokens || 32768),
+        DSH_MODEL_VISION: (model.input || spec.defaultInput || []).includes('image') ? '1' : '0',
+      } }
+    } catch {
+      return { error: { kind: 'not_ready', reason: 'Lane provider/model, endpoint, protocol or credential is unavailable',
+        fix: 'Check lane.patch.yml and its apiKeyEnv entry in .credentials.yaml (OpenAI completions or Anthropic messages).' } }
+    }
+  }
+
   const row = PROVIDER_ROWS_BY_ID.get(provider)
   if (!row) {
     return {
@@ -1351,6 +1382,7 @@ function codexModelKnown (modelId, known = loadCodexKnownModels()) {
 // live, but main.cjs must stand up a new codex proxy instance first.
 function decideRouteChange (prevEnv, nextEnv, opts = {}) {
   if (!prevEnv || !nextEnv) return { mode: 'restart', reason: 'no previous route to compare against' }
+  if (prevEnv.DSH_LANE_REGISTERED === '1' || nextEnv.DSH_LANE_REGISTERED === '1') return { mode: 'restart', reason: 'lane registration metadata is loaded at startup' }
   if (prevEnv.LANE_KIND !== nextEnv.LANE_KIND) return { mode: 'restart', reason: `lane kind ${prevEnv.LANE_KIND} -> ${nextEnv.LANE_KIND}` }
   const prevCodex = prevEnv.DSH_PROVIDER === 'codex'
   const nextCodex = nextEnv.DSH_PROVIDER === 'codex'

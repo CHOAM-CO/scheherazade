@@ -96,7 +96,7 @@ console.log('\n-- one lane: supervisor.mjs execs the lane on its own runtime')
   ok('supervisor reaper patterns (full path; dsh lane keys on its --patch argv)',
     supSrc.includes("laneKind === 'dsh' ? 'dsh-lane.mjs' : 'headless-lane.mjs'") &&
     supSrc.includes("`--mcp-config ${path.join(mem, '.mcp.json')}`") &&
-    supSrc.includes("`--patch ${path.join(mem, '.dsh-lane-home', 'lane.patch.yml')}`"))
+    supSrc.includes("`--patch ${path.join(mem, '.dsh-lane-home', 'lane.runtime.patch.yml')}`"))
   // win sweep self-kill regression (2026-08-18, magi-win live repro): the
   // sweep powershell's own command line contains `*<pattern>*`, so without
   // excluding $PID the Where-Object matches the sweep itself and

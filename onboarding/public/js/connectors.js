@@ -1053,7 +1053,7 @@
       try { cfg = await api('/api/config') } catch (err) { console.error(err) }
     }
     currentProvider = cfg.PROVIDER || null
-    currentModel = cfg.MODEL || ''
+    currentModel = cfg.PROVIDER?.startsWith('lane:') && cfg.MODEL ? `${cfg.PROVIDER}/${cfg.MODEL}` : (cfg.MODEL || '')
     currentEffort = EFFORT_LEVELS.includes(cfg.EFFORT_LEVEL) ? cfg.EFFORT_LEVEL : EFFORT_DEFAULT
     availableProviders = Array.isArray(cfg.availableProviders) ? cfg.availableProviders.slice() : []
     if (currentProvider && !availableProviders.includes(currentProvider)) availableProviders.push(currentProvider)

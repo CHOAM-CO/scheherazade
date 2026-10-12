@@ -33,7 +33,7 @@ function readKeyFile(file, keyName) {
     if (typeof keyName !== 'string' || !keyName.trim()) throw new Error('keyName is required for a YAML keyFile')
     let data
     try { data = YAML.parse(text, { maxAliasCount: 0, logLevel: 'silent' }) } catch { throw new Error('keyFile contains invalid YAML') }
-    if (!data || Array.isArray(data) || !Object.hasOwn(data, keyName) || typeof data[keyName] !== 'string') {
+    if (!data || typeof data !== 'object' || Array.isArray(data) || !Object.hasOwn(data, keyName) || typeof data[keyName] !== 'string') {
       throw new Error('keyName must select a string entry in keyFile')
     }
     key = data[keyName].trim()

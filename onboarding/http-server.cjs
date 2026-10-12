@@ -2210,7 +2210,7 @@ function parseMcpConnectorList(text) {
 // artifact LOGIN_SPECS itself points at. A keychain read failure logs LOUD
 // but degrades to "not available" rather than 500ing the whole config bag.
 function computeAvailableProviders() {
-  const out = []
+  const out = [...new Set(require('../lane-providers.cjs').laneModels().flatMap((m) => m.providers))]
   // PROVIDERS_REQUIRING_STORED_CREDENTIAL rather than a literal list, so a
   // provider moving to key-mode (ollama, 2026-08-04) is available exactly
   // when its stored credential exists -- same single source of truth as the
@@ -2772,7 +2772,12 @@ function discoverCatalog() {
 
 async function handleApi(req, res, pathname, onOnboardingComplete, agentControls) {
   if (req.method === 'GET' && pathname === '/api/models') {
-    sendJson(res, 200, { models: await discoverCatalog() })
+    const models = [...await discoverCatalog(), ...require('../lane-providers.cjs').laneModels()]
+    const cfg = readAgentConfig()
+    if (cfg.CUSTOM_BASE_URL && cfg.PROVIDER === 'custom' && cfg.MODEL && !models.some((m) => m.id === cfg.MODEL)) {
+      models.push({ id: cfg.MODEL, label: `${cfg.MODEL} [UI custom]`, group: 'Custom', providers: ['custom'], source: 'ui' })
+    }
+    sendJson(res, 200, { models })
     return
   }
   const callCtx = { agentControls, onOnboardingComplete, getAskpassToken: () => askpassToken, getCaptionToken: () => captionToken, getUsageToken: () => usageToken }

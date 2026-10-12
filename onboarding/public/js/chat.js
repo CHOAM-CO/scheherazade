@@ -1749,7 +1749,7 @@
       console.error('model chip config probe failed:', err)
       return // chip stays hidden; Engine page still has the full picker
     }
-    msModel = cfg.MODEL || ''
+    msModel = cfg.PROVIDER?.startsWith('lane:') && cfg.MODEL ? `${cfg.PROVIDER}/${cfg.MODEL}` : (cfg.MODEL || '')
     msProvider = cfg.PROVIDER || null
     msAvailable = Array.isArray(cfg.availableProviders) ? cfg.availableProviders.slice() : []
     // The onboarded provider is always available -- the running agent is

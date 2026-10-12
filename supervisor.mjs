@@ -148,8 +148,9 @@ export function resolveConfig(env = process.env, scriptDir = SCRIPT_DIR) {
     // dsh leaf: an orphaned dsh web engine is matched by its --patch argv
     // (stable per-agent path under MEM, written by dsh-lane's buildPatch) --
     // same never-key-on-mutable-fields rule as the --mcp-config leaf.
+    legacyDshLeafPattern: laneKind === 'dsh' ? `--patch ${path.join(mem, '.dsh-lane-home', 'lane.patch.yml')}` : null,
     pkillLeafPattern: laneKind === 'dsh'
-      ? `--patch ${path.join(mem, '.dsh-lane-home', 'lane.patch.yml')}`
+      ? `--patch ${path.join(mem, '.dsh-lane-home', 'lane.runtime.patch.yml')}`
       : `--mcp-config ${path.join(mem, '.mcp.json')}`,
     sessionTimeoutSec: Number(merged.SESSION_TIMEOUT) > 0 ? Number(merged.SESSION_TIMEOUT) : 43200,
     // v0.0.15 stall watchdog window (seconds). 0 disables. Default 15 min
@@ -865,6 +866,7 @@ export async function runLoop(cfg, deps = {}) {
     // died by SIGKILL before it could TERM its child. Lane parity with
     // run.sh's PKILL_LEAF_PATTERN sweep.
     if (cfg.pkillLeafPattern) sweepOrphansDefault(cfg.pkillLeafPattern, log)
+    if (cfg.legacyDshLeafPattern) sweepOrphansDefault(cfg.legacyDshLeafPattern, log)
   })
   const installSignalHandler = deps.installSignalHandler || ((h) => {
     for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => h(sig))

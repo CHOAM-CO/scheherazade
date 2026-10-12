@@ -422,10 +422,10 @@ ${providerBlock}
   if (persona) parts.push(persona)
   const mcp = mcpRowsFromClaudeConfig(MCP_CONFIG_FILE)
   if (mcp) parts.push(mcp)
-  const patch = parts.join('\n')
+  const patch = require('./lane-providers.cjs').mergeLanePatch(parts.join('\n'), dshHome(), process.env)
   fs.mkdirSync(dshHome(), { recursive: true })
   ensureLanePreset() // the patch's agent-presets default row names this preset
-  const p = path.join(dshHome(), 'lane.patch.yml')
+  const p = path.join(dshHome(), 'lane.runtime.patch.yml')
   fs.writeFileSync(p, patch)
   return p
 }

@@ -151,7 +151,7 @@ function createRoutes(staticCtx) {
         }
         const provider = (q.get('provider') || '').trim()
         if (provider) {
-          if (!PROVIDERS.includes(provider)) { sendJson(res, 400, { error: `invalid provider: ${provider.slice(0, 80)}` }); return }
+          if (!PROVIDERS.includes(provider) && !require('../../lane-providers.cjs').laneModels().some((m) => m.providers.includes(provider))) { sendJson(res, 400, { error: `invalid provider: ${provider.slice(0, 80)}` }); return }
           overrides.provider = provider
         }
         let r
@@ -263,15 +263,33 @@ function createRoutes(staticCtx) {
           return
         }
         const { model, provider } = await readJsonBody(req)
-        const value = typeof model === 'string' ? model.trim() : ''
+        let value = typeof model === 'string' ? model.trim() : ''
         if (!value || value.length > 200 || !MODEL_ID_PATTERN.test(value)) {
           sendJson(res, 400, { error: 'invalid model id' })
           return
         }
         let providerValue = null
+        const laneProvider = typeof provider === 'string' && provider.startsWith('lane:') ? provider :
+          (value.startsWith('lane:') ? value.slice(0, value.indexOf('/')) :
+            (!provider && readAgentConfig().PROVIDER?.startsWith('lane:') ? readAgentConfig().PROVIDER : null))
+        if (laneProvider && provider && provider !== laneProvider) {
+          sendJson(res, 400, { error: 'lane model/provider mismatch' })
+          return
+        }
+        if (laneProvider) {
+          if (rejectIfRouterNotWired(res, laneProvider)) return
+          const { buildProviderEnv } = require('../../provider-env.cjs')
+          const built = buildProviderEnv(laneProvider, { MODEL: value }, { readProviderKey: () => null })
+          if (built.error) {
+            sendJson(res, 400, { error: 'lane provider/model or credential is unavailable' })
+            return
+          }
+          providerValue = laneProvider
+          value = built.env.DSH_MODEL // picker identity is qualified; runtime/config id stays native
+        }
         if (provider !== undefined && provider !== null && provider !== '') {
           providerValue = typeof provider === 'string' ? provider.trim() : ''
-          if (!PROVIDERS.includes(providerValue)) {
+          if (!PROVIDERS.includes(providerValue) && !require('../../lane-providers.cjs').laneModels().some((m) => m.modelId === value && m.providers.includes(providerValue))) {
             sendJson(res, 400, { error: `invalid provider: ${String(providerValue).slice(0, 80)}` })
             return
           }
@@ -287,7 +305,7 @@ function createRoutes(staticCtx) {
         // pre-swap MODEL/PROVIDER is about to be clobbered by writeAgentConfig.
         const prior = readAgentConfig()
         const previousFields = {}
-        if (prior.MODEL && prior.MODEL !== value) {
+        if (prior.MODEL && (prior.MODEL !== value || (providerValue && prior.PROVIDER !== providerValue))) {
           previousFields.PREVIOUS_MODEL = prior.MODEL
           previousFields.PREVIOUS_PROVIDER = prior.PROVIDER || ''
         }
