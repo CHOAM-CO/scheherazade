@@ -1328,6 +1328,8 @@
     // reflects the stored value, only whether one exists (hasCustomApiKey,
     // GET /api/config). Cleared on every render, including right after a
     // successful save below.
+    $('set-custom-key-file').value = ''
+    $('set-custom-key-name').value = ''
     $('set-custom-key-input').value = ''
     $('set-custom-key-input').placeholder = cfg.hasCustomApiKey ? S.customKeyStoredPlaceholder : S.customKeyEmptyPlaceholder
     // Whether the value sitting in the key field came from a PASTE rather than
@@ -1416,6 +1418,8 @@
       const baseUrl = $('set-custom-url-input').value.trim()
       const model = $('set-custom-model-input').value.trim()
       const apiKey = $('set-custom-key-input').value
+      const keyFile = $('set-custom-key-file').value.trim()
+      const keyName = $('set-custom-key-name').value.trim()
       if (!baseUrl || !model) {
         statusEl.textContent = S.customMissingFields
         statusEl.classList.remove('hidden')
@@ -1482,7 +1486,7 @@
         await api('/api/agent/custom-provider', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ baseUrl, apiKey, model }),
+          body: JSON.stringify({ baseUrl, key: apiKey, model, ...(keyFile ? { keyFile } : {}), ...(keyName ? { keyName } : {}) }),
         })
         showToast(S.customSaved)
         // Re-read from the server, never trust the form (same principle

@@ -181,7 +181,13 @@ function createRoutes(staticCtx) {
         // fields client-side-visibly and the user saves through here, so
         // there is exactly one place CUSTOM_BASE_URL/MODEL/key are set and
         // exactly one confirm dialog in front of it.
-        const { baseUrl, apiKey, model } = await readJsonBody(req)
+        const body = await readJsonBody(req)
+        const { baseUrl, model } = body
+        let apiKey
+        try { apiKey = require('../key-file.cjs').resolveRequestKey(body) } catch (err) {
+          sendJson(res, 400, { error: err.message })
+          return
+        }
         // Single source of truth shared with provider-env.cjs's buildProviderEnv()
         // 'custom' branch (spawn-time) -- see resolveCustomBaseUrl's own header
         // comment for why this is not restricted to localhost.
@@ -201,6 +207,11 @@ function createRoutes(staticCtx) {
         // Discord reconnect token field (discordStoredTokenNote copy) and the
         // sudo password field -- never "blank means clear it", which would
         // silently lock the user out of a proxy that DOES check the key.
+        const validation = await validateProviderKey('custom', apiKey, { baseUrl: urlResult.url, model: modelValue })
+        if (!validation.ok) {
+          sendJson(res, 400, { error: 'custom provider validation failed' })
+          return
+        }
         if (typeof apiKey === 'string' && apiKey.trim()) {
           storeProviderKeyVerified('custom', apiKey) // throws (fail loud) on storage failure -> caught by outer handler -> 500
         }
