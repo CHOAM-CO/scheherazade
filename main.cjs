@@ -179,11 +179,12 @@ if (!gotSingleInstanceLock) {
 // far below): re-opens the window when the app is resident but windowless.
 // Declared up here because 'second-instance' can fire before that point.
 let reopenMainWindow = null
+let companion = null
 app.on('second-instance', () => {
   // A second launch attempt while this instance is running -- focus our
   // existing window instead of doing nothing (or, worse, without the lock
   // above, spawning a competing agent supervisor).
-  const win = BrowserWindow.getAllWindows()[0]
+  const win = BrowserWindow.getAllWindows().find(w => !w.isSeraCompanion)
   if (win) {
     if (win.isMinimized()) win.restore()
     win.focus()
@@ -2677,6 +2678,7 @@ async function proxyHealth() {
 // ~/.claude login from that binary, same as the agent. Returns the path
 // string or null. Same injection channel as proxyHealth/spawnInfo above.
 const agentControls = {
+  companion: () => companion,
   stopAgent,
   startAgent,
   restartAgent,
@@ -2724,6 +2726,17 @@ app.whenReady().then(async () => {
     // HTML serving now requires (page-scrape fix, 2026-08-07). /boot 302s
     // to "/" which lands wizard or /memory as before.
     createMainWindow(new URL(bootPathFor('/'), url).href)
+    // Optional surface: its failure must never change main-window startup.
+    try {
+      companion = require('./companion/controller.cjs').createCompanion({
+        electron: require('electron'), home: DATA_HOME, url, bootPathFor, log,
+        openMain: () => {
+          const main = BrowserWindow.getAllWindows().find(w => !w.isSeraCompanion)
+          if (main) { if (main.isMinimized()) main.restore(); main.show(); main.focus() }
+          else if (reopenMainWindow) reopenMainWindow()
+        },
+      })
+    } catch (err) { log(`companion unavailable: ${err.message}`) }
 
     // Long-lived; deliberately not awaited to exit -- see
     // spawnRealAgentChild()'s own comment. Returns null (onboarding
@@ -2770,7 +2783,7 @@ app.whenReady().then(async () => {
   // fatal() as its catch, so a config that went bad after boot killed the app
   // on a dock click.
   reopenMainWindow = () => {
-    if (BrowserWindow.getAllWindows().length !== 0) return
+    if (BrowserWindow.getAllWindows().some(w => !w.isSeraCompanion)) return
     if (onboardingServerUrl) {
       // Through /boot again: the Electron session usually still holds the
       // cookie, but a fresh session partition (or cleared storage) must not

@@ -49,8 +49,9 @@ function layout(anchor, area, expanded) {
   const width = Math.min(left ? 396 : 320, area.width)
   const height = Math.min(left ? 320 : 396, area.height)
   const x = Math.min(Math.max(left ? a.x - 332 : a.x, area.x), area.x + area.width - width)
-  const y = Math.min(a.y, area.y + area.height - height)
-  return { bounds: { x, y, width, height }, face: { x: a.x - x, y: a.y - y }, placement: left ? 'left' : 'below' }
+  const above = !left && a.y + height > area.y + area.height
+  const y = above ? Math.max(area.y, a.y + FACE - height) : Math.min(a.y, area.y + area.height - height)
+  return { bounds: { x, y, width, height }, face: { x: a.x - x, y: a.y - y }, placement: left ? 'left' : above ? 'above' : 'below' }
 }
 function fullscreenDecision({ enabled, fullscreen, known = true }) {
   return { visible: !!enabled && !fullscreen, hiddenByFullscreen: !!enabled && !!fullscreen,

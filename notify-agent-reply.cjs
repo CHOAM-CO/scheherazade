@@ -104,7 +104,7 @@ function initReplyNotifications({ app, Notification, BrowserWindow, DATA_HOME, l
         })
         n.on('click', () => {
           try {
-            const win = BrowserWindow.getAllWindows()[0]
+            const win = BrowserWindow.getAllWindows().find(w => !w.isSeraCompanion)
             if (!win) return
             if (win.isMinimized()) win.restore()
             win.show()

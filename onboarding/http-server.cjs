@@ -3853,6 +3853,7 @@ const API_ROUTES = [
   ...require('./routes/memory.cjs').createRoutes(staticCtx), // G8
   ...require('./routes/settings.cjs').createRoutes(staticCtx), // G9
   ...require('./routes/setup-token.cjs').createRoutes(staticCtx), // G10
+  ...require('./routes/companion.cjs').createRoutes(staticCtx),
   ...require('./routes/chat.cjs').createRoutes(staticCtx), // G11
   ...require('./routes/migrate.cjs').createRoutes(staticCtx), // G12 (design-0022)
   ...require('./routes/oauth-usage.cjs').createRoutes(staticCtx), // G13 (usage-gauge full-scope OAuth)

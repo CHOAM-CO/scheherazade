@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sera companion</title>
+    <link rel="stylesheet" href="/css/companion.css" />
+  </head>
+  <body>
+    <button id="face" class="surface" aria-label="세라와 이야기하기" title="눌러서 이야기하기 · 끌어서 옮기기"><img id="avatar" src="/img/agent-avatar.png" alt="" draggable="false" /></button>
+    <section id="bubble" class="surface" hidden aria-label="세라의 이야기">
+      <header><span>세라</span><button id="close" aria-label="말풍선 접기">×</button></header>
+      <div id="message" role="status" aria-live="polite"></div>
+      <p id="approval-note" hidden>아래 버튼은 채팅 답장을 보내요. 도구 실행 권한을 바꾸지는 않아요.</p>
+      <div id="approval" hidden><button id="allow">허용한다고 답하기</button><button id="deny">거절한다고 답하기</button></div>
+      <form id="reply-form"><label class="sr-only" for="reply">답장</label><input id="reply" autocomplete="off" maxlength="16000" placeholder="짧게 답해 주세요" /><button id="send" type="submit">보내기</button></form>
+      <p id="failure" role="alert" hidden></p>
+      <footer><button id="main">앱에서 보기</button><span id="connection"></span></footer>
+    </section>
+    <script src="/js/copy.js"></script>
+    <script src="/js/companion.js"></script>
+  </body>
+</html>

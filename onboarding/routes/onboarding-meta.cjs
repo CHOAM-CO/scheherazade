@@ -57,7 +57,7 @@ function createRoutes(staticCtx) {
   function applyWindowMaterial(values) {
     if (HOST.windowMaterial === 'vibrancy') {
       try {
-        const win = getElectron().BrowserWindow.getAllWindows()[0]
+        const win = getElectron().BrowserWindow.getAllWindows().find(w => !w.isSeraCompanion)
         if (win) {
           win.setVibrancy(null)
           if (values.macMaterial) setTimeout(() => { try { win.setVibrancy(values.macMaterial) } catch { /* window died mid-tick */ } }, 0)
@@ -67,7 +67,7 @@ function createRoutes(staticCtx) {
     }
     if (HOST.windowMaterial === 'acrylic') {
       try {
-        const win = getElectron().BrowserWindow.getAllWindows()[0]
+        const win = getElectron().BrowserWindow.getAllWindows().find(w => !w.isSeraCompanion)
         if (win && typeof win.setBackgroundMaterial === 'function') {
           win.setBackgroundMaterial(values.blur === 'off' ? 'none' : 'acrylic')
         }
