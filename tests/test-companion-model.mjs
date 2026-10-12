@@ -43,6 +43,14 @@ try {
   test('collapsed window is exactly 64 DIP', () => assert.deepEqual(m.layout({ x: 100, y: 50 }, primary.workArea, false).bounds, { x: 100, y: 50, width: 64, height: 64 }))
   test('bubble opens left when room', () => { const g = m.layout({ x: 2400, y: 42 }, primary.workArea, true); assert.equal(g.placement, 'left'); assert.equal(g.bounds.x + g.face.x, 2400) })
   test('bubble opens below when no left room', () => assert.equal(m.layout({ x: 20, y: 42 }, primary.workArea, true).placement, 'below'))
+  test('near bottom-left bubble opens above the face', () => assert.equal(m.layout({ x: 20, y: 1300 }, primary.workArea, true).placement, 'above'))
+  test('native hit shape excludes circle corners and transparent gap', () => {
+    const g = m.layout({ x: 2400, y: 42 }, primary.workArea, true)
+    const regions = m.hitShape(g, 200)
+    const hit = (x, y) => regions.some(r => x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height)
+    assert.equal(hit(332, 0), false); assert.equal(hit(364, 32), true)
+    assert.equal(hit(325, 50), false); assert.equal(hit(100, 100), true); assert.equal(hit(100, 250), false)
+  })
   test('bubble stays within work area at bottom-right', () => { const b = m.layout({ x: 2496, y: 1336 }, primary.workArea, true).bounds; assert.ok(b.y + b.height <= 1400); assert.ok(b.x + b.width <= 2560) })
   const eligible = { now: 120000, bootAt: 0, lastAt: null, enabled: true, known: true, fullscreen: false, busy: false, bubble: false }
   test('two-minute boot boundary permits proactive', () => assert.equal(m.canProactive(eligible), true))

@@ -53,6 +53,22 @@ function layout(anchor, area, expanded) {
   const y = above ? Math.max(area.y, a.y + FACE - height) : Math.min(a.y, area.y + area.height - height)
   return { bounds: { x, y, width, height }, face: { x: a.x - x, y: a.y - y }, placement: left ? 'left' : above ? 'above' : 'below' }
 }
+// Native window regions use integer DIP rectangles. Scanlines approximate the
+// visible circles/rounded bubble without sampling or recording cursor position.
+function hitShape(geometry, bubbleHeight = 0) {
+  const rectangles = []
+  function rounded(x, y, width, height, radius) {
+    for (let row = 0; row < height; row++) {
+      const distance = row < radius ? radius - row - 0.5 : row >= height - radius ? row - (height - radius) + 0.5 : 0
+      const inset = distance ? Math.ceil(radius - Math.sqrt(Math.max(0, radius * radius - distance * distance))) : 0
+      rectangles.push({ x: x + inset, y: y + row, width: Math.max(1, width - inset * 2), height: 1 })
+    }
+  }
+  rounded(geometry.face.x, geometry.face.y, FACE, FACE, FACE / 2)
+  if (bubbleHeight > 0) rounded(0, geometry.placement === 'below' ? 76 : 0,
+    Math.min(320, geometry.bounds.width), Math.min(320, Math.ceil(bubbleHeight)), 17)
+  return rectangles
+}
 function fullscreenDecision({ enabled, fullscreen, known = true }) {
   return { visible: !!enabled && !fullscreen, hiddenByFullscreen: !!enabled && !!fullscreen,
     proactiveAllowed: !!enabled && known && !fullscreen }
@@ -69,4 +85,4 @@ function classifyMessage(m, awaiting = null) {
   if (awaiting === 'reply') return 'reply'
   return /[?？]|(?:알려\s?주세요|골라\s?주세요|선택해\s?주세요)/.test(text) ? 'question' : null
 }
-module.exports = { DEFAULTS, FACE, INSET, normalize, readState, writeState, clampAnchor, initialAnchor, layout, fullscreenDecision, canProactive, classifyMessage }
+module.exports = { DEFAULTS, FACE, INSET, normalize, readState, writeState, clampAnchor, initialAnchor, layout, hitShape, fullscreenDecision, canProactive, classifyMessage }

@@ -1,6 +1,7 @@
 // A plain same-origin renderer: no preload, IPC, Node, or executable agent HTML.
 ;(function () {
   const $ = id => document.getElementById(id)
+  let shapeHeight = -1
   let current = null, lastId = null, pointerInside = false, pointerQueue = Promise.resolve()
   let drag = null, dragged = false, sending = false, avatarUrl = null, avatarAt = 0
   async function api(route, body) {
@@ -22,7 +23,7 @@
     $('face').setAttribute('aria-label', state.ring === 'attention' ? '세라 · 확인할 이야기가 있어요' : '세라와 이야기하기')
     $('bubble').hidden = !state.bubble
     $('connection').textContent = state.connected ? '' : '채팅 연결 확인 중'
-    if (!state.bubble) { lastId = null; return }
+    if (!state.bubble) { lastId = null; shapeHeight = -1; return }
     const b = state.bubble
     if (b.id !== lastId) {
       $('message').textContent = b.text
@@ -31,6 +32,8 @@
     }
     $('approval').hidden = $('approval-note').hidden = b.kind !== 'approval-reply'
     $('reply-form').hidden = b.kind === 'error'
+    const height = Math.ceil($('bubble').getBoundingClientRect().height)
+    if (height !== shapeHeight) { shapeHeight = height; command('shape', { height }).catch(() => { shapeHeight = -1 }) }
   }
   function pointer(inside) {
     if (pointerInside === inside) return

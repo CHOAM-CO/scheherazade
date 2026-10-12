@@ -12,6 +12,12 @@ Decided by Mino 2026-10-12 14:32–14:35 (idea home): "작업표시줄 우상단
   Keep passive presence, explicit dismissal, a draggable face, opt-in sound,
   and quiet startup. Do not inject into games: Discord/Steam overlays are not
   evidence that a transparent Electron window can cover exclusive fullscreen.
+- Windows rehearsal exposed missing mousemove forwarding while ignored: an
+  initially ignored face could not be entered or clicked. Windows/Linux use
+  native `setShape` rounded hit regions instead; transparent pixels pass
+  clicks through without polling or tracking the cursor. macOS retains the
+  renderer-enter/leave `setIgnoreMouseEvents` path. At a bottom-left edge the
+  bubble goes above, rather than overlap its own face or leave the work area.
 - No structured tool approval queue or allow/deny endpoint exists in this
   revision. Beta can answer conversational approval questions through the
   existing `/api/chat/in` endpoint, explicitly labeled as chat replies, NOT

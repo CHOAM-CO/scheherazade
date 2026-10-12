@@ -1,10 +1,10 @@
 'use strict'
 
 const path = require('node:path')
-const { readState, writeState, initialAnchor, clampAnchor, layout, fullscreenDecision, canProactive, classifyMessage } = require('./model.cjs')
+const { readState, writeState, initialAnchor, clampAnchor, layout, hitShape, fullscreenDecision, canProactive, classifyMessage } = require('./model.cjs')
 const { createFullscreenProbe } = require('./fullscreen.cjs')
 
-function createCompanion({ electron, home, url, bootPathFor, openMain, log, now = Date.now, probeOverride, autoPoll = true }) {
+function createCompanion({ electron, home, url, bootPathFor, openMain, log, now = Date.now, probeOverride, autoPoll = true, platform = process.platform }) {
   const { app, BrowserWindow, screen, Tray, Menu, nativeImage, shell } = electron
   const token = new URL(bootPathFor('/'), url).searchParams.get('t')
   const bootAt = now()
@@ -13,8 +13,9 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
   let anchor, display, geometry, bubble = null, serial = 0, cursor = null, lastError = null
   let busy = false, connected = false, providerHealthy = false, awaiting = null, awaitingUntil = 0, lastNudge = null
   let fullscreen = { fullscreen: false, known: process.platform === 'win32' }, hidden = false
-  let touched = false, expiresAt = 0, dragging = null
-  const probe = probeOverride || createFullscreenProbe({ BrowserWindow, log })
+  let touched = false, expiresAt = 0, dragging = null, bubbleHeight = 0, shapeKey = null
+  const shaped = platform === 'win32' || platform === 'linux'
+  const probe = probeOverride || createFullscreenProbe({ BrowserWindow, log, platform })
 
   async function request(route, body) {
     const r = await fetch(new URL(route, url), {
@@ -31,6 +32,14 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
     anchor = clampAnchor(anchor, display.workArea)
     geometry = layout(anchor, display.workArea, !!bubble)
     win.setBounds(geometry.bounds)
+    applyShape()
+  }
+  function applyShape() {
+    if (!shaped || !win || !geometry) return
+    const key = JSON.stringify([geometry, bubble ? bubbleHeight || 320 : 0])
+    if (key === shapeKey) return
+    win.setShape(hitShape(geometry, bubble ? bubbleHeight || 320 : 0))
+    shapeKey = key
   }
   function remember() {
     settings = writeState(home, { ...settings, displayId: String(display.id),
@@ -46,8 +55,9 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
       maximizable: false, minimizable: false, hasShadow: false, title: 'Sera companion',
       webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } })
     win.isSeraCompanion = true
-    win.setIgnoreMouseEvents(true, { forward: true })
-    if (process.platform === 'darwin') win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: false })
+    win.setIgnoreMouseEvents(!shaped, { forward: true })
+    shapeKey = null; applyShape()
+    if (platform === 'darwin') win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: false })
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
     win.webContents.on('will-navigate', (event, target) => {
       if (new URL(target).origin !== new URL(url).origin || new URL(target).pathname !== '/companion.html') event.preventDefault()
@@ -69,8 +79,8 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
     tray.on('click', openMain)
   }
   function collapse() {
-    bubble = null; touched = false; expiresAt = 0
-    if (win && !win.isDestroyed()) { win.setIgnoreMouseEvents(true, { forward: true }); reposition() }
+    bubble = null; touched = false; expiresAt = 0; bubbleHeight = 0
+    if (win && !win.isDestroyed()) { win.setIgnoreMouseEvents(!shaped, { forward: true }); reposition() }
   }
   function showBubble(kind, text, id) {
     // Never displace an unresolved ask with a casual line or a later completion.
@@ -109,8 +119,11 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
       }
       case 'pointer':
         if (typeof body.inside !== 'boolean') bad()
-        if (win) win.setIgnoreMouseEvents(!body.inside, { forward: true })
+        if (win && !shaped) win.setIgnoreMouseEvents(!body.inside, { forward: true })
         break
+      case 'shape':
+        if (!Number.isFinite(body.height) || body.height < 0 || body.height > 320) bad()
+        bubbleHeight = body.height; applyShape(); break
       case 'touch': touched = true; break
       case 'dismiss': collapse(); break
       case 'open':

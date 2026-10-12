@@ -15,6 +15,7 @@ const windows = [], trays = [], requests = []
 class Window extends EventEmitter {
   constructor(options) { super(); this.options = options; this.bounds = options; this.visible = false; this.dead = false; this.focused = false; this.webContents = new EventEmitter(); this.webContents.setWindowOpenHandler = fn => { this.openHandler = fn }; windows.push(this) }
   setBounds(b) { this.bounds = b }
+  setShape(rects) { this.shape = rects }
   isDestroyed() { return this.dead }
   setIgnoreMouseEvents(ignore, opts) { this.ignore = ignore; this.forward = opts.forward }
   setVisibleOnAllWorkspaces() {}
@@ -54,7 +55,7 @@ await new Promise(r => srv.listen(0, '127.0.0.1', r))
 const url = `http://127.0.0.1:${srv.address().port}`
 controller = createCompanion({ electron: { app, BrowserWindow: Window, screen, Tray, Menu: { buildFromTemplate: x => x }, nativeImage: { createFromPath: () => ({ resize: () => ({}) }) }, shell: { beep: () => beeps++ } },
   home, url, bootPathFor: to => `/boot?t=test-token&to=${encodeURIComponent(to)}`, openMain: () => mainOpens++, log: console.error,
-  now: () => clock, probeOverride: () => ({ fullscreen, known }), autoPoll: false })
+  now: () => clock, probeOverride: () => ({ fullscreen, known }), autoPoll: false, platform: 'win32' })
 const add = text => { items.push({ seq: ++latest, role: 'agent', kind: 'message', text }) }
 try {
   await test('off by default creates no window', () => assert.equal(windows.length, 0))
@@ -66,7 +67,7 @@ try {
     assert.equal(o.webPreferences.contextIsolation, true); assert.equal(o.webPreferences.sandbox, true); assert.equal(o.webPreferences.nodeIntegration, false); assert.equal(o.webPreferences.preload, undefined)
     assert.equal(windows[0].focused, false); assert.equal(windows[0].isSeraCompanion, true)
   })
-  await test('initial mouse mode passes through with forwarding', () => { assert.equal(windows[0].ignore, true); assert.equal(windows[0].forward, true) })
+  await test('Windows shape accepts face clicks and clips transparent corners', () => { assert.equal(windows[0].ignore, false); assert.equal(windows[0].shape.length, 64); assert.ok(windows[0].shape[0].x > 0) })
   await test('renderer navigation cannot leave companion page', () => { let stopped = false; windows[0].webContents.emit('will-navigate', { preventDefault: () => stopped = true }, 'https://example.com'); assert.equal(stopped, true); assert.equal(windows[0].openHandler().action, 'deny') })
   await test('initial retained history is not replayed', async () => { await controller.poll(); assert.equal(controller.snapshot().bubble, null) })
   await test('ordinary chat completion stays quiet', async () => { add('Finished.'); await controller.poll(); assert.equal(controller.snapshot().bubble, null) })
