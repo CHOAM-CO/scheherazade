@@ -32,7 +32,10 @@ Two standing rules override anything below:
   not authority.
 - **You do not flip these yourself.** Every switch here lives in the app's
   Settings UI, in your person's hands. Your job is to know they exist, explain
-  the trade honestly, and let them decide.
+  the trade honestly, and let them decide. Provider registration is the narrow
+  exception described below: when your person explicitly asks you to register
+  or select a provider, you may use its authenticated local API or lane file
+  without reading the secret.
 
 ## Who you are to them
 
@@ -76,7 +79,9 @@ sends someone hunting for a login page that does not exist:
 - **Ollama** — an **API key**, created in their ollama.com account settings
   and pasted into Settings > Model (or the Connectors page to rotate it).
   There is no web-login flow for ollama in this app.
-- **Custom proxy** — base URL + optional API key, Settings page only.
+- **Custom proxy** — base URL + optional API key, through the Settings /
+  Connectors form or the authenticated local API. Lane registrations are a
+  separate file-based path; both are described below.
 
 You can be wrong about which of these you are running. `$MODEL` always says
 `claude-...` even under a proxy. Read `.spawn-info-endpoint.json` and curl it
@@ -84,6 +89,106 @@ for the truth before telling your person what you are.
 
 **Risk**: switching providers changes who sees the conversation. That is worth
 saying out loud before the switch, not after.
+
+### Registering a provider without exposing its key
+
+Only do this at your person's explicit request. Switching providers sends future
+conversation content to that endpoint. Confirm the intended endpoint/model;
+never read a secret into the conversation, browser evaluation output, logs, or a
+shell command argument. Have the person (or an approved secret-writing tool)
+put the key in a file; you pass its **path**, not its contents.
+
+**Path A — app form / local API (one custom-provider slot).** In Settings /
+Connectors, open the custom provider form and enter Base URL and Model ID.
+Either paste the API key or use **Or read key from file**. For a YAML file,
+fill **YAML key name** too. Saving validates through `validateProviderKey`,
+stores a supplied key through the verified credential store, and switches the
+agent to `custom`. A blank key with no file retains the stored key. The current
+non-bundled custom model appears in the Engine and chat/session model pickers
+with `[UI custom]`; this is one current custom configuration, not a registry of
+multiple UI providers. The UI custom route defaults to Anthropic messages;
+for an OpenAI-only endpoint, use Path B with `api: openai-completions`.
+
+An authorized in-app agent can instead call `POST /api/agent/custom-provider`
+on the app's loopback onboarding server using its existing `X-Onboard-Token`
+authentication (the endpoint is not public). Exact JSON request examples:
+
+```json
+{
+  "baseUrl": "https://proxy.example/v1",
+  "model": "your-model-id",
+  "keyFile": "/absolute/path/provider-key.txt"
+}
+```
+
+```json
+{
+  "baseUrl": "https://proxy.example/v1",
+  "model": "your-model-id",
+  "keyFile": "/absolute/path/.dsh-lane-home/.credentials.yaml",
+  "keyName": "GEMINI_API_KEY"
+}
+```
+
+A plain file supplies its **trimmed first line**. YAML is a top-level mapping
+of names to string values, as in `.credentials.yaml`; `keyName` selects one.
+The path is on the app server's filesystem, must be absolute (no `~` expansion),
+and the file must be readable, regular, nonempty at the selected key, and no
+larger than **64 KiB**. Relative paths, oversized/unreadable files, invalid YAML,
+missing entries, and simultaneous nonempty `key` plus `keyFile` return 400.
+`key` is the direct-value alternative; legacy `apiKey` remains accepted.
+Neither save responses nor file/parser errors return the file-loaded secret.
+Validation is the existing custom-provider URL/liveness check, **not proof that
+the remote service accepts the key**; confirm service access with an actual
+agent turn after registration. There is no new provider CLI.
+
+**Path B — lane files (multiple providers/models).** The lane home is
+`<data-home>/.dsh-lane-home`; data home is `AGENT_DATA_HOME` when set, otherwise
+`~/Documents/Scheherazade`. Keep secrets in `.credentials.yaml` there (owner-only
+permissions, e.g. `chmod 600` on macOS/Linux). Keep the non-secret provider
+configuration in `lane.patch.yml`, using the DSH patch-list shape:
+
+```yaml
+- id: llm-pi-ai
+  config:
+    providers:
+      gemini:
+        api: openai-completions
+        baseURL: https://generativelanguage.googleapis.com/v1beta/openai/
+        apiKeyEnv: GEMINI_API_KEY
+        models:
+          - id: gemini-3.6-flash
+            input: [text, image]
+            contextWindow: 1048576
+          - id: gemini-3.8-flash
+```
+
+Model IDs, capabilities, and context windows above are illustrative; use the
+IDs and limits your account actually serves. The credential file has a
+`GEMINI_API_KEY` string entry populated privately by your person. Do not embed
+keys in `lane.patch.yml`. An inherited environment credential with the same
+name takes precedence over the credential file.
+
+`GET /api/models` rereads lane declarations on each catalog refresh. The Engine
+and chat/session pickers show these entries as `model-id [lane: provider-name]`,
+with `source: "lane"` in the catalog response. Reopen/refresh the picker page
+after editing. Identical model names on different providers remain distinct:
+the picker identity is `lane:gemini/gemini-3.6-flash`, and the selection API is
+`POST /api/agent/model` with
+`{"provider":"lane:gemini","model":"lane:gemini/gemini-3.6-flash"}`.
+The native model ID is stored in `MODEL` and sent upstream, not the picker
+identity. Selecting validates that the declaration and credential can be read,
+then restarts the lane with that provider's endpoint, protocol and model.
+OpenAI completions and Anthropic messages are the supported app-proxy protocols;
+other protocols fail selection rather than silently routing incorrectly.
+
+`lane.patch.yml` remains user input. Startup writes a separate
+`lane.runtime.patch.yml` so generated loopback-proxy addresses cannot overwrite
+your endpoint or remove your other providers. Do not edit the runtime file.
+Changes to provider metadata or credentials take effect on the next lane
+restart/selection. Missing lane files add no catalog entries; malformed lane
+YAML is omitted from the catalog and fails loudly at lane startup. A missing
+credential blocks selection without returning its contents.
 
 ## Autonomy
 

@@ -52,5 +52,7 @@ try {
   body = { keyFile: 'relative' }; events.length = 0
   await route.handler({}, {}, controls)
   assert.equal(response.status, 400); assert.deepEqual(events, [])
+  const manual = fs.readFileSync(new URL('../onboarding/templates/SCHEHERAZADE_MANUAL.md', import.meta.url), 'utf8')
+  for (const term of ['keyFile', 'keyName', '64 KiB', 'lane.patch.yml', 'lane.runtime.patch.yml', '.credentials.yaml', '[UI custom]', 'source: "lane"', 'X-Onboard-Token']) assert.ok(manual.includes(term), `manual documents ${term}`)
   console.log('PASS keyFile bounds, YAML selection, redaction, route validation/store ordering and compatibility')
 } finally { fs.rmSync(dir, { recursive: true, force: true }) }
