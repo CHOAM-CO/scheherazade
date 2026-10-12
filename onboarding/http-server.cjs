@@ -41,7 +41,7 @@ const { pathToFileURL } = require('node:url')
 // liveness pings below, so neither can drift out of sync with
 // provider-env.cjs's buildProviderEnv(). Zero Electron dependency, safe to
 // require from here. (history: docs/HISTORY.md)
-const { PROVIDERS_REQUIRING_STORED_CREDENTIAL, resolveChatgptProxyPort, resolveCustomBaseUrl, parseCustomProviderJson, OLLAMA_CLOUD_BASE_URL, normalizeOllamaCloudModel } = require('../provider-env.cjs')
+const { PROVIDERS_REQUIRING_STORED_CREDENTIAL, resolveChatgptProxyPort, resolveCustomBaseUrl, parseCustomProviderJson, OLLAMA_CLOUD_BASE_URL, normalizeOllamaCloudModel, unwrapOAuthKey } = require('../provider-env.cjs')
 // External-network validation cap for the ollama.com key check -- a real
 // 1-token generation over the internet, so LOCAL_LIVENESS_TIMEOUT_MS's
 // loopback-scale value would false-negative on any slow link.
@@ -100,7 +100,7 @@ const { createSetupTokenSession, killSetupTokenChildOnShutdown } = require('../s
 // tester's gauge is stuck on HTTP 429 because setup-token's user:inference
 // scope cannot read the usage endpoint). Loopback flow, no native module.
 const {
-  createUsageOAuthSession, killUsageOAuthChildOnShutdown, refreshUsageCredential,
+  createUsageOAuthSession, killUsageOAuthChildOnShutdown, refreshUsageCredential, serializeLoginCredential,
   PROVIDER_ID: USAGE_PROVIDER_ID, LOGIN_SCOPES,
 } = require('../oauth-usage-session.cjs')
 
@@ -1016,8 +1016,13 @@ function storeProviderKey(provider, key) {
     manifestPath,
     JSON.stringify({ provider, keyFile: path.basename(filePath), validatedAt: new Date().toISOString() }, null, 2) + '\n'
   )
+  // 0.4.3: main.cjs drops its cached live credential for this provider (the
+  // route proxy's), so a re-login / re-paste reaches the running agent.
+  for (const fn of providerKeyStoredListeners) { try { fn(provider) } catch {} }
   return filePath
 }
+const providerKeyStoredListeners = []
+function onProviderKeyStored(fn) { providerKeyStoredListeners.push(fn) }
 
 function readProviderKey(provider) {
   const { safeStorage } = getElectron()
@@ -1324,7 +1329,7 @@ async function validateProviderKey(provider, key, opts = {}) {
   // route only persists when the BODY carried a non-empty key, so an ok
   // verdict from this fallback never writes anything.
   if (provider === 'claude-subscription' && (!key || typeof key !== 'string' || key.trim() === '')) {
-    try { key = readProviderKey('claude-subscription') || '' } catch (err) { /* fall through to the empty guard */ }
+    try { key = (unwrapOAuthKey(readProviderKey('claude-subscription')) || {}).token || '' } catch (err) { /* fall through to the empty guard */ }
   }
   if (!key || typeof key !== 'string' || key.trim() === '') {
     return { ok: false, reason: '키가 비어 있습니다' }
@@ -2163,10 +2168,12 @@ function getLoginOAuthSession() {
     loginOAuthSession = createUsageOAuthSession({
       storeUsageCredential: (token) => storeProviderKeyVerified('claude-subscription', token),
       scopes: LOGIN_SCOPES,
-      // Store the raw oat string, not the access+refresh blob -- an
-      // inference-only token is long-lived and never refreshed, and the lane
-      // expects the bare token exactly as setup-token wrote it.
-      serialize: (body) => body.access_token,
+      // 0.4.3: store the access+refresh blob (same shape the usage gauge
+      // reads) when the endpoint returns a refresh token + expiry -- a bare
+      // access token died after hours with nothing able to renew it (field
+      // report 2026-10-12). No refresh token -> bare string, as before.
+      // Readers unwrap both shapes (provider-env.cjs unwrapOAuthKey).
+      serialize: serializeLoginCredential,
       log,
     })
   }
@@ -3337,7 +3344,7 @@ async function fetchClaudeSubscriptionUsage(opts = {}) {
   }
   let subToken = null
   try {
-    subToken = readProviderKey('claude-subscription')
+    subToken = (unwrapOAuthKey(readProviderKey('claude-subscription')) || {}).token || null
   } catch (err) {
     // A setup-token that cannot be decrypted is not fatal here: the
     // full-scope token or the CLI session may still answer.
@@ -3895,6 +3902,7 @@ module.exports = {
   // existing callers here (storeProviderKeyVerified's round-trip check,
   // readDiscordToken).
   readProviderKey,
+  onProviderKeyStored,
   // Exported for main.cjs's pre-spawn gate and
   // tests/test-harness-refresh.mjs (pure, no Electron dependency): a
   // failed boot harness refresh must stop the spawn, not just print a line.

@@ -696,6 +696,26 @@ async function refreshClaudeCliToken(deps) {
   return { refreshed: true, expiresAt: holder.expiresAt }
 }
 
+// claude-subscription stored value, both shapes (0.4.3): a bare oat string
+// (setup-token paste, pre-0.4.3 in-app login) or the JSON blob
+// {accessToken, refreshToken, expiresAt} the in-app login now stores when the
+// token endpoint returns a refresh token. Returns { token, expiresAt?, blob }
+// (blob = parsed object for the JSON shape, else null) or null when empty.
+function unwrapOAuthKey(raw) {
+  if (!raw || typeof raw !== 'string') return null
+  const s = raw.trim()
+  if (s.startsWith('{')) {
+    try {
+      const o = JSON.parse(s)
+      if (o && typeof o.accessToken === 'string' && o.accessToken) {
+        const exp = Number(o.expiresAt)
+        return Number.isFinite(exp) && exp > 0 ? { token: o.accessToken, expiresAt: exp, blob: o } : { token: o.accessToken, blob: o }
+      }
+    } catch { /* not JSON: treat as a bare token */ }
+  }
+  return { token: s, blob: null }
+}
+
 function readClaudeCliToken() {
   const st = readClaudeCliStore()
   if (st.error) return { error: st.error }
@@ -710,7 +730,8 @@ function readClaudeCliToken() {
   if (Number.isFinite(expiresAt) && expiresAt < Date.now() + CLAUDE_CLI_TOKEN_HEADROOM_MS) {
     return { error: 'the Claude Code CLI login token is expired (or about to expire)' }
   }
-  return { token }
+  // expiresAt rides along for the route proxy's per-expiry credential cache.
+  return Number.isFinite(expiresAt) ? { token, expiresAt } : { token }
 }
 
 const PROVIDER_ROWS = [
@@ -740,7 +761,8 @@ const PROVIDER_ROWS = [
     keyName: 'claude-subscription',
     notReady: 'onboarding says PROVIDER=claude-subscription but no OAuth token is on file yet',
     notReadyFix: 'Run `claude setup-token` in a terminal, copy the token it prints, and paste it into Settings > Model.',
-    env: ({ key, config }) => anthropicRouteEnv(key, config),
+    // The lane always gets a BARE access token (JSON blob unwrapped, 0.4.3).
+    env: ({ key, config }) => anthropicRouteEnv((unwrapOAuthKey(key) || {}).token || key, config),
   },
   {
     // Reuse the Claude Code CLI login the user ALREADY has on this machine,
@@ -1386,6 +1408,7 @@ module.exports = {
   ROUTE_PROXY_DUMMY_KEY,
   refreshClaudeCliToken,
   readClaudeCliToken,
+  unwrapOAuthKey,
   CLAUDE_CLI_PROVIDER_ID,
   resolveChatgptProxyPort,
   resolveCustomBaseUrl,

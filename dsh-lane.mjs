@@ -581,6 +581,7 @@ export function killEngine (c, { platform = process.platform, killTree = (pid, s
 // count. 0 disables.
 const TURN_ERROR_RECYCLE = Number(process.env.DSH_TURN_ERROR_RECYCLE ?? 3)
 let consecutiveTurnErrors = 0
+let authRestartPending = false // AUTH recycle: waiting for main's restart
 
 function spawnEngine (patchPath) {
   const env = {
@@ -1055,6 +1056,27 @@ async function main () {
             consecutiveTurnErrors += 1
             if (TURN_ERROR_RECYCLE > 0 && consecutiveTurnErrors >= TURN_ERROR_RECYCLE) {
               errLog(`${consecutiveTurnErrors} consecutive turn errors (last: ${code || 'unknown'}) -- recycling lane for a fresh session`)
+              // AUTH (0.4.3 hotfix): a plain respawn inherits the same stale
+              // credential env and fails again at once. Ask main to restart us
+              // instead (main.cjs pollRestartRequest -> restartAgent, which
+              // re-acquires the credential). The exit below still happens.
+              // Claude login rows only (SCHZ_PROVIDER from main). The lane does
+              // NOT exit after writing: exiting would let the supervisor respawn
+              // on the stale env before main acts. Main's restartAgent stops the
+              // supervisor (and us) first; if it does not within 60s (cooldown,
+              // main gone) we fall back to the plain recycle.
+              if (authRestartPending) return
+              if (code === 'AUTH' && ['claude-subscription', 'claude-cli'].includes(process.env.SCHZ_PROVIDER || '')) {
+                authRestartPending = true
+                try {
+                  fs.writeFileSync(path.join(MEM, '.restart-request'), JSON.stringify({ ts: Date.now(), reason: 'auth', pid: process.pid }))
+                  errLog('AUTH recycle: wrote .restart-request; waiting up to 60s for main to restart with fresh credentials')
+                  // Engine left running: its exit handler would exit the lane
+                  // (and let the supervisor respawn) before main acts.
+                  setTimeout(() => { errLog('AUTH recycle: main did not restart us in 60s -- plain recycle'); killEngine(child); process.exit(1) }, 60_000)
+                  return
+                } catch (err) { errLog(`restart-request write failed: ${err.message}`) }
+              }
               killEngine(child)
               process.exit(1)
             }

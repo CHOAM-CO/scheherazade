@@ -56,7 +56,7 @@ const { spawn } = require('node:child_process')
 const proc = require('./proc.cjs')
 const attachTopology = require('./attach-topology.cjs')
 const { startShimmedProxy } = require('./codex-proxy-shim.cjs')
-const { createRouteProxy } = require('./route-proxy.cjs')
+const { createRouteProxy, cachedAuthSource } = require('./route-proxy.cjs')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 const fs = require('node:fs')
@@ -126,6 +126,8 @@ const {
   readTelegramToken,
   readHomeChannelId,
   readProviderKey,
+  storeProviderKeyVerified,
+  onProviderKeyStored,
   readHarnessFailure,
   laneVision,
   toUnpackedPath,
@@ -146,7 +148,7 @@ const { killOllamaDaemon } = require('./onboarding/ollama-daemon.cjs') // ensure
 // log-buffer.cjs's own header on the require-cycle this avoids.
 const logBuffer = require('./onboarding/log-buffer.cjs')
 logBuffer.initSink(path.join(DATA_HOME, 'logs'))
-const { buildProviderEnv, resolveChatgptProxyPort, refreshClaudeCliToken, CLAUDE_CLI_PROVIDER_ID, routeClassOf, credentialClassOf, decideRouteChange, ROUTE_PROXY_DUMMY_KEY } = require('./provider-env.cjs')
+const { buildProviderEnv, resolveChatgptProxyPort, refreshClaudeCliToken, readClaudeCliToken, unwrapOAuthKey, CLAUDE_CLI_PROVIDER_ID, routeClassOf, credentialClassOf, decideRouteChange, ROUTE_PROXY_DUMMY_KEY } = require('./provider-env.cjs')
 const { probeUserFolders } = require('./tcc-probe.cjs')
 
 // Fix C, closing the residual gap (code-review pass, 2026-07-03): the
@@ -756,10 +758,43 @@ function pollFailureMarker() {
   }
 }
 
+// AUTH restart request (0.4.3 hotfix, field report 2026-10-12): dsh-lane.mjs
+// writes DATA_HOME/.restart-request when its turn-error recycle fires on AUTH
+// errors. The supervisor's own respawn reuses the spawn-time env, so the
+// recycle has to go through main: restartAgent() -> spawnRealAgentChild()
+// re-reads/refreshes the credential and re-inits the route proxy, the same
+// path the control-panel restart takes. Cooldown so a login that is truly
+// dead cannot turn into a restart loop.
+const RESTART_REQUEST_PATH = path.join(DATA_HOME, '.restart-request')
+const RESTART_REQUEST_COOLDOWN_MS = 5 * 60_000
+const MAIN_STARTED_AT = Date.now()
+// A request left by a previous run must not restart this run's fresh agent.
+try { fs.unlinkSync(RESTART_REQUEST_PATH); console.log('[scheherazade/main] removed a stale .restart-request from a previous run') } catch {}
+let lastRestartRequestAt = 0
+function pollRestartRequest() {
+  let raw
+  try { raw = fs.readFileSync(RESTART_REQUEST_PATH, 'utf8') } catch { return }
+  try { fs.unlinkSync(RESTART_REQUEST_PATH) } catch {}
+  let reason = 'unknown'
+  let ts = 0
+  try { const j = JSON.parse(raw); reason = String(j.reason || 'unknown'); ts = Number(j.ts) || 0 } catch {}
+  if (shuttingDown) { log(`restart-request (${reason}) dropped: app is shutting down`); return }
+  if (ts < MAIN_STARTED_AT) { log(`restart-request (${reason}) dropped: written before this app run started`); return }
+  if (Date.now() - lastRestartRequestAt < RESTART_REQUEST_COOLDOWN_MS) {
+    log(`restart-request (${reason}) dropped by the ${RESTART_REQUEST_COOLDOWN_MS / 60_000}-min cooldown (last handled ${Math.round((Date.now() - lastRestartRequestAt) / 1000)}s ago); the lane falls back to a plain recycle in 60s`)
+    return
+  }
+  lastRestartRequestAt = Date.now()
+  // The lane is holding (not exited), so the supervisor has not respawned;
+  // restartAgent stops the supervisor first, then spawns with fresh creds.
+  log(`restart-request (${reason}) from the lane: stopping the supervisor and restarting through main to re-acquire credentials`)
+  restartAgent().catch((err) => console.error('[scheherazade/main] restart-request: restartAgent threw:', err))
+}
+
 function startFailurePoll() {
   stopFailurePoll()
   lastFailureMtimeMs = 0
-  failurePollTimer = setInterval(pollFailureMarker, FAILURE_POLL_MS)
+  failurePollTimer = setInterval(() => { pollFailureMarker(); pollRestartRequest() }, FAILURE_POLL_MS)
   failurePollTimer.unref?.()
 }
 
@@ -1075,12 +1110,99 @@ const ANTHROPIC_DEFAULT_BASE_URL = 'https://api.anthropic.com'
 async function ensureRouteProxy() {
   if (routeProxy && routeProxy.server && routeProxy.server.listening) return routeProxy
   routeProxy = null
-  routeProxy = await createRouteProxy({ log: (m) => log(m) })
+  routeProxy = await createRouteProxy({ log: (m) => log(m), onUpstreamStatus: onRouteProxyStatus })
   routeProxy.server.on('error', (err) => {
     console.error('[scheherazade/main] route-proxy: server error:', err)
   })
   log(`ensureRouteProxy: route proxy up at 127.0.0.1:${routeProxy.port}`)
   return routeProxy
+}
+
+// Live Claude credential for the route proxy (0.4.3 hotfix). The lane's env
+// token is frozen at spawn; the proxy asks this on every request instead, so
+// a token rotated in the store (claude-cli refresh, or a Sera re-login for
+// claude-subscription) reaches the running agent without a restart. Cached
+// per token expiry (cachedAuthSource), not per process. Only the Claude
+// login rows going straight to api.anthropic.com get one; no macOS-only
+// call on this path except refreshClaudeCliToken's existing keychain
+// fallback, which Windows never reaches (it reads ~/.claude/.credentials.json).
+const CLAUDE_LOGIN_ROWS = ['claude-subscription', CLAUDE_CLI_PROVIDER_ID]
+const CLAUDE_SUB_REFRESH_SKEW_MS = 5 * 60 * 1000
+const { refreshUsageCredential } = require('./oauth-usage-session.cjs')
+const claudeAuthSources = {}
+function claudeAuthSourceFor(provider) {
+  if (claudeAuthSources[provider]) return claudeAuthSources[provider]
+  const load = provider === CLAUDE_CLI_PROVIDER_ID
+    ? async () => {
+      const r = await refreshClaudeCliToken()
+      if (r && r.error) log(`route-proxy credential: ${provider} refresh skipped: ${r.error}`)
+      const t = readClaudeCliToken()
+      return t.token ? t : null
+    }
+    : async () => {
+      // Both stored shapes (provider-env.cjs unwrapOAuthKey): bare oat ->
+      // { token }; JSON blob -> refresh via refreshUsageCredential when inside
+      // the skew, store the rotated blob back, return { token, expiresAt }.
+      const raw = readProviderKey(provider)
+      const k = unwrapOAuthKey(raw)
+      if (!k) return null
+      if (!k.blob || !Number.isFinite(k.expiresAt) || k.expiresAt - Date.now() > CLAUDE_SUB_REFRESH_SKEW_MS) return k.expiresAt ? { token: k.token, expiresAt: k.expiresAt } : { token: k.token }
+      const refreshed = await refreshUsageCredential(raw)
+      if (!refreshed) {
+        log(`route-proxy credential: ${provider} refresh failed${k.expiresAt < Date.now() ? ' and the token is expired' : ' (token still valid, using it)'}`)
+        return k.expiresAt < Date.now() ? null : { token: k.token, expiresAt: k.expiresAt }
+      }
+      try { storeProviderKeyVerified(provider, refreshed) } catch (err) { log(`route-proxy credential: ${provider} refreshed but store failed (${err.message})`) }
+      const r = unwrapOAuthKey(refreshed)
+      log(`route-proxy credential: ${provider} token refreshed (expires ${new Date(r.expiresAt || 0).toISOString()})`)
+      return { token: r.token, expiresAt: r.expiresAt }
+    }
+  claudeAuthSources[provider] = cachedAuthSource(load)
+  return claudeAuthSources[provider]
+}
+function invalidateClaudeAuthSources(why) {
+  for (const k of Object.keys(claudeAuthSources)) claudeAuthSources[k].invalidate()
+  if (why) log(`route-proxy credential: cache dropped (${why})`)
+}
+try { onProviderKeyStored((p) => { if (CLAUDE_LOGIN_ROWS.includes(p)) invalidateClaudeAuthSources(`${p} key stored`) }) } catch {}
+function withLiveCredential(provider, route) {
+  let host = ''
+  try { host = new URL(route.upstreamBase).hostname } catch {}
+  if (CLAUDE_LOGIN_ROWS.includes(provider) && route.keyMode === 'passthrough' && host === 'api.anthropic.com') {
+    route.authSource = claudeAuthSourceFor(provider)
+  }
+  return route
+}
+
+// 401 from the Claude upstream -> the visible "login expired" state (the
+// turn-error marker the nav banner reads; subtype AUTH is rendered as the
+// login-expired sentence and does not age out). Cleared on the next 2xx.
+// Writer/clearer is turn-error-marker.mjs (the one marker owner), loaded once.
+let turnErrorMarkerMod = null
+function turnErrorMarker() {
+  if (!turnErrorMarkerMod) turnErrorMarkerMod = import(pathToFileURL(path.join(__dirname, 'turn-error-marker.mjs')).href)
+  return turnErrorMarkerMod
+}
+let authMarkerMaybeSet = true // unknown at boot: the first 2xx checks once
+async function clearAuthMarker(why) {
+  try {
+    const m = JSON.parse(fs.readFileSync(path.join(DATA_HOME, '.last-turn-error.json'), 'utf8'))
+    if (m && m.subtype === 'AUTH') { (await turnErrorMarker()).clearTurnErrorMarker(DATA_HOME); log(`auth marker cleared (${why})`) }
+  } catch { /* absent: nothing to clear */ }
+  authMarkerMaybeSet = false
+}
+function onRouteProxyStatus(cls, code) {
+  if (cls !== 'anthropic') return
+  const provider = liveRoute && liveRoute.provider
+  if (!CLAUDE_LOGIN_ROWS.includes(provider)) return
+  if (code === 401) {
+    authMarkerMaybeSet = true
+    turnErrorMarker()
+      .then((m) => m.writeTurnErrorMarker(DATA_HOME, { code: 'AUTH', message: 'api.anthropic.com answered 401 authentication_error', model: liveRoute.model || 'claude' }))
+      .catch((err) => log(`route-proxy: auth marker write failed (${err.message})`))
+  } else if (code >= 200 && code < 300 && authMarkerMaybeSet) {
+    clearAuthMarker('successful Claude call')
+  }
 }
 
 function killRouteProxy() {
@@ -1240,7 +1362,8 @@ async function applyRouteInner() {
     retireCodexProxy(old.server, old.port, old.model)
   }
   const { cls, route } = routeConfigFor(next)
-  routeProxy.setRoute(cls, route)
+  routeProxy.setRoute(cls, withLiveCredential(provider, route))
+  if (!CLAUDE_LOGIN_ROWS.includes(provider)) clearAuthMarker(`live switch to ${provider}`)
   // Declared routes keep the spawn-time contextWindow (the engine read it
   // from the patch at boot); say so when the catalog disagrees so a wrong
   // compaction window is a logged fact, not a surprise.
@@ -1628,6 +1751,13 @@ async function spawnRealAgentChildLocked() {
       console.warn(`[scheherazade/main] ${provider}: login refresh threw: ${e && e.message ? e.message : String(e)}`)
     }
   }
+  // claude-subscription JSON blob (0.4.3): rotate an expiring token before
+  // the spawn reads it, same loader the route proxy uses. Bare tokens: no-op.
+  invalidateClaudeAuthSources('spawn')
+  if (!CLAUDE_LOGIN_ROWS.includes(provider)) clearAuthMarker(`spawn on ${provider}`)
+  if (provider === 'claude-subscription') {
+    try { await claudeAuthSourceFor(provider)() } catch (e) { log(`${provider}: pre-spawn credential check threw: ${e && e.message ? e.message : String(e)}`) }
+  }
   const providerEnvResult = buildProviderEnv(provider, config, { readProviderKey })
   if (providerEnvResult.error) {
     const { kind, reason, fix } = providerEnvResult.error
@@ -1699,12 +1829,13 @@ async function spawnRealAgentChildLocked() {
   // options all key on it. lastSpawnEnv keeps the pre-rewrite build for
   // decideRouteChange. Proxy failure is loud and falls back to the direct
   // route (every later pick then restarts, as before).
+  providerEnvResult.env.SCHZ_PROVIDER = provider // dsh-lane AUTH restart-request gate (not part of lastSpawnEnv)
   lastSpawnEnv = null
   try {
     const rp = await ensureRouteProxy()
     const { cls, route, laneEnv } = routeConfigFor(providerEnvResult.env)
     lastSpawnEnv = { ...providerEnvResult.env }
-    rp.setRoute(cls, route)
+    rp.setRoute(cls, withLiveCredential(provider, route))
     Object.assign(providerEnvResult.env, laneEnv(rp.port))
     log(`route proxy: ${provider} rides ${cls} class via ${providerEnvResult.env.DSH_ROUTE_BASE_URL} (key ${route.keyMode}) -> ${route.upstreamBase}`)
   } catch (err) {

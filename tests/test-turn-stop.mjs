@@ -199,7 +199,7 @@ console.log('\n7. 0.3.6: every other kill path goes through the same tree kill')
 
   const dsh = readFileSync(path.join(ROOT, 'dsh-lane.mjs'), 'utf8')
   assert((dsh.match(/child\.kill\(/g) || []).length === 0, 'dsh-lane has no bare child.kill outside killEngine')
-  assert((dsh.match(/killEngine\(child\)/g) || []).length === 3, 'dsh-lane: error recycle, shutdown (incl. .stop_requested) and boot failure use killEngine')
+  assert((dsh.match(/killEngine\(child\)/g) || []).length === 4, 'dsh-lane: error recycle, AUTH-hold fallback (0.4.3), shutdown (incl. .stop_requested) and boot failure use killEngine')
   assert(dsh.includes("killTree(c.pid, 'SIGKILL')") && dsh.includes("platform === 'win32'"), 'dsh killEngine tree-kills on win32')
   const copy = readFileSync(path.join(ROOT, 'onboarding/public/js/copy.js'), 'utf8')
   assert(!copy.includes('takes a few seconds to come back'), 'Stop copy no longer promises a restart delay on every platform')

@@ -251,5 +251,17 @@ async function tick() { await new Promise((r) => setImmediate(r)) }
   check('login stored the RAW oat string, not a JSON blob', stored.length === 1 && stored[0] === 'sk-ant-oat01-LOGIN', String(stored[0]))
 }
 
+// ── 7. serializeLoginCredential (0.4.3): blob when renewable, bare otherwise ──
+{
+  const { serializeLoginCredential } = require(path.join(ROOT, 'oauth-usage-session.cjs'))
+  const blob = JSON.parse(serializeLoginCredential({ access_token: 'sk-ant-oat01-A', refresh_token: 'sk-ant-ort01-R', expires_in: 28800 }, 1_000))
+  check('login serialize: refresh_token + expires_in -> {accessToken, refreshToken, expiresAt} blob', blob.accessToken === 'sk-ant-oat01-A' && blob.refreshToken === 'sk-ant-ort01-R' && blob.expiresAt === 1_000 + 28800_000, JSON.stringify(blob))
+  check('login serialize: no refresh_token -> bare string', serializeLoginCredential({ access_token: 'sk-ant-oat01-B', expires_in: 31536000 }, 1) === 'sk-ant-oat01-B')
+  check('login serialize: no expires_in -> bare string', serializeLoginCredential({ access_token: 'sk-ant-oat01-C', refresh_token: 'r' }, 1) === 'sk-ant-oat01-C')
+  const src = require('node:fs').readFileSync(path.join(ROOT, 'onboarding', 'http-server.cjs'), 'utf8')
+  check('pin: getLoginOAuthSession stores through serializeLoginCredential', /serialize: serializeLoginCredential,/.test(src))
+  check('pin: Test + usage paths unwrap the claude-subscription key', (src.match(/unwrapOAuthKey\(readProviderKey\('claude-subscription'\)\)/g) || []).length === 2)
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

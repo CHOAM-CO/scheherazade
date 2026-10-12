@@ -347,6 +347,17 @@ function serializeCredential(tokenBody, nowMs) {
   })
 }
 
+// Agent-lane login store shape (0.4.3): the full blob when the endpoint
+// returned a refresh token + expiry (renewable; the bare token died after
+// hours, field report 2026-10-12), else the bare access token as before.
+// Readers unwrap both (provider-env.cjs unwrapOAuthKey).
+function serializeLoginCredential(body, nowMs) {
+  if (body && body.refresh_token && Number.isFinite(Number(body.expires_in)) && Number(body.expires_in) > 0) {
+    return serializeCredential({ ...body, expires_in: Number(body.expires_in) }, nowMs)
+  }
+  return body.access_token
+}
+
 // Refresh grant. Pulled out as a pure-ish function so the gauge can call it
 // without a session object: given the stored credential JSON, returns a fresh
 // serialized credential (rotated refresh token included) or null on any
@@ -384,6 +395,7 @@ module.exports = {
   killUsageOAuthChildOnShutdown,
   refreshUsageCredential,
   serializeCredential,
+  serializeLoginCredential,
   PROVIDER_ID,
   OAUTH_USAGE_TIMEOUT_MS,
   TERMINAL_STATES,

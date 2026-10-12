@@ -22,7 +22,7 @@
 // convention.
 
 import { spawnSync } from 'node:child_process'
-import { buildProviderEnv, refreshClaudeCliToken, parseCustomProviderJson, PROVIDERS_REQUIRING_STORED_CREDENTIAL, CHATGPT_PROXY_DEFAULT_PORT, CHATGPT_PLACEHOLDER_KEY, OLLAMA_CLOUD_BASE_URL, normalizeOllamaCloudModel, routeClassOf, credentialClassOf, routeKindOf, anthropicThinkingShape, decideRouteChange, loadCodexKnownModels, codexModelKnown, CODEX_AS_API_BUNDLE, ROUTE_PROXY_DUMMY_KEY } from '../provider-env.cjs'
+import { buildProviderEnv, refreshClaudeCliToken, parseCustomProviderJson, PROVIDERS_REQUIRING_STORED_CREDENTIAL, CHATGPT_PROXY_DEFAULT_PORT, CHATGPT_PLACEHOLDER_KEY, OLLAMA_CLOUD_BASE_URL, normalizeOllamaCloudModel, routeClassOf, credentialClassOf, routeKindOf, anthropicThinkingShape, decideRouteChange, loadCodexKnownModels, codexModelKnown, CODEX_AS_API_BUNDLE, ROUTE_PROXY_DUMMY_KEY, unwrapOAuthKey } from '../provider-env.cjs'
 
 let pass = 0
 let fail = 0
@@ -792,6 +792,22 @@ assert(!!parseCustomProviderJson(JSON.stringify({ baseUrl: 'ftp://nope', model: 
   const dshVision = env('dsh', { MODEL: 'qwen3.5:cloud' })
   assert(d(dsh, dshVision).mode === 'restart' && /SIDECAR/.test(d(dsh, dshVision).reason), 'decide: dsh glm -> qwen (sidecar wiring changes) = restart')
   assert(d(null, claude).mode === 'restart' && d(claude, undefined).mode === 'restart', 'decide: missing side = restart')
+}
+
+// claude-subscription stored shapes (0.4.3): bare oat and JSON blob both
+// reach the lane as a BARE access token.
+{
+  const blob = JSON.stringify({ accessToken: 'sk-ant-oat01-BLOB', refreshToken: 'sk-ant-ort01-R', expiresAt: 1_900_000_000_000 })
+  const e1 = buildProviderEnv('claude-subscription', { MODEL: 'claude-opus-5-5' }, { readProviderKey: () => 'sk-ant-oat01-BARE' })
+  assert(e1.env && e1.env.ANTHROPIC_API_KEY === 'sk-ant-oat01-BARE', 'claude-subscription: bare stored token reaches the lane unchanged')
+  const e2 = buildProviderEnv('claude-subscription', { MODEL: 'claude-opus-5-5' }, { readProviderKey: () => blob })
+  assert(e2.env && e2.env.ANTHROPIC_API_KEY === 'sk-ant-oat01-BLOB', 'claude-subscription: JSON blob unwrapped to the bare access token at spawn')
+  const u1 = unwrapOAuthKey('sk-ant-oat01-BARE')
+  assert(u1.token === 'sk-ant-oat01-BARE' && u1.blob === null && !('expiresAt' in u1), 'unwrapOAuthKey: bare -> {token}, no expiry')
+  const u2 = unwrapOAuthKey(blob)
+  assert(u2.token === 'sk-ant-oat01-BLOB' && u2.expiresAt === 1_900_000_000_000 && u2.blob.refreshToken === 'sk-ant-ort01-R', 'unwrapOAuthKey: blob -> {token, expiresAt, blob}')
+  assert(unwrapOAuthKey('') === null && unwrapOAuthKey(null) === null, 'unwrapOAuthKey: empty -> null')
+  assert(unwrapOAuthKey('{not json').token === '{not json', 'unwrapOAuthKey: unparsable brace string treated as bare')
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const require_ = createRequire(path.join(ROOT, 'package.json'))
-const { createRouteProxy, rewriteRequestBody, isNonStandardOpenAIHost } = require_('./route-proxy.cjs')
+const { createRouteProxy, rewriteRequestBody, isNonStandardOpenAIHost, cachedAuthSource } = require_('./route-proxy.cjs')
 
 let pass = 0
 let fail = 0
@@ -39,6 +39,11 @@ const upstream = http.createServer((req, res) => {
   req.on('end', () => {
     const body = Buffer.concat(chunks)
     seen.push({ url: req.url, method: req.method, headers: req.headers, body })
+    if (req.url.endsWith('/v1/expired')) {
+      res.writeHead(401, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'OAuth access token has expired.' } }))
+      return
+    }
     if (req.url.endsWith('/sse')) {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
       let i = 0
@@ -61,7 +66,8 @@ await new Promise((r) => upstream.listen(0, '127.0.0.1', r))
 const upPort = upstream.address().port
 const upBase = `http://127.0.0.1:${upPort}`
 
-const proxy = await createRouteProxy({ log: () => {} })
+const statuses = []
+const proxy = await createRouteProxy({ log: () => {}, onUpstreamStatus: (cls, code) => statuses.push([cls, code]) })
 const post = async (url, body, headers = {}) => {
   const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) })
   return { status: res.status, json: await res.json().catch(() => null) }
@@ -290,7 +296,7 @@ const lastBody = () => JSON.parse(last().body.toString('utf8'))
     /async function spawnCodexProxyInstance\(model\)/.test(mainSrc) && /startCodexProxyInstance\(\{ model, port: 0 \}\)/.test(mainSrc) && /async function startCodexProxyInstance\(/.test(mainSrc))
   ok('pin: ensureCodexProxy builds through the same startCodexProxyInstance', /await startCodexProxyInstance\(\{ model: desiredModel, port: requestedPort \}\)/.test(mainSrc))
   ok('pin: applyRouteInner handles decision.handover by spawning a new instance BEFORE setRoute',
-    apply.includes('if (decision.handover)') && apply.indexOf('await spawnCodexProxyInstance(next.DSH_MODEL)') > -1 && apply.indexOf('await spawnCodexProxyInstance(next.DSH_MODEL)') < apply.indexOf('routeProxy.setRoute(cls, route)'))
+    apply.includes('if (decision.handover)') && apply.indexOf('await spawnCodexProxyInstance(next.DSH_MODEL)') > -1 && apply.indexOf('await spawnCodexProxyInstance(next.DSH_MODEL)') < apply.indexOf('routeProxy.setRoute(cls'))
   ok('pin: applyRouteInner never calls killCodexProxy; the old instance goes through retireCodexProxy (grace period, in-flight streams finish)',
     !apply.includes('killCodexProxy(') && apply.includes('retireCodexProxy(old.server, old.port, old.model)') && /function retireCodexProxy\(server, port, model, graceMs = CODEX_PROXY_RETIRE_GRACE_MS\)/.test(mainSrc) && /setTimeout\(/.test(mainSrc.slice(mainSrc.indexOf('function retireCodexProxy('), mainSrc.indexOf('\n}\n', mainSrc.indexOf('function retireCodexProxy(')))))
   ok('pin: handover repoints the route at the new port and records it as the proxy to reuse on the next spawn',
@@ -298,6 +304,77 @@ const lastBody = () => JSON.parse(last().body.toString('utf8'))
   ok('pin: handover health failure falls back to restart', /if \(!inst\.ok\) return fallback\(`codex proxy handover failed/.test(apply))
   ok('pin: applyRouteInner never calls ensureCodexProxy (that rebuild kills in-flight streams)', !apply.includes('ensureCodexProxy('))
   ok('pin: killCodexProxy closes retiring instances too (quit / fatal)', /function killCodexProxy\(\) \{\s*for \(const entry of retiringCodexProxies\)/.test(mainSrc))
+}
+
+// ---------- (g) live credential header swap (0.4.3 auth-expiry hotfix) ----------
+{
+  let store = { token: 'sk-ant-oat01-fresh-A', expiresAt: Date.now() + 3600_000 }
+  let loads = 0
+  const src = cachedAuthSource(async () => { loads++; return store })
+  proxy.setRoute('anthropic', { upstreamBase: upBase, model: 'claude-opus-5-5', key: null, keyMode: 'passthrough', authSource: src })
+  await post(`${proxy.baseUrlFor('anthropic')}/v1/messages`, { model: 'x', messages: [] }, { authorization: 'Bearer sk-ant-oat01-STALE', 'anthropic-beta': 'oauth-2025-04-20' })
+  ok('auth swap: stale lane Bearer replaced by the current store token', last().headers.authorization === 'Bearer sk-ant-oat01-fresh-A', last().headers.authorization)
+  ok('auth swap: other lane headers (anthropic-beta) untouched', last().headers['anthropic-beta'] === 'oauth-2025-04-20')
+  await post(`${proxy.baseUrlFor('anthropic')}/v1/messages`, { model: 'x', messages: [] }, { authorization: 'Bearer sk-ant-oat01-STALE' })
+  ok('auth swap: cached per expiry (one load for two requests)', loads === 1, String(loads))
+  store = { token: 'sk-ant-oat01-fresh-B', expiresAt: Date.now() + 3600_000 }
+  statuses.length = 0
+  const r401 = await post(`${proxy.baseUrlFor('anthropic')}/v1/expired`, { model: 'x', messages: [] }, { authorization: 'Bearer sk-ant-oat01-STALE' })
+  ok('auth swap: 401 passes through and is reported to onUpstreamStatus', r401.status === 401 && statuses.some(([c, s]) => c === 'anthropic' && s === 401), JSON.stringify(statuses))
+  await post(`${proxy.baseUrlFor('anthropic')}/v1/messages`, { model: 'x', messages: [] }, { authorization: 'Bearer sk-ant-oat01-STALE' })
+  ok('auth swap: a 401 invalidates the cache; next request carries the rotated token', last().headers.authorization === 'Bearer sk-ant-oat01-fresh-B' && loads === 2, `${last().headers.authorization} loads=${loads}`)
+  // expiry-driven reload: token inside the headroom is re-read
+  let t = 1_000_000
+  let n = 0
+  const src2 = cachedAuthSource(async () => { n++; return { token: `tok-${n}`, expiresAt: t + 10 * 60_000 } }, { now: () => t })
+  await src2(); t += 4 * 60_000; await src2()
+  ok('cache: reused while outside the 5-min headroom', n === 1, String(n))
+  t += 2 * 60_000; const g = await src2()
+  ok('cache: reloaded once inside the headroom (per token expiry, not per process)', n === 2 && g.token === 'tok-2', `${n} ${g && g.token}`)
+  // non-oat token -> x-api-key, Authorization dropped
+  proxy.setRoute('anthropic', { upstreamBase: upBase, key: null, keyMode: 'passthrough', authSource: async () => ({ token: 'sk-ant-api03-k' }) })
+  await post(`${proxy.baseUrlFor('anthropic')}/v1/messages`, { messages: [] }, { authorization: 'Bearer old' })
+  ok('auth swap: non-oat token goes in x-api-key, Authorization removed', last().headers['x-api-key'] === 'sk-ant-api03-k' && !last().headers.authorization)
+  // loader returns null -> lane header forwarded verbatim (env path kept)
+  proxy.setRoute('anthropic', { upstreamBase: upBase, key: null, keyMode: 'passthrough', authSource: async () => null })
+  await post(`${proxy.baseUrlFor('anthropic')}/v1/messages`, { messages: [] }, { authorization: 'Bearer lane-env' })
+  ok('auth swap: no current credential -> lane header forwarded verbatim', last().headers.authorization === 'Bearer lane-env')
+  // no authSource (every other provider) -> unchanged passthrough
+  proxy.setRoute('anthropic', { upstreamBase: upBase, key: null, keyMode: 'passthrough' })
+  await post(`${proxy.baseUrlFor('anthropic')}/v1/messages`, { messages: [] }, { authorization: 'Bearer other-provider' })
+  ok('no authSource: passthrough untouched', last().headers.authorization === 'Bearer other-provider')
+  // api-key mode ignores authSource
+  proxy.setRoute('anthropic', { upstreamBase: upBase, key: 'real', keyMode: 'api-key', authSource: async () => ({ token: 'sk-ant-oat01-x' }) })
+  await post(`${proxy.baseUrlFor('anthropic')}/v1/messages`, { messages: [] }, { 'x-api-key': 'dummy' })
+  ok('api-key mode: authSource ignored, proxy key injected', last().headers['x-api-key'] === 'real' && !last().headers.authorization)
+  const mainSrc = fs.readFileSync(path.join(ROOT, 'main.cjs'), 'utf8')
+  ok('pin: both main.cjs setRoute sites go through withLiveCredential', (mainSrc.match(/setRoute\(cls, withLiveCredential\(provider, route\)\)/g) || []).length === 2)
+  ok('pin: main polls .restart-request and restarts through restartAgent', /function pollRestartRequest\(\)/.test(mainSrc) && /pollRestartRequest\(\) \}, FAILURE_POLL_MS\)/.test(mainSrc))
+  const laneSrc = fs.readFileSync(path.join(ROOT, 'dsh-lane.mjs'), 'utf8')
+  ok("pin: dsh-lane writes .restart-request on an AUTH recycle for Claude login rows only, and holds instead of exiting", /if \(code === 'AUTH' && \['claude-subscription', 'claude-cli'\]\.includes\(process\.env\.SCHZ_PROVIDER/.test(laneSrc) && /\.restart-request[\s\S]{0,900}setTimeout\([\s\S]{0,200}process\.exit\(1\) \}, 60_000\)\s*return/.test(laneSrc))
+  ok('pin: main sets SCHZ_PROVIDER, drops a stale .restart-request at boot and ignores pre-start requests', /env\.SCHZ_PROVIDER = provider/.test(mainSrc) && /try \{ fs\.unlinkSync\(RESTART_REQUEST_PATH\)/.test(mainSrc) && /ts < MAIN_STARTED_AT/.test(mainSrc))
+  ok('pin: credential cache invalidated at spawn and on key store', /invalidateClaudeAuthSources\('spawn'\)/.test(mainSrc) && /onProviderKeyStored\(/.test(mainSrc))
+  ok('pin: auth marker cleared when spawning / switching to a non-Claude row, via turn-error-marker.mjs', /clearAuthMarker\(`spawn on/.test(mainSrc) && /clearAuthMarker\(`live switch to/.test(mainSrc) && /writeTurnErrorMarker\(DATA_HOME/.test(mainSrc) && !/subtype: 'AUTH', detail/.test(mainSrc))
+  // in-flight dedupe + negative TTL
+  {
+    let calls = 0
+    let release
+    const gate = new Promise((r) => { release = r })
+    const s1 = cachedAuthSource(async () => { calls++; await gate; return { token: 'T', expiresAt: Date.now() + 3600_000 } })
+    const ps = [s1(), s1(), s1()]
+    release()
+    const rs = await Promise.all(ps)
+    ok('dedupe: 3 parallel callers share one load', calls === 1 && rs.every((r) => r && r.token === 'T'), String(calls))
+    let tn = 0
+    let nulls = 0
+    const s2 = cachedAuthSource(async () => { nulls++; return null }, { now: () => tn })
+    await s2(); await s2(); tn += 29_000; await s2()
+    ok('negative TTL: a failed load is not retried inside 30s', nulls === 1, String(nulls))
+    tn += 2_000; await s2()
+    ok('negative TTL: retried after 30s', nulls === 2, String(nulls))
+    s2.invalidate(); await s2()
+    ok('invalidate clears a negative entry', nulls === 3, String(nulls))
+  }
 }
 
 await proxy.close()

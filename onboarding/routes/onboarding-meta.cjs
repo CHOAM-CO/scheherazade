@@ -199,7 +199,9 @@ function createRoutes(staticCtx) {
         }
         sendJson(res, 200, {
           present: true,
-          fresh: Date.now() - Number(marker.ts) < 10 * 60_000,
+          // AUTH stays fresh until cleared: a dead login with no inbound
+          // traffic must not age out of the banner (0.4.3, 65h silent outage).
+          fresh: String(marker.subtype) === 'AUTH' || Date.now() - Number(marker.ts) < 10 * 60_000,
           ts: Number(marker.ts),
           subtype: String(marker.subtype || 'error').slice(0, 80),
           detail: String(marker.detail || '').slice(0, 600),

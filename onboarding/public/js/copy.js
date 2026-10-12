@@ -1016,7 +1016,11 @@ window.COPY = {
     // rate-limit hit ("429/limit reached", wait it out) apart from dead
     // auth ("401/authentication", re-login on Connectors). Paraphrasing it
     // away would hide exactly the discriminator the user needs.
-    turnError: (subtype, detail) => `Model call failed (${subtype}): ${detail || 'no detail from the provider'}`,
+    // AUTH (0.4.3): a dead Claude login is not a transient model error -- say
+    // what it means for the user. Cleared by the next successful call.
+    turnError: (subtype, detail) => subtype === 'AUTH'
+      ? `Claude login expired, agent cannot respond. Log in again in Settings > Model, or restart the agent. (${detail || 'HTTP 401'})`
+      : `Model call failed (${subtype}): ${detail || 'no detail from the provider'}`,
     turnErrorDismiss: 'Dismiss',
     muteRevert: (m) => `Go back to ${m}`,
     // context gauge (v0.0.22): occupancy is exact (from the transcript's own

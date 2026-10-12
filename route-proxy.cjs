@@ -52,6 +52,16 @@
 //
 // GET /health -> { anthropic: {model, effort, upstream}, openai: {...} }.
 // The key is never reported.
+//
+// authSource (0.4.3 hotfix, field report 2026-10-12 sanha): a passthrough
+// route may carry an async authSource() -> { token } | null. When present the
+// proxy reads the CURRENT credential on every request and overwrites the
+// lane's auth header with it (oat -> Bearer, anything else -> x-api-key).
+// The lane's env token is frozen at spawn; a lane alive past the access
+// token's lifetime 401'd every turn and the supervisor respawned it with the
+// same env. main.cjs wires it only for the Claude login rows -> api.anthropic.com;
+// every other route keeps the env path untouched. onUpstreamStatus(cls, code)
+// lets main surface a 401 and drop its credential cache.
 'use strict'
 const http = require('node:http')
 const https = require('node:https')
@@ -122,6 +132,54 @@ function rewriteRequestBody (cls, bodyBuf, live) {
   return after === before ? bodyBuf : Buffer.from(after)
 }
 
+/**
+ * Cache an async credential loader per token EXPIRY, not per process.
+ * load() -> { token, expiresAt? } | { error } (expiresAt epoch ms). A token
+ * with no known expiry is re-read after unknownTtlMs so a re-login lands
+ * without a restart. invalidate() forces the next call to reload (on a 401).
+ */
+// Parallel callers share ONE in-flight load (a refresh token must be spent
+// once; concurrent refresh grants with the same token can revoke the family).
+// A load that yields no token is cached as negative for negativeTtlMs so a
+// dead login does not send every request to the refresh endpoint.
+function cachedAuthSource (load, { now = Date.now, headroomMs = 5 * 60 * 1000, unknownTtlMs = 60 * 1000, negativeTtlMs = 30 * 1000 } = {}) {
+  let cache = null
+  let inflight = null
+  let gen = 0
+  const get = () => {
+    if (cache && now() < cache.validUntil) return Promise.resolve(cache.token ? { token: cache.token } : null)
+    if (inflight) return inflight
+    const myGen = gen
+    inflight = (async () => {
+      try {
+        const r = await load()
+        if (myGen !== gen) return r && r.token ? { token: r.token } : null // invalidated mid-load: answer, do not cache
+        if (!r || !r.token) { cache = { token: null, validUntil: now() + negativeTtlMs }; return null }
+        const exp = Number(r.expiresAt)
+        cache = { token: r.token, validUntil: Number.isFinite(exp) ? exp - headroomMs : now() + unknownTtlMs }
+        return { token: r.token }
+      } finally {
+        if (myGen === gen) inflight = null
+      }
+    })()
+    return inflight
+  }
+  get.invalidate = () => { cache = null; inflight = null; gen++ }
+  return get
+}
+
+// Overwrite the lane's auth header with a current credential (pure).
+function applyAuthToken (headers, token) {
+  if (/^sk-ant-oat/.test(token)) {
+    headers.authorization = `Bearer ${token}`
+    delete headers['x-api-key']
+  } else {
+    headers['x-api-key'] = token
+    delete headers.authorization
+  }
+  return headers
+}
+
 function classOf (url) {
   for (const cls of CLASSES) {
     const p = PREFIX[cls]
@@ -135,7 +193,7 @@ function classOf (url) {
  * @param {{ log?: (msg: string) => void, host?: string }} opts
  * @returns {Promise<{ server: import('http').Server, port: number, host: string, setRoute: Function, getRoute: Function, baseUrlFor: Function, close: Function }>}
  */
-function createRouteProxy ({ log = () => {}, host = '127.0.0.1' } = {}) {
+function createRouteProxy ({ log = () => {}, host = '127.0.0.1', onUpstreamStatus = () => {} } = {}) {
   const routes = { anthropic: null, openai: null }
 
   const setRoute = (cls, cfg) => {
@@ -150,9 +208,10 @@ function createRouteProxy ({ log = () => {}, host = '127.0.0.1' } = {}) {
       keyMode,
       protocol: cfg.protocol || (cls === 'anthropic' ? 'anthropic-messages' : 'openai-completions'),
       effortAlwaysSupported: cfg.effortAlwaysSupported === true,
+      authSource: keyMode === 'passthrough' && typeof cfg.authSource === 'function' ? cfg.authSource : null,
       since: new Date().toISOString(),
     }
-    log(`route-proxy: ${cls} -> ${routes[cls].upstreamBase} model=${routes[cls].model || '(passthrough)'} effort=${routes[cls].effort || '(passthrough)'}${routes[cls].effortAlwaysSupported ? ' (always set)' : ''} key=${keyMode}`)
+    log(`route-proxy: ${cls} -> ${routes[cls].upstreamBase} model=${routes[cls].model || '(passthrough)'} effort=${routes[cls].effort || '(passthrough)'}${routes[cls].effortAlwaysSupported ? ' (always set)' : ''} key=${keyMode}${routes[cls].authSource ? ' (live credential)' : ''}`)
     return getRoute(cls)
   }
   const getRoute = (cls) => (routes[cls] ? { ...routes[cls] } : null)
@@ -178,7 +237,11 @@ function createRouteProxy ({ log = () => {}, host = '127.0.0.1' } = {}) {
 
     const chunks = []
     req.on('data', (c) => chunks.push(c))
-    req.on('end', () => {
+    req.on('end', async () => {
+      let auth = null
+      if (live.authSource) {
+        try { auth = await live.authSource() } catch (err) { log(`route-proxy: credential read failed (${err && err.message}) -- forwarding the lane's own header`) }
+      }
       let body = Buffer.concat(chunks)
       if (req.method === 'POST' && body.length) body = rewriteRequestBody(target.cls, body, live)
       let upstream
@@ -193,6 +256,7 @@ function createRouteProxy ({ log = () => {}, host = '127.0.0.1' } = {}) {
         if (target.cls === 'anthropic') headers['x-api-key'] = live.key
         else headers.authorization = `Bearer ${live.key}`
       }
+      if (auth && auth.token) applyAuthToken(headers, auth.token)
       const mod = upstream.protocol === 'https:' ? https : http
       const up = mod.request({
         host: upstream.hostname,
@@ -201,6 +265,8 @@ function createRouteProxy ({ log = () => {}, host = '127.0.0.1' } = {}) {
         method: req.method,
         headers,
       }, (upRes) => {
+        if (upRes.statusCode === 401 && live.authSource && live.authSource.invalidate) live.authSource.invalidate()
+        try { onUpstreamStatus(target.cls, upRes.statusCode) } catch {}
         res.writeHead(upRes.statusCode, upRes.headers)
         upRes.pipe(res)
       })
@@ -232,4 +298,4 @@ function createRouteProxy ({ log = () => {}, host = '127.0.0.1' } = {}) {
   })
 }
 
-module.exports = { createRouteProxy, rewriteRequestBody, isNonStandardOpenAIHost, NON_STANDARD_OPENAI_HOSTS, ROUTE_PROXY_PREFIX: PREFIX }
+module.exports = { createRouteProxy, rewriteRequestBody, cachedAuthSource, applyAuthToken, isNonStandardOpenAIHost, NON_STANDARD_OPENAI_HOSTS, ROUTE_PROXY_PREFIX: PREFIX }
