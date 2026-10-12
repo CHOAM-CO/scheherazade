@@ -336,6 +336,16 @@
     }
   }
 
+  // Live route switch (chat model/effort pickers, 0.4.4): the proxy moves at
+  // once but the status poll only refetches spawn-info on a STATE change, so
+  // the header kept the old model name until the next transition (Mino
+  // 2026-10-12 15:12 "info쪽에서는 리프레시 안됨"). The picker calls this
+  // right after POST /api/agent/model answers mode 'live'.
+  window.refreshAgentReality = async () => {
+    await refreshSpawnInfo()
+    if (lastPolledState) renderRealityDetails(lastPolledState)
+  }
+
   function renderRealityDetails(state) {
     const running = state === 'live' || state === 'connecting'
     // 0.2.6 UI pass: the header names the agent, not its species — "세라",

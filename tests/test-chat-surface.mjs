@@ -267,7 +267,8 @@ console.log('\nN. live switches skip the confirm dialog (0.3.15, Mino 10-07 19:1
     assert(/if \(mode !== 'live'\) \{\s*\n\s*const ok = await window\.confirmDialog\(SET\.(switch|effort)Confirm\(/.test(block), `${name}: confirmDialog is reached ONLY when the preview is not live (restart wording)`)
     assert((block.match(/confirmDialog/g) || []).length === 1, `${name}: exactly one confirmDialog call (no live variant)`)
   }
-  assert(js.includes('function flashLiveCue(') && /r\.mode === 'live'\) \{ resolveVisionState\(\); flashLiveCue\(SET\.switchedLive\(/.test(js), 'chat: a live apply flashes a short status-row cue (no modal, no toast)')
+  assert(js.includes('function flashLiveCue(') && /r\.mode === 'live'\) \{\s*resolveVisionState\(\)\s*flashLiveCue\(SET\.switchedLive\(/.test(js), 'chat: a live apply flashes a short status-row cue (no modal, no toast)')
+  assert((js.match(/window\.refreshAgentReality\(\)\.catch/g) || []).length === 2, 'chat: both live pickers (model, effort) refetch the header reality right away (Mino 2026-10-12 15:12)')
   assert(copy.includes('switchedLive:') && /Takes effect on the next message/.test(copy), 'copy: switchedLive wording names the next-message semantics')
   const connModel = connectors.slice(connectors.indexOf("const mode = await window.routeSwitchPreview(provider !== currentProvider"), connectors.indexOf("$('set-ollama-url-hint')"))
   const connUrl = connectors.slice(connectors.indexOf("const mode = await window.routeSwitchPreview(currentProvider !== 'ollama'"), connectors.indexOf("$('set-effort-select').onchange"))

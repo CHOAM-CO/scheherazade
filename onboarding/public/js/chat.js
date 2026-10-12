@@ -1785,8 +1785,11 @@
         })
         // mode 'live' (route proxy): nothing restarted, the chip can re-read
         // spawn-info at once; otherwise follow the restart settle as before.
-        if (r && r.mode === 'live') { resolveVisionState(); flashLiveCue(SET.switchedLive(model, msEffort)) }
-        else msSettle()
+        if (r && r.mode === 'live') {
+          resolveVisionState()
+          flashLiveCue(SET.switchedLive(model, msEffort))
+          if (window.refreshAgentReality) window.refreshAgentReality().catch(() => {})
+        } else msSettle()
       } catch (err) {
         console.error('model swap failed:', err)
         window.showToast(window.COPY.genericError(err.message))
@@ -1828,7 +1831,11 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ effort }),
           })
-          if (r && r.mode === 'live') { resolveVisionState(); flashLiveCue(SET.switchedLive(msModel, effort)) }
+          if (r && r.mode === 'live') {
+            resolveVisionState()
+            flashLiveCue(SET.switchedLive(msModel, effort))
+            if (window.refreshAgentReality) window.refreshAgentReality().catch(() => {})
+          }
           else msSettle()
         } catch (err) {
           console.error('effort swap failed:', err)
