@@ -5,6 +5,51 @@ Decided by Mino 2026-10-12 14:32–14:35 (idea home): "작업표시줄 우상단
 컴패니언마냥 말풍선으로 말걸기 모드… AOD처럼", "프사는 세라에 이미 있는 프사 동그랗게
 빼서", "coucou + 컴패니언 앱들 시중에 나와있는거 참고해서".
 
+## Beta implementation decisions (2026-10-12)
+
+- Surveyed Coucou, Shimeji, Discord overlay, Steamworks overlay, Windows
+  notification guidance, and notch-app conventions before implementation.
+  Keep passive presence, explicit dismissal, a draggable face, opt-in sound,
+  and quiet startup. Do not inject into games: Discord/Steam overlays are not
+  evidence that a transparent Electron window can cover exclusive fullscreen.
+- Windows rehearsal exposed missing mousemove forwarding while ignored: an
+  initially ignored face could not be entered or clicked. Windows/Linux use
+  native `setShape` rounded hit regions instead; transparent pixels pass
+  clicks through without polling or tracking the cursor. macOS retains the
+  renderer-enter/leave `setIgnoreMouseEvents` path. At a bottom-left edge the
+  bubble goes above, rather than overlap its own face or leave the work area.
+- No structured tool approval queue or allow/deny endpoint exists in this
+  revision. Beta can answer conversational approval questions through the
+  existing `/api/chat/in` endpoint, explicitly labeled as chat replies, NOT
+  permission grants. Actual tool authorization remains outside this surface.
+- The pending signal is accumulated material for a user-triggered recital,
+  not a permission request. Do not auto-recite it or change design-0024.
+- Windows checks foreground bounds against native monitor bounds at 1 Hz,
+  including borderless fullscreen conservatively. macOS/Linux cannot safely
+  infer another app's fullscreen state using Electron alone; proactive turns
+  stay disabled there rather than claim a false all-clear.
+- Questions are detected conservatively from new chat text; the current chat
+  protocol carries no structured question or originating-turn identifier.
+  Only local-channel messages are available; external-channel approvals are
+  not mirrored. Proactive turns use the existing SYSTEM-turn path, never
+  pretend to be user messages, and cool down even after failed injection.
+- The shell can dismiss a focused bubble on blur. Outside clicks while the
+  companion has never taken focus need platform verification; a visible close
+  button and Escape remain available without global input hooks.
+- The survey did not establish a current Windows Copilot-specific toast
+  contract. Use Microsoft's documented Windows banner/inline-reply/Do Not
+  Disturb conventions, not an assumed Copilot API. NotchNook's landing page
+  was unavailable; notch hover conventions are secondary-source evidence.
+
+Reference pages read through Aside, read-only, 2026-10-12:
+[Coucou](https://louis-cfm.github.io/coucou/),
+[Shimeji](https://shimejis.xyz/),
+[Discord](https://support.discord.com/hc/en-us/articles/217659737-Game-Overlay-101),
+[Steamworks](https://partner.steamgames.com/doc/features/overlay),
+[Windows notifications](https://support.microsoft.com/en-us/windows/experience/notifications-and-do-not-disturb-in-windows).
+None establishes per-display position persistence or transparent hit testing;
+those remain Sera design decisions. No competitor assets were reused.
+
 ## What it is
 
 A second, tiny Electron window: Sera's face (the existing agent avatar, cropped

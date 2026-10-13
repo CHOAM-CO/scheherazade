@@ -71,6 +71,8 @@
             <button class="secondary" id="set-avatar-remove"></button>
           </div>
 
+          <p class="field-hint">이 사진이 데스크톱 컴패니언의 얼굴로도 보여요.</p>
+
           <!-- The user's own picture (0.3.5, 2026-09-29): the same control,
                a second slot. settings.js wires both through one function;
                only the id prefix, the route and the empty state differ (this
@@ -86,6 +88,17 @@
             <button id="set-user-avatar-choose"></button>
             <button class="secondary" id="set-user-avatar-remove"></button>
           </div>
+        </div>
+
+        <div class="category" id="set-companion">
+          <div class="category-label">데스크톱 컴패니언</div>
+          <p class="subtitle">세라를 화면 한쪽에 작게 띄워 두세요. 질문이나 답장은 말풍선에서 주고받을 수 있어요.</p>
+          <p class="field-hint">먼저 말 걸기는 모델 사용량을 쓸 수 있어요. 전체 화면 앱에서는 잠시 숨고 트레이에 표시돼요. macOS·Linux에서는 전체 화면 확인이 제한되어 먼저 말 걸기는 쉬어요.</p>
+          <div class="agent-control-row"><label for="set-companion-enabled">세라를 데스크톱 컴패니언으로 표시</label><input type="checkbox" id="set-companion-enabled" /></div>
+          <div class="agent-control-row"><label for="set-companion-interval">먼저 말 걸기 간격 (분)</label><input type="number" id="set-companion-interval" min="5" max="1440" value="45" /></div>
+          <div class="agent-control-row"><label for="set-companion-sound">전체 화면에 가려졌을 때 알림 소리</label><input type="checkbox" id="set-companion-sound" /></div>
+          <p class="field-hint">얼굴을 끌어서 옮길 수 있어요. 말풍선은 닫기 버튼이나 Esc로 접어요. 게임 안에 직접 그리는 오버레이는 아니에요.</p>
+          <div class="step-actions"><button id="set-companion-save">컴패니언 설정 저장</button><span id="set-companion-status" role="status"></span></div>
         </div>
 
         <!-- Autonomous cycle (v0.0.6). The only setting on this page that
@@ -248,6 +261,7 @@
     <script src="/js/tts.js"></script>
     <script src="/js/stt-core.cjs"></script>
     <script src="/js/stt.js"></script>
+    <script src="/js/companion-settings.js"></script>
     <script src="/js/seed-settings.js"></script>
   </body>
 </html>
