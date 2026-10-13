@@ -2180,3 +2180,12 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .call-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--panel); color: var(--fg); flex-shrink: 0; }
 .call-controls[hidden] { display: none; }
 .call-controls button { flex-shrink: 0; }
+
+/* Native buttons retain Tab/Space/Enter access in chat and both call bubbles. */
+.call-controls { flex-wrap: wrap; }
+.call-controls #call-state { flex: 1; min-width: 75px; font-size: 12px; }
+.call-controls .call-mute { width: 30px; height: 30px; padding: 5px; display: inline-flex; align-items: center; justify-content: center; }
+.call-mute svg { width: 18px; height: 18px; }
+.call-mute .mute-slash { display: none; }
+.call-mute[aria-pressed="true"] { border-color: #e5484d; background: #e5484d18; }
+.call-mute[aria-pressed="true"] .mute-slash { display: block; stroke: #e5484d; stroke-width: 3; }

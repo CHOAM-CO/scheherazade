@@ -4,7 +4,7 @@
   const settings = !!document.getElementById('set-about'), companion = !!document.getElementById('b-mic')
   const channel = new BroadcastChannel('sera-call-settings')
   const post = (url, body) => window.api(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
-  let enabled = false, retrying = false, remoteSpeaking = false
+  let enabled = false, retrying = false, remoteSpeaking = false, voiceMuted = false, micMuted = false
   let active = false, speaking = false, cursor = null, busy = false, audio = null, lastEnd = 0, opening = false, syncing = false, playbackStarted = 0, queueStarted = 0, speechStopped = false, detachAudio = null
   function presentError(message) {
     if (window.showToast) window.showToast(message)
@@ -15,17 +15,49 @@
   status.id = 'call-state'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite')
   hangup.id = 'call-end'; hangup.type = 'button'; hangup.textContent = '통화 종료'; hangup.className = 'secondary'
   hangup.onclick = () => window.SeraCall.stop()
-  panel.append(status, hangup)
+  function muteButton(id, icon) {
+    const b = document.createElement('button')
+    b.id = id; b.type = 'button'; b.className = 'secondary call-mute'
+    b.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icon}<path class="mute-slash" d="M3 3l18 18"/></svg>`
+    return b
+  }
+  const voiceButton = muteButton('call-voice', '<path d="M11 4L6 8H3v8h3l5 4zM15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14"/>')
+  const micButton = muteButton('call-mic', '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>')
+  voiceButton.onclick = () => { applyMutes(!voiceMuted, micMuted); publishMutes() }
+  micButton.onclick = () => { applyMutes(voiceMuted, !micMuted); publishMutes() }
+  panel.append(status, voiceButton, micButton, hangup)
+  function publishMutes() { channel.postMessage({ type: 'call-mutes', voiceMuted, micMuted }) }
+  function applyMutes(voice, mic) {
+    const changedMic = micMuted !== mic
+    voiceMuted = voice; micMuted = mic
+    if (voiceMuted && active) stopSpeech()
+    if (changedMic && active) {
+      if (micMuted) { window.SeraSTT?.cancel(); utterance.partial('') }
+      else {
+        opening = true
+        Promise.resolve(window.SeraSTT?.start()).catch(e => presentError(e.message)).finally(() => {
+          opening = false
+          if (!active || micMuted) window.SeraSTT?.cancel()
+        })
+      }
+    }
+    renderState()
+  }
   if (!settings) {
     if (companion) document.getElementById('bubble').prepend(panel)
     else document.getElementById('ct-status')?.before(panel)
   }
   function renderState() {
     panel.hidden = !enabled
-    const text = retrying ? '다시 보내는 중...' : (speaking || (!active && remoteSpeaking)) ? '말하는 중' : utterance.waiting ? '듣는 중...' : '듣는 중'
+    const text = micMuted ? '마이크 꺼짐' : retrying ? '다시 보내는 중...' : (speaking || (!active && remoteSpeaking)) ? '말하는 중' : utterance.waiting ? '듣는 중...' : '듣는 중'
+    for (const [b, muted, name] of [[voiceButton, voiceMuted, '세라 목소리'], [micButton, micMuted, '내 마이크']]) {
+      b.setAttribute('aria-pressed', String(muted))
+      b.title = `${name} ${muted ? '켜기' : '끄기'}`
+      b.setAttribute('aria-label', b.title)
+    }
     if (status.textContent !== text) status.textContent = text // Do not re-announce unchanged live text every tick.
   }
-  const reply = core.createReplySpeech(text => { const clean = window.SeraTTSCore.cleanForSpeech(text); if (clean) { speechStopped = false; queue.enqueue(clean) } })
+  const reply = core.createReplySpeech(text => { const clean = window.SeraTTSCore.cleanForSpeech(text); if (clean && !voiceMuted) { speechStopped = false; queue.enqueue(clean) } })
   function stopSpeech() { speechStopped = true; reply.abandon(); queue.stop(); speaking = false; lastEnd = 0 }
   const ttsRetry = core.createSegmentRetry({ onLimit: e => { presentError(e.message); window.SeraCall.stop() } })
   const queue = window.SeraTTSCore.createSpeechQueue({
@@ -35,8 +67,8 @@
         const r = await fetch('/api/tts', { signal: AbortSignal.timeout(60000), method: 'POST', headers: { 'content-type': 'application/json', 'X-Onboard-Token': window.getOnboardToken() }, body: JSON.stringify({ text: window.SeraTTSCore.cleanForSpeech(text) }) })
         if (!r.ok) throw new Error(`TTS ${r.status}`)
         return r.blob()
-      }, () => active && generation === session.generation && !speechStopped)
-      if (!active || generation !== session.generation || speechStopped) throw new Error('Call speech cancelled')
+      }, () => active && generation === session.generation && !speechStopped && !voiceMuted)
+      if (!active || generation !== session.generation || speechStopped || voiceMuted) throw new Error('Call speech cancelled')
       return URL.createObjectURL(blob)
     },
     play: url => new Promise(resolve => {
@@ -75,7 +107,7 @@
   } })
   const session = core.createSession({ send: text => utterance.final(text), closeMic: () => window.SeraSTT?.cancel(), clearQueue: stopSpeech })
   function off() { if (!active) return; active = false; posting = false; turnRevision++; utterance.reset(); session.stop(); cursor = null; reply.reset(); const mic = document.getElementById(companion ? 'b-mic' : 'ct-mic'); if (mic) mic.disabled = false }
-  window.SeraCall = { get active() { return active }, get speaking() { return active && core.suppressMic(queue.running && !speechStopped, speaking, lastEnd, Date.now()) }, stop() { enabled = false; retrying = false; off(); renderState(); post('/api/call', { enabled: false }).then(() => channel.postMessage({ enabled: false })).catch(e => presentError(e.message)) }, stopSpeech, final: text => session.final(text), partial: text => { utterance.partial(text); session.partial(text, stopSpeech) } }
+  window.SeraCall = { get active() { return active }, get micMuted() { return micMuted }, get voiceMuted() { return voiceMuted }, get speaking() { return active && core.suppressMic(queue.running && !speechStopped, speaking, lastEnd, Date.now()) }, stop() { enabled = false; retrying = false; off(); voiceMuted = micMuted = false; renderState(); post('/api/call', { enabled: false }).then(() => channel.postMessage({ enabled: false })).catch(e => presentError(e.message)) }, stopSpeech, final: text => { if (!micMuted) session.final(text) }, partial: text => { if (active && !micMuted) { utterance.partial(text); session.partial(text, stopSpeech) } } }
   const button = document.createElement(settings ? 'input' : 'button')
   button.id = 'call-mode'; button.type = settings ? 'checkbox' : 'button'
   const label = ko ? '통화 모드' : 'Call mode'
@@ -96,7 +128,7 @@
     syncing = true
     try {
       const s = await window.api('/api/call')
-      enabled = !!s.enabled; renderState()
+      enabled = !!s.enabled; if (!enabled) voiceMuted = micMuted = false; renderState()
       button.disabled = !s.allowed; button.checked = s.enabled; button.setAttribute('aria-pressed', String(s.enabled)); hint.hidden = s.allowed
       let owns = !settings
       if (!companion && owns) { const c = await window.api('/api/companion'); owns = !(c.available && c.enabled) }
@@ -104,10 +136,10 @@
       if (!active) {
         window.SeraTTS?.stop(); window.SeraCompanionSpeechStop?.(); active = true; session.start(); utterance.setBlocked(true); ttsRetry.reset()
         opening = true
-        try { await window.SeraSTT?.start() } finally { opening = false }
-        if (!active) window.SeraSTT?.cancel()
+        try { if (!micMuted) await window.SeraSTT?.start() } finally { opening = false }
+        if (!active || micMuted) window.SeraSTT?.cancel()
       }
-      if (active && !opening && core.micHealth(active, window.SeraSTT?.mode) === 'failed') {
+      if (active && !micMuted && !opening && core.micHealth(active, window.SeraSTT?.mode) === 'failed') {
         const message = ko ? '마이크 연결이 끊겨 통화 모드를 껐어요. 마이크 권한을 확인하고 다시 켜 주세요' : 'Call mode stopped: microphone unavailable. Check microphone permissions and enable it again.'
         presentError(message)
         enabled = false; off(); renderState(); await post('/api/call', { enabled: false }); channel.postMessage({ enabled: false })
@@ -120,7 +152,11 @@
     if (!enabled) { window.SeraCall.stop(); return }
     try { await post('/api/call', { enabled }); channel.postMessage({ enabled }); await sync() } catch (e) { presentError(e.message); await sync() }
   }
-  channel.onmessage = e => { if (!e.data.enabled) { enabled = false; off(); renderState() }; sync() }
+  channel.onmessage = e => {
+    if (e.data.type === 'call-mutes') { if (enabled) applyMutes(e.data.voiceMuted === true, e.data.micMuted === true); return }
+    if (!e.data.enabled) { enabled = false; off(); voiceMuted = micMuted = false; renderState() }
+    sync()
+  }
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && enabled && !settings) { e.preventDefault(); e.stopImmediatePropagation(); window.SeraCall.stop() }
   }, true)

@@ -6,7 +6,8 @@ const require = createRequire(import.meta.url)
 const source = fs.readFileSync(process.env.CALL_RENDERER_SOURCE || new URL('../onboarding/public/js/call.js', import.meta.url), 'utf8')
 const tick = () => new Promise(r => setImmediate(r))
 async function fixture({ failMic = false, companion = true, toast = true, remote = false, failTTS = false } = {}) {
-  const deadlines = new Map(); let timerId = 0
+  const deadlines = new Map(); let timerId = 0, starts = 0, cancels = 0, broadcast
+  const broadcasts = []
   const timers = [], spoken = [], elements = new Map(), messages = [], bubbleErrors = [], posted = [], keys = []
   function make(id = '') {
     return { id, children: [], hidden: false, textContent: '', setAttribute(k,v) { this[k] = v }, getAttribute(k) { return this[k] },
@@ -23,18 +24,18 @@ async function fixture({ failMic = false, companion = true, toast = true, remote
   const win = {
     SeraCallCore: { ...require('../onboarding/public/js/call-core.cjs'), createUtteranceAggregator: opts => require('../onboarding/public/js/call-core.cjs').createUtteranceAggregator({ ...opts, setTimer: (fn, ms) => { deadlines.set(++timerId, { fn, at: now + ms }); return timerId }, clearTimer: id => deadlines.delete(id) }), createSegmentRetry: opts => require('../onboarding/public/js/call-core.cjs').createSegmentRetry({ ...opts, wait: () => Promise.resolve() }) },
     SeraTTSCore: { cleanForSpeech: require('../onboarding/public/js/tts-core.cjs').cleanForSpeech, createSpeechQueue: require('../onboarding/public/js/tts-core.cjs').createSpeechQueue },
-    SeraSTT: { get mode() { return mode }, async start() { mode = failMic ? 'idle' : 'listening' }, cancel() { mode = 'idle' } },
+    SeraSTT: { get mode() { return mode }, async start() { starts++; mode = failMic ? 'idle' : 'listening' }, cancel() { cancels++; mode = 'idle' } },
     getOnboardToken: () => '', addEventListener() {}, ...(toast ? { showToast: x => messages.push(x) } : {}), SeraCompanionError: x => bubbleErrors.push(x),
     api: async (url, opts) => { if (opts) { posted.push({ url, body: JSON.parse(opts.body) }); if (failPost) throw new Error('request failed') }; if (url === '/api/agent/turn-error') return turnError; if (url === '/api/companion') return { available: remote, enabled: remote, speaking: remote }; if (url === '/api/call') { if (opts) enabled = JSON.parse(opts.body).enabled; return { enabled, allowed: true } }; if (url.startsWith('/api/chat/out')) return payload; return {} },
   }
   vm.runInNewContext(source, { window: win, document: { documentElement: { lang: 'ko' }, getElementById: element, createElement: () => make(), addEventListener: (name, fn) => { if (name === 'keydown') keys.push(fn) } },
-    BroadcastChannel: class { postMessage() {} }, setInterval: (fn, ms) => { timers.push({ fn, ms }); return timers.length }, clearInterval() {}, setTimeout() {}, clearTimeout() {},
+    BroadcastChannel: class { constructor() { broadcast = this } postMessage(m) { broadcasts.push(m) } }, setInterval: (fn, ms) => { timers.push({ fn, ms }); return timers.length }, clearInterval() {}, setTimeout() {}, clearTimeout() {},
     Date: { now: () => now }, AbortSignal, console, URL: { createObjectURL: () => 'blob:test', revokeObjectURL() {} },
     fetch: async (_url, opts) => { spoken.push(JSON.parse(opts.body).text); return { ok: !failTTS, status: failTTS ? 503 : 200, blob: async () => ({}) } },
     Audio: class { constructor() { this.paused = false; this.ended = false; this.duration = 2; audios.push(this) }; play() { this.playCalls = (this.playCalls || 0) + 1; return Promise.resolve() }; pause() { this.paused = true; this.onpause?.() } },
   })
   await tick(); await tick()
-  return { win, timers, spoken, audios, messages, bubbleErrors, posted, keys, root, element, setError: e => { turnError = e }, failPost: () => { failPost = true }, setPayload: p => { payload = { state: { awaitingReplySince: null }, ...p } }, advance: ms => { now += ms; for (const [id, t] of [...deadlines]) if (t.at <= now && deadlines.delete(id)) t.fn() }, async run(ms) { for (const t of timers.filter(t => t.ms === ms)) await t.fn(); await tick(); await tick() } }
+  return { win, broadcasts, receive: data => broadcast.onmessage({ data }), get starts() { return starts }, get cancels() { return cancels }, timers, spoken, audios, messages, bubbleErrors, posted, keys, root, element, setError: e => { turnError = e }, failPost: () => { failPost = true }, setPayload: p => { payload = { state: { awaitingReplySince: null }, ...p } }, advance: ms => { now += ms; for (const [id, t] of [...deadlines]) if (t.at <= now && deadlines.delete(id)) t.fn() }, async run(ms) { for (const t of timers.filter(t => t.ms === ms)) await t.fn(); await tick(); await tick() } }
 }
 // B2 must never claim active after a failed open.
 if (!process.env.CALL_CASE || process.env.CALL_CASE === 'B2') { const failed = await fixture({ failMic: true }); assert.equal(failed.win.SeraCall.active, false) }
@@ -159,3 +160,38 @@ pending.win.SeraCall.final('tail'); pending.advance(1200); await tick()
 assert.deepEqual(sentTurns(), ['sent', 'older newer tail'])
 pending.win.SeraCall.stop()
 console.log('renderer turn gate: wait for completion, replace with prepend, and merge resumed speech passed')
+
+for (const companion of [false, true]) {
+  const f = await fixture({ companion }); await f.run(250)
+  const voice = f.element('call-voice'), mic = f.element('call-mic')
+  for (const b of [voice, mic]) {
+    assert.equal(b.type, 'button', 'native keyboard activation, not a clickable span')
+    assert.equal(b.parent.id, 'call-controls'); assert.equal(b.hidden, false)
+    assert.equal(b['aria-pressed'], 'false'); assert.match(b.innerHTML, /mute-slash/)
+  }
+  f.setPayload({ latest: 1, items: [], draft: '지금 말하는 중. ' }); await f.run(250)
+  assert.equal(f.audios.length, 1)
+  voice.onclick(); assert.equal(f.audios[0].paused, true)
+  assert.equal(voice['aria-pressed'], 'true'); assert.equal(voice['aria-label'], '세라 목소리 켜기')
+  f.setPayload({ latest: 2, items: [{ role: 'agent', text: '새 음성은 재생 안 함.' }] }); await f.run(250)
+  assert.equal(f.spoken.length, 1)
+  voice.onclick()
+  f.setPayload({ latest: 3, items: [{ role: 'agent', text: '다시 말해요.' }] }); await f.run(250)
+  assert.equal(f.spoken.length, 2)
+  mic.onclick(); assert.equal(f.cancels, 1); assert.equal(f.win.SeraCall.micMuted, true)
+  assert.equal(f.element('call-state').textContent, '마이크 꺼짐')
+  f.win.SeraCall.final('muted final'); f.win.SeraCall.partial('muted partial'); f.advance(15000)
+  assert.equal(f.posted.filter(p => p.url === '/api/chat/in').length, 0)
+  await f.run(1000); assert.equal(f.win.SeraCall.active, true, 'intentional mute is not mic failure')
+  mic.onclick(); await tick(); assert.equal(f.starts, 2); assert.equal(f.win.SeraCall.micMuted, false)
+  assert.equal(mic['aria-label'], '내 마이크 끄기')
+  voice.onclick(); mic.onclick(); f.win.SeraCall.stop()
+  assert.equal(f.win.SeraCall.voiceMuted, false); assert.equal(f.win.SeraCall.micMuted, false)
+  assert.ok(f.broadcasts.some(m => m.type === 'call-mutes'))
+}
+const owner = await fixture()
+owner.receive({ type: 'call-mutes', micMuted: true, voiceMuted: true })
+assert.equal(owner.win.SeraCall.active, true); assert.equal(owner.cancels, 1)
+assert.equal(owner.element('call-state').textContent, '마이크 꺼짐')
+owner.win.SeraCall.stop()
+console.log('call mute controls: keyboard-native buttons, playback stop/skip/resume, mic cancel/reopen, remote control and call-only reset passed')

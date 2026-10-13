@@ -117,7 +117,9 @@
       // A live hypothesis suspends the quiet deadline until its endpoint.
       // The cap still releases already finalized text during a long monologue.
       partial(value) {
+        const wasRecognizing = recognizing
         recognizing = !!value.trim()
+        if (wasRecognizing && !recognizing) arm()
         if (recognizing) {
           ready = false; clearTimer(silence); silence = null
           if (text && cap === null) cap = setTimer(flush, capMs)

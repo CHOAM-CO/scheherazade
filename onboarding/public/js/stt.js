@@ -132,6 +132,7 @@
     return out.subarray(0, o)
   }
   function pump(flush = false) {
+    if (window.SeraCall?.active && window.SeraCall.micMuted) { queue = []; queued = 0; return inflight }
     if (inflight || !sid || (!flush && queued < CHUNK) || !queued) return inflight
     const requestEpoch = epoch
     const pcm = take(flush ? queued : Math.floor(queued / CHUNK) * CHUNK)
@@ -149,7 +150,7 @@
     let ctx
     try { ctx = new AudioContext({ sampleRate: 16000 }) } catch { ctx = new AudioContext() }
     const down = window.SeraSTTCore.createDownsampler(ctx.sampleRate)
-    const onFrame = f => { if (mode !== 'listening' || window.SeraCall?.speaking) return; const d = down(f); if (d.length) { queue.push(d); queued += d.length; pump() } }
+    const onFrame = f => { if (mode !== 'listening' || window.SeraCall?.micMuted || window.SeraCall?.speaking) return; const d = down(f); if (d.length) { queue.push(d); queued += d.length; pump() } }
     const src = ctx.createMediaStreamSource(stream)
     let node
     try {
