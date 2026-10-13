@@ -53,25 +53,9 @@ const LATEST_API = `https://api.github.com/repos/${UPDATE_OWNER}/${UPDATE_REPO}/
 const FIRST_CHECK_DELAY_MS = 15 * 1000
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 
-// "v0.1.5" / "0.1.5" / "0.1.5-rc1" -> [0,1,5]; anything unparseable -> null.
-// null NEVER compares as newer -- a garbage tag in the releases repo must not
-// be able to trigger an update prompt.
-function parseVersion(raw) {
-  if (typeof raw !== 'string') return null
-  const m = raw.trim().replace(/^v/i, '').match(/^(\d+)\.(\d+)\.(\d+)/)
-  if (!m) return null
-  return [Number(m[1]), Number(m[2]), Number(m[3])]
-}
-
-function isNewerVersion(remote, local) {
-  const r = parseVersion(remote)
-  const l = parseVersion(local)
-  if (!r || !l) return false
-  for (let i = 0; i < 3; i++) {
-    if (r[i] !== l[i]) return r[i] > l[i]
-  }
-  return false
-}
+const { parseSemver, isNewerVersion, isPrerelease, fetchLatestRelease } = require('./onboarding/update-version.cjs')
+// Legacy exported triple parser; comparison always uses full SemVer.
+function parseVersion(raw) { return parseSemver(raw)?.core.map(Number) || null }
 
 function pickUpdateMode({ platform, isPackaged }) {
   if (!isPackaged) return 'off'
@@ -79,25 +63,15 @@ function pickUpdateMode({ platform, isPackaged }) {
   return 'notify'
 }
 
-async function fetchLatestTag(fetchImpl = fetch) {
-  const res = await fetchImpl(LATEST_API, {
-    headers: {
-      'user-agent': 'scheherazade-updater',
-      accept: 'application/vnd.github+json',
-    },
-  })
-  if (!res.ok) throw new Error(`GitHub releases API ${res.status}`)
-  const body = await res.json()
-  const tag = body && body.tag_name
-  if (typeof tag !== 'string' || !parseVersion(tag)) {
-    throw new Error(`releases API returned unusable tag_name: ${JSON.stringify(tag)}`)
-  }
-  return tag
+async function fetchLatestTag(fetchImpl = fetch, current = '') {
+  return (await fetchLatestRelease({ repo: `${UPDATE_OWNER}/${UPDATE_REPO}`, current, fetchImpl })).tag_name
 }
 
-function initWindowsUpdater({ dialog, log }) {
+function initWindowsUpdater({ app, dialog, log }) {
   // Required lazily so the mac/dev paths never load electron-updater at all.
   const { autoUpdater } = require('electron-updater')
+  autoUpdater.allowPrerelease = isPrerelease(app.getVersion())
+  autoUpdater.allowDowngrade = false
   autoUpdater.autoDownload = true
   // The safety net: even if the user dismisses the restart prompt (or it
   // never fires), the downloaded update installs on next quit.
@@ -139,7 +113,7 @@ function initMacNotifier({ app, dialog, shell, log }) {
   let promptedFor = ''
   const check = async () => {
     try {
-      const tag = await fetchLatestTag()
+      const tag = await fetchLatestTag(fetch, app.getVersion())
       if (!isNewerVersion(tag, app.getVersion())) return
       if (promptedFor === tag) return // one prompt per version per run
       promptedFor = tag
@@ -152,7 +126,7 @@ function initMacNotifier({ app, dialog, shell, log }) {
         defaultId: 0,
         cancelId: 1,
       })
-      if (response === 0) shell.openExternal(RELEASES_PAGE)
+      if (response === 0) shell.openExternal(`https://github.com/${UPDATE_OWNER}/${UPDATE_REPO}/releases/tag/${encodeURIComponent(tag)}`)
     } catch (err) {
       log('updater: check failed (non-fatal):', (err && err.message) || String(err))
     }
@@ -172,7 +146,7 @@ function initAutoUpdate({ app, dialog, shell, log }) {
   // that says which lane we picked.
   log(`updater: mode=${mode}`)
   try {
-    if (mode === 'auto') initWindowsUpdater({ dialog, log })
+    if (mode === 'auto') initWindowsUpdater({ app, dialog, log })
     else if (mode === 'notify') initMacNotifier({ app, dialog, shell, log })
   } catch (err) {
     log('updater: init failed (non-fatal):', (err && err.message) || String(err))

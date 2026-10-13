@@ -3743,10 +3743,7 @@ async function fetchImageCaption(imageBase64, mediaType) {
 // restart.
 const UPDATE_RELEASES_REPO = 'Mino-is-me/scheherazade-releases'
 let updateCheckCache = null // { at, payload }
-function parseSemverTriple(v) {
-  const m = String(v || '').replace(/^v/, '').split('.').map(Number)
-  return m.length === 3 && m.every(Number.isFinite) ? m : null
-}
+const { isNewerVersion, fetchLatestRelease } = require('./update-version.cjs')
 async function checkForUpdate(force = false) {
   // force=true (Settings "Check now" button, the owner 19:14 "오토 업데이트
   // 버튼 어딨니?") bypasses the read side of the cache but still WRITES it,
@@ -3759,27 +3756,15 @@ async function checkForUpdate(force = false) {
   }
   let payload
   try {
-    const res = await fetch(`https://api.github.com/repos/${UPDATE_RELEASES_REPO}/releases/latest`, {
-      headers: { 'User-Agent': `scheherazade/${APP_VERSION}`, Accept: 'application/vnd.github+json' },
-      signal: AbortSignal.timeout(8000),
-    })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const body = await res.json()
-    const latestTag = String(body.tag_name || '')
-    const latest = parseSemverTriple(latestTag)
-    const current = parseSemverTriple(APP_VERSION)
-    let hasUpdate = false
-    if (latest && current) {
-      for (let i = 0; i < 3; i++) {
-        if (latest[i] !== current[i]) { hasUpdate = latest[i] > current[i]; break }
-      }
-    }
+    const body = await fetchLatestRelease({ repo: UPDATE_RELEASES_REPO, current: APP_VERSION })
+    const latestTag = body.tag_name
+    const hasUpdate = isNewerVersion(latestTag, APP_VERSION)
     payload = {
       ok: true,
       current: APP_VERSION,
       latest: latestTag.replace(/^v/, ''),
       hasUpdate,
-      url: body.html_url || `https://github.com/${UPDATE_RELEASES_REPO}/releases/latest`,
+      url: `https://github.com/${UPDATE_RELEASES_REPO}/releases/tag/${encodeURIComponent(latestTag)}`,
     }
   } catch (err) {
     payload = { ok: false, current: APP_VERSION, hasUpdate: false, detail: err.message }
