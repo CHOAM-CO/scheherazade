@@ -43,6 +43,10 @@
     else about.parentNode.insertBefore(card, about)
     let timer = null
     let last = null
+    let revision = 0
+    let saving = false
+    state.setAttribute('role', 'status')
+    box.disabled = sel.disabled = true
     function paint(s) {
       last = s
       box.checked = s.enabled
@@ -61,9 +65,31 @@
       clearTimeout(timer)
       if (d.state === 'downloading' || s.engine === 'loading') timer = setTimeout(refresh, 1000)
     }
-    async function refresh() { try { paint(await getStatus()) } catch (e) { state.textContent = T.err(e.message) } }
-    box.onchange = async () => { box.disabled = true; try { paint(await postSettings({ enabled: box.checked })) } finally { box.disabled = false } }
-    sel.onchange = async () => paint(await postSettings({ voice: sel.value }))
+    async function refresh() {
+      const requestRevision = revision
+      try {
+        const s = await getStatus()
+        if (requestRevision !== revision || saving) return
+        paint(s); box.disabled = sel.disabled = false
+      } catch (e) { if (requestRevision === revision) state.textContent = T.err(e.message) }
+    }
+    async function saveSettings(body) {
+      if (saving || !last) return
+      const previous = last
+      saving = true; revision++; clearTimeout(timer)
+      box.disabled = sel.disabled = del.disabled = addBtn.disabled = true
+      try { paint(await postSettings(body)) }
+      catch (e) {
+        paint(previous)
+        clearTimeout(timer) // Keep the error visible until the user retries.
+        state.textContent = T.err(e.message)
+      } finally {
+        saving = false
+        box.disabled = sel.disabled = del.disabled = addBtn.disabled = false
+      }
+    }
+    box.onchange = () => saveSettings({ enabled: box.checked })
+    sel.onchange = () => saveSettings({ voice: sel.value })
     del.onclick = async () => {
       if (sel.value === 'default') return
       try { paint(await window.api('/api/tts/voices/delete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: sel.value }) })) } catch (e) { state.textContent = T.err(e.message) }
