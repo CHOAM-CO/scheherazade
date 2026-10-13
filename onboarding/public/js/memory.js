@@ -26,20 +26,10 @@
   // here and in settings.js.
 
   function confirmDialog(message, confirmText, cancelText) {
-    return new Promise((resolve) => {
-      const dialog = $('m-dialog')
-      $('m-dialog-text').textContent = message
-      $('m-dialog-confirm').textContent = confirmText
-      $('m-dialog-cancel').textContent = cancelText
-      dialog.classList.remove('hidden')
-      const cleanup = (result) => {
-        dialog.classList.add('hidden')
-        $('m-dialog-confirm').onclick = null
-        $('m-dialog-cancel').onclick = null
-        resolve(result)
-      }
-      $('m-dialog-confirm').onclick = () => cleanup(true)
-      $('m-dialog-cancel').onclick = () => cleanup(false)
+    return window.openConfirmDialog({
+      dialog: $('m-dialog'), text: $('m-dialog-text'),
+      confirmBtn: $('m-dialog-confirm'), cancelBtn: $('m-dialog-cancel'),
+      message, confirmText, cancelText,
     })
   }
 

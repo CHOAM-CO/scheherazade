@@ -127,12 +127,53 @@
   // split: fireControl's stop-confirm and the mute-revert-confirm both used
   // to share memory.js's #m-dialog markup, and that markup only exists on
   // memory.html. Since nav.js now renders on pages that never had a dialog
-  // element (settings.html, connectors.html), the shell grows its own,
-  // built the same way the rest of this file builds its DOM (dynamically,
-  // since it has to work on any page). memory.js keeps its OWN separate
-  // #m-dialog-backed confirmDialog untouched, for its delete/pointer-clear
-  // confirms -- this one only backs the shell's own confirms and (by
-  // necessity, same reasoning) settings.js's model/effort switch confirms.
+  // element (settings.html, connectors.html), the shell grows its own.
+  // Memory keeps its existing markup but shares the same modal behavior.
+  let closeActiveDialog = null
+  window.openConfirmDialog = function ({ dialog, text, confirmBtn, cancelBtn, message, confirmText, cancelText }) {
+    closeActiveDialog?.(false)
+    const opener = document.activeElement
+    const box = dialog.querySelector('.dialog-box')
+    box.setAttribute('role', 'dialog')
+    box.setAttribute('aria-modal', 'true')
+    box.setAttribute('aria-label', message)
+    text.textContent = message
+    confirmBtn.textContent = confirmText
+    cancelBtn.textContent = cancelText
+    dialog.classList.remove('hidden')
+    return new Promise(resolve => {
+      const controls = () => Array.from(box.querySelectorAll('button, input, select, textarea, a[href], [tabindex]'))
+        .filter(el => !el.disabled && !el.hidden && el.tabIndex >= 0 && el.getClientRects().length)
+      const focusFirst = () => (controls()[0] || box).focus()
+      box.tabIndex = -1
+      const onKey = event => {
+        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(false) }
+        else if (event.key === 'Tab') {
+          const list = controls()
+          const index = list.indexOf(document.activeElement)
+          event.preventDefault()
+          if (!list.length) box.focus()
+          else list[index < 0 ? (event.shiftKey ? list.length - 1 : 0) : (index + (event.shiftKey ? -1 : 1) + list.length) % list.length].focus()
+        }
+      }
+      const onFocus = event => { if (!box.contains(event.target)) focusFirst() }
+      const close = result => {
+        dialog.classList.add('hidden')
+        document.removeEventListener('keydown', onKey, true)
+        document.removeEventListener('focusin', onFocus, true)
+        confirmBtn.onclick = cancelBtn.onclick = null
+        closeActiveDialog = null
+        if (opener?.isConnected) opener.focus()
+        resolve(result)
+      }
+      closeActiveDialog = close
+      confirmBtn.onclick = () => close(true)
+      cancelBtn.onclick = () => close(false)
+      document.addEventListener('keydown', onKey, true)
+      document.addEventListener('focusin', onFocus, true)
+      focusFirst()
+    })
+  }
   let dialogEl = null
   function ensureDialog() {
     if (dialogEl) return dialogEl
@@ -150,22 +191,12 @@
     return dialogEl
   }
   window.confirmDialog = function confirmDialog(message, confirmText, cancelText) {
-    return new Promise((resolve) => {
-      const dialog = ensureDialog()
-      dialog.querySelector('.nav-dialog-text').textContent = message
-      const confirmBtn = dialog.querySelector('.nav-dialog-confirm')
-      const cancelBtn = dialog.querySelector('.nav-dialog-cancel')
-      confirmBtn.textContent = confirmText
-      cancelBtn.textContent = cancelText
-      dialog.classList.remove('hidden')
-      const cleanup = (result) => {
-        dialog.classList.add('hidden')
-        confirmBtn.onclick = null
-        cancelBtn.onclick = null
-        resolve(result)
-      }
-      confirmBtn.onclick = () => cleanup(true)
-      cancelBtn.onclick = () => cleanup(false)
+    const dialog = ensureDialog()
+    return window.openConfirmDialog({
+      dialog, text: dialog.querySelector('.nav-dialog-text'),
+      confirmBtn: dialog.querySelector('.nav-dialog-confirm'),
+      cancelBtn: dialog.querySelector('.nav-dialog-cancel'),
+      message, confirmText, cancelText,
     })
   }
 
