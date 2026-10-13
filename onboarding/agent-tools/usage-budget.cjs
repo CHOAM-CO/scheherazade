@@ -24,9 +24,15 @@ function localTime(iso) {
   const t = new Date(iso)
   return Number.isNaN(t.getTime()) ? 'unknown' : t.toLocaleString('en-GB', { hour12: false, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
+function winName(secs, fallback) {
+  if (!Number.isFinite(secs) || secs <= 0) return fallback
+  return secs >= 6 * 86400 ? 'weekly' : (secs <= 6 * 3600 ? '5h' : `${Math.round(secs / 3600)}h`)
+}
 function line(label, fiveH, weekly, now) {
-  const a = fiveH ? `5h: ${pct(fiveH.pct)} (resets ${fiveH.at ? localTime(fiveH.at) : 'unknown'})` : '5h: n/a'
-  const b = weekly ? `weekly: ${pct(weekly.pct)} (resets ${weekly.at ? inDur(weekly.at, now) : 'unknown'})` : 'weekly: n/a'
+  const an = (fiveH && fiveH.name) || '5h'
+  const bn = (weekly && weekly.name) || 'weekly'
+  const a = fiveH ? `${an}: ${pct(fiveH.pct)} (resets ${fiveH.at ? localTime(fiveH.at) : 'unknown'})` : `${an}: n/a`
+  const b = weekly ? `${bn}: ${pct(weekly.pct)} (resets ${weekly.at ? inDur(weekly.at, now) : 'unknown'})` : `${bn}: n/a`
   return `${label} ${a} / ${b}`
 }
 
@@ -57,8 +63,8 @@ async function main() {
   }
   const x = body.codex || {}
   if (x.ok) {
-    const w = (v) => (v ? { pct: v.usedPct, at: v.resetsAt } : null)
-    out.push(line('Codex', w(x.primary), w(x.secondary), now) + (x.stale ? ' [stale]' : ''))
+    const w = (v, d) => (v ? { pct: v.usedPct, at: v.resetsAt, name: winName(v.windowSeconds, d) } : null)
+    out.push(line('Codex', w(x.primary, '5h'), w(x.secondary, 'weekly'), now) + (x.stale ? ' [stale]' : ''))
   } else if (x.branch === 'no_token') {
     out.push('Codex usage: unknown -- no Codex login')
   } else {
