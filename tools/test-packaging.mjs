@@ -304,7 +304,7 @@ function mountedAsarEntries() {
     // hand back the ANSWER, not a path that will be gone by the time the
     // payload gate reads it.
     const unpacked = fs.existsSync(unpackedRoot) ? unpackedFiles(unpackedRoot) : null
-    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^\/+/, ''))), chromuxShipped, chromuxExtensionShipped, agentToolsShipped, natives, unpacked }
+    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^\/+/, ''))), chromuxShipped, chromuxExtensionShipped, agentToolsShipped, natives, unpacked, onnx: onnxOsDirs(unpackedRoot) }
   } catch (e) {
     // A DMG that EXISTS but will not mount / list is fail-CLOSED, never a skip.
     // (Skia fail-open catch: the old null-collapse let an hdiutil failure pass
@@ -346,7 +346,7 @@ function stagedAsarEntries() {
     const nativesDir = path.join(unpackedRoot, 'node_modules')
     const natives = fs.existsSync(nativesDir) ? installedPackageNames(nativesDir) : null
     const unpacked = fs.existsSync(unpackedRoot) ? unpackedFiles(unpackedRoot) : null
-    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^[/\\]+/, '').split('\\').join('/'))), chromuxShipped, chromuxExtensionShipped, agentToolsShipped, natives, unpacked }
+    return { status: 'ok', entries: new Set(entries.map((e) => e.replace(/^[/\\]+/, '').split('\\').join('/'))), chromuxShipped, chromuxExtensionShipped, agentToolsShipped, natives, unpacked, onnx: onnxOsDirs(unpackedRoot) }
   } catch (e) {
     // fail-CLOSED, same as the dmg lane: an artifact that exists but cannot be
     // listed is an UNVERIFIED artifact, never a skip.
@@ -380,6 +380,7 @@ const IS_PREDIST = lifecycle.startsWith('predist')
 // volume attached. Whatever the lane learned about app.asar.unpacked/node_modules
 // is stashed here for it.
 let bundleNatives = null
+let bundleOnnx = null
 // The PAYLOAD gate below reads the same opened artifact (see its header for why
 // it is not allowed to open one of its own).
 let bundleEntries = null
@@ -407,6 +408,7 @@ if (IS_PREDIST) {
   } else {
     bundleNatives = asarResult.natives
     bundleUnpacked = asarResult.unpacked
+    bundleOnnx = asarResult.onnx
     bundleEntries = asarResult.entries
     const asarEntries = asarResult.entries
     ok(`the ${LANE === 'mac' ? 'mounted' : 'staged'} asar listed something (an empty listing always passes)`, asarEntries.size > 0)
@@ -645,6 +647,12 @@ function installedPackageNames(nodeModulesDir) {
 
 const TARGET_OS = { mac: 'darwin', win: 'win32', linux: 'linux' }[LANE]
 
+// os dirs under onnxruntime-node/bin/napi-v6 in an app.asar.unpacked (null = package absent)
+function onnxOsDirs(unpackedRoot) {
+  const d = path.join(unpackedRoot, "node_modules", "onnxruntime-node", "bin", "napi-v6")
+  return fs.existsSync(d) ? fs.readdirSync(d).sort() : null
+}
+
 function checkNatives(what, installed) {
   ok(`${what}: the package scan found something (a scan that finds nothing always passes)`,
     installed.size > 0, 'no package directories under that node_modules -- the walker or the path is wrong')
@@ -668,6 +676,16 @@ function checkNatives(what, installed) {
     .filter(([, v]) => !(fieldAllows(v.os, TARGET_OS) && fieldAllows(v.cpu, LANE_ARCH)))
     .map(([name]) => name)
     .sort()
+
+  // onnxruntime-node ships every OS under bin/napi-v6/<os> inside ONE package, so the
+  // lockfile scan above cannot see it; tools/onnx-natives-trim.cjs (afterPack) removes them.
+  if (what.startsWith("the built")) {
+    const dirs = bundleOnnx
+    if (dirs) {
+      ok(`${what} carries onnxruntime binaries for ${TARGET_OS} only`,
+        dirs.length === 1 && dirs[0] === TARGET_OS, `found [${dirs.join(", ")}]; afterPack trim did not run`)
+    }
+  }
   const stowaways = foreign.filter((name) => installed.has(name))
   ok(`${what} carries NO other platform's native variants (${foreign.length} foreign variants known to the lockfile)`,
     stowaways.length === 0,

@@ -134,6 +134,7 @@
         "to": "agent-tools"
       }
     ],
+    "afterPack": "tools/onnx-natives-trim.cjs",
     "asarUnpack": [
       "onboarding/tts/**",
       "onboarding/stt/**",
