@@ -134,6 +134,11 @@
       analyser = ctx.createAnalyser(); analyser.fftSize = 1024; analyser.smoothingTimeConstant = 0.6
       ctx.createMediaElementSource(el).connect(analyser); analyser.connect(ctx.destination)
     }
+    window.SeraCompanionAudioTap = audio => {
+      tap(); ctx.resume().catch(() => {})
+      const source = ctx.createMediaElementSource(audio); source.connect(analyser); kick()
+      return () => { source.disconnect(); kick() }
+    }
     function ensureQueue() {
       return (queue ||= core.createSpeechQueue({
         synth: async text => {
@@ -158,7 +163,7 @@
       ttsAt = Date.now()
       try { const s = await window.api('/api/tts/status'); ttsOn = s.enabled && s.modelsPresent } catch { ttsOn = false }
       try { const s = await window.api('/api/stt/status'); sttOn = s.enabled && s.modelsPresent } catch { sttOn = false }
-      $('b-mic').disabled = !sttOn && mode === 'idle'
+      $('b-mic').disabled = !!window.SeraCall?.active || (!sttOn && mode === 'idle')
     }
     function state() {
       if (window.SeraCall?.speaking) return 'speaking'
@@ -194,6 +199,7 @@
     const input = $('ct-input')
     input.addEventListener('input', () => { $('caption').textContent = input.value })
     async function mic() {
+      if (window.SeraCall?.active) return
       const stt = window.SeraSTT
       if (!stt) return
       if (stt.mode === 'listening') {

@@ -4,24 +4,31 @@
   const settings = !!document.getElementById('set-about'), companion = !!document.getElementById('b-mic')
   const channel = new BroadcastChannel('sera-call-settings')
   const post = (url, body) => window.api(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
-  let active = false, speaking = false, cursor = null, draft = '', spoken = 0, busy = false, audio = null
+  let active = false, speaking = false, cursor = null, busy = false, audio = null, lastEnd = 0, opening = false, syncing = false, playbackStarted = 0, queueStarted = 0, speechStopped = false, detachAudio = null
+  const reply = core.createReplySpeech(text => { const clean = window.SeraTTSCore.cleanForSpeech(text); if (clean) { speechStopped = false; queue.enqueue(clean) } })
+  function stopSpeech() { speechStopped = true; reply.abandon(); queue.stop(); speaking = false; lastEnd = 0 }
   const queue = window.SeraTTSCore.createSpeechQueue({
     synth: async text => {
-      const r = await fetch('/api/tts', { method: 'POST', headers: { 'content-type': 'application/json', 'X-Onboard-Token': window.getOnboardToken() }, body: JSON.stringify({ text: window.SeraTTSCore.cleanForSpeech(text) }) })
+      const generation = session.generation
+      const r = await fetch('/api/tts', { signal: AbortSignal.timeout(60000), method: 'POST', headers: { 'content-type': 'application/json', 'X-Onboard-Token': window.getOnboardToken() }, body: JSON.stringify({ text: window.SeraTTSCore.cleanForSpeech(text) }) })
       if (!r.ok) throw new Error(`TTS ${r.status}`)
-      return URL.createObjectURL(await r.blob())
+      const blob = await r.blob()
+      if (!active || generation !== session.generation || speechStopped) throw new Error('Call speech cancelled')
+      return URL.createObjectURL(blob)
     },
     play: url => new Promise(resolve => {
-      audio = new Audio(url); speaking = true
+      audio = new Audio(url); speaking = true; playbackStarted = Date.now()
+      detachAudio = window.SeraCompanionAudioTap?.(audio)
       let done = false
-      const finish = () => { if (done) return; done = true; speaking = false; URL.revokeObjectURL(url); audio = null; resolve() }
-      audio.onended = finish; audio.onerror = finish; audio._done = finish; audio.play().catch(finish)
+      const finish = () => { if (done) return; done = true; speaking = false; lastEnd = Date.now(); audio?.pause(); detachAudio?.(); detachAudio = null; URL.revokeObjectURL(url); audio = null; resolve() }
+      audio.onended = finish; audio.onerror = finish; audio.onpause = finish; audio.onstalled = finish; audio._done = finish; audio.play().catch(finish)
     }),
-    stopPlayback: () => { if (audio) { audio.pause(); audio._done() } },
+    onState: state => { if (state === 'playing') queueStarted = Date.now(); if (state === 'idle') queueStarted = 0 },
+    stopPlayback: () => { speaking = false; if (audio) { const a = audio; a._done(); a.pause() } },
   })
-  const session = core.createSession({ send: text => { post('/api/chat/in', { text }).catch(e => window.showToast?.(e.message)) }, closeMic: () => window.SeraSTT?.cancel(), clearQueue: () => queue.stop() })
-  function off() { if (!active) return; active = false; session.stop(); cursor = null; draft = ''; spoken = 0 }
-  window.SeraCall = { get active() { return active }, get speaking() { return speaking }, stop: off, stopSpeech: () => queue.stop(), final: text => session.final(text), partial: text => session.partial(text, () => queue.stop()) }
+  const session = core.createSession({ send: text => { post('/api/chat/in', { text }).catch(e => window.showToast?.(e.message)) }, closeMic: () => window.SeraSTT?.cancel(), clearQueue: stopSpeech })
+  function off() { if (!active) return; active = false; session.stop(); cursor = null; reply.reset(); const mic = document.getElementById(companion ? 'b-mic' : 'ct-mic'); if (mic) mic.disabled = false }
+  window.SeraCall = { get active() { return active }, get speaking() { return active && core.suppressMic(queue.running && !speechStopped, speaking, lastEnd, Date.now()) }, stop() { off(); post('/api/call', { enabled: false }).then(() => channel.postMessage({ enabled: false })).catch(e => window.showToast?.(e.message)) }, stopSpeech, final: text => session.final(text), partial: text => session.partial(text, stopSpeech) }
   const button = document.createElement(settings ? 'input' : 'button')
   button.id = 'call-mode'; button.type = settings ? 'checkbox' : 'button'
   const label = ko ? '통화 모드' : 'Call mode'
@@ -34,6 +41,8 @@
     card.append(lab, button, hint); const about = document.getElementById('set-about'); about.before(card)
   } else if (companion) { button.className = 'round'; button.textContent = '☎'; document.getElementById('b-mic').after(button) }
   async function sync() {
+    if (syncing) return
+    syncing = true
     try {
       const s = await window.api('/api/call')
       button.disabled = !s.allowed; button.checked = s.enabled; button.setAttribute('aria-pressed', String(s.enabled)); hint.hidden = s.allowed
@@ -42,10 +51,19 @@
       if (!s.enabled || !owns) { off(); return }
       if (!active) {
         window.SeraTTS?.stop(); window.SeraCompanionSpeechStop?.(); active = true; session.start()
-        await window.SeraSTT?.start()
+        opening = true
+        try { await window.SeraSTT?.start() } finally { opening = false }
         if (!active) window.SeraSTT?.cancel()
       }
-    } catch { off() }
+      if (active && !opening && core.micHealth(active, window.SeraSTT?.mode) === 'failed') {
+        const message = ko ? '마이크 연결이 끊겨 통화 모드를 껐어요. 마이크 권한을 확인하고 다시 켜 주세요' : 'Call mode stopped: microphone unavailable. Check microphone permissions and enable it again.'
+        window.showToast?.(message)
+        const bubble = document.getElementById(companion ? 'failure' : 'chat-pane')
+        if (bubble) { if (companion) { bubble.textContent = message; bubble.hidden = false } else { const note = document.createElement('p'); note.textContent = message; note.setAttribute('role', 'alert'); bubble.append(note) } }
+        off(); await post('/api/call', { enabled: false }); channel.postMessage({ enabled: false })
+      }
+      const mic = document.getElementById(companion ? 'b-mic' : 'ct-mic'); if (mic && active) mic.disabled = true
+    } catch { off() } finally { syncing = false }
   }
   button[settings ? 'onchange' : 'onclick'] = async () => {
     const enabled = settings ? button.checked : button.getAttribute('aria-pressed') !== 'true'
@@ -55,37 +73,30 @@
   channel.onmessage = e => { if (!e.data.enabled) off(); sync() }
   // Changes to either prerequisite are propagated immediately from Settings.
   if (settings) document.addEventListener('change', e => {
-    if (['set-tts-enabled', 'set-stt-enabled'].includes(e.target.id) && !e.target.checked) {
+    if (!['set-tts-enabled', 'set-stt-enabled'].includes(e.target.id)) return
+    if (!e.target.checked) {
       post('/api/call', { enabled: false }).then(() => channel.postMessage({ enabled: false })).catch(() => {})
     }
     setTimeout(sync, 300)
   })
-  function speak(text, flush) {
-    // Drafts are cumulative. Only consume complete sentences once.
-    if (!text.startsWith(draft.slice(0, spoken))) { spoken = 0 }
-    draft = text
-    const part = core.split(text.slice(spoken), flush)
-    for (const sentence of part.sentences) queue.enqueue(sentence)
-    spoken = text.length - part.rest.length
-  }
   async function poll() {
     if (!active || busy) return
     busy = true; const generation = session.generation
     try {
       const r = await window.api(`/api/chat/out?since=${cursor ?? 0}`)
       if (!active || generation !== session.generation) return
-      if (cursor === null) { cursor = r.latest; return }
+      if (cursor === null) { cursor = r.latest; reply.prime(r.draft || ''); return }
       for (const m of r.items || []) {
         if (m.role === 'user' || (m.kind && m.kind !== 'message') || !m.text || /^\[system\]/i.test(m.text)) continue
-        speak(m.text, true); draft = ''; spoken = 0
+        reply.update(m.text, true)
       }
       cursor = r.latest
       if (r.draft) {
-        speak(r.draft, false)
+        reply.update(r.draft, false)
         if (companion) document.getElementById('caption').textContent = r.draft
       }
     } catch (e) { console.warn('[call]', e.message) } finally { busy = false }
   }
-  sync(); setInterval(sync, 1000); if (!settings) setInterval(poll, 250)
+  sync(); setInterval(() => { if (audio && core.playbackExpired(audio, playbackStarted, Date.now())) audio._done(); if (queue.running && queueStarted && Date.now() - Math.max(queueStarted, playbackStarted) > 120000) stopSpeech(); }, 250); setInterval(sync, 1000); if (!settings) setInterval(poll, 250)
   window.addEventListener('pagehide', off)
 })()

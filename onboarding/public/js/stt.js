@@ -104,7 +104,7 @@
     inflight = fetch('/api/stt/audio', { method: 'POST', headers: { 'content-type': 'application/octet-stream', 'X-Onboard-Token': token(), 'X-STT-Session': sid }, body: pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength) })
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then(r => { if (mode === 'idle' || requestEpoch !== epoch) return; if (window.SeraCall?.active) { window.SeraCall.partial(r.partial || ''); for (const text of r.finals) window.SeraCall.final(text); finals = []; base = ''; partial = r.partial || '' } else { finals.push(...r.finals); partial = r.partial || '' }; render() })
-      .catch(e => console.warn('[stt]', e.message))
+      .catch(e => { console.warn('[stt]', e.message); if (window.SeraCall?.active && requestEpoch === epoch) window.SeraSTT.cancel() })
       .finally(() => { inflight = null; if (mode === 'listening') pump() })
     return inflight
   }
@@ -148,6 +148,7 @@
       const capture = await startCapture()
       if (e !== epoch) { capture.stream.getTracks().forEach(t => t.stop()); capture.ctx.close(); return }
       cap = capture
+      for (const track of cap.stream.getTracks()) track.onended = () => { if (e === epoch) window.SeraSTT.cancel() }
       sid = (await postJson('/api/stt/start', {})).sid
       if (e !== epoch) { const old = sid; sid = null; postJson('/api/stt/stop', { sid: old, cancel: true }).catch(() => {}); return }
       setMode('listening')
@@ -194,11 +195,11 @@
     btn.hidden = true
     btn.setAttribute('aria-label', T.mic)
     btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>'
-    btn.onclick = () => (mode === 'listening' ? stop() : start())
+    btn.onclick = () => { if (!window.SeraCall?.active) return mode === 'listening' ? stop() : start() }
     const anchor = document.getElementById('ct-stop') || document.getElementById('ct-send')
     bar.insertBefore(btn, anchor)
     setMode('idle')
-    document.addEventListener('keydown', e => { if (e.key === 'Escape' && mode === 'listening') { e.preventDefault(); e.stopPropagation(); stop() } }, true)
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && mode === 'listening') { e.preventDefault(); e.stopPropagation(); if (window.SeraCall?.active) window.SeraCall.stop(); else stop() } }, true)
   }
   async function syncEnabled() {
     try {
