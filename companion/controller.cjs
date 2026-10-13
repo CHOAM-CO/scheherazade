@@ -36,6 +36,9 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
   // renderer owns read-aloud. New agent replies are handed to it here (last 8,
   // by seq) and the chat window's tts.js stays silent.
   let speech = []
+  let callEnabled = false, speaking = false
+  // Reserve the existing bubble bounds/hit shape during calls, even after blur or dismissal.
+  const visibleBubble = () => bubble || (callEnabled ? { kind: 'call', text: '', id: 'call' } : null)
 
   async function request(route, body) {
     const r = await fetch(new URL(route, url), {
@@ -50,15 +53,15 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
     const displays = screen.getAllDisplays()
     display = displays.find(d => d.id === display?.id) || screen.getPrimaryDisplay()
     anchor = clampAnchor(anchor, display.workArea, size())
-    geometry = layout(anchor, display.workArea, !!bubble, size(), bubbleHeight || 320)
+    geometry = layout(anchor, display.workArea, !!visibleBubble(), size(), bubbleHeight || 320)
     win.setBounds(geometry.bounds)
     applyShape()
   }
   function applyShape() {
     if (!shaped || !win || !geometry) return
-    const key = JSON.stringify([geometry, bubble ? bubbleHeight || 320 : 0])
+    const key = JSON.stringify([geometry, visibleBubble() ? bubbleHeight || 320 : 0])
     if (key === shapeKey) return
-    win.setShape(hitShape(geometry, bubble ? bubbleHeight || 320 : 0))
+    win.setShape(hitShape(geometry, visibleBubble() ? bubbleHeight || 320 : 0))
     shapeKey = key
   }
   function remember() {
@@ -118,7 +121,7 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
       enabled: settings.enabled && connected && providerHealthy, ...fullscreen, busy: busy || !!awaiting, bubble: !!bubble })
   }
   function snapshot() {
-    return { available: true, ...settings, bubble, ring: bubble && ['question', 'approval-reply', 'error'].includes(bubble.kind) ? 'attention' : busy || awaiting ? 'thinking' : 'idle',
+    return { available: true, ...settings, bubble: visibleBubble(), speaking, ring: bubble && ['question', 'approval-reply', 'error'].includes(bubble.kind) ? 'attention' : busy || awaiting ? 'thinking' : 'idle',
       speech, connected, hiddenByFullscreen: hidden, fullscreenKnown: fullscreen.known, geometry }
   }
   async function command(body) {
@@ -144,13 +147,19 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
         if (settings.enabled) {
           start(); ensureWindow(); fullscreen = probe(); applyVisibility()
           if (before !== settings.variant) { shapeKey = null; reposition() }
-        } else { collapse(); awaiting = null; dragging = null; hidden = false; trayFallback(); if (win) win.destroy(); cursor = null; halt() }
+        } else { callEnabled = false; speaking = false; collapse(); awaiting = null; dragging = null; hidden = false; trayFallback(); if (win) win.destroy(); cursor = null; halt() }
         break
       }
       case 'pointer':
         if (typeof body.inside !== 'boolean') bad()
         if (win && !shaped) win.setIgnoreMouseEvents(!body.inside, { forward: true })
         break
+      case 'call-error':
+        if (typeof body.message !== 'string' || !body.message.trim()) bad()
+        showBubble('error', body.message, `call-error-${++serial}`); break
+      case 'call-speaking':
+        if (typeof body.speaking !== 'boolean') bad()
+        speaking = body.speaking; break
       case 'shape':
         if (!Number.isFinite(body.height) || body.height < 0 || body.height > 320) bad()
         bubbleHeight = body.height; reposition(); break
@@ -199,9 +208,14 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
         fullscreen = probe(); applyVisibility()
         if (expiresAt && !touched && now() >= expiresAt) collapse()
         if (awaiting && now() >= awaitingUntil) awaiting = null
-        const [chatResult, errorResult, statusResult] = await Promise.allSettled([
-          request(`/api/chat/out?since=${cursor ?? 0}`), request('/api/agent/turn-error'), request('/api/agent/status'),
+        const [chatResult, errorResult, statusResult, callResult] = await Promise.allSettled([
+          request(`/api/chat/out?since=${cursor ?? 0}`), request('/api/agent/turn-error'), request('/api/agent/status'), request('/api/call'),
         ])
+        if (callResult.status === 'fulfilled' && callEnabled !== !!callResult.value.enabled) {
+          callEnabled = !!callResult.value.enabled
+          if (!callEnabled) speaking = false
+          reposition()
+        }
         const chat = chatResult.status === 'fulfilled' ? chatResult.value : null
         connected = !!chat
         busy = !!chat?.state?.awaitingReplySince || !!chat?.draft || statusResult.value?.state === 'connecting'

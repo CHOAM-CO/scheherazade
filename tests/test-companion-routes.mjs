@@ -26,6 +26,7 @@ fs.writeFileSync(path.join(process.env.AGENT_DATA_HOME, 'local-channel.json'), J
 const companion = {
   snapshot: () => ({ available: true, enabled: false }),
   command: async body => {
+    if (['call-error', 'call-speaking'].includes(body.action)) return { action: body.action }
     if (body.action !== 'settings') { const e = new Error('bad'); e.code = 'BAD_COMMAND'; throw e }
     return { available: true, enabled: body.enabled === true }
   },
@@ -50,6 +51,13 @@ try {
     const r = await fetch(new URL('/api/companion/nudge', url), { method: 'POST', headers: auth, body: '{"content":"UNTRUSTED-CALLER-CONTENT"}' })
     assert.deepEqual(await r.json(), { injected: true }); assert.equal(received[0].path, '/system-turn')
     assert.match(received[0].body.content, /^\[SYSTEM: desktop companion\]/); assert.ok(!received[0].body.content.includes('UNTRUSTED')); assert.equal(nudgeResult, true)
+  })
+  await test('call error and playback commands reach the controller through authenticated routes', async () => {
+    for (const body of [{ action: 'call-error', message: 'TTS 실패' }, { action: 'call-speaking', speaking: true }]) {
+      const r = await fetch(new URL('/api/companion', url), { method: 'POST', headers: auth, body: JSON.stringify(body) })
+      assert.equal(r.status, 200); assert.equal((await r.json()).action, body.action)
+      assert.equal((await fetch(new URL('/api/companion', url), { method: 'POST', body: JSON.stringify(body) })).status, 403)
+    }
   })
   await test('raw companion HTML cannot scrape token without session cookie', async () => assert.equal((await fetch(new URL('/companion.html', url))).status, 403))
   await test('boot cookie serves companion with normal token injection', async () => {

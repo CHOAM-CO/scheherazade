@@ -9,6 +9,7 @@ const require = createRequire(import.meta.url)
 const { createCompanion } = require('../companion/controller.cjs')
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sera-window-'))
 let clock = 1000, fullscreen = false, known = true, latest = 3, items = [], error = { present: false }, nudges = 0, replies = [], beeps = 0, mainOpens = 0
+let callEnabled = false
 let count = 0
 async function test(name, fn) { await fn(); count++; console.log(`ok ${count} - ${name}`) }
 const windows = [], trays = [], requests = []
@@ -44,7 +45,8 @@ const srv = http.createServer(async (req, res) => {
   let body = ''; for await (const b of req) body += b
   const route = new URL(req.url, 'http://localhost').pathname
   let data = {}
-  if (route === '/api/chat/out') data = { latest, items: items.filter(m => m.seq > Number(new URL(req.url, 'http://localhost').searchParams.get('since'))), state: {} }
+  if (route === '/api/call') data = { enabled: callEnabled }
+  else if (route === '/api/chat/out') data = { latest, items: items.filter(m => m.seq > Number(new URL(req.url, 'http://localhost').searchParams.get('since'))), state: {} }
   else if (route === '/api/agent/status') data = { state: 'live' }
   else if (route === '/api/agent/turn-error') data = error
   else if (route === '/api/chat/in') { replies.push(JSON.parse(body)); data = { ok: true } }
@@ -69,6 +71,32 @@ try {
   })
   await test('Windows shape accepts face clicks and clips transparent corners', () => { assert.equal(windows[0].ignore, false); assert.equal(windows[0].shape.length, 64); assert.ok(windows[0].shape[0].x > 0) })
   await test('renderer navigation cannot leave companion page', () => { let stopped = false; windows[0].webContents.emit('will-navigate', { preventDefault: () => stopped = true }, 'https://example.com'); assert.equal(stopped, true); assert.equal(windows[0].openHandler().action, 'deny') })
+  await test('active Face call pins a hit-tested bubble across blur and dismiss', async () => {
+    callEnabled = true; await controller.poll()
+    assert.equal(controller.snapshot().bubble.kind, 'call')
+    assert.ok(windows[0].bounds.width >= 320)
+    await controller.command({ action: 'shape', height: 100 })
+    windows[0].emit('blur'); await controller.command({ action: 'dismiss' })
+    assert.equal(controller.snapshot().bubble.kind, 'call')
+    assert.ok(windows[0].shape.some(r => r.width >= 300), 'bubble controls remain hit tested')
+    await controller.command({ action: 'call-speaking', speaking: true })
+    assert.equal(controller.snapshot().speaking, true)
+    await controller.command({ action: 'settings', variant: 'orb' })
+    assert.equal(controller.snapshot().bubble.kind, 'call', 'variant switch preserves call controls')
+    await controller.command({ action: 'settings', variant: 'face' })
+    callEnabled = false; await controller.poll()
+    assert.equal(controller.snapshot().bubble, null)
+    assert.equal(controller.snapshot().speaking, false)
+    assert.equal(windows[0].bounds.width, 64)
+  })
+  await test('call error expands Face into a persistent error bubble', async () => {
+    await controller.command({ action: 'call-error', message: 'TTS 연결 실패' })
+    assert.equal(controller.snapshot().bubble.kind, 'error')
+    assert.equal(controller.snapshot().bubble.text, 'TTS 연결 실패')
+    assert.ok(windows[0].bounds.width >= 320)
+    await assert.rejects(controller.command({ action: 'call-error', message: 4 }), { code: 'BAD_COMMAND' })
+    await controller.command({ action: 'dismiss' })
+  })
   await test('initial retained history is not replayed', async () => { await controller.poll(); assert.equal(controller.snapshot().bubble, null) })
   await test('ordinary chat completion stays quiet', async () => { add('Finished.'); await controller.poll(); assert.equal(controller.snapshot().bubble, null) })
   await test('question opens without focusing window', async () => { add('Which one?'); await controller.poll(); assert.equal(controller.snapshot().bubble.kind, 'question'); assert.equal(windows[0].focused, false) })
