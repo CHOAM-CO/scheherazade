@@ -12,14 +12,16 @@ const require = createRequire(import.meta.url)
 const [modelDir, threadsArg, modelId = '72m'] = process.argv.slice(2)
 const { ENCODER, DECODER, JOINER, TOKENS, SAMPLE_RATE, chunkSize } = require('./manifest.cjs').getModel(modelId)
 const threads = Math.max(1, Number(threadsArg) || 2)
-let recognizer = null
+const { endpointConfig } = require('./endpoint.cjs')
+const recognizers = new Map()
 const streams = new Map() // sid -> { stream, last }
 
-function load() {
-  if (recognizer) return recognizer
+function load(callMode = false) {
+  const mode = callMode === true
+  if (recognizers.has(mode)) return recognizers.get(mode)
   const sherpa = require('sherpa-onnx-node')
   const p = f => path.join(modelDir, f)
-  recognizer = new sherpa.OnlineRecognizer({
+  const recognizer = new sherpa.OnlineRecognizer({
     featConfig: { sampleRate: SAMPLE_RATE, featureDim: 80 },
     modelConfig: { transducer: { encoder: p(ENCODER), decoder: p(DECODER), joiner: p(JOINER) }, tokens: p(TOKENS), numThreads: threads, provider: 'cpu', debug: 0 },
     // modified_beam_search: the model card's KsponSpeech CER (8.6) is measured with beam 8; greedy on a
@@ -27,17 +29,16 @@ function load() {
     decodingMethod: 'modified_beam_search',
     maxActivePaths: 8,
     enableEndpoint: 1,
-    rule1MinTrailingSilence: 2.4,
-    rule2MinTrailingSilence: 1.2,
-    rule3MinUtteranceLength: 20,
+    ...endpointConfig(mode),
   })
+  recognizers.set(mode, recognizer)
   return recognizer
 }
 
 const send = m => { try { process.send(m) } catch {} }
 
 function drain(sid, s) {
-  const r = recognizer
+  const r = s.recognizer
   while (r.isReady(s.stream)) r.decode(s.stream)
   const text = r.getResult(s.stream).text.trim()
   if (r.isEndpoint(s.stream)) {
@@ -49,11 +50,14 @@ function drain(sid, s) {
 }
 
 function handle(msg) {
-  if (msg.op === 'load') { load(); return send({ id: msg.id, ok: true }) }
-  const r = load()
-  if (msg.op === 'start') { streams.set(msg.sid, { stream: r.createStream(), last: '' }); return }
+  if (msg.op === 'load') { load(msg.callMode); return send({ id: msg.id, ok: true }) }
+  if (msg.op === 'start') {
+    const r = load(msg.callMode)
+    streams.set(msg.sid, { recognizer: r, stream: r.createStream(), last: '' }); return
+  }
   const s = streams.get(msg.sid)
   if (!s) return send({ sid: msg.sid, type: 'error', error: 'unknown session' })
+  const r = s.recognizer
   if (msg.op === 'audio') {
     s.stream.acceptWaveform({ sampleRate: SAMPLE_RATE, samples: msg.pcm })
     return drain(msg.sid, s)

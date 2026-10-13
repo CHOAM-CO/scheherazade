@@ -185,7 +185,7 @@
       if (e !== epoch) { capture.stream.getTracks().forEach(t => t.stop()); capture.ctx.close(); return }
       cap = capture
       for (const track of cap.stream.getTracks()) track.onended = () => { if (e === epoch) window.SeraSTT.cancel() }
-      sid = (await postJson('/api/stt/start', {})).sid
+      sid = (await postJson('/api/stt/start', { callMode: window.SeraCall?.active === true })).sid
       if (e !== epoch) { const old = sid; sid = null; postJson('/api/stt/stop', { sid: old, cancel: true }).catch(() => {}); return }
       setMode('listening')
     } catch (e) {

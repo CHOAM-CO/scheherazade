@@ -112,7 +112,7 @@ function createRoutes(ctx) {
     {
       method: 'POST', match: p => p === '/api/stt/start',
       handler: async (req, res) => {
-        await readJsonBody(req)
+        const body = await readJsonBody(req)
         if (!enabled()) return sendJson(res, 409, { error: 'voice input is off' })
         if (!modelsPresent(dir(), modelId)) return sendJson(res, 409, { error: 'models not downloaded' })
         sweep()
@@ -121,7 +121,7 @@ function createRoutes(ctx) {
           const x = { partial: '', finals: [], touched: Date.now() }
           x.s = await eng().createSession(ev => {
             if (ev.type === 'final') { x.finals.push(ev.text); x.partial = '' } else x.partial = ev.text
-          })
+          }, { callMode: body.callMode === true })
           if (dumping()) x.dump = createDump(dumpDir(), x.s.id, log)
           sessions.set(x.s.id, x)
           sendJson(res, 200, { sid: x.s.id, sampleRate: 16000 })

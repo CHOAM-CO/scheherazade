@@ -52,28 +52,28 @@ function createEngine(modelDir, { threads = 2, idleMs = IDLE_MS, modelId = '72m'
     idleTimer.unref?.()
   }
 
-  function load() {
+  function load(callMode = false) {
     clearTimeout(idleTimer)
     if (!loadPromise) {
       if (!child) spawn()
       state = 'loading'; lastError = null
       const id = ++seq
-      loadPromise = new Promise((resolve, reject) => { calls.set(id, { resolve, reject }); child.send({ op: 'load', id }) })
+      loadPromise = new Promise((resolve, reject) => { calls.set(id, { resolve, reject }); child.send({ op: 'load', id, callMode: callMode === true }) })
         .then(r => { state = 'ready'; armIdle(); return r })
         .catch(e => { state = 'error'; lastError = e.message; loadPromise = null; throw e })
     }
     return loadPromise
   }
 
-  async function createSession(onEvent = () => {}) {
-    await load()
+  async function createSession(onEvent = () => {}, { callMode = false } = {}) {
+    await load(callMode)
     clearTimeout(idleTimer)
     const sid = crypto.randomBytes(8).toString('hex')
     let resolve, reject
     const done = new Promise((a, b) => { resolve = a; reject = b })
     done.catch(() => {})
     sessions.set(sid, { onEvent, done: { resolve, reject } })
-    child.send({ op: 'start', sid })
+    child.send({ op: 'start', sid, callMode: callMode === true })
     let open = true
     return {
       id: sid,
