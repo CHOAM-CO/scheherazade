@@ -63,6 +63,15 @@ function createRoutes(ctx) {
   function drainOut(x) { const finals = x.finals.splice(0); return { partial: x.partial, finals } }
 
   return [
+    { method: 'GET', match: p => p === '/api/call', handler: async (_req, res) => {
+      const c = readAgentConfig(); sendJson(res, 200, { enabled: c.CALL_ENABLED === 'true' && c.STT_ENABLED === 'true' && c.TTS_ENABLED === 'true', allowed: c.STT_ENABLED === 'true' && c.TTS_ENABLED === 'true' })
+    } },
+    { method: 'POST', match: p => p === '/api/call', handler: async (req, res) => {
+      const b = await readJsonBody(req), c = readAgentConfig()
+      if (typeof b.enabled !== 'boolean') return sendJson(res, 400, { error: 'enabled must be boolean' })
+      if (b.enabled && (c.STT_ENABLED !== 'true' || c.TTS_ENABLED !== 'true')) return sendJson(res, 409, { error: 'Enable read aloud and voice input first' })
+      writeAgentConfig({ CALL_ENABLED: String(b.enabled) }); sendJson(res, 200, { enabled: b.enabled })
+    } },
     { method: 'GET', match: p => p === '/api/stt/status', handler: async (req, res) => sendJson(res, 200, status()) },
     {
       method: 'POST', match: p => p === '/api/stt/settings',

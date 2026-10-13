@@ -59,6 +59,7 @@
   registerProcessor('sera-mic-tap', SeraMicTap)`
   const CHUNK = 1600 // 100 ms at 16 kHz
 
+  let epoch = 0
   let btn = null
   let input = null
   let mode = 'idle' // idle | listening | processing
@@ -98,10 +99,11 @@
   }
   function pump(flush = false) {
     if (inflight || !sid || (!flush && queued < CHUNK) || !queued) return inflight
+    const requestEpoch = epoch
     const pcm = take(flush ? queued : Math.floor(queued / CHUNK) * CHUNK)
     inflight = fetch('/api/stt/audio', { method: 'POST', headers: { 'content-type': 'application/octet-stream', 'X-Onboard-Token': token(), 'X-STT-Session': sid }, body: pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength) })
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-      .then(r => { if (mode === 'idle') return; finals.push(...r.finals); partial = r.partial || ''; render() })
+      .then(r => { if (mode === 'idle' || requestEpoch !== epoch) return; if (window.SeraCall?.active) { window.SeraCall.partial(r.partial || ''); for (const text of r.finals) window.SeraCall.final(text); finals = []; base = ''; partial = r.partial || '' } else { finals.push(...r.finals); partial = r.partial || '' }; render() })
       .catch(e => console.warn('[stt]', e.message))
       .finally(() => { inflight = null; if (mode === 'listening') pump() })
     return inflight
@@ -112,7 +114,7 @@
     let ctx
     try { ctx = new AudioContext({ sampleRate: 16000 }) } catch { ctx = new AudioContext() }
     const down = window.SeraSTTCore.createDownsampler(ctx.sampleRate)
-    const onFrame = f => { if (mode !== 'listening') return; const d = down(f); if (d.length) { queue.push(d); queued += d.length; pump() } }
+    const onFrame = f => { if (mode !== 'listening' || window.SeraCall?.speaking) return; const d = down(f); if (d.length) { queue.push(d); queued += d.length; pump() } }
     const src = ctx.createMediaStreamSource(stream)
     let node
     try {
@@ -139,11 +141,15 @@
 
   async function start() {
     if (mode !== 'idle' || !input) return
+    const e = ++epoch
     setMode('processing')
     base = input.value; finals = []; partial = ''; queue = []; queued = 0
     try {
-      cap = await startCapture()
+      const capture = await startCapture()
+      if (e !== epoch) { capture.stream.getTracks().forEach(t => t.stop()); capture.ctx.close(); return }
+      cap = capture
       sid = (await postJson('/api/stt/start', {})).sid
+      if (e !== epoch) { const old = sid; sid = null; postJson('/api/stt/stop', { sid: old, cancel: true }).catch(() => {}); return }
       setMode('listening')
     } catch (e) {
       stopCapture(); sid = null; setMode('idle')
@@ -201,7 +207,7 @@
     } catch {}
   }
 
-  window.SeraSTT = { start, stop, get mode() { return mode } }
+  window.SeraSTT = { start, stop, cancel() { epoch++; stopCapture(); const old = sid; sid = null; queue = []; queued = 0; partial = ''; finals = []; setMode('idle'); if (old) postJson('/api/stt/stop', { sid: old, cancel: true }).catch(() => {}) }, get mode() { return mode } }
 
   if (document.getElementById('set-about')) mountSettings()
   else if (document.getElementById('ct-input')) { mountMic(); syncEnabled(); setInterval(syncEnabled, 15000); document.addEventListener('visibilitychange', () => { if (!document.hidden) syncEnabled() }) }

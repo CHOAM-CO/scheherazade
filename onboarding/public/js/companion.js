@@ -161,12 +161,13 @@
       $('b-mic').disabled = !sttOn && mode === 'idle'
     }
     function state() {
+      if (window.SeraCall?.speaking) return 'speaking'
       const stt = window.SeraSTT?.mode
       if (stt === 'listening' || stt === 'processing') return 'listening'
       if (!el.paused && !el.ended && el.currentSrc) return 'speaking'
       return 'idle'
     }
-    function kick() { orb?.kick(); $('b-stop').disabled = !queue?.running; $('b-mic').classList.toggle('on', state() === 'listening'); $('b-mic').setAttribute('aria-pressed', String(state() === 'listening')) }
+    function kick() { orb?.kick(); $('b-stop').disabled = !queue?.running && !window.SeraCall?.speaking; $('b-mic').classList.toggle('on', state() === 'listening'); $('b-mic').setAttribute('aria-pressed', String(state() === 'listening')) }
     function update(s) {
       syncVoice()
       if (s.variant === 'orb' && !orb && window.SeraCompanionOrb) orb = window.SeraCompanionOrb.createOrb($('orb'), { getAnalyser: () => analyser, getState: state })
@@ -178,7 +179,7 @@
       for (const m of items) {
         if (m.seq <= lastSeq) continue
         lastSeq = m.seq
-        if (!ttsOn || !core) continue
+        if (window.SeraCall?.active || !ttsOn || !core) continue
         const clean = core.cleanForSpeech(m.text)
         if (clean) ensureQueue().enqueue(clean)
       }
@@ -210,8 +211,9 @@
         kick(); await started; kick()
       }
     }
-    $('b-power').onclick = () => { queue?.stop(); action('settings', { enabled: false }) }
-    $('b-stop').onclick = () => { queue?.stop(); kick() }
+    window.SeraCompanionSpeechStop = () => queue?.stop()
+    $('b-power').onclick = () => { window.SeraCall?.stop(); queue?.stop(); action('settings', { enabled: false }) }
+    $('b-stop').onclick = () => { window.SeraCall?.stopSpeech(); queue?.stop(); kick() }
     $('b-mic').onclick = mic
     const wrap = $('orb-wrap')
     wrap.addEventListener('mouseenter', () => wrap.classList.add('hov'))

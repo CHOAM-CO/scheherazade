@@ -134,7 +134,7 @@
   window.SeraTTS = {
     // chat.js calls this only for NEW agent replies (not the seeded history).
     onReply(text) {
-      if (!enabled || companionSpeaks || !window.SeraTTSCore) return
+      if (window.SeraCall?.active || !enabled || companionSpeaks || !window.SeraTTSCore) return
       const clean = window.SeraTTSCore.cleanForSpeech(text)
       if (clean) ensureQueue().enqueue(clean)
     },
