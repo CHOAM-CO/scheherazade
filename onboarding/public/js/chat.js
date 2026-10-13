@@ -1211,7 +1211,12 @@
         const result = await window.api(`/api/chat/out?since=${nextSeq}`)
         if (result.missed) appendGap()
         applyAwaiting((result.state && result.state.awaitingReplySince) || null)
-        for (const m of result.items) renderItem(m)
+        for (const m of result.items) {
+          renderItem(m)
+          // Read-aloud (tts.js): only NEW agent replies, never the seeded history,
+          // never system lines / activity / think items.
+          if (window.SeraTTS && (!m.kind || m.kind === 'message') && roleOf(m) === 'agent' && typeof m.text === 'string' && parseSystemLine(m.text) === null) window.SeraTTS.onReply(m.text)
+        }
         nextSeq = result.latest
         if (typeof result.draft === 'string' && result.draft) renderDraft(result.draft)
         else discardDraft()

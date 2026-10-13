@@ -1,0 +1,160 @@
+diff --git a/packages/pocket-tts-onnx/src/sentencepiece.ts b/packages/pocket-tts-onnx/src/sentencepiece.ts
+index fd266df..74c3bf2 100644
+--- a/packages/pocket-tts-onnx/src/sentencepiece.ts
++++ b/packages/pocket-tts-onnx/src/sentencepiece.ts
+@@ -74,24 +74,34 @@ function decodeUtf8(bytes: Uint8Array): string {
+   return new TextDecoder().decode(bytes);
+ }
+ 
+-function parseModel(bytes: Uint8Array): { pieces: Piece[]; addDummyPrefix: boolean } {
++function parseModel(bytes: Uint8Array): {
++  pieces: Piece[];
++  addDummyPrefix: boolean;
++  removeExtraWhitespaces: boolean;
++  modelType: number;
++} {
+   const reader = new Reader(bytes);
+   const pieces: Piece[] = [];
+   let addDummyPrefix = true;
+-
++  let removeExtraWhitespaces = false;
++  let modelType = 1; // UNIGRAM
+   while (!reader.done) {
+     const tag = reader.varint();
+     const field = tag >>> 3;
+     const wire = tag & 7;
+     if (field === 1 && wire === 2) {
+       pieces.push(parsePiece(reader.bytesField()));
+-    } else if (field === 4 && wire === 2) {
+-      addDummyPrefix = parseNormalizer(reader.bytesField());
++    } else if (field === 2 && wire === 2) {
++      modelType = parseTrainerType(reader.bytesField());
++    } else if (field === 3 && wire === 2) {
++      const n = parseNormalizer(reader.bytesField());
++      addDummyPrefix = n.addDummyPrefix;
++      removeExtraWhitespaces = n.removeExtraWhitespaces;
+     } else {
+       reader.skip(wire);
+     }
+   }
+-  return { pieces, addDummyPrefix };
++  return { pieces, addDummyPrefix, removeExtraWhitespaces, modelType };
+ }
+ 
+ function parsePiece(bytes: Uint8Array): Piece {
+@@ -111,17 +121,33 @@ function parsePiece(bytes: Uint8Array): Piece {
+   return { piece, score, type };
+ }
+ 
+-function parseNormalizer(bytes: Uint8Array): boolean {
++function parseNormalizer(bytes: Uint8Array): { addDummyPrefix: boolean; removeExtraWhitespaces: boolean } {
+   const reader = new Reader(bytes);
+   let addDummyPrefix = true;
++  let removeExtraWhitespaces = true; // proto default
+   while (!reader.done) {
+     const tag = reader.varint();
+     const field = tag >>> 3;
+     const wire = tag & 7;
+     if (field === 3 && wire === 0) addDummyPrefix = reader.varint() !== 0;
++    else if (field === 4 && wire === 0) removeExtraWhitespaces = reader.varint() !== 0;
+     else reader.skip(wire);
+   }
+-  return addDummyPrefix;
++  return { addDummyPrefix, removeExtraWhitespaces };
++}
++
++/** TrainerSpec.model_type (field 3): 1 unigram (default), 2 BPE. */
++function parseTrainerType(bytes: Uint8Array): number {
++  const reader = new Reader(bytes);
++  let type = 1;
++  while (!reader.done) {
++    const tag = reader.varint();
++    const field = tag >>> 3;
++    const wire = tag & 7;
++    if (field === 3 && wire === 0) type = reader.varint();
++    else reader.skip(wire);
++  }
++  return type;
+ }
+ 
+ export class SentencePiece {
+@@ -132,11 +158,15 @@ export class SentencePiece {
+   private readonly maxPieceLength: number;
+   private readonly unkScore: number;
+   private readonly addDummyPrefix: boolean;
++  private readonly removeExtraWhitespaces: boolean;
++  private readonly bpe: boolean;
+ 
+   constructor(model: Uint8Array) {
+     const parsed = parseModel(model);
+     this.pieces = parsed.pieces;
+     this.addDummyPrefix = parsed.addDummyPrefix;
++    this.removeExtraWhitespaces = parsed.removeExtraWhitespaces;
++    this.bpe = parsed.modelType === 2;
+ 
+     let minScore = Infinity;
+     let longest = 1;
+@@ -169,8 +199,14 @@ export class SentencePiece {
+     if (text === "") return [];
+     // The dummy prefix goes on unconditionally: this model keeps
+     // remove_extra_whitespaces off, so leading spaces are content.
+-    let normalized = text.replaceAll(" ", SPACE);
++    let source = text;
++    if (this.removeExtraWhitespaces) {
++      source = source.replace(/ +/g, " ").replace(/^ | $/g, "");
++      if (source === "") return [];
++    }
++    let normalized = source.replaceAll(" ", SPACE);
+     if (this.addDummyPrefix) normalized = SPACE + normalized;
++    if (this.bpe) return this.encodeBpe(normalized);
+ 
+     // Viterbi: best[i] is the best score for the first i characters, and
+     // back[i] the start of the piece that got there.
+@@ -234,6 +270,39 @@ export class SentencePiece {
+     return out;
+   }
+ 
++  /** SentencePiece BPE: merge the adjacent pair with the best-scoring piece until none is left. */
++  private encodeBpe(normalized: string): number[] {
++    const syms: string[] = [...normalized];
++    for (;;) {
++      let bestAt = -1;
++      let bestScore = -Infinity;
++      for (let i = 0; i + 1 < syms.length; i++) {
++        const id = this.ids.get(syms[i] + syms[i + 1]);
++        if (id === undefined) continue;
++        const score = this.pieces[id].score;
++        if (score > bestScore) {
++          bestScore = score;
++          bestAt = i;
++        }
++      }
++      if (bestAt < 0) break;
++      syms.splice(bestAt, 2, syms[bestAt] + syms[bestAt + 1]);
++    }
++    const out: number[] = [];
++    for (const sym of syms) {
++      const id = this.ids.get(sym);
++      if (id !== undefined) {
++        out.push(id);
++        continue;
++      }
++      const bytes = new TextEncoder().encode(sym);
++      if (bytes.length > 0 && bytes.every((b) => this.byteIds.has(b))) {
++        for (const b of bytes) out.push(this.byteIds.get(b)!);
++      } else out.push(this.unkId);
++    }
++    return out;
++  }
++
+   decode(ids: number[]): string {
+     const out: string[] = [];
+     let pending: number[] = [];
+@@ -252,6 +321,7 @@ export class SentencePiece {
+       }
+       flush();
+       if (piece.type === NORMAL || piece.type === USER_DEFINED) out.push(piece.piece);
++      else if (piece.type === UNKNOWN) out.push(" \u2047 "); // sentencepiece's unk surface
+     }
+     flush();
+     return out.join("").replaceAll(SPACE, " ").replace(/^ /, "");

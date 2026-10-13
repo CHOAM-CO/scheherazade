@@ -1,0 +1,14 @@
+Vendored from thewh1teagle/pocket-tts-onnx, packages/pocket-tts-onnx (CC BY 4.0, see LICENSE),
+commit 9860fc0fe0ee5ffb13a4bae2fb99e9bd913acbe5, compiled dist/*.js (tsc), files: tts, sentencepiece,
+text, onnxMeta, audio, wav.
+
+Sera changes:
+- sentencepiece.js: built from src/sentencepiece.ts with sentencepiece_bpe.patch applied (BPE model
+  type, remove_extra_whitespaces, normalizer field 3, " ⁇ " for unk) so the Korean tokenizer matches Python.
+- tts.js: "#platform" / "#ort" import maps replaced by ./platform.js and ./ort.js (onnxruntime-node).
+- sourceMappingURL comments removed (maps not vendored).
+
+Model credits (weights are downloaded, not bundled):
+- Pocket-TTS by Kyutai (kyutai/pocket-tts), CC BY 4.0.
+- Korean checkpoint seastar105/pocket-tts-korean-100m, CC BY 4.0. Exported to one int8 ONNX with the
+  pocket-tts-onnx exporter (korean.yaml config, --quantize).

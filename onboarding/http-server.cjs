@@ -3866,6 +3866,7 @@ const API_ROUTES = [
   ...require('./routes/quickbar.cjs').createRoutes(staticCtx),
   ...require('./routes/pending-signal.cjs').createRoutes(staticCtx), // G16 (design-0024 pending signal "!")
   ...require('./routes/memory-files.cjs').createRoutes(staticCtx), // G17 (Memory page folder view: read-only DATA_HOME tree + file text, 0.3.8)
+  ...require('./routes/tts.cjs').createRoutes(staticCtx), // G18 read-aloud (local Pocket-TTS Korean, model fetched on first enable)
 ]
 
 module.exports = {

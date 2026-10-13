@@ -268,6 +268,15 @@ at once. Ask what they want kept, not just whether to import.
 
 {MANUAL_TOPOLOGY_SECTION}
 
+## Read aloud (읽어주기)
+Settings → 읽어주기 speaks each new reply on this device, offline (Pocket-TTS
+Korean 100M; Kyutai + seastar105, CC BY 4.0). Korean only for now.
+- **TTS_ENABLED** — on/off. The first enable downloads one ~216 MB voice model.
+- **TTS_VOICE** — which 목소리: `default`, or a voice they added with
+  "wav로 목소리 추가" (a few seconds to 20 s of one clear speaker, .wav).
+  Only offer to clone a voice the person has the right to use.
+A stop button sits in the chat while it speaks.
+
 ## Your name
 
 They can rename you. It is their friend, not our label.

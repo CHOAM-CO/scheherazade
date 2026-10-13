@@ -36,6 +36,7 @@
     "discord.js": "^14.26.4",
     "dotenv": "^17.4.2",
     "electron-updater": "^6.8.9",
+    "onnxruntime-node": "1.27.0",
     "undici": "^7.28.0",
     "zod": "^4.4.3",
     "yaml": "^2.9.0",
@@ -129,6 +130,7 @@
       }
     ],
     "asarUnpack": [
+      "onboarding/tts/**",
       "memory/import-candidates.cjs",
       "memory/migrate-import.cjs",
       "node_modules/**",
@@ -158,6 +160,7 @@
       "onboarding/public/js/model-catalog.cjs",
       "onboarding/chromux-live-consent.cjs",
       "onboarding/chromux-live-gate.cjs",
+    "onboarding/tts/**",
       "hooks/**",
       "scripts/**",
       "autonomy/**",
@@ -165,6 +168,9 @@
       "calendar/**"
     ],
     "mac": {
+      "files": [
+        "!node_modules/onnxruntime-node/bin/napi-v6/{linux,win32}/**"
+      ],
       "extraResources": [
         {
           "from": "vendor/tmux-portable",
@@ -195,6 +201,10 @@
       "sign": false
     },
     "win": {
+      "files": [
+        "!node_modules/onnxruntime-node/bin/napi-v6/{darwin,linux}/**",
+        "!node_modules/onnxruntime-node/bin/napi-v6/win32/arm64/**"
+      ],
       "target": [
         {
           "target": "nsis",
@@ -206,6 +216,10 @@
       "artifactName": "Scheherazade-Setup-${version}.exe"
     },
     "linux": {
+      "files": [
+        "!node_modules/onnxruntime-node/bin/napi-v6/{darwin,win32}/**",
+        "!node_modules/onnxruntime-node/bin/napi-v6/linux/arm64/**"
+      ],
       "target": [
         {
           "target": "AppImage",
