@@ -2,6 +2,20 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const YAML = require('yaml')
+// The generated lane patch carries `!!js process.env.NAME` scalars (dsh-lane.mjs
+// channel-token passthrough; the dsh loader's js-yaml dialect turns them into
+// expression nodes). The `yaml` package does not know that tag: a plain
+// parse/stringify round-trip (0.4.4 regression, 2026-10-13: Slack users hit
+// `auth.test failed: invalid_auth` in a restart loop because the engine got the
+// literal string "process.env.SLACK_BOT_TOKEN" as its token) emits the scalar
+// untagged. Register the tag so the round-trip preserves it verbatim.
+const JS_EXPR_TAG = {
+  tag: 'tag:yaml.org,2002:js',
+  identify: (v) => v && typeof v === 'object' && typeof v.__jsExpr === 'string',
+  resolve: (str) => ({ __jsExpr: String(str) }),
+  stringify: (item) => item.value.__jsExpr,
+}
+const GENERATED_YAML_OPTS = { customTags: [JS_EXPR_TAG] }
 const { resolveDataHome } = require('./data-home.cjs')
 const ID = /^[A-Za-z0-9._:/-]+$/
 const PROVIDER = /^[A-Za-z0-9._-]+$/
@@ -58,7 +72,7 @@ function resolveLaneModel(provider, id, home = laneHome()) {
 function mergeLanePatch(generated, home, env) {
   const providers = readLaneProviders(home)
   if (!Object.keys(providers).length) return generated
-  const rows = YAML.parse(generated)
+  const rows = YAML.parse(generated, GENERATED_YAML_OPTS)
   const row = rows.find((r) => r.id === 'llm-pi-ai')
   const generatedProviders = row.config.providers
   const merged = { ...providers, ...generatedProviders }
@@ -68,6 +82,6 @@ function mergeLanePatch(generated, home, env) {
     merged[name] = { ...providers[name], api: providers[name].api || env.DSH_ROUTE_API, baseURL: env.DSH_ROUTE_BASE_URL, apiKeyEnv: env.DSH_ROUTE_KEY_ENV }
   }
   row.config.providers = merged
-  return YAML.stringify(rows)
+  return YAML.stringify(rows, GENERATED_YAML_OPTS)
 }
 module.exports = { laneHome, readLaneProviders, laneModels, laneModelId, resolveLaneModel, mergeLanePatch }
