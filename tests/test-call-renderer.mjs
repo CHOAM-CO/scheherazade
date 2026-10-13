@@ -178,7 +178,7 @@ for (const companion of [false, true]) {
   voice.onclick()
   f.setPayload({ latest: 3, items: [{ role: 'agent', text: '다시 말해요.' }] }); await f.run(250)
   assert.equal(f.spoken.length, 2)
-  mic.onclick(); assert.equal(f.cancels, 1); assert.equal(f.win.SeraCall.micMuted, true)
+  mic.onclick(); assert.equal(f.cancels, 2); assert.equal(f.win.SeraCall.micMuted, true)
   assert.equal(f.element('call-state').textContent, '마이크 꺼짐')
   f.win.SeraCall.final('muted final'); f.win.SeraCall.partial('muted partial'); f.advance(15000)
   assert.equal(f.posted.filter(p => p.url === '/api/chat/in').length, 0)
@@ -191,7 +191,7 @@ for (const companion of [false, true]) {
 }
 const owner = await fixture()
 owner.receive({ type: 'call-mutes', micMuted: true, voiceMuted: true })
-assert.equal(owner.win.SeraCall.active, true); assert.equal(owner.cancels, 1)
+assert.equal(owner.win.SeraCall.active, true); assert.equal(owner.cancels, 2)
 assert.equal(owner.element('call-state').textContent, '마이크 꺼짐')
 owner.win.SeraCall.stop()
 console.log('call mute controls: keyboard-native buttons, playback stop/skip/resume, mic cancel/reopen, remote control and call-only reset passed')

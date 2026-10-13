@@ -73,10 +73,10 @@ try {
   console.log(`  transcript: ${text}`)
   check(partials.length >= 3, `${partials.length} partials streamed, first after ${firstAt} ms`)
   check(text.includes('세라'), 'transcript contains "세라"')
-  // A second session on the same worker works (stream reset per session).
-  const s2 = await engine.createSession()
+  // Call profile on the same native worker must not inherit dictation endpoints.
+  const s2 = await engine.createSession(() => {}, { callMode: true })
   for (let i = 0; i < samples.length; i += 16000) s2.push(samples.slice(i, i + 16000))
-  check((await s2.stop()).includes('세라'), 'second session on the same worker')
+  check((await s2.stop()).includes('세라'), 'call-profile session on the same native worker')
   const s3 = await engine.createSession()
   s3.cancel()
   await new Promise(r => setTimeout(r, 900))

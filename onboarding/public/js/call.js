@@ -134,7 +134,7 @@
       if (!companion && owns) { const c = await window.api('/api/companion'); owns = !(c.available && c.enabled) }
       if (!s.enabled || !owns) { off(); return }
       if (!active) {
-        window.SeraTTS?.stop(); window.SeraCompanionSpeechStop?.(); active = true; session.start(); utterance.setBlocked(true); ttsRetry.reset()
+        window.SeraTTS?.stop(); window.SeraCompanionSpeechStop?.(); window.SeraSTT?.cancel(); active = true; session.start(); utterance.setBlocked(true); ttsRetry.reset()
         opening = true
         try { if (!micMuted) await window.SeraSTT?.start() } finally { opening = false }
         if (!active || micMuted) window.SeraSTT?.cancel()
