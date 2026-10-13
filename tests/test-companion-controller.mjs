@@ -93,7 +93,7 @@ try {
   await test('fullscreen exit restores without focus and removes tray', async () => { fullscreen = false; await controller.poll(); assert.equal(windows[0].visible, true); assert.equal(windows[0].focused, false); assert.equal(trays[0].dead, true) })
   await test('unknown fullscreen blocks proactive', async () => { await controller.command({ action: 'dismiss' }); known = false; await controller.poll(); assert.equal(nudges, 1) })
   await test('all requests carry same per-launch auth token', () => assert.ok(requests.length > 0 && requests.every(r => r.token === 'test-token')))
-  await test('disable destroys companion only and persists off', async () => { await controller.command({ action: 'settings', enabled: false }); assert.equal(windows[0].dead, true); assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'companion.json'))).enabled, false) })
+  await test('disable destroys companion only and persists off', async () => { await controller.command({ action: 'settings', enabled: false }); assert.equal(windows[0].dead, true); assert.equal(controller.snapshot().enabled, false); assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'companion.json'))).enabled, false) })
   await test('disabled poll produces no traffic', async () => { const n = requests.length; await controller.poll(); assert.equal(requests.length, n) })
 } finally {
   controller.dispose(); srv.closeAllConnections(); await new Promise(r => srv.close(r))

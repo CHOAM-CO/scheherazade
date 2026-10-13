@@ -11,14 +11,27 @@
     return r.json()
   }
   const command = (action, args = {}) => api('/api/companion', { action, ...args })
+  // stt.js (loaded after this file) talks through window.api like the main pages.
+  window.api = async (route, options = {}) => {
+    const r = await fetch(route, { ...options, headers: { ...(options.headers || {}), 'X-Onboard-Token': window.getOnboardToken() } })
+    const body = await r.json().catch(() => ({}))
+    if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`)
+    return body
+  }
   function showFailure() { $('failure').hidden = false; $('failure').textContent = '보내지 못했어요. 연결을 확인하고 다시 보내 주세요.' }
   async function action(name, args) { try { render(await command(name, args)) } catch { showFailure() } }
   function render(state) {
     current = state
+    const orbMode = state.variant === 'orb'
+    $('face').hidden = orbMode; $('orb-wrap').hidden = !orbMode
+    document.body.dataset.variant = orbMode ? 'orb' : 'face'
     if (state.geometry) {
-      $('face').style.left = `${state.geometry.face.x}px`; $('face').style.top = `${state.geometry.face.y}px`
+      const surface = orbMode ? $('orb-wrap') : $('face')
+      surface.style.left = `${state.geometry.face.x}px`; surface.style.top = `${state.geometry.face.y}px`
+      $('bubble').style.top = `${state.geometry.bubbleTop || 0}px`
       document.body.dataset.placement = state.geometry.placement
     }
+    voice.update(state)
     $('face').dataset.ring = state.ring
     $('face').setAttribute('aria-label', state.ring === 'attention' ? '세라 · 확인할 이야기가 있어요' : '세라와 이야기하기')
     $('bubble').hidden = !state.bubble
@@ -49,28 +62,38 @@
   $('bubble').addEventListener('pointerdown', () => command('touch').catch(() => {}))
   $('bubble').addEventListener('input', () => command('touch').catch(() => {}))
   $('close').onclick = () => action('dismiss')
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') action('dismiss') })
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') action('dismiss')
+    // Space = pause/resume speech, never while typing in the reply box.
+    if (e.code === 'Space' && current?.variant === 'orb' && !e.target.closest('input, textarea, button')) { e.preventDefault(); voice.togglePause() }
+  })
   document.addEventListener('pointerdown', e => { if (!e.target.closest('.surface')) action('dismiss') })
   $('main').onclick = () => action('main')
-  $('face').addEventListener('pointerdown', e => {
-    if (e.button !== 0) return
-    drag = { x: e.screenX, y: e.screenY }; dragged = false
-    $('face').setPointerCapture(e.pointerId)
-  })
-  $('face').addEventListener('pointermove', e => {
-    if (!drag || dragged || Math.hypot(e.screenX - drag.x, e.screenY - drag.y) < 4) return
-    dragged = true
-    pointerQueue = pointerQueue.then(() => command('drag-start')).catch(showFailure)
-  })
+  // Face and orb share drag-to-move. A plain click on the face opens the
+  // bubble; on the orb it pauses/resumes speech, or opens the bubble when quiet.
+  const tap = () => (current?.variant === 'orb' && voice.togglePause()) || action('open')
+  for (const handle of [$('face'), $('orb')]) {
+    handle.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return
+      drag = { x: e.screenX, y: e.screenY, handle }; dragged = false
+      handle.setPointerCapture(e.pointerId)
+    })
+    handle.addEventListener('pointermove', e => {
+      if (!drag || dragged || Math.hypot(e.screenX - drag.x, e.screenY - drag.y) < 4) return
+      dragged = true
+      pointerQueue = pointerQueue.then(() => command('drag-start')).catch(showFailure)
+    })
+    handle.addEventListener('pointerup', endDrag)
+    handle.addEventListener('pointercancel', endDrag)
+  }
   async function endDrag(e) {
     if (!drag) return
+    const { handle } = drag
     drag = null
-    if ($('face').hasPointerCapture(e.pointerId)) $('face').releasePointerCapture(e.pointerId)
+    if (handle.hasPointerCapture(e.pointerId)) handle.releasePointerCapture(e.pointerId)
     if (dragged) { await pointerQueue; await action('drag-end') }
-    else await action('open')
+    else await tap()
   }
-  $('face').addEventListener('pointerup', endDrag)
-  $('face').addEventListener('pointercancel', endDrag)
   $('face').addEventListener('click', e => { if (e.detail === 0) action('open') })
   async function send(text) {
     if (sending || !text.trim()) return
@@ -95,6 +118,109 @@
       avatarUrl = next
     } catch { /* Keep the last face or the shipped fallback. */ }
   }
+  // ── voice: read-aloud playback + orb + mic (design-0027) ─────────────────
+  // While the companion is on, THIS renderer owns read-aloud (tts.js in the
+  // chat window goes silent), for both variants: audio plays once. One
+  // persistent <audio> element feeds one MediaElementSource -> AnalyserNode ->
+  // destination, so the orb reads the same samples that reach the speakers.
+  const voice = (function () {
+    const core = window.SeraTTSCore
+    const el = new Audio()
+    let ctx = null, analyser = null, queue = null, ttsOn = false, ttsAt = 0, sttOn = false
+    let lastSeq = null, finishClip = null, orb = null, mode = 'idle'
+    function tap() {
+      if (ctx) return
+      ctx = new AudioContext()
+      analyser = ctx.createAnalyser(); analyser.fftSize = 1024; analyser.smoothingTimeConstant = 0.6
+      ctx.createMediaElementSource(el).connect(analyser); analyser.connect(ctx.destination)
+    }
+    function ensureQueue() {
+      return (queue ||= core.createSpeechQueue({
+        synth: async text => {
+          const r = await fetch('/api/tts', { method: 'POST', headers: { 'content-type': 'application/json', 'X-Onboard-Token': window.getOnboardToken() }, body: JSON.stringify({ text }) })
+          if (!r.ok) throw new Error(`tts HTTP ${r.status}`)
+          return URL.createObjectURL(await r.blob())
+        },
+        play: url => new Promise(resolve => {
+          tap(); ctx.resume().catch(() => {})
+          const done = () => { el.onended = el.onerror = null; finishClip = null; URL.revokeObjectURL(url); resolve(); kick() }
+          finishClip = done
+          el.onended = done; el.onerror = done
+          el.src = url
+          el.play().then(kick, done)
+        }),
+        stopPlayback: () => { el.pause(); finishClip?.() },
+        onState: (_s, e) => { if (e) console.warn('[companion tts]', e); kick() },
+      }))
+    }
+    async function syncVoice() {
+      if (Date.now() - ttsAt < 15000) return
+      ttsAt = Date.now()
+      try { const s = await window.api('/api/tts/status'); ttsOn = s.enabled && s.modelsPresent } catch { ttsOn = false }
+      try { const s = await window.api('/api/stt/status'); sttOn = s.enabled && s.modelsPresent } catch { sttOn = false }
+      $('b-mic').disabled = !sttOn && mode === 'idle'
+    }
+    function state() {
+      const stt = window.SeraSTT?.mode
+      if (stt === 'listening' || stt === 'processing') return 'listening'
+      if (!el.paused && !el.ended && el.currentSrc) return 'speaking'
+      return 'idle'
+    }
+    function kick() { orb?.kick(); $('b-stop').disabled = !queue?.running; $('b-mic').classList.toggle('on', state() === 'listening'); $('b-mic').setAttribute('aria-pressed', String(state() === 'listening')) }
+    function update(s) {
+      syncVoice()
+      if (s.variant === 'orb' && !orb && window.SeraCompanionOrb) orb = window.SeraCompanionOrb.createOrb($('orb'), { getAnalyser: () => analyser, getState: state })
+      if (s.variant === 'orb') kick(); else orb?.stop()
+      // Seed on first sight so retained replies are never replayed.
+      const items = s.speech || []
+      const top = items.length ? items[items.length - 1].seq : 0
+      if (lastSeq === null) { lastSeq = top; return }
+      for (const m of items) {
+        if (m.seq <= lastSeq) continue
+        lastSeq = m.seq
+        if (!ttsOn || !core) continue
+        const clean = core.cleanForSpeech(m.text)
+        if (clean) ensureQueue().enqueue(clean)
+      }
+    }
+    function togglePause() {
+      if (!el.currentSrc || el.ended || !queue?.running) return false
+      if (el.paused) el.play().catch(() => {}); else el.pause()
+      kick(); return true
+    }
+    // Mic: STT's own start/stop (stt.js) on a hidden composer field; partials
+    // show as a caption, the final text lands in the reply bubble, never sent.
+    const input = $('ct-input')
+    input.addEventListener('input', () => { $('caption').textContent = input.value })
+    async function mic() {
+      const stt = window.SeraSTT
+      if (!stt) return
+      if (stt.mode === 'listening') {
+        await stt.stop(); kick()
+        const text = input.value.trim()
+        $('caption').textContent = ''; input.value = ''
+        if (text) {
+          if (!current?.bubble) await action('open')
+          $('reply').value = text; $('reply').focus()
+        }
+      } else if (stt.mode === 'idle') {
+        queue?.stop() // no echo: Sera stops talking while the user speaks
+        input.value = ''
+        const started = stt.start()
+        kick(); await started; kick()
+      }
+    }
+    $('b-power').onclick = () => { queue?.stop(); action('settings', { enabled: false }) }
+    $('b-stop').onclick = () => { queue?.stop(); kick() }
+    $('b-mic').onclick = mic
+    const wrap = $('orb-wrap')
+    wrap.addEventListener('mouseenter', () => wrap.classList.add('hov'))
+    wrap.addEventListener('mousemove', () => wrap.classList.add('hov'))
+    wrap.addEventListener('mouseleave', () => wrap.classList.remove('hov'))
+    $('b-stop').disabled = true
+    return { update, togglePause }
+  })()
+
   async function poll() {
     try { render(await api('/api/companion')); await refreshAvatar() }
     catch { $('connection').textContent = '연결을 확인해 주세요' }

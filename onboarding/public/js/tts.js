@@ -123,12 +123,18 @@
     stopBtn.onclick = () => queue?.stop()
     document.body.appendChild(stopBtn)
   }
-  async function syncEnabled() { try { const s = await getStatus(); enabled = s.enabled && s.modelsPresent } catch {} }
+  // Audio-once rule (design-0027): while the desktop companion is on, it plays
+  // read-aloud itself (one renderer, one AudioContext), so the chat stays silent.
+  let companionSpeaks = false
+  async function syncEnabled() {
+    try { const s = await getStatus(); enabled = s.enabled && s.modelsPresent } catch {}
+    try { const c = await window.api('/api/companion'); companionSpeaks = !!(c.available && c.enabled) } catch { companionSpeaks = false }
+  }
 
   window.SeraTTS = {
     // chat.js calls this only for NEW agent replies (not the seeded history).
     onReply(text) {
-      if (!enabled || !window.SeraTTSCore) return
+      if (!enabled || companionSpeaks || !window.SeraTTSCore) return
       const clean = window.SeraTTSCore.cleanForSpeech(text)
       if (clean) ensureQueue().enqueue(clean)
     },

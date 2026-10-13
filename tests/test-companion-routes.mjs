@@ -46,6 +46,7 @@ try {
   await test('ineligible nudge cannot inject', async () => { const r = await fetch(new URL('/api/companion/nudge', url), { method: 'POST', headers: auth, body: '{}' }); assert.deepEqual(await r.json(), { injected: false }); assert.equal(received.length, 0) })
   await test('eligible nudge uses fixed SYSTEM path, not caller text', async () => {
     canClaim = true
+    fs.appendFileSync(path.join(process.env.AGENT_DATA_HOME, '.agent-config'), 'COMPANION_ENABLED=true\n')
     const r = await fetch(new URL('/api/companion/nudge', url), { method: 'POST', headers: auth, body: '{"content":"UNTRUSTED-CALLER-CONTENT"}' })
     assert.deepEqual(await r.json(), { injected: true }); assert.equal(received[0].path, '/system-turn')
     assert.match(received[0].body.content, /^\[SYSTEM: desktop companion\]/); assert.ok(!received[0].body.content.includes('UNTRUSTED')); assert.equal(nudgeResult, true)
@@ -62,7 +63,8 @@ try {
     const js = fs.readFileSync(new URL('../onboarding/public/js/companion.js', import.meta.url), 'utf8')
     assert.ok(!/innerHTML|ipcRenderer|require\(/.test(js))
   })
-  await test('only gated nudge attempts reached controller', () => assert.equal(claims, 2))
+  // The first nudge ran with COMPANION_ENABLED off and never reached the controller.
+  await test('only gated nudge attempts reached controller', () => assert.equal(claims, 1))
 } finally {
   server.closeAllConnections(); channel.closeAllConnections()
   await Promise.all([new Promise(r => server.close(r)), new Promise(r => channel.close(r))])

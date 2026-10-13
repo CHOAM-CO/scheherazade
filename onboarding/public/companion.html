@@ -8,6 +8,16 @@
   </head>
   <body>
     <button id="face" class="surface" aria-label="세라와 이야기하기" title="눌러서 이야기하기 · 끌어서 옮기기"><img id="avatar" src="/img/agent-avatar.png" alt="" draggable="false" /></button>
+    <div id="orb-wrap" class="surface" hidden>
+      <canvas id="orb" aria-label="세라 · 소리만" title="눌러서 이야기하기 · 읽는 중이면 잠시 멈춤 · 끌어서 옮기기"></canvas>
+      <p id="caption" aria-live="polite"></p>
+      <div id="ctl" role="toolbar" aria-label="컴패니언 조작">
+        <button id="b-power" class="round" aria-label="컴패니언 끄기" title="컴패니언 끄기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8M6.3 6.8a8 8 0 1 0 11.4 0"/></svg></button>
+        <button id="b-stop" class="round" aria-label="읽기 멈춤" title="읽기 멈춤"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg></button>
+        <button id="b-mic" class="round" aria-label="음성 입력" title="음성 입력" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+      </div>
+      <div class="chat-composer-bar" hidden><textarea id="ct-input" tabindex="-1" aria-hidden="true"></textarea></div>
+    </div>
     <section id="bubble" class="surface" hidden aria-label="세라의 이야기">
       <header><span>세라</span><button id="close" aria-label="말풍선 접기">×</button></header>
       <div id="message" role="status" aria-live="polite"></div>
@@ -18,6 +28,10 @@
       <footer><button id="main">앱에서 보기</button><span id="connection"></span></footer>
     </section>
     <script src="/js/copy.js"></script>
+    <script src="/js/tts-core.cjs"></script>
+    <script src="/js/stt-core.cjs"></script>
+    <script src="/js/companion-orb.cjs"></script>
     <script src="/js/companion.js"></script>
+    <script src="/js/stt.js"></script>
   </body>
 </html>

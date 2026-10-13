@@ -1,21 +1,41 @@
 'use strict'
 
 const path = require('node:path')
-const { readState, writeState, initialAnchor, clampAnchor, layout, hitShape, fullscreenDecision, canProactive, classifyMessage } = require('./model.cjs')
+const { readState, writeState, initialAnchor, clampAnchor, layout, hitShape, fullscreenDecision, canProactive, classifyMessage, readConfig: parseConfig, sizeOf, VARIANTS, speakable } = require('./model.cjs')
 const { createFullscreenProbe } = require('./fullscreen.cjs')
 
-function createCompanion({ electron, home, url, bootPathFor, openMain, log, now = Date.now, probeOverride, autoPoll = true, platform = process.platform }) {
+// readConfig/writeConfig are the agent config accessors (COMPANION_ENABLED,
+// COMPANION_VARIANT; default off / 'face'). Without them an in-memory config is
+// used, which is what the electron-free tests get.
+function createCompanion({ electron, home, url, bootPathFor, openMain, log, now = Date.now, probeOverride, autoPoll = true, platform = process.platform,
+  readConfig, writeConfig }) {
+  if (!readConfig || !writeConfig) {
+    const memory = {}
+    readConfig = () => ({ ...memory }); writeConfig = fields => Object.assign(memory, fields)
+  }
   const { app, BrowserWindow, screen, Tray, Menu, nativeImage, shell } = electron
   const token = new URL(bootPathFor('/'), url).searchParams.get('t')
   const bootAt = now()
-  let settings = readState(home, log)
+  const load = () => ({ ...readState(home, log), ...parseConfig(readConfig()) })
+  let settings = load()
+  const size = () => sizeOf(settings.variant)
+  // companion.json's own 'enabled' is a 0026 leftover; the agent config is the
+  // only switch, so the file always records false.
+  const persist = value => writeState(home, { ...value, enabled: false })
   let win = null, tray = null, timer = null, stopped = false, polling = false
   let anchor, display, geometry, bubble = null, serial = 0, cursor = null, lastError = null
   let busy = false, connected = false, providerHealthy = false, awaiting = null, awaitingUntil = 0, lastNudge = null
   let fullscreen = { fullscreen: false, known: process.platform === 'win32' }, hidden = false
   let touched = false, expiresAt = 0, dragging = null, bubbleHeight = 0, shapeKey = null
   const shaped = platform === 'win32' || platform === 'linux'
-  const probe = probeOverride || createFullscreenProbe({ BrowserWindow, log, platform })
+  // Lazy: off means not even the native fullscreen probe gets loaded.
+  let probeFn = probeOverride || null
+  const probe = () => (probeFn ||= createFullscreenProbe({ BrowserWindow, log, platform }))()
+  let dragTimer = null, listening = false
+  // Audio-once rule (design-0027): while the companion is on, the companion
+  // renderer owns read-aloud. New agent replies are handed to it here (last 8,
+  // by seq) and the chat window's tts.js stays silent.
+  let speech = []
 
   async function request(route, body) {
     const r = await fetch(new URL(route, url), {
@@ -29,8 +49,8 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
     if (!win || win.isDestroyed()) return
     const displays = screen.getAllDisplays()
     display = displays.find(d => d.id === display?.id) || screen.getPrimaryDisplay()
-    anchor = clampAnchor(anchor, display.workArea)
-    geometry = layout(anchor, display.workArea, !!bubble)
+    anchor = clampAnchor(anchor, display.workArea, size())
+    geometry = layout(anchor, display.workArea, !!bubble, size())
     win.setBounds(geometry.bounds)
     applyShape()
   }
@@ -42,14 +62,14 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
     shapeKey = key
   }
   function remember() {
-    settings = writeState(home, { ...settings, displayId: String(display.id),
-      positions: { ...settings.positions, [display.id]: anchor } })
+    settings = { ...persist({ ...settings, displayId: String(display.id),
+      positions: { ...settings.positions, [display.id]: anchor } }), ...parseConfig(readConfig()) }
   }
   function ensureWindow() {
     if (win && !win.isDestroyed()) return
-    const initial = initialAnchor(settings, screen.getAllDisplays(), screen.getPrimaryDisplay())
+    const initial = initialAnchor(settings, screen.getAllDisplays(), screen.getPrimaryDisplay(), size())
     anchor = initial.anchor; display = initial.display
-    geometry = layout(anchor, display.workArea, false)
+    geometry = layout(anchor, display.workArea, false, size())
     win = new BrowserWindow({ ...geometry.bounds, show: false, frame: false, transparent: true,
       backgroundColor: '#00000000', alwaysOnTop: true, skipTaskbar: true, resizable: false,
       maximizable: false, minimizable: false, hasShadow: false, title: 'Sera companion',
@@ -99,22 +119,32 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
   }
   function snapshot() {
     return { available: true, ...settings, bubble, ring: bubble && ['question', 'approval-reply', 'error'].includes(bubble.kind) ? 'attention' : busy || awaiting ? 'thinking' : 'idle',
-      connected, hiddenByFullscreen: hidden, fullscreenKnown: fullscreen.known, geometry }
+      speech, connected, hiddenByFullscreen: hidden, fullscreenKnown: fullscreen.known, geometry }
   }
   async function command(body) {
     const bad = () => { const e = new Error('invalid companion command'); e.code = 'BAD_COMMAND'; throw e }
     if (!body || typeof body !== 'object') bad()
+    if (body.action !== 'settings' && !settings.enabled) {
+      const e = new Error('companion disabled'); e.code = 'DISABLED'; throw e
+    }
     switch (body.action) {
       case 'settings': {
         if (body.enabled !== undefined && typeof body.enabled !== 'boolean') bad()
         if (body.sound !== undefined && typeof body.sound !== 'boolean') bad()
         if (body.intervalMinutes !== undefined && (!Number.isInteger(body.intervalMinutes) || body.intervalMinutes < 5 || body.intervalMinutes > 1440)) bad()
-        settings = writeState(home, { ...settings,
-          ...(body.enabled === undefined ? {} : { enabled: body.enabled }),
+        if (body.variant !== undefined && !VARIANTS.includes(body.variant)) bad()
+        const fields = {
+          ...(body.enabled === undefined ? {} : { COMPANION_ENABLED: String(body.enabled) }),
+          ...(body.variant === undefined ? {} : { COMPANION_VARIANT: body.variant }) }
+        if (Object.keys(fields).length) writeConfig(fields)
+        const before = settings.variant
+        settings = { ...persist({ ...settings,
           ...(body.sound === undefined ? {} : { sound: body.sound }),
-          ...(body.intervalMinutes === undefined ? {} : { intervalMinutes: body.intervalMinutes }) })
-        if (settings.enabled) { ensureWindow(); fullscreen = probe(); applyVisibility() }
-        else { collapse(); awaiting = null; dragging = null; hidden = false; trayFallback(); if (win) win.destroy(); cursor = null }
+          ...(body.intervalMinutes === undefined ? {} : { intervalMinutes: body.intervalMinutes }) }), ...parseConfig(readConfig()) }
+        if (settings.enabled) {
+          start(); ensureWindow(); fullscreen = probe(); applyVisibility()
+          if (before !== settings.variant) { shapeKey = null; reposition() }
+        } else { collapse(); awaiting = null; dragging = null; hidden = false; trayFallback(); if (win) win.destroy(); cursor = null; halt() }
         break
       }
       case 'pointer':
@@ -179,6 +209,7 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
           const seed = cursor === null
           for (const item of chat.items || []) {
             if (seed) continue
+            if (speakable(item)) speech = [...speech, { seq: item.seq, text: item.text.slice(0, 16000) }].slice(-8)
             if (item.kind === 'message' && item.role === 'user' && awaiting === 'proactive') awaiting = null
             const kind = classifyMessage(item, awaiting)
             if (kind) {
@@ -203,35 +234,48 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
         if (eligible()) await request('/api/companion/nudge', {})
       }
     } catch (e) { log(`companion poll: ${e.message}`) }
-    finally { polling = false; if (!stopped && autoPoll) timer = setTimeout(poll, 1000) }
+    finally { polling = false; if (!stopped && autoPoll && settings.enabled) timer = setTimeout(poll, 1000) }
   }
   // Cursor sampling happens ONLY during an explicit avatar drag, never idle.
-  const dragTimer = setInterval(() => {
+  const dragTick = () => {
     if (!dragging || !win) return
     if (now() >= dragging.until) { dragging = null; remember(); return }
     const point = screen.getCursorScreenPoint()
     display = screen.getDisplayNearestPoint(point)
-    anchor = clampAnchor({ x: dragging.anchor.x + point.x - dragging.start.x, y: dragging.anchor.y + point.y - dragging.start.y }, display.workArea)
+    anchor = clampAnchor({ x: dragging.anchor.x + point.x - dragging.start.x, y: dragging.anchor.y + point.y - dragging.start.y }, display.workArea, size())
     reposition()
-  }, 30)
+  }
   function displaysChanged() {
     if (!win) return
-    const selected = initialAnchor(settings, screen.getAllDisplays(), screen.getPrimaryDisplay())
+    const selected = initialAnchor(settings, screen.getAllDisplays(), screen.getPrimaryDisplay(), size())
     anchor = selected.anchor; display = selected.display; reposition()
   }
-  screen.on('display-removed', displaysChanged)
-  screen.on('display-metrics-changed', displaysChanged)
-  function dispose() {
-    stopped = true; clearTimeout(timer); clearInterval(dragTimer)
+  // Everything periodic exists only while enabled: off = no window, no poll,
+  // no drag sampler, no display listeners, no proactive nudges.
+  function start() {
+    if (stopped || listening) return
+    listening = true
+    dragTimer = setInterval(dragTick, 30)
+    screen.on('display-removed', displaysChanged)
+    screen.on('display-metrics-changed', displaysChanged)
+    if (autoPoll) { clearTimeout(timer); timer = setTimeout(poll, 1000) }
+  }
+  function halt() {
+    if (!listening) return
+    listening = false
+    clearTimeout(timer); timer = null; clearInterval(dragTimer); dragTimer = null
     screen.removeListener('display-removed', displaysChanged)
     screen.removeListener('display-metrics-changed', displaysChanged)
+  }
+  function dispose() {
+    halt(); stopped = true
     if (tray) { tray.destroy(); tray = null }
     if (win) win.destroy()
   }
   app.once('before-quit', dispose)
-  if (settings.enabled) { ensureWindow(); fullscreen = probe(); applyVisibility() }
-  if (autoPoll) timer = setTimeout(poll, 1000)
+  if (settings.enabled) { start(); ensureWindow(); fullscreen = probe(); applyVisibility() }
   return { snapshot, command, dispose, poll, isWindow: candidate => candidate === win,
+    get active() { return listening },
     claimNudge() {
       if (!eligible()) return false
       lastNudge = now(); awaiting = 'proactive'; awaitingUntil = now() + 60000

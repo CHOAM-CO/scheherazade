@@ -3896,6 +3896,8 @@ module.exports = {
   // Exported for test pins (vision stand-in table, 0.0.56) -- pure fn.
   laneVision,
   readAgentConfig,
+  // main.cjs: companion toggle (COMPANION_ENABLED) is flipped from its tray menu too.
+  writeAgentConfig,
   readDiscordToken,
   readHomeChannelId,
   // Exported for main.cjs's RUN_SH_PATH resolution -- same asar/asarUnpack

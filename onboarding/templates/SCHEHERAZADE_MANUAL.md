@@ -290,6 +290,28 @@ sherpa-onnx, Apache-2.0). Korean only for now.
 - If the mic is blocked, macOS asks once; after a denial it is System Settings →
   Privacy & Security → Microphone.
 
+## Desktop companion (컴패니언)
+Settings → 컴패니언 floats you in a small always-on-top window at a screen
+corner. Off by default; while off nothing of it runs (no window, no timers,
+no proactive lines).
+- **COMPANION_ENABLED**: on/off (default off).
+- **COMPANION_VARIANT**: `face` (default) or `orb` (shown as 얼굴 / 소리만).
+  - 얼굴: their avatar for you, cropped round; a speech bubble opens for
+    questions, approvals, errors and replies to what they asked from it.
+  - 소리만: no face. A ring that breathes when idle, moves with your actual
+    voice while read-aloud plays, and shows orbiting dots while the mic
+    listens. Hovering it shows three buttons: turn the companion off, stop
+    reading, mic (voice input, needs 음성 입력 on). Dictated text lands in the
+    bubble's reply box; nothing is sent on its own. Click the ring (or Space)
+    to pause/resume reading.
+- Audio plays once: while the companion is on, read-aloud plays in the
+  companion window (either variant) and the chat window stays silent, so a
+  reply is never spoken twice. With the companion off, the chat window reads
+  as before. Read-aloud itself still follows TTS_ENABLED.
+- Proactive lines: at most one per interval (default 45 min), never in the
+  first 2 minutes, never over a fullscreen app; they cost model usage.
+- Fullscreen apps hide it; a tray icon stands in until they leave.
+
 ## Your name
 
 They can rename you. It is their friend, not our label.

@@ -120,6 +120,7 @@ const {
   createOnboardingServer,
   migrateChannelBackendsOnDisk,
   readAgentConfig,
+  writeAgentConfig,
   readDiscordToken,
   readSlackBotToken,
   readSlackAppToken,
@@ -2730,6 +2731,8 @@ app.whenReady().then(async () => {
     try {
       companion = require('./companion/controller.cjs').createCompanion({
         electron: require('electron'), home: DATA_HOME, url, bootPathFor, log,
+        // COMPANION_ENABLED (default off) gates the window and every timer.
+        readConfig: readAgentConfig, writeConfig: writeAgentConfig,
         openMain: () => {
           const main = BrowserWindow.getAllWindows().find(w => !w.isSeraCompanion)
           if (main) { if (main.isMinimized()) main.restore(); main.show(); main.focus() }
