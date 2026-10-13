@@ -22,9 +22,23 @@
     play: url => new Promise(resolve => {
       audio = new Audio(url); speaking = true; playbackStarted = Date.now()
       detachAudio = window.SeraCompanionAudioTap?.(audio)
+      const clip = audio
       let done = false
-      const finish = () => { if (done) return; done = true; speaking = false; lastEnd = Date.now(); audio?.pause(); detachAudio?.(); detachAudio = null; URL.revokeObjectURL(url); audio = null; resolve() }
-      audio.onended = finish; audio.onerror = finish; audio.onpause = finish; audio.onstalled = finish; audio._done = finish; audio.play().catch(finish)
+      const finish = () => {
+        if (done) return
+        done = true; speaking = false; lastEnd = Date.now()
+        clip.onended = clip.onerror = clip.onpause = clip.onstalled = clip.onplaying = clip.oncanplay = null
+        clip.pause(); detachAudio?.(); detachAudio = null; URL.revokeObjectURL(url); audio = null; resolve()
+      }
+      clip.onended = finish; clip.onerror = finish
+      clip.onpause = () => { if (clip._stalledAt == null) finish() }
+      clip.onstalled = () => { if (clip._stalledAt == null) clip._stalledAt = Date.now() }
+      clip.onplaying = () => {
+        if (clip._stalledAt != null) playbackStarted += Date.now() - clip._stalledAt
+        clip._stalledAt = null
+      }
+      clip.oncanplay = () => { if (clip._stalledAt != null) clip.play().catch(finish) }
+      clip._done = finish; clip.play().catch(finish)
     }),
     onState: state => { if (state === 'playing') queueStarted = Date.now(); if (state === 'idle') queueStarted = 0 },
     stopPlayback: () => { speaking = false; if (audio) { const a = audio; a._done(); a.pause() } },

@@ -24,7 +24,7 @@ async function fixture({ failMic = false } = {}) {
     BroadcastChannel: class { postMessage() {} }, setInterval: (fn, ms) => { timers.push({ fn, ms }); return timers.length }, clearInterval() {}, setTimeout() {}, clearTimeout() {},
     Date: { now: () => now }, AbortSignal, console, URL: { createObjectURL: () => 'blob:test', revokeObjectURL() {} },
     fetch: async (_url, opts) => { spoken.push(JSON.parse(opts.body).text); return { ok: true, blob: async () => ({}) } },
-    Audio: class { constructor() { this.paused = false; this.ended = false; this.duration = 2; audios.push(this) }; play() { return Promise.resolve() }; pause() { this.paused = true; this.onpause?.() } },
+    Audio: class { constructor() { this.paused = false; this.ended = false; this.duration = 2; audios.push(this) }; play() { this.playCalls = (this.playCalls || 0) + 1; return Promise.resolve() }; pause() { this.paused = true; this.onpause?.() } },
   })
   await tick(); await tick()
   return { win, timers, spoken, audios, messages, element, setPayload: p => { payload = p }, advance: ms => { now += ms }, async run(ms) { for (const t of timers.filter(t => t.ms === ms)) await t.fn(); await tick(); await tick() } }
@@ -47,3 +47,32 @@ stalled.advance(121000); await stalled.run(250); stalled.advance(301); await sta
 assert.equal(stalled.win.SeraCall.speaking, false)
 }
 console.log('renderer regressions: failed mic off, abandoned draft and lost ended watchdog passed')
+
+// A short stall is not an ended segment, even near the duration watchdog.
+const resume = await fixture(); await resume.run(250)
+resume.setPayload({ latest: 0, items: [], draft: '첫 문장. 두 번째. ' }); await resume.run(250)
+const clip = resume.audios[0]
+resume.advance(7000); clip.onstalled()
+resume.advance(7999); await resume.run(250)
+assert.equal(resume.spoken.length, 1, 'stall must not advance the queue')
+assert.equal(resume.win.SeraCall.speaking, true, 'mic remains suppressed during stall')
+clip.oncanplay(); assert.equal(clip.playCalls, 2, 'canplay attempts to resume')
+clip.onplaying(); await resume.run(250)
+assert.equal(resume.spoken.length, 1, 'resume extends watchdog by time spent stalled')
+clip.onended(); await resume.run(250)
+assert.equal(resume.spoken.length, 2, 'only ended advances the recovered segment')
+assert.equal(clip.onstalled, null, 'finished clips cannot affect later playback')
+
+const timeout = await fixture(); await timeout.run(250)
+timeout.setPayload({ latest: 0, items: [], draft: '첫 문장. 두 번째. ' }); await timeout.run(250)
+const stuck = timeout.audios[0]
+stuck.onstalled(); timeout.advance(4000); stuck.onstalled()
+timeout.advance(3999); await timeout.run(250); assert.equal(timeout.spoken.length, 1)
+timeout.advance(1); await timeout.run(250)
+assert.equal(timeout.spoken.length, 2, 'eight seconds skips a stalled segment; repeated stalls do not reset the deadline')
+assert.equal(timeout.win.SeraCall.active, true)
+timeout.audios[1].onstalled(); timeout.win.SeraCall.stop()
+timeout.advance(9000); await timeout.run(250)
+assert.equal(timeout.win.SeraCall.speaking, false, 'hangup clears stalled playback immediately')
+assert.equal(timeout.spoken.length, 2)
+console.log('renderer stall regression: wait, canplay/playing resume, eight-second skip and hangup passed')

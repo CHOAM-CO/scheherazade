@@ -57,6 +57,7 @@
   }
   function micHealth(active, mode) { return !active ? 'off' : mode === 'listening' ? 'ok' : mode === 'processing' ? 'opening' : 'failed' }
   function playbackExpired(audio, started, now) {
+    if (audio._stalledAt != null) return now - audio._stalledAt >= 8000
     const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration * 1500 + 5000 : 120000
     return audio.ended || (audio.paused && now - started > 500) || now - started > Math.min(120000, duration)
   }
