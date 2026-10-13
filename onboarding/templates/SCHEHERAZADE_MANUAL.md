@@ -397,6 +397,8 @@ The extension popup kill switch detaches the agent without closing Chrome.
 `CALL_ENABLED` defaults to false. Enable Read aloud and Voice input first, then
 Call mode in Settings or the companion hover row. The microphone stays open;
 endpointed utterances send automatically. Turning off closes capture and clears
-speech. Recognition ignores microphone audio during playback to avoid speaker
-echo; interruption works only between sentences. Streaming-capable lanes speak
+speech. Recognition ignores microphone audio during playback, queued synthesis and a
+300 ms speaker tail to avoid echo; interruption works only while listening.
+A microphone failure turns Call mode off with a visible error; check permissions
+and enable it again. Streaming-capable lanes speak
 complete sentences as they arrive; other lanes speak after completion.
