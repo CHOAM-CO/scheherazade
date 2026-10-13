@@ -63,9 +63,10 @@
     onState: state => { if (state === 'playing') queueStarted = Date.now(); if (state === 'idle') queueStarted = 0 },
     stopPlayback: () => { speaking = false; if (audio) { const a = audio; a._done(); a.pause() } },
   })
-  const session = core.createSession({ send: text => { post('/api/chat/in', { text }).catch(e => presentError(e.message)) }, closeMic: () => window.SeraSTT?.cancel(), clearQueue: stopSpeech })
-  function off() { if (!active) return; active = false; session.stop(); cursor = null; reply.reset(); const mic = document.getElementById(companion ? 'b-mic' : 'ct-mic'); if (mic) mic.disabled = false }
-  window.SeraCall = { get active() { return active }, get speaking() { return active && core.suppressMic(queue.running && !speechStopped, speaking, lastEnd, Date.now()) }, stop() { enabled = false; retrying = false; off(); renderState(); post('/api/call', { enabled: false }).then(() => channel.postMessage({ enabled: false })).catch(e => presentError(e.message)) }, stopSpeech, final: text => session.final(text), partial: text => session.partial(text, stopSpeech) }
+  const utterance = core.createUtteranceAggregator({ send: text => { post('/api/chat/in', { text }).catch(e => presentError(e.message)) } })
+  const session = core.createSession({ send: text => utterance.final(text), closeMic: () => window.SeraSTT?.cancel(), clearQueue: stopSpeech })
+  function off() { if (!active) return; active = false; utterance.reset(); session.stop(); cursor = null; reply.reset(); const mic = document.getElementById(companion ? 'b-mic' : 'ct-mic'); if (mic) mic.disabled = false }
+  window.SeraCall = { get active() { return active }, get speaking() { return active && core.suppressMic(queue.running && !speechStopped, speaking, lastEnd, Date.now()) }, stop() { enabled = false; retrying = false; off(); renderState(); post('/api/call', { enabled: false }).then(() => channel.postMessage({ enabled: false })).catch(e => presentError(e.message)) }, stopSpeech, final: text => session.final(text), partial: text => { utterance.partial(text); session.partial(text, stopSpeech) } }
   const button = document.createElement(settings ? 'input' : 'button')
   button.id = 'call-mode'; button.type = settings ? 'checkbox' : 'button'
   const label = ko ? '통화 모드' : 'Call mode'

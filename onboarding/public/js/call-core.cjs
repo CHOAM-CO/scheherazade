@@ -86,6 +86,36 @@
       },
     }
   }
+  // Call-only: endpoints are transcript fragments, not conversation turns.
+  const UTTERANCE_WINDOW_MS = 1200, UTTERANCE_CAP_MS = 12000, UTTERANCE_CAP_CHARS = 400
+  function createUtteranceAggregator({ send, windowMs = UTTERANCE_WINDOW_MS,
+    capMs = UTTERANCE_CAP_MS, capChars = UTTERANCE_CAP_CHARS,
+    setTimer = setTimeout, clearTimer = clearTimeout }) {
+    let text = '', silence = null, cap = null, recognizing = false
+    function clear() { clearTimer(silence); clearTimer(cap); silence = cap = null }
+    function flush() {
+      if (!text) return
+      const turn = text; text = ''; clear(); send(turn)
+    }
+    function arm() {
+      clearTimer(silence)
+      silence = !recognizing && text ? setTimer(flush, windowMs) : null
+    }
+    return {
+      get waiting() { return !!text },
+      final(fragment) {
+        fragment = fragment.trim(); if (!fragment) return
+        if (!text) cap = setTimer(flush, capMs)
+        text = text ? text + ' ' + fragment : fragment
+        recognizing = false
+        if (text.length >= capChars) flush(); else arm()
+      },
+      // A live hypothesis suspends the quiet deadline until its endpoint.
+      // The cap still releases already finalized text during a long monologue.
+      partial(value) { recognizing = !!value.trim(); if (recognizing) { clearTimer(silence); silence = null } },
+      reset() { clear(); text = ''; recognizing = false },
+    }
+  }
   function createSession({ send, closeMic, clearQueue, now = () => Date.now() }) {
     let on = false, generation = 0
     const recent = new Map()
@@ -104,7 +134,7 @@
       stop() { on = false; generation++; closeMic(); clearQueue() },
     }
   }
-  const api = { split, createSegmentRetry, createSession, createReplySpeech, micHealth, playbackExpired, suppressMic }
+  const api = { createUtteranceAggregator, UTTERANCE_WINDOW_MS, UTTERANCE_CAP_MS, UTTERANCE_CAP_CHARS, split, createSegmentRetry, createSession, createReplySpeech, micHealth, playbackExpired, suppressMic }
   if (typeof module !== 'undefined') module.exports = api
   else root.SeraCallCore = api
 })(typeof window !== 'undefined' ? window : globalThis)

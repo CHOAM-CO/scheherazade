@@ -138,7 +138,7 @@
     const request = () => fetch('/api/stt/audio', { signal: AbortSignal.timeout(10000), method: 'POST', headers: { 'content-type': 'application/octet-stream', 'X-Onboard-Token': token(), 'X-STT-Session': sid }, body: pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength) })
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
     inflight = (audioRetry ? audioRetry.run(request, () => requestEpoch === epoch && mode !== 'idle') : request())
-      .then(r => { if (mode === 'idle' || requestEpoch !== epoch) return; if (window.SeraCall?.active) { window.SeraCall.partial(r.partial || ''); for (const text of r.finals) window.SeraCall.final(text); finals = []; base = ''; partial = r.partial || '' } else { finals.push(...r.finals); partial = r.partial || '' }; render() })
+      .then(r => { if (mode === 'idle' || requestEpoch !== epoch) return; if (window.SeraCall?.active) { for (const text of r.finals) window.SeraCall.final(text); window.SeraCall.partial(r.partial || ''); finals = []; base = ''; partial = r.partial || '' } else { finals.push(...r.finals); partial = r.partial || '' }; render() })
       .catch(e => { console.warn('[stt]', e.message) })
       .finally(() => { inflight = null; if (mode === 'listening') pump() })
     return inflight

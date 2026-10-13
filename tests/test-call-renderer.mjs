@@ -6,6 +6,7 @@ const require = createRequire(import.meta.url)
 const source = fs.readFileSync(process.env.CALL_RENDERER_SOURCE || new URL('../onboarding/public/js/call.js', import.meta.url), 'utf8')
 const tick = () => new Promise(r => setImmediate(r))
 async function fixture({ failMic = false, companion = true, toast = true, remote = false, failTTS = false } = {}) {
+  const deadlines = new Map(); let timerId = 0
   const timers = [], spoken = [], elements = new Map(), messages = [], bubbleErrors = [], posted = [], keys = []
   function make(id = '') {
     return { id, children: [], hidden: false, textContent: '', setAttribute(k,v) { this[k] = v }, getAttribute(k) { return this[k] },
@@ -20,7 +21,7 @@ async function fixture({ failMic = false, companion = true, toast = true, remote
   let mode = 'idle', payload = { latest: 0, items: [], draft: '' }, enabled = true, turnError = {}, failPost = false
   const audios = []; let now = 1000
   const win = {
-    SeraCallCore: { ...require('../onboarding/public/js/call-core.cjs'), createSegmentRetry: opts => require('../onboarding/public/js/call-core.cjs').createSegmentRetry({ ...opts, wait: () => Promise.resolve() }) },
+    SeraCallCore: { ...require('../onboarding/public/js/call-core.cjs'), createUtteranceAggregator: opts => require('../onboarding/public/js/call-core.cjs').createUtteranceAggregator({ ...opts, setTimer: (fn, ms) => { deadlines.set(++timerId, { fn, at: now + ms }); return timerId }, clearTimer: id => deadlines.delete(id) }), createSegmentRetry: opts => require('../onboarding/public/js/call-core.cjs').createSegmentRetry({ ...opts, wait: () => Promise.resolve() }) },
     SeraTTSCore: { cleanForSpeech: require('../onboarding/public/js/tts-core.cjs').cleanForSpeech, createSpeechQueue: require('../onboarding/public/js/tts-core.cjs').createSpeechQueue },
     SeraSTT: { get mode() { return mode }, async start() { mode = failMic ? 'idle' : 'listening' }, cancel() { mode = 'idle' } },
     getOnboardToken: () => '', addEventListener() {}, ...(toast ? { showToast: x => messages.push(x) } : {}), SeraCompanionError: x => bubbleErrors.push(x),
@@ -33,7 +34,7 @@ async function fixture({ failMic = false, companion = true, toast = true, remote
     Audio: class { constructor() { this.paused = false; this.ended = false; this.duration = 2; audios.push(this) }; play() { this.playCalls = (this.playCalls || 0) + 1; return Promise.resolve() }; pause() { this.paused = true; this.onpause?.() } },
   })
   await tick(); await tick()
-  return { win, timers, spoken, audios, messages, bubbleErrors, posted, keys, root, element, setError: e => { turnError = e }, failPost: () => { failPost = true }, setPayload: p => { payload = p }, advance: ms => { now += ms }, async run(ms) { for (const t of timers.filter(t => t.ms === ms)) await t.fn(); await tick(); await tick() } }
+  return { win, timers, spoken, audios, messages, bubbleErrors, posted, keys, root, element, setError: e => { turnError = e }, failPost: () => { failPost = true }, setPayload: p => { payload = p }, advance: ms => { now += ms; for (const [id, t] of [...deadlines]) if (t.at <= now && deadlines.delete(id)) t.fn() }, async run(ms) { for (const t of timers.filter(t => t.ms === ms)) await t.fn(); await tick(); await tick() } }
 }
 // B2 must never claim active after a failed open.
 if (!process.env.CALL_CASE || process.env.CALL_CASE === 'B2') { const failed = await fixture({ failMic: true }); assert.equal(failed.win.SeraCall.active, false) }
@@ -113,7 +114,7 @@ assert.equal(remote.element('call-state').textContent, '말하는 중')
 remote.keys[0]({ key: 'Escape', preventDefault() {}, stopImmediatePropagation() {} }); await tick()
 assert.equal(remote.element('call-controls').hidden, true, 'Esc stops even a non-owning call surface')
 for (const toast of [false, true]) {
-  const f = await fixture({ toast }); f.failPost(); f.win.SeraCall.final('전송'); await tick()
+  const f = await fixture({ toast }); f.failPost(); f.win.SeraCall.final('전송'); f.advance(1200); await tick()
   assert.deepEqual(toast ? f.messages : f.bubbleErrors, ['request failed'])
   assert.equal((toast ? f.bubbleErrors : f.messages).length, 0)
   const mic = await fixture({ toast, failMic: true })
@@ -131,3 +132,14 @@ for (const toast of [false, true]) {
   assert.deepEqual(toast ? f.messages : f.bubbleErrors, ['TTS 503'], 'exhausted TTS uses the shared presenter')
 }
 console.log('TTS error routing: retries quiet, exhausted segments stop and alert on both surfaces')
+
+const aggregated = await fixture(); await aggregated.run(250)
+aggregated.win.SeraCall.final('첫 구절'); aggregated.advance(1100)
+assert.equal(aggregated.posted.filter(p => p.url === '/api/chat/in').length, 0)
+aggregated.win.SeraCall.partial('다음'); aggregated.advance(1500)
+assert.equal(aggregated.posted.filter(p => p.url === '/api/chat/in').length, 0)
+aggregated.win.SeraCall.final('다음 구절'); aggregated.advance(1200); await tick()
+assert.equal(aggregated.posted.find(p => p.url === '/api/chat/in').body.text, '첫 구절 다음 구절')
+aggregated.win.SeraCall.final('종료 후 보내면 안 됨'); aggregated.win.SeraCall.stop(); aggregated.advance(15000)
+assert.equal(aggregated.posted.filter(p => p.url === '/api/chat/in').length, 1)
+console.log('call aggregation: delayed publication, resumed speech merge and hangup cancellation passed')
