@@ -54,9 +54,6 @@ const direct = buildTestPatch({})
 assert(!direct.includes('baseURL:'), 'bare Anthropic uses the adapter catalog endpoint')
 assert(direct.includes('api: anthropic-messages'))
 for (const model of catalog.MODELS.filter(m => m.id.startsWith('claude-'))) assert(direct.includes(`id: "${model.id}"`))
-const metadata = buildTestPatch({}, [{ id: 'claude-sonnet-5-5', vision: false, maxTokens: 12345 }])
-assert(metadata.includes('input: [text]'))
-assert(metadata.includes('maxTokens: 12345'))
 const main = fs.readFileSync(new URL('../main.cjs', import.meta.url), 'utf8')
 const pollStart = main.indexOf('function pollFailureMarker()')
 const pollEnd = main.indexOf('\n}', pollStart) + 2
@@ -102,4 +99,55 @@ await vm.runInNewContext(`(${connectors.slice(controlStart, controlEnd)})('model
   showToast: () => {}, GEN: x => x,
 })
 assert.equal(picker.disabled, false, 'failed state/request leaves picker usable')
-console.log('PASS: bare Anthropic, per-row metadata, status detail rendering and picker recovery')
+console.log('PASS: bare Anthropic, status detail rendering and picker recovery')
+
+// Drive the real route fallback -> restart -> fresh-spawn status segment.
+// Poll immediately at startup to catch a stale marker race, not just a
+// successful reset that depends on the new supervisor clearing it in time.
+function mainFunction(name) {
+  const start = main.indexOf(`function ${name}(`)
+  const end = main.indexOf('\n}', start) + 2
+  return main.slice(start, end)
+}
+const markerPath = '/fixture/.agent-failed.json'
+const markerFiles = new Map([[markerPath, { code: 'model_selection_failed', reason: message }]])
+setAgentStatus('failed', 'model_selection_failed', message)
+const context = vm.createContext({
+  agentChild: null, agentSupervisorPid: null, shuttingDown: false,
+  routeProxy: { server: { listening: true } }, lastSpawnEnv: {},
+  readAgentConfig: () => ({ MODEL: 'claude-opus-5-5', PROVIDER: 'claude' }),
+  CLAUDE_CLI_PROVIDER_ID: 'claude-cli', log: () => {}, console: { error: () => {} },
+  intentionalStopMode: null, stopAgentAwaited: async () => {},
+  agentTopologyIsAttach: () => false, waitForAgentHandleCleared: async () => true,
+  setAgentStatus, AGENT_FAILFILE: markerPath,
+  fs: {
+    rmSync: p => markerFiles.delete(p),
+    unlinkSync: p => markerFiles.delete(p),
+    writeFileSync: () => {},
+  },
+  process: { execPath: '/node' }, SUPERVISOR_MJS_PATH: '/supervisor.mjs', DATA_HOME: '/fixture',
+  supervisorEnv: {}, spawn: () => ({ pid: 42 }),
+  startChannelCompanions: async () => {}, enabledBackends: ['local'], agentName: 'Sera',
+  config: { MODEL: 'claude-opus-5-5', PROVIDER: 'claude' },
+  AGENT_PIDFILE: '/fixture/.agent.pid',
+  startFailurePoll: () => {
+    if (markerFiles.has(markerPath)) setAgentStatus('failed', 'model_selection_failed', message)
+  },
+})
+vm.runInContext(mainFunction('routeDecisionFor'), context)
+const realRestart = vm.runInContext('(async ' + mainFunction('restartAgent') + ')', context)
+let restarted
+context.restartAgent = () => {
+  restarted = realRestart()
+  return restarted
+}
+// Include any preparation inserted immediately before spawn, not just spawn.
+const spawnStart = main.indexOf('  // ONE lane, every platform')
+const spawnEnd = main.indexOf("  child.stdout.on('data'", spawnStart)
+context.spawnRealAgentChild = async () => vm.runInContext(`(async () => { ${main.slice(spawnStart, spawnEnd)} })()`, context)
+const result = await vm.runInContext(`(async ${mainFunction('applyRouteInner')})()`, context)
+assert.equal(result.mode, 'restart')
+await restarted
+assert.equal(getAgentStatus().state, 'connecting', 'picker model change after exit 78 resets panel status')
+assert(!markerFiles.has(markerPath), 'fresh spawn clears terminal failure before its first poll')
+console.log('PASS: picker restart changes failed to connecting without a stale-marker race')

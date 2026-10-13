@@ -1577,8 +1577,8 @@
       }
       if (result.state === 'failed') {
         stopS5Poll()
-        // result.detail is free-form debug prose -- log it, never render
-        // it. result.code is the stable enum that drives the cause table.
+        // result.code drives the cause table. Log detail for every failure;
+        // model_selection_failed also renders it as text with picker guidance.
         if (result.detail) console.error('agent failed:', result.code, result.detail)
         renderStep5Failed(result.code, result.detail)
         return

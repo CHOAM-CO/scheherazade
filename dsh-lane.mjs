@@ -298,15 +298,12 @@ function buildPatch () {
   // Per-model window, so the vision sidecar declares its OWN number instead
   // of inheriting the main model's -- they are different models.
   const modelRow = (id, name, vision) => {
-    const metadata = MODEL_CATALOG.MODELS.find((m) => m.id === id)
-    const modelVision = metadata?.vision ?? vision
-    const maxTokens = metadata?.maxTokens ?? DSH_MODEL_MAXTOK
     return [
       `          - id: ${yamlQuote(id)}`,
       `            name: ${yamlQuote(name)}`,
-      `            input: [${modelVision ? 'text, image' : 'text'}]`,
+      `            input: [${vision ? 'text, image' : 'text'}]`,
       `            contextWindow: ${declaredContextFor(id)}`,
-      `            maxTokens: ${maxTokens}`,
+      `            maxTokens: ${DSH_MODEL_MAXTOK}`,
       `            reasoningEfforts:`,
       efforts
     ].join('\n')

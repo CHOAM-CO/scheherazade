@@ -1981,6 +1981,11 @@ async function spawnRealAgentChildLocked() {
   // what lets app-quit signal the WHOLE tree (supervisor -> lane -> engine)
   // with one negative-pid signal without touching Electron's own group; on
   // win32, where no such thing exists, proc.killTree does taskkill /T instead.
+  // A fresh picker restart must not re-read the previous terminal failure
+  // before the new supervisor gets CPU time to clear it. Otherwise the poll
+  // restores 'failed' after our 'connecting' stamp and marker disappearance
+  // deliberately does not reset that state. No live supervisor is adopted here.
+  fs.rmSync(AGENT_FAILFILE, { force: true })
   const child = spawn(process.execPath, [SUPERVISOR_MJS_PATH, '__loop'], {
     cwd: DATA_HOME,
     env: { ...supervisorEnv, ELECTRON_RUN_AS_NODE: '1' },
