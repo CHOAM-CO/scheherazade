@@ -107,6 +107,7 @@ const AGENT_STATUS_CODES = Object.freeze([
   'key_error', // same, for the provider key
   // -- the user's configuration
   'provider_not_wired',
+  'model_selection_failed', // chosen model/effort was rejected; pick another
   'cli_missing', // Claude Code is not installed on this machine
   'ollama_unavailable', // the local Ollama daemon is not up
   'proxy_unavailable', // the local codex-as-api proxy is not up

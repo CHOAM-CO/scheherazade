@@ -403,6 +403,19 @@ const NOON_KST = Date.UTC(2026, 6, 14, 3, 0, 0) // 12:00 KST -- far from rollove
   const result = await runLoop(h.cfg, h.deps)
   ok('model selection config failure returns 78 without any restart/backoff', result === 78 && h.sleeps.length === 0)
   ok('config failure preserves the lane detail and removes supervisor pidfile', JSON.parse(fs.readFileSync(h.cfg.failfile)).reason === 'unsupported medium' && !fs.existsSync(h.cfg.pidfile))
+  let restarted = false
+  h.cfg.model = 'claude-opus-5-5'
+  const restartDeps = {
+    ...h.deps,
+    spawnChild: (cfg) => {
+      restarted = cfg.model === 'claude-opus-5-5' && !fs.existsSync(cfg.failfile)
+      fs.writeFileSync(cfg.stopflag, '')
+      return { pid: 2, kill: () => {}, exited: Promise.resolve({ exitCode: 0 }) }
+    },
+  }
+  const restartResult = await runLoop(h.cfg, restartDeps)
+  ok('subsequent model change starts a fresh loop with the failure marker cleared', restarted && restartResult === 0)
+
   h.cleanup()
 }
 

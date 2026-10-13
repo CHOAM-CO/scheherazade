@@ -690,6 +690,11 @@ window.COPY = {
           action: () => 'Re-check the token from BotFather in Settings, then quit and reopen the app.',
           buttons: ['openSettings', 'openLogs'],
         },
+        model_selection_failed: {
+          cause: (_name, detail) => detail || 'The selected model or effort was rejected.',
+          action: () => 'Pick a different model or effort in the model picker on the Engine page.',
+          buttons: ['openEngine', 'openLogs'],
+        },
         provider_not_wired: {
           cause: () => "The model connection you chose isn't ready yet.",
           action: () => 'Switch the model to Claude on the Engine page, then quit and reopen the app.',

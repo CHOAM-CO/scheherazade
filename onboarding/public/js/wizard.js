@@ -1506,11 +1506,11 @@
     ])
   }
 
-  function renderStep5Failed(code) {
+  function renderStep5Failed(code, detail) {
     const causes = C.step5.failed.causes
     const row = causes[code] || causes.unknown
     $('s5-title').textContent = C.step5.failed.title
-    $('s5-body').textContent = `${row.cause(state.displayName)} ${row.action(state.displayName)}`
+    $('s5-body').textContent = `${row.cause(state.displayName, detail)} ${row.action(state.displayName)}`
 
     const buttons = row.buttons.map((kind) => {
       if (kind === 'openSettings') {
@@ -1580,7 +1580,7 @@
         // result.detail is free-form debug prose -- log it, never render
         // it. result.code is the stable enum that drives the cause table.
         if (result.detail) console.error('agent failed:', result.code, result.detail)
-        renderStep5Failed(result.code)
+        renderStep5Failed(result.code, result.detail)
         return
       }
       renderStep5Connecting()

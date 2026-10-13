@@ -58,6 +58,7 @@ assert(AGENT_STATUS_CODES.includes('unknown'), "AGENT_STATUS_CODES includes the 
 // Missing the second route is exactly how slack_token_bad and
 // telegram_token_bad stayed invisible: nothing in main.cjs mentions them.
 const EMITTERS = [
+  { file: 'dsh-lane.mjs', re: /code:\s*'(model_selection_failed)'/g },
   { file: 'main.cjs', re: /setAgentStatus\(\s*'[a-z]+'\s*,\s*'([^']+)'/g },
   { file: 'channel.mjs', re: /writeFailureMarker\(\s*[^,)]+,\s*'([^']+)'/g },
   { file: 'channel-slack.mjs', re: /writeFailureMarker\(\s*[^,)]+,\s*'([^']+)'/g },

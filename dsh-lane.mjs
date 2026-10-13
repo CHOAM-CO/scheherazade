@@ -297,15 +297,20 @@ function buildPatch () {
     .map((e) => e === 'off' ? '              off:' : `              ${e}: ${e}`).join('\n')
   // Per-model window, so the vision sidecar declares its OWN number instead
   // of inheriting the main model's -- they are different models.
-  const modelRow = (id, name, vision) => [
-    `          - id: ${yamlQuote(id)}`,
-    `            name: ${yamlQuote(name)}`,
-    `            input: [${vision ? 'text, image' : 'text'}]`,
-    `            contextWindow: ${declaredContextFor(id)}`,
-    `            maxTokens: ${DSH_MODEL_MAXTOK}`,
-    `            reasoningEfforts:`,
-    efforts
-  ].join('\n')
+  const modelRow = (id, name, vision) => {
+    const metadata = MODEL_CATALOG.MODELS.find((m) => m.id === id)
+    const modelVision = metadata?.vision ?? vision
+    const maxTokens = metadata?.maxTokens ?? DSH_MODEL_MAXTOK
+    return [
+      `          - id: ${yamlQuote(id)}`,
+      `            name: ${yamlQuote(name)}`,
+      `            input: [${modelVision ? 'text, image' : 'text'}]`,
+      `            contextWindow: ${declaredContextFor(id)}`,
+      `            maxTokens: ${maxTokens}`,
+      `            reasoningEfforts:`,
+      efforts
+    ].join('\n')
+  }
   // Retry policy: dsh's default retryableCodes INCLUDE EMPTY_RESPONSE, but a
   // channel agent's final assistant message after its reply tool call is
   // NORMALLY empty -- the reply already went out through the tool. With the
@@ -322,7 +327,8 @@ function buildPatch () {
   ]
   let providerBlock
   if (DSH_ROUTE === 'anthropic-catalog') {
-    // Declare all picker Claude rows (including ids newer than pi-ai), plus
+    // A non-empty models list REPLACES pi-ai's served catalog; declare all
+    // picker Claude rows (including ids newer than pi-ai), plus
     // the selected id for discovered models. Each keeps its own context and
     // image modality; the route-level proxy override and native auth survive.
     const claudeIds = new Set([
@@ -637,7 +643,6 @@ async function main () {
     const reason = `selectModel failed (${DSH_PROVIDER}/${DSH_MODEL}, effort ${DSH_EFFORT}): ${e.message || String(e)}`
     errLog(reason) // main captures lane stderr under [agent!].
     try {
-      fs.writeFileSync(liveRouteFile(), JSON.stringify({ model: DSH_MODEL, effort: DSH_EFFORT, error: reason, status: 'failed', since: new Date().toISOString() }) + '\n')
       fs.writeFileSync(path.join(MEM, '.agent-failed.json'), JSON.stringify({ status: 'failed', code: 'model_selection_failed', reason, since: new Date().toISOString() }) + '\n')
     } catch (markerError) { errLog(`selection failure marker write failed: ${markerError.message}`) }
     killEngine(child)
