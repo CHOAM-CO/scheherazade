@@ -116,6 +116,8 @@
       "procedures/**/*",
       "docs/release-notes-v*.md",
       "!docs/release-notes-v*.ko.md",
+      "!node_modules/onnxruntime-node/bin/napi-v6/win32/arm64/**",
+      "!node_modules/onnxruntime-node/bin/napi-v6/linux/arm64/**",
       "CLAUDE.md",
       "ONTOLOGY_GUIDE.md",
       "BUILD_INFO.json",
@@ -173,9 +175,6 @@
       "calendar/**"
     ],
     "mac": {
-      "files": [
-        "!node_modules/onnxruntime-node/bin/napi-v6/{linux,win32}/**"
-      ],
       "extraResources": [
         {
           "from": "vendor/tmux-portable",
@@ -207,10 +206,6 @@
       "sign": false
     },
     "win": {
-      "files": [
-        "!node_modules/onnxruntime-node/bin/napi-v6/{darwin,linux}/**",
-        "!node_modules/onnxruntime-node/bin/napi-v6/win32/arm64/**"
-      ],
       "target": [
         {
           "target": "nsis",
@@ -222,10 +217,6 @@
       "artifactName": "Scheherazade-Setup-${version}.exe"
     },
     "linux": {
-      "files": [
-        "!node_modules/onnxruntime-node/bin/napi-v6/{darwin,win32}/**",
-        "!node_modules/onnxruntime-node/bin/napi-v6/linux/arm64/**"
-      ],
       "target": [
         {
           "target": "AppImage",
