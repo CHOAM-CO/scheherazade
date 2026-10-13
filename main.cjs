@@ -2094,6 +2094,12 @@ async function spawnRealAgentChildLocked() {
       // which is not the same failure as never starting (2026-08-04; both
       // were 'unknown').
       setAgentStatus('failed', 'agent_exited', `agent process exited unexpectedly (code=${code} signal=${signal})`)
+      if (code === 78) {
+        // Terminal lane configuration failure: keep the full picker error,
+        // even if the failure poll already saw this marker before exit.
+        lastFailureMtimeMs = 0
+        pollFailureMarker()
+      }
     }
   })
 

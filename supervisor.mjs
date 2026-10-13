@@ -971,6 +971,14 @@ export async function runLoop(cfg, deps = {}) {
 
     if (stopRequested()) { exitOnStop(); return 0 }
 
+    // EX_CONFIG: lane already wrote the actionable failure marker. A model
+    // pick cannot recover by respawning the same configuration indefinitely.
+    if (exitCode === 78) {
+      log('agent configuration failed (exit 78); stopped until an explicit start/model change')
+      try { fs.rmSync(cfg.pidfile, { force: true }) } catch {}
+      return 78
+    }
+
     const uptime = Math.floor((now() - started) / 1000)
     if (uptime > 300) {
       restartCount = 0
@@ -1122,8 +1130,7 @@ if (isMain) {
   } else if (mode === 'stop') {
     try { await stopAgent(cfg) } catch (err) { fatalSupervisor(err) }
   } else if (mode === '__loop') {
-    try { await runLoop(cfg) } catch (err) { fatalSupervisor(err) }
-    process.exit(0)
+    try { process.exit(await runLoop(cfg)) } catch (err) { fatalSupervisor(err) }
   } else {
     console.error(`usage: supervisor.mjs [start|stop]`)
     process.exit(1)

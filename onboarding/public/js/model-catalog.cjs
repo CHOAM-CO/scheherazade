@@ -160,17 +160,8 @@
   // questions; a companion chat lives at high. Shown as an option suffix.
   const EFFORT_HINTS = { low: 'fastest', xhigh: 'deep work', max: 'slow, hard questions only' }
 
-  // The reasoningEfforts map dsh-lane.mjs declares on every hand-declared
-  // model row. It is NOT the same list as EFFORT_LEVELS above and the two are
-  // kept separate on purpose rather than reconciled here: the lane declares
-  // 'off' (which no picker offers) and does NOT declare 'medium' (which the
-  // picker does offer, and which provider-env.cjs passes through verbatim as
-  // DSH_EFFORT). Making them one list would silently either add an undeclared
-  // effort to the lane or remove a level from the UI; both are decisions with
-  // a live-behaviour blast radius, so they belong to whoever verifies against
-  // a running engine, not to a refactor. Written down side by side here so
-  // the gap is visible in one file instead of two.
-  const DSH_REASONING_EFFORTS = ['off', 'low', 'high', 'max']
+  // Every picker effort is accepted by declared rows; off remains lane-only.
+  const DSH_REASONING_EFFORTS = ['off', 'low', 'medium', 'high', 'xhigh', 'max']
 
   const BUNDLED_MODELS = MODELS.map((m) => ({ ...m }))
   const BY_ID = new Map(MODELS.map((m) => [m.id, m]))

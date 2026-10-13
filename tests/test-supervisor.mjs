@@ -394,6 +394,20 @@ function makeLoopHarness({ baseMs, script }) {
 const NOON_KST = Date.UTC(2026, 6, 14, 3, 0, 0) // 12:00 KST -- far from rollover
 
 {
+  const h = makeLoopHarness({ baseMs: NOON_KST, script: [{ runSec: 1, exitCode: 78 }] })
+  const originalSpawn = h.deps.spawnChild
+  h.deps.spawnChild = (cfg) => {
+    fs.writeFileSync(cfg.failfile, JSON.stringify({ code: 'model_selection_failed', reason: 'unsupported medium' }))
+    return originalSpawn(cfg)
+  }
+  const result = await runLoop(h.cfg, h.deps)
+  ok('model selection config failure returns 78 without any restart/backoff', result === 78 && h.sleeps.length === 0)
+  ok('config failure preserves the lane detail and removes supervisor pidfile', JSON.parse(fs.readFileSync(h.cfg.failfile)).reason === 'unsupported medium' && !fs.existsSync(h.cfg.pidfile))
+  h.cleanup()
+}
+
+
+{
   // Attack: three quick crashes escalate the ladder AND write the marker.
   const h = makeLoopHarness({
     baseMs: NOON_KST,

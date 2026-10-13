@@ -195,7 +195,7 @@ const get = async (p) => {
   const catalog = sel.slice(sel.indexOf("client.selectModel(sessionId, 'anthropic', model"))
   chk('lane: catalog route also moves DSH_EFFORT + env and writes .live-route.json', /if \(effort\) \{ DSH_EFFORT = effort; process\.env\.DSH_EFFORT = effort \}/.test(catalog) && /writeLiveRoute\(model, effort \|\| DSH_EFFORT\)/.test(catalog))
   chk('lane: .live-route.json lives in the data home with {model, effort, since}', /path\.join\(MEM, '\.live-route\.json'\)/.test(lane) && /JSON\.stringify\(\{ model: model \|\| null, effort: effort \|\| null, since: new Date\(\)\.toISOString\(\) \}\)/.test(lane))
-  chk('lane: .live-route.json written at session start too (file always exists)', /selectModel skipped[\s\S]{0,200}writeLiveRoute\(DSH_MODEL, DSH_EFFORT\)/.test(lane))
+  chk('lane: .live-route.json written at session start too (file always exists)', /process\.exit\(78\)[\s\S]{0,200}writeLiveRoute\(DSH_MODEL, DSH_EFFORT\)/.test(lane))
   const main = fs.readFileSync(path.join(ROOT, 'main.cjs'), 'utf8')
   chk('main: applyRouteInner passes effort to the lane on every live apply (effort-only included)', /notifyLaneSelectModel\(next\.DSH_MODEL, next\.DSH_EFFORT\)/.test(main))
   const prompt = fs.readFileSync(path.join(ROOT, 'onboarding', 'templates', 'agent-system-prompt.md'), 'utf8')

@@ -292,12 +292,7 @@ function personaRow () {
 }
 
 function buildPatch () {
-  // The ladder the lane DECLARES to the engine. It is deliberately not the
-  // same list as the picker's (model-catalog.cjs EFFORT_LEVELS): 'off' is
-  // declared here and offered nowhere, 'medium' is offered by the picker and
-  // declared nowhere. Both lists now live in the catalog file so the gap is
-  // readable in one place; closing it is a live-engine decision, not a
-  // refactor's.
+  // Declare every picker level, plus the lane-only off value.
   const efforts = MODEL_CATALOG.DSH_REASONING_EFFORTS
     .map((e) => e === 'off' ? '              off:' : `              ${e}: ${e}`).join('\n')
   // Per-model window, so the vision sidecar declares its OWN number instead
@@ -327,20 +322,21 @@ function buildPatch () {
   ]
   let providerBlock
   if (DSH_ROUTE === 'anthropic-catalog') {
-    // Catalog route: pi-ai ships the full anthropic model list (ids,
-    // context windows, vision modality, anthropic-messages protocol). Only
-    // the credential env is ours. An sk-ant-oat value in that env flips
-    // pi-ai's native OAuth mode -- see the route contract comment above.
-    // DSH_ROUTE_BASE_URL on the catalog route (2026-10-07): main.cjs points
-    // it at its loopback route proxy. dsh honours a route-level baseURL
-    // without dropping the catalog's per-model metadata (dsh-llm-pi-ai
-    // lib/index.js `request.baseURL ?? base?.baseUrl ?? providerBaseUrl`).
-    // Unset (bare lane boot) -> pi-ai's own api.anthropic.com, as before.
+    // Declare all picker Claude rows (including ids newer than pi-ai), plus
+    // the selected id for discovered models. Each keeps its own context and
+    // image modality; the route-level proxy override and native auth survive.
+    const claudeIds = new Set([
+      ...MODEL_CATALOG.MODELS.filter((m) => m.id.startsWith('claude-')).map((m) => m.id),
+      DSH_MODEL
+    ])
     providerBlock = [
       '      anthropic:',
       `        apiKeyEnv: ${DSH_ROUTE_KEY_ENV}`,
+      '        api: anthropic-messages',
       ...(process.env.DSH_ROUTE_BASE_URL ? [`        baseURL: ${yamlQuote(process.env.DSH_ROUTE_BASE_URL)}`] : []),
-      ...retryPolicyBlock
+      ...retryPolicyBlock,
+      '        models:',
+      ...[...claudeIds].map((id) => modelRow(id, id, true))
     ].join('\n')
   } else {
     // Hand-declared route: everything explicit. The main model row plus,
@@ -638,7 +634,14 @@ async function main () {
   const sessionId = created.sessionId || created.id
   log(`session ${sessionId} (cwd=${MEM}, model=${DSH_PROVIDER}/${DSH_MODEL})`)
   try { await client.selectModel(sessionId, DSH_PROVIDER, DSH_MODEL, DSH_EFFORT === 'off' ? undefined : DSH_EFFORT) } catch (e) {
-    log(`selectModel skipped: ${e.message.slice(0, 120)}`)
+    const reason = `selectModel failed (${DSH_PROVIDER}/${DSH_MODEL}, effort ${DSH_EFFORT}): ${e.message || String(e)}`
+    errLog(reason) // main captures lane stderr under [agent!].
+    try {
+      fs.writeFileSync(liveRouteFile(), JSON.stringify({ model: DSH_MODEL, effort: DSH_EFFORT, error: reason, status: 'failed', since: new Date().toISOString() }) + '\n')
+      fs.writeFileSync(path.join(MEM, '.agent-failed.json'), JSON.stringify({ status: 'failed', code: 'model_selection_failed', reason, since: new Date().toISOString() }) + '\n')
+    } catch (markerError) { errLog(`selection failure marker write failed: ${markerError.message}`) }
+    killEngine(child)
+    process.exit(78) // Permanent configuration failure: supervisor must not retry.
   }
   writeLiveRoute(DSH_MODEL, DSH_EFFORT)
 
