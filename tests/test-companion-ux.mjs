@@ -35,7 +35,7 @@ await test('one settings group hosts voice and mic without introducing a call-mo
   const html = read('onboarding/public/settings.html')
   const group = html.slice(html.indexOf('id="set-companion"'), html.indexOf('id="set-autonomy"'))
   for (const id of ['set-companion-enabled', 'set-companion-voice', 'set-companion-mic']) assert.ok(group.includes(`id="${id}"`))
-  assert.match(group, /Call mode placeholder/)
+  assert.match(group, /id="set-companion-call"/)
   assert.doesNotMatch(group, /id="set-companion-enabled"[^>]*checked/)
   for (const name of ['tts', 'stt']) assert.match(read(`onboarding/public/js/${name}.js`), /Math\.round\(d.done \/ d.total \* 100\)/)
 })

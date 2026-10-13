@@ -36,9 +36,12 @@
   const hint = document.createElement('p'); hint.className = 'agent-control-hint'
   hint.textContent = ko ? '읽어주기와 음성 입력을 먼저 켜 주세요' : 'Enable Read aloud and Voice input first.'
   if (settings) {
-    const card = document.createElement('div'); card.className = 'category'
-    const lab = document.createElement('label'); lab.htmlFor = button.id; lab.textContent = label
-    card.append(lab, button, hint); const about = document.getElementById('set-about'); about.before(card)
+    // Settings chrome is English-only (house rule, Mino 2026-10-13 21:00); the companion group hosts the row.
+    const lab = document.createElement('label'); lab.htmlFor = button.id; lab.textContent = 'Call mode'
+    hint.textContent = 'Enable Read aloud and Voice input first.'; hint.className = 'field-hint'
+    const slot = document.getElementById('set-companion-call')
+    if (slot) { const row = document.createElement('div'); row.className = 'agent-control-row'; row.append(lab, button); slot.replaceWith(row, hint) }
+    else { const card = document.createElement('div'); card.className = 'category'; card.append(lab, button, hint); document.getElementById('set-about').before(card) }
   } else if (companion) { button.className = 'round'; button.textContent = '☎'; document.getElementById('b-mic').after(button) }
   async function sync() {
     if (syncing) return
