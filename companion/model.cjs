@@ -54,19 +54,35 @@ function initialAnchor(state, displays, primary, size = SIZES.face) {
   const saved = state.positions[String(display.id)]
   return { display, anchor: clampAnchor(saved || { x: a.x + a.width - size.width - INSET, y: a.y + INSET }, a, size) }
 }
-// The bubble is 320 wide and up to 320 tall; it sits 12 px left of or below
-// the surface. With the default face size this is exactly the 0026 layout.
-function layout(anchor, area, expanded, size = SIZES.face) {
+// Measured renderer surface: 64px face, or 200px orb + 52px controls.
+// The drawn orb radius is 0.3 × canvas width: its transparent side inset is
+// 40px. Tuck into that inset for a 12px visible-ring gap; controls begin at 30px.
+// Flip horizontally first, then vertically on narrow displays.
+function layout(anchor, area, expanded, size = SIZES.face, bubbleHeight = 320) {
   const a = clampAnchor(anchor, area, size)
   if (!expanded) return { bounds: { ...a, width: size.width, height: size.height }, face: { x: 0, y: 0 }, size, bubbleTop: 0, placement: 'left' }
-  const left = a.x - area.x >= 332
-  const width = Math.min(left ? 332 + size.width : Math.max(320, size.width), area.width)
-  const height = Math.min(left ? Math.max(320, size.height) : size.height + 12 + 320, area.height)
-  const x = Math.min(Math.max(left ? a.x - 332 : a.x, area.x), area.x + area.width - width)
-  const above = !left && a.y + height > area.y + area.height
-  const y = above ? Math.max(area.y, a.y + size.height - height) : Math.min(a.y, area.y + area.height - height)
-  return { bounds: { x, y, width, height }, face: { x: a.x - x, y: a.y - y }, size,
-    bubbleTop: !left && !above ? size.height + 12 : 0, placement: left ? 'left' : above ? 'above' : 'below' }
+  const bw = Math.min(320, area.width), bh = Math.min(320, Math.max(1, bubbleHeight), area.height)
+  const gap = size.width === size.height ? 12 : 12 - size.width * 0.2
+  const left = a.x - area.x >= bw + gap
+  const right = area.x + area.width - a.x - size.width >= bw + gap
+  let bx, by, placement
+  if (left || right) {
+    placement = left ? 'left' : 'right'
+    bx = left ? a.x - bw - gap : a.x + size.width + gap
+    // Align with the ring/face, never with the control row below it.
+    by = Math.max(area.y, Math.min(a.y + (size.width - bh) / 2, area.y + area.height - bh))
+  } else {
+    const below = area.y + area.height - a.y - size.height
+    const above = a.y - area.y
+    placement = below >= bh + 12 || below >= above ? 'below' : 'above'
+    bx = Math.max(area.x, Math.min(a.x + (size.width - bw) / 2, area.x + area.width - bw))
+    by = placement === 'below' ? a.y + size.height + 12 : a.y - bh - 12
+    by = Math.max(area.y, Math.min(by, area.y + area.height - bh))
+  }
+  bx = Math.round(bx); by = Math.round(by)
+  const x = Math.min(a.x, bx), y = Math.min(a.y, by)
+  return { bounds: { x, y, width: Math.max(a.x + size.width, bx + bw) - x, height: Math.max(a.y + size.height, by + bh) - y },
+    face: { x: a.x - x, y: a.y - y }, size, bubbleLeft: bx - x, bubbleTop: by - y, placement }
 }
 // Native window regions use integer DIP rectangles. Scanlines approximate the
 // visible circles/rounded bubble without sampling or recording cursor position.
@@ -82,8 +98,8 @@ function hitShape(geometry, bubbleHeight = 0) {
   const size = geometry.size || SIZES.face
   // Face = circle. Orb = rounded box so the control row under the ring stays clickable.
   rounded(geometry.face.x, geometry.face.y, size.width, size.height, size.width === size.height ? size.width / 2 : 24)
-  if (bubbleHeight > 0) rounded(0, geometry.bubbleTop ?? (geometry.placement === 'below' ? FACE + 12 : 0),
-    Math.min(320, geometry.bounds.width), Math.min(320, Math.ceil(bubbleHeight)), 17)
+  if (bubbleHeight > 0) rounded(geometry.bubbleLeft || 0, geometry.bubbleTop ?? (geometry.placement === 'below' ? FACE + 12 : 0),
+    Math.min(320, geometry.bounds.width), Math.min(320, Math.ceil(bubbleHeight)), 14)
   return rectangles
 }
 function fullscreenDecision({ enabled, fullscreen, known = true }) {

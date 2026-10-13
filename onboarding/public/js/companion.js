@@ -29,6 +29,7 @@
       const surface = orbMode ? $('orb-wrap') : $('face')
       surface.style.left = `${state.geometry.face.x}px`; surface.style.top = `${state.geometry.face.y}px`
       $('bubble').style.top = `${state.geometry.bubbleTop || 0}px`
+      $('bubble').style.left = `${state.geometry.bubbleLeft || 0}px`
       document.body.dataset.placement = state.geometry.placement
     }
     voice.update(state)
@@ -44,10 +45,17 @@
       lastId = b.id
     }
     $('approval').hidden = $('approval-note').hidden = b.kind !== 'approval-reply'
+    $('main').hidden = b.kind !== 'approval-reply'
     $('reply-form').hidden = b.kind === 'error'
-    const height = Math.ceil($('bubble').getBoundingClientRect().height)
-    if (height !== shapeHeight) { shapeHeight = height; command('shape', { height }).catch(() => { shapeHeight = -1 }) }
+    $('bubble').classList.toggle('expects-reply', ['compose', 'question', 'approval-reply'].includes(b.kind) || !!$('reply').value)
+    measureBubble()
   }
+  function measureBubble() {
+    if ($('bubble').hidden) return
+    const height = Math.ceil($('bubble').getBoundingClientRect().height)
+    if (height !== shapeHeight) { shapeHeight = height; command('shape', { height }).then(render).catch(() => { shapeHeight = -1 }) }
+  }
+  new ResizeObserver(measureBubble).observe($('bubble'))
   function pointer(inside) {
     if (pointerInside === inside) return
     pointerInside = inside
@@ -61,7 +69,6 @@
   }
   $('bubble').addEventListener('pointerdown', () => command('touch').catch(() => {}))
   $('bubble').addEventListener('input', () => command('touch').catch(() => {}))
-  $('close').onclick = () => action('dismiss')
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') action('dismiss')
     // Space = pause/resume speech, never while typing in the reply box.
@@ -189,23 +196,27 @@
       kick(); return true
     }
     // Mic: STT's own start/stop (stt.js) on a hidden composer field; partials
-    // show as a caption, the final text lands in the reply bubble, never sent.
+    // share the bubble as ghost text; finals land in its reply field, never sent.
     const input = $('ct-input')
-    input.addEventListener('input', () => { $('caption').textContent = input.value })
+    input.addEventListener('input', () => {
+      $('ghost').textContent = input.value
+      $('ghost').hidden = !input.value
+    })
     async function mic() {
       const stt = window.SeraSTT
       if (!stt) return
       if (stt.mode === 'listening') {
         await stt.stop(); kick()
         const text = input.value.trim()
-        $('caption').textContent = ''; input.value = ''
+        $('ghost').textContent = ''; $('ghost').hidden = true; input.value = ''
         if (text) {
           if (!current?.bubble) await action('open')
-          $('reply').value = text; $('reply').focus()
+          $('reply').value = text; $('bubble').classList.add('expects-reply'); $('reply').focus()
         }
       } else if (stt.mode === 'idle') {
         queue?.stop() // no echo: Sera stops talking while the user speaks
         input.value = ''
+        if (!current?.bubble) await action('open')
         const started = stt.start()
         kick(); await started; kick()
       }

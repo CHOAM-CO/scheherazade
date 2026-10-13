@@ -91,17 +91,21 @@
         </div>
 
         <div class="category" id="set-companion">
-          <div class="category-label">컴패니언</div>
-          <p class="subtitle">세라를 화면 한쪽에 작게 띄워 두세요. 질문이나 답장은 말풍선에서 주고받을 수 있어요. 처음에는 꺼져 있어요.</p>
+          <div class="category-label">Companion · 컴패니언</div>
+          <p class="subtitle">세라를 화면 한쪽에 작게 띄워 두세요. 질문이나 답장은 말풍선에서 주고받을 수 있어요. 처음에는 꺼져 있어요. 이 스위치 하나로 시작하고, 목소리와 마이크는 아래에서 따로 켤 수 있어요.</p>
           <p class="field-hint">먼저 말 걸기는 모델 사용량을 쓸 수 있어요. 전체 화면 앱에서는 잠시 숨고 트레이에 표시돼요. macOS·Linux에서는 전체 화면 확인이 제한되어 먼저 말 걸기는 쉬어요.</p>
-          <div class="agent-control-row"><label for="set-companion-enabled">세라를 데스크톱 컴패니언으로 표시</label><input type="checkbox" id="set-companion-enabled" /></div>
+          <div class="agent-control-row"><label for="set-companion-enabled">컴패니언 켜기</label><input type="checkbox" id="set-companion-enabled" /></div>
           <div class="agent-control-row" role="radiogroup" aria-labelledby="set-companion-variant-label"><span id="set-companion-variant-label">모양</span>
             <span class="control-pair"><label><input type="radio" name="set-companion-variant" id="set-companion-variant-face" value="face" checked /> 얼굴</label>
             <label><input type="radio" name="set-companion-variant" id="set-companion-variant-orb" value="orb" /> 소리만</label></span></div>
           <p class="field-hint">소리만: 얼굴 대신 세라 목소리에 맞춰 움직이는 둥근 링이 떠요. 마우스를 올리면 끄기, 읽기 멈춤, 마이크 버튼이 보여요. 컴패니언이 켜져 있으면 읽어주기 소리는 컴패니언 창에서 한 번만 나요.</p>
+          <div id="set-companion-voice"></div>
+          <div id="set-companion-mic"></div>
+          <!-- Call mode placeholder: no setting key exists at branch base 0c5ace2. Wire the row only after the call-mode implementation lands. -->
+          <p class="field-hint">통화 모드 · 준비 중</p>
           <div class="agent-control-row"><label for="set-companion-interval">먼저 말 걸기 간격 (분)</label><input type="number" id="set-companion-interval" min="5" max="1440" value="45" /></div>
           <div class="agent-control-row"><label for="set-companion-sound">전체 화면에 가려졌을 때 알림 소리</label><input type="checkbox" id="set-companion-sound" /></div>
-          <p class="field-hint">얼굴을 끌어서 옮길 수 있어요. 말풍선은 닫기 버튼이나 Esc로 접어요. 게임 안에 직접 그리는 오버레이는 아니에요.</p>
+          <p class="field-hint">얼굴을 끌어서 옮길 수 있어요. 말풍선은 Esc나 바깥 클릭으로 접어요. 게임 안에 직접 그리는 오버레이는 아니에요.</p>
           <div class="step-actions"><button id="set-companion-save">컴패니언 설정 저장</button><span id="set-companion-status" role="status"></span></div>
         </div>
 

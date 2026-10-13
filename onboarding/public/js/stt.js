@@ -20,7 +20,7 @@
     const about = document.getElementById('set-about')
     if (!about) return
     const card = document.createElement('div')
-    card.className = 'category'
+    card.className = 'companion-setting-section'
     card.id = 'set-stt'
     const label = document.createElement('div'); label.className = 'category-label'; label.textContent = T.label
     const note = document.createElement('p'); note.className = 'subtitle'; note.textContent = T.note
@@ -32,16 +32,18 @@
     const credit = document.createElement('div'); credit.className = 'agent-control-hint'; credit.id = 'set-stt-credit'
     card.append(label, note, row, state, credit)
     const tts = document.getElementById('set-tts')
-    if (tts) tts.after(card)
+    const group = document.getElementById('set-companion-mic')
+    if (group) group.append(card)
+    else if (tts) tts.after(card)
     else about.parentNode.insertBefore(card, about)
     let timer = null
     function paint(s) {
       box.checked = s.enabled
       credit.textContent = s.credit || ''
       const d = s.download
-      if (d.state === 'downloading') state.textContent = T.dl(d.done, d.total)
+      if (d.state === 'downloading') state.textContent = `${T.dl(d.done, d.total)}${d.total > 0 ? ` · ${Math.min(100, Math.round(d.done / d.total * 100))}%` : ''}`
       else if (d.state === 'error') state.textContent = T.err(d.error)
-      else if (!s.modelsPresent) state.textContent = T.missing(s.totalBytes)
+      else if (!s.modelsPresent) state.textContent = `${ko ? '미설치' : 'Not installed'} · ${T.missing(s.totalBytes)}`
       else if (s.engine === 'error') state.textContent = T.err(s.engineError)
       else state.textContent = T.ready
       clearTimeout(timer)

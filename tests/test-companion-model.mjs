@@ -42,16 +42,34 @@ try {
   test('offscreen saved position clamped after resolution change', () => assert.deepEqual(m.clampAnchor({ x: 9999, y: -9999 }, primary.workArea), { x: 2496, y: 30 }))
   test('collapsed window is exactly 64 DIP', () => assert.deepEqual(m.layout({ x: 100, y: 50 }, primary.workArea, false).bounds, { x: 100, y: 50, width: 64, height: 64 }))
   test('bubble opens left when room', () => { const g = m.layout({ x: 2400, y: 42 }, primary.workArea, true); assert.equal(g.placement, 'left'); assert.equal(g.bounds.x + g.face.x, 2400) })
-  test('bubble opens below when no left room', () => assert.equal(m.layout({ x: 20, y: 42 }, primary.workArea, true).placement, 'below'))
-  test('near bottom-left bubble opens above the face', () => assert.equal(m.layout({ x: 20, y: 1300 }, primary.workArea, true).placement, 'above'))
+  test('bubble flips right when no left room', () => assert.equal(m.layout({ x: 20, y: 42 }, primary.workArea, true).placement, 'right'))
+  test('narrow display opens below', () => assert.equal(m.layout({ x: 20, y: 42 }, { x: 0, y: 0, width: 360, height: 1400 }, true).placement, 'below'))
+  test('near bottom-left bubble opens above the face', () => assert.equal(m.layout({ x: 20, y: 1300 }, { x: 0, y: 0, width: 360, height: 1400 }, true).placement, 'above'))
   test('native hit shape excludes circle corners and transparent gap', () => {
     const g = m.layout({ x: 2400, y: 42 }, primary.workArea, true)
     const regions = m.hitShape(g, 200)
     const hit = (x, y) => regions.some(r => x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height)
-    assert.equal(hit(332, 0), false); assert.equal(hit(364, 32), true)
+    assert.equal(hit(g.face.x, g.face.y), false); assert.equal(hit(g.face.x + 32, g.face.y + 32), true)
     assert.equal(hit(325, 50), false); assert.equal(hit(100, 100), true); assert.equal(hit(100, 250), false)
   })
   test('bubble stays within work area at bottom-right', () => { const b = m.layout({ x: 2496, y: 1336 }, primary.workArea, true).bounds; assert.ok(b.y + b.height <= 1400); assert.ok(b.x + b.width <= 2560) })
+  test('orb bubble sits 12px from the visible ring on either side, clear of controls', () => {
+    for (const x of [20, 2200]) {
+      const g = m.layout({ x, y: 500 }, primary.workArea, true, m.SIZES.orb, 180)
+      const left = g.placement === 'left'
+      const gap = left ? g.face.x + 40 - (g.bubbleLeft + 320) : g.bubbleLeft - (g.face.x + 160)
+      assert.equal(gap, 12)
+      // 140px control row is centered in the 200px canvas wrapper.
+      assert.ok(left ? g.bubbleLeft + 320 < g.face.x + 30 : g.bubbleLeft > g.face.x + 170)
+      const regions = m.hitShape(g, 180)
+      assert.ok(regions.some(r => g.bubbleLeft + 20 >= r.x && g.bubbleLeft + 20 < r.x + r.width && r.y === g.bubbleTop + 20))
+    }
+  })
+  test('short bottom-edge bubble stays anchored instead of floating at reserved 320px top', () => {
+    const g = m.layout({ x: 2400, y: 1300 }, primary.workArea, true, m.SIZES.face, 80)
+    assert.ok(Math.abs(g.bubbleTop + 40 - g.face.y - 32) <= 8)
+    assert.ok(g.bounds.y + g.bounds.height <= 1400)
+  })
   const eligible = { now: 120000, bootAt: 0, lastAt: null, enabled: true, known: true, fullscreen: false, busy: false, bubble: false }
   test('two-minute boot boundary permits proactive', () => assert.equal(m.canProactive(eligible), true))
   test('first two minutes are quiet', () => assert.equal(m.canProactive({ ...eligible, now: 119999 }), false))
