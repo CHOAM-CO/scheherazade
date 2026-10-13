@@ -62,14 +62,19 @@
   }
   function suppressMic(running, audible, lastEnd, now) { return running || audible || (lastEnd > 0 && now - lastEnd < 300) }
   function createSession({ send, closeMic, clearQueue, now = () => Date.now() }) {
-    let on = false, generation = 0, last = '', lastAt = 0
+    let on = false, generation = 0
+    const recent = new Map()
     return {
       get on() { return on }, get generation() { return generation },
-      start() { on = true; last = ''; return ++generation },
+      start() { on = true; recent.clear(); return ++generation },
       partial(text, stopSpeech) { if (on && text.trim()) stopSpeech() },
       final(text, g = generation) {
-        text = text.trim(); const time = now()
-        if (on && g === generation && text && !(text === last && time - lastAt < 2000)) { last = text; lastAt = time; send(text) }
+        text = text.trim()
+        if (!on || g !== generation || !text) return
+        const time = now(), key = text.normalize('NFC').replace(/\s+/g, ' ').toLowerCase()
+        for (const [value, at] of recent) if (time - at >= 2000) recent.delete(value)
+        if (recent.has(key)) return
+        recent.set(key, time); send(text)
       },
       stop() { on = false; generation++; closeMic(); clearQueue() },
     }
