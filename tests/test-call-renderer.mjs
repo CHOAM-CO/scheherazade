@@ -7,7 +7,7 @@ const source = fs.readFileSync(process.env.CALL_RENDERER_SOURCE || new URL('../o
 const tick = () => new Promise(r => setImmediate(r))
 async function fixture({ failMic = false, companion = true, toast = true, remote = false, failTTS = false } = {}) {
   const deadlines = new Map(); let timerId = 0, starts = 0, cancels = 0, broadcast
-  const broadcasts = []
+  const broadcasts = []; let heldOut = null
   const timers = [], spoken = [], elements = new Map(), messages = [], bubbleErrors = [], posted = [], keys = []
   function make(id = '') {
     return { id, children: [], hidden: false, textContent: '', setAttribute(k,v) { this[k] = v }, getAttribute(k) { return this[k] },
@@ -26,7 +26,7 @@ async function fixture({ failMic = false, companion = true, toast = true, remote
     SeraTTSCore: { cleanForSpeech: require('../onboarding/public/js/tts-core.cjs').cleanForSpeech, createSpeechQueue: require('../onboarding/public/js/tts-core.cjs').createSpeechQueue },
     SeraSTT: { get mode() { return mode }, async start() { starts++; mode = failMic ? 'idle' : 'listening' }, cancel() { cancels++; mode = 'idle' } },
     getOnboardToken: () => '', addEventListener() {}, ...(toast ? { showToast: x => messages.push(x) } : {}), SeraCompanionError: x => bubbleErrors.push(x),
-    api: async (url, opts) => { if (opts) { posted.push({ url, body: JSON.parse(opts.body) }); if (failPost) throw new Error('request failed') }; if (url === '/api/agent/turn-error') return turnError; if (url === '/api/companion') return { available: remote, enabled: remote, speaking: remote }; if (url === '/api/call') { if (opts) enabled = JSON.parse(opts.body).enabled; return { enabled, allowed: true } }; if (url.startsWith('/api/chat/out')) return payload; return {} },
+    api: async (url, opts) => { if (opts) { posted.push({ url, body: JSON.parse(opts.body) }); if (failPost) throw new Error('request failed') }; if (url === '/api/agent/turn-error') return turnError; if (url === '/api/companion') return { available: remote, enabled: remote, speaking: remote }; if (url === '/api/call') { if (opts) enabled = JSON.parse(opts.body).enabled; return { enabled, allowed: true } }; if (url.startsWith('/api/chat/out')) { if (heldOut) { const held = heldOut; heldOut = null; return held }; return payload }; return {} },
   }
   vm.runInNewContext(source, { window: win, document: { documentElement: { lang: 'ko' }, getElementById: element, createElement: () => make(), addEventListener: (name, fn) => { if (name === 'keydown') keys.push(fn) } },
     BroadcastChannel: class { constructor() { broadcast = this } postMessage(m) { broadcasts.push(m) } }, setInterval: (fn, ms) => { timers.push({ fn, ms }); return timers.length }, clearInterval() {}, setTimeout() {}, clearTimeout() {},
@@ -35,7 +35,7 @@ async function fixture({ failMic = false, companion = true, toast = true, remote
     Audio: class { constructor() { this.paused = false; this.ended = false; this.duration = 2; audios.push(this) }; play() { this.playCalls = (this.playCalls || 0) + 1; return Promise.resolve() }; pause() { this.paused = true; this.onpause?.() } },
   })
   await tick(); await tick()
-  return { win, broadcasts, receive: data => broadcast.onmessage({ data }), get starts() { return starts }, get cancels() { return cancels }, timers, spoken, audios, messages, bubbleErrors, posted, keys, root, element, setError: e => { turnError = e }, failPost: () => { failPost = true }, setPayload: p => { payload = { state: { awaitingReplySince: null }, ...p } }, advance: ms => { now += ms; for (const [id, t] of [...deadlines]) if (t.at <= now && deadlines.delete(id)) t.fn() }, async run(ms) { for (const t of timers.filter(t => t.ms === ms)) await t.fn(); await tick(); await tick() } }
+  return { win, deferOut() { let release; heldOut = new Promise(r => { release = r }); return release }, broadcasts, receive: data => broadcast.onmessage({ data }), get starts() { return starts }, get cancels() { return cancels }, timers, spoken, audios, messages, bubbleErrors, posted, keys, root, element, setError: e => { turnError = e }, failPost: () => { failPost = true }, setPayload: p => { payload = { state: { awaitingReplySince: null }, ...p } }, advance: ms => { now += ms; for (const [id, t] of [...deadlines]) if (t.at <= now && deadlines.delete(id)) t.fn() }, async run(ms) { for (const t of timers.filter(t => t.ms === ms)) await t.fn(); await tick(); await tick() } }
 }
 // B2 must never claim active after a failed open.
 if (!process.env.CALL_CASE || process.env.CALL_CASE === 'B2') { const failed = await fixture({ failMic: true }); assert.equal(failed.win.SeraCall.active, false) }
@@ -195,3 +195,15 @@ assert.equal(owner.win.SeraCall.active, true); assert.equal(owner.cancels, 2)
 assert.equal(owner.element('call-state').textContent, '마이크 꺼짐')
 owner.win.SeraCall.stop()
 console.log('call mute controls: keyboard-native buttons, playback stop/skip/resume, mic cancel/reopen, remote control and call-only reset passed')
+
+const raced = await fixture(); await raced.run(250)
+const releaseOldPoll = raced.deferOut(), oldPoll = raced.run(250)
+await tick()
+raced.win.SeraCall.final('first'); raced.advance(1200); await tick()
+releaseOldPoll({ latest: 0, items: [], state: { awaitingReplySince: null } }); await oldPoll
+raced.win.SeraCall.final('second'); raced.advance(1200); await tick()
+assert.equal(raced.posted.filter(p => p.url === '/api/chat/in').length, 1, 'pre-send idle snapshot cannot release a second turn')
+await raced.run(250)
+assert.equal(raced.posted.filter(p => p.url === '/api/chat/in').length, 2, 'fresh post-ACK idle snapshot releases pending text')
+raced.win.SeraCall.stop()
+console.log('turn status race: delayed pre-send idle snapshots cannot release pending turns passed')
