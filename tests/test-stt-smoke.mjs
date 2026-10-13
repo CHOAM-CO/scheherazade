@@ -2,6 +2,7 @@
 // test-stt-smoke.mjs -- real Korean streaming recognition through
 // onboarding/stt/engine.cjs (forked sherpa-onnx worker). Needs the model:
 // SERA_STT_MODEL_DIR holding the four pinned files (sizes+sha checked here),
+// SERA_STT_MODEL selects 72m (default) or 174m,
 // and a 16 kHz mono wav saying "안녕, 나 세라야..." in SERA_STT_WAV. Both
 // default to the voice-input spike scratchpad when it exists. Prints a column-0
 // SKIP otherwise.
@@ -14,13 +15,14 @@ import { fileURLToPath } from 'node:url'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const req = createRequire(path.join(ROOT, 'package.json'))
 const { createEngine } = req(path.join(ROOT, 'onboarding/stt/engine.cjs'))
-const { FILES } = req(path.join(ROOT, 'onboarding/stt/manifest.cjs'))
+const modelId = process.env.SERA_STT_MODEL || '72m'
+const { FILES } = req(path.join(ROOT, 'onboarding/stt/manifest.cjs')).getModel(modelId)
 const { modelsPresent } = req(path.join(ROOT, 'onboarding/stt/models.cjs'))
 
 const SPIKE = '/private/tmp/claude-501/-Users-narr-Desktop-MAGI/3b70b6c6-8c17-4a59-a884-b3519d3c1ec9/scratchpad/stt-ko'
 const modelDir = process.env.SERA_STT_MODEL_DIR || path.join(SPIKE, 'models/k72')
 const wavPath = process.env.SERA_STT_WAV || path.join(SPIKE, 'wav/a.wav')
-if (!modelsPresent(modelDir) || !fs.existsSync(wavPath)) {
+if (!modelsPresent(modelDir, modelId) || !fs.existsSync(wavPath)) {
   console.log('SKIP: no Korean STT model or test wav (set SERA_STT_MODEL_DIR and SERA_STT_WAV)'); process.exit(0)
 }
 
@@ -48,7 +50,7 @@ function readWav16(b) {
 
 const { samples, sr } = readWav16(fs.readFileSync(wavPath))
 check(sr === 16000, `fixture is 16 kHz (${path.basename(wavPath)}, ${(samples.length / sr).toFixed(2)} s)`)
-const engine = createEngine(modelDir, { idleMs: 500 })
+const engine = createEngine(modelDir, { idleMs: 500, modelId })
 try {
   let t0 = Date.now()
   await engine.load()
@@ -87,7 +89,7 @@ try {
 // Route layer over real HTTP: settings gate, session, Float32LE chunks, stop.
 {
   const http = await import('node:http')
-  const cfg = {}
+  const cfg = { STT_MODEL: modelId }
   const sendJson = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)) }
   const readJsonBody = r => new Promise(ok => { let b = ''; r.on('data', c => (b += c)); r.on('end', () => ok(b ? JSON.parse(b) : {})) })
   process.env.SERA_STT_MODEL_DIR = modelDir
@@ -100,7 +102,10 @@ try {
     check((await post('/api/stt/start', {})).status === 409, 'route: start refused while STT_ENABLED is off')
     const st = await (await post('/api/stt/settings', { enabled: true })).json()
     check(cfg.STT_ENABLED === 'true' && st.enabled && st.modelsPresent && st.download.state === 'idle', 'route: enable writes STT_ENABLED, no download when present')
+    check(st.modelId === modelId, 'route: persisted model selection used')
+    check((await post('/api/stt/settings', { modelId: 'invalid', enabled: false })).status === 400 && cfg.STT_ENABLED === 'true', 'route: invalid model does not mutate settings')
     const { sid } = await (await post('/api/stt/start', {})).json()
+    check((await post('/api/stt/settings', { modelId: modelId === '72m' ? '174m' : '72m' })).status === 409, 'route: model switching blocked during active recognition')
     let partial = ''
     for (let i = 0; i < samples.length; i += 1600) {
       const c = samples.slice(i, i + 1600)
