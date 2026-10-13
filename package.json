@@ -37,6 +37,7 @@
     "dotenv": "^17.4.2",
     "electron-updater": "^6.8.9",
     "onnxruntime-node": "1.27.0",
+    "sherpa-onnx-node": "1.13.8",
     "undici": "^7.28.0",
     "zod": "^4.4.3",
     "yaml": "^2.9.0",
@@ -131,6 +132,7 @@
     ],
     "asarUnpack": [
       "onboarding/tts/**",
+      "onboarding/stt/**",
       "memory/import-candidates.cjs",
       "memory/migrate-import.cjs",
       "node_modules/**",
@@ -160,7 +162,8 @@
       "onboarding/public/js/model-catalog.cjs",
       "onboarding/chromux-live-consent.cjs",
       "onboarding/chromux-live-gate.cjs",
-    "onboarding/tts/**",
+      "onboarding/tts/**",
+      "onboarding/stt/**",
       "hooks/**",
       "scripts/**",
       "autonomy/**",
@@ -194,6 +197,7 @@
         "NSDownloadsFolderUsageDescription": "세헤라자드가 companion 에이전트를 위해 Downloads 폴더의 파일을 읽고 씁니다.",
         "NSDesktopFolderUsageDescription": "세헤라자드가 companion 에이전트를 위해 Desktop 폴더의 파일을 읽고 씁니다.",
         "NSCalendarsFullAccessUsageDescription": "세헤라자드가 오늘 무슨 일정이 있는지 알고 대화하기 위해 캘린더를 읽습니다. 일정을 추가하거나 수정하지 않습니다.",
+        "NSMicrophoneUsageDescription": "세헤라자드가 음성 입력을 켰을 때만 마이크 소리를 이 기기 안에서 글자로 바꿉니다. 소리는 밖으로 보내지 않습니다.",
         "NSCalendarsUsageDescription": "세헤라자드가 오늘 무슨 일정이 있는지 알고 대화하기 위해 캘린더를 읽습니다. 일정을 추가하거나 수정하지 않습니다."
       }
     },
@@ -250,5 +254,11 @@
   "allowScripts": {
     "electron": true,
     "electron-winstaller": true
+  },
+  "optionalDependencies": {
+    "sherpa-onnx-darwin-arm64": "1.13.8",
+    "sherpa-onnx-darwin-x64": "1.13.8",
+    "sherpa-onnx-linux-x64": "1.13.8",
+    "sherpa-onnx-win-x64": "1.13.8"
   }
 }

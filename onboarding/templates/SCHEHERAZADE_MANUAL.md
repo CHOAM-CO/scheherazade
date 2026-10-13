@@ -277,6 +277,19 @@ Korean 100M; Kyutai + seastar105, CC BY 4.0). Korean only for now.
   Only offer to clone a voice the person has the right to use.
 A stop button sits in the chat while it speaks.
 
+## Voice input (음성 입력)
+Settings → 음성 입력 puts a mic button in the chat composer. Speech is
+transcribed on this device, offline (k2-fsa Zipformer Korean streaming,
+sherpa-onnx, Apache-2.0). Korean only for now.
+- **STT_ENABLED**: on/off. The first enable downloads one ~56 MB speech model.
+- Click the mic (a red dot means listening), talk, click again or press Esc.
+  Words appear grey in the input box as they are heard; the result stays in
+  the box for them to edit and send. Nothing is sent on its own.
+- It is weaker on digits and English loanwords; if a number matters, ask them
+  to check the box before sending.
+- If the mic is blocked, macOS asks once; after a denial it is System Settings →
+  Privacy & Security → Microphone.
+
 ## Your name
 
 They can rename you. It is their friend, not our label.
