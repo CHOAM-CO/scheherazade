@@ -8,14 +8,14 @@ const fs = require('node:fs')
 const path = require('node:path')
 const zlib = require('node:zlib')
 const crypto = require('node:crypto')
-const { ARCHIVE, FILES } = require('./manifest.cjs')
+const { getModel } = require('./manifest.cjs')
 
-function missingFiles(dir) {
-  return FILES.filter(f => {
+function missingFiles(dir, modelId = '72m') {
+  return getModel(modelId).FILES.filter(f => {
     try { return fs.statSync(path.join(dir, f.rel)).size !== f.size } catch { return true }
   })
 }
-function modelsPresent(dir) { return missingFiles(dir).length === 0 }
+function modelsPresent(dir, modelId = '72m') { return missingFiles(dir, modelId).length === 0 }
 
 // Minimal ustar/GNU tar reader: regular files only, returns [{ name, data }].
 // Directory and metadata entries (pax headers, ._ AppleDouble files) are skipped.
@@ -59,7 +59,8 @@ async function fetchVerified(url, dest, { size, sha256 }, onBytes, fetchImpl) {
 }
 
 // Writes the pinned FILES found in a tar(.gz) buffer into dir, sha-checked.
-function extractModels(archive, dir) {
+function extractModels(archive, dir, modelId = '72m') {
+  const { FILES } = getModel(modelId)
   const entries = untar(archive[0] === 0x1f && archive[1] === 0x8b ? zlib.gunzipSync(archive) : archive)
   const byBase = new Map(entries.map(e => [path.posix.basename(e.name), e.data]))
   for (const f of FILES) {
@@ -73,14 +74,15 @@ function extractModels(archive, dir) {
 }
 
 // onProgress({ done, total, file }) -- archive bytes.
-async function ensureModels(dir, { onProgress = () => {}, fetchImpl = fetch } = {}) {
+async function ensureModels(dir, { onProgress = () => {}, fetchImpl = fetch, modelId = '72m' } = {}) {
+  const { ARCHIVE } = getModel(modelId)
   const total = ARCHIVE.size
-  if (modelsPresent(dir)) { onProgress({ done: total, total, file: null }); return dir }
+  if (modelsPresent(dir, modelId)) { onProgress({ done: total, total, file: null }); return dir }
   fs.mkdirSync(dir, { recursive: true })
   let done = 0
   onProgress({ done, total, file: ARCHIVE.name })
   const part = await fetchVerified(ARCHIVE.url, path.join(dir, ARCHIVE.name), ARCHIVE, n => { done += n; onProgress({ done, total, file: ARCHIVE.name }) }, fetchImpl)
-  try { extractModels(fs.readFileSync(part), dir) } finally { try { fs.unlinkSync(part) } catch {} }
+  try { extractModels(fs.readFileSync(part), dir, modelId) } finally { try { fs.unlinkSync(part) } catch {} }
   onProgress({ done: total, total, file: null })
   return dir
 }

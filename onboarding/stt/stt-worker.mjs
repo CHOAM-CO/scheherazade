@@ -2,15 +2,15 @@
 // Spawned by engine.cjs (child_process.fork, serialization 'advanced',
 // ELECTRON_RUN_AS_NODE=1 under Electron). One OnlineRecognizer, one stream per
 // session id; audio is Float32 16 kHz mono PCM.
-// argv: <modelDir> <threads>
+// argv: <modelDir> <threads> <modelId>
 // in:  { op: 'load', id } | { op: 'start', sid } | { op: 'audio', sid, pcm: Float32Array } | { op: 'stop', sid } | { op: 'cancel', sid }
 // out: { id, ok, error? } for load; { sid, type: 'partial' | 'final', text } ; { sid, type: 'done', text } after stop; { sid?, type: 'error', error }
 import path from 'node:path'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
-const { ENCODER, DECODER, JOINER, TOKENS, SAMPLE_RATE } = require('./manifest.cjs')
-const [modelDir, threadsArg] = process.argv.slice(2)
+const [modelDir, threadsArg, modelId = '72m'] = process.argv.slice(2)
+const { ENCODER, DECODER, JOINER, TOKENS, SAMPLE_RATE, chunkSize } = require('./manifest.cjs').getModel(modelId)
 const threads = Math.max(1, Number(threadsArg) || 2)
 let recognizer = null
 const streams = new Map() // sid -> { stream, last }
@@ -59,8 +59,8 @@ function handle(msg) {
     return drain(msg.sid, s)
   }
   if (msg.op === 'stop') {
-    // Half a second of tail silence lets the last chunk through the encoder.
-    s.stream.acceptWaveform({ sampleRate: SAMPLE_RATE, samples: new Float32Array(SAMPLE_RATE / 2) })
+    // Pad at least one encoder chunk (40 ms per frame) to flush trailing speech.
+    s.stream.acceptWaveform({ sampleRate: SAMPLE_RATE, samples: new Float32Array(Math.ceil(SAMPLE_RATE * Math.max(0.5, chunkSize * 0.04))) })
     s.stream.inputFinished()
     while (r.isReady(s.stream)) r.decode(s.stream)
     const text = r.getResult(s.stream).text.trim()

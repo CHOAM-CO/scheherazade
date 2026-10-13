@@ -1,4 +1,4 @@
-// stt.js -- voice input (음성 입력). Settings: one toggle + download progress,
+// stt.js -- voice input (음성 입력). Settings: toggle + model selection + download progress,
 // placed right under the read-aloud card. Chat: when enabled and the model is
 // on disk, a mic button sits in the composer bar. Click toggles listening; Esc
 // stops. Mic audio is captured (AudioWorklet, ScriptProcessor fallback),
@@ -30,7 +30,11 @@
     row.append(lab, box)
     const state = document.createElement('div'); state.className = 'agent-control-hint'; state.id = 'set-stt-state'
     const credit = document.createElement('div'); credit.className = 'agent-control-hint'; credit.id = 'set-stt-credit'
-    card.append(label, note, row, state, credit)
+    const modelRow = document.createElement('div'); modelRow.className = 'agent-control-row'
+    const modelLabel = document.createElement('label'); modelLabel.htmlFor = 'set-stt-model'; modelLabel.textContent = ko ? '인식 모델' : 'Recognition model'
+    const modelSelect = document.createElement('select'); modelSelect.id = 'set-stt-model'
+    modelRow.append(modelLabel, modelSelect)
+    card.append(label, note, row, modelRow, state, credit)
     const tts = document.getElementById('set-tts')
     const group = document.getElementById('set-companion-mic')
     if (group) group.append(card)
@@ -39,6 +43,13 @@
     let timer = null
     function paint(s) {
       box.checked = s.enabled
+      modelSelect.replaceChildren(...(s.models || []).map(m => {
+        const option = document.createElement('option'); option.value = m.id
+        option.textContent = `${m.id === '72m' ? (ko ? '소형 · 72M (기본)' : 'Small · 72M (default)') : (ko ? '대형 · 174M' : 'Large · 174M')} · ${mb(m.totalBytes)} MiB`
+        return option
+      }))
+      modelSelect.value = s.modelId || '72m'
+      modelSelect.disabled = s.download.state === 'downloading'
       credit.textContent = s.credit || ''
       const d = s.download
       if (d.state === 'downloading') state.textContent = `${T.dl(d.done, d.total)}${d.total > 0 ? ` · ${Math.min(100, Math.round(d.done / d.total * 100))}%` : ''}`
@@ -46,10 +57,16 @@
       else if (!s.modelsPresent) state.textContent = `${ko ? '미설치' : 'Not installed'} · ${T.missing(s.totalBytes)}`
       else if (s.engine === 'error') state.textContent = T.err(s.engineError)
       else state.textContent = T.ready
-      clearTimeout(timer)
+      clearTimeout(timer); timer = null
       if (d.state === 'downloading') timer = setTimeout(refresh, 1000)
     }
     async function refresh() { try { paint(await getStatus()) } catch (e) { state.textContent = T.err(e.message) } }
+    modelSelect.onchange = async () => {
+      modelSelect.disabled = true
+      try { paint(await postJson('/api/stt/settings', { modelId: modelSelect.value })) }
+      catch (e) { await refresh(); state.textContent = T.err(e.message) }
+      finally { if (!timer) modelSelect.disabled = false }
+    }
     box.onchange = async () => { box.disabled = true; try { paint(await postJson('/api/stt/settings', { enabled: box.checked })) } catch (e) { state.textContent = T.err(e.message) } finally { box.disabled = false } }
     refresh()
   }

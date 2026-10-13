@@ -1,5 +1,5 @@
 'use strict'
-// Korean streaming speech-to-text engine. sherpa-onnx-node and the ~70 MB
+// Korean streaming speech-to-text engine. sherpa-onnx-node and the selected
 // Zipformer stay out of the server process in a forked child (stt-worker.mjs),
 // started lazily on first use and killed after IDLE_MS without a session.
 // createSession(onEvent) -> { push(Float32Array 16 kHz), stop() -> Promise<text>, cancel() }
@@ -11,7 +11,7 @@ const { fork } = require('node:child_process')
 
 const IDLE_MS = 3 * 60 * 1000
 
-function createEngine(modelDir, { threads = 2, idleMs = IDLE_MS } = {}) {
+function createEngine(modelDir, { threads = 2, idleMs = IDLE_MS, modelId = '72m' } = {}) {
   let child = null
   let loadPromise = null
   let state = 'idle' // idle | loading | ready | error
@@ -26,7 +26,7 @@ function createEngine(modelDir, { threads = 2, idleMs = IDLE_MS } = {}) {
     if (process.versions.electron) env.ELECTRON_RUN_AS_NODE = '1'
     // Inside a packaged app the worker must run from app.asar.unpacked (asarUnpack onboarding/stt/**).
     const script = path.join(__dirname, 'stt-worker.mjs').replace(/app\.asar([\\/])/, 'app.asar.unpacked$1')
-    const c = fork(script, [modelDir, String(threads)], { env, serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'] })
+    const c = fork(script, [modelDir, String(threads), modelId], { env, serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'] })
     child = c
     c.on('message', m => {
       if (m.id) { const p = calls.get(m.id); if (!p) return; calls.delete(m.id); m.ok ? p.resolve(m) : p.reject(new Error(m.error)); return }

@@ -1,6 +1,6 @@
 'use strict'
-// Korean streaming speech-to-text: k2-fsa Zipformer transducer, 72M params, int8
-// ONNX (chunk 16, left context 128), run by sherpa-onnx-node's OnlineRecognizer.
+// Korean streaming STT: kangkyu Zipformer, int8, left context 128.
+// Default 72M/chunk-16 or optional 174M/chunk-32, sherpa-onnx OnlineRecognizer.
 // Sera ships none of these bytes; first enable fetches one sha256-pinned tarball
 // from the models-v1 release, extracts it into userData/models/stt-ko and checks
 // each file's sha256 too. SERA_STT_MODEL_DIR overrides the directory (dev/tests).
@@ -24,4 +24,26 @@ const FILES = [
 const TOTAL_BYTES = ARCHIVE.size // what the user downloads
 const SAMPLE_RATE = 16000
 const CREDIT = 'k2-fsa Zipformer Korean streaming (sherpa-onnx) · Apache-2.0'
-module.exports = { SERA_STT_MODEL_URL, ARCHIVE, FILES, ENCODER, DECODER, JOINER, TOKENS, TOTAL_BYTES, SAMPLE_RATE, CREDIT }
+const small = { id: '72m', label: 'Small · 72M', cacheName: 'stt-ko', chunkSize: 16, SERA_STT_MODEL_URL, ARCHIVE, FILES, ENCODER, DECODER, JOINER, TOKENS, TOTAL_BYTES, SAMPLE_RATE, CREDIT }
+const largeFiles = [
+  ['encoder', 156838446, 'd07cbf5198c8c6d41108cc9c9e057b0a3591846867b6a4d2e283add3bbb84413'],
+  ['decoder', 1544210, 'f5dfa6c8609b29da86c739d4904889475c33b62e28e70c619952a0ee6c31416f'],
+  ['joiner', 1270777, '64efd9aeb71fb2278c713b3d5eb5ec45edf6b2ccd8716d3709044f17723c13fd'],
+].map(([part, size, sha256]) => ({ rel: `${part}-epoch-99-avg-1-chunk-32-left-128.int8.onnx`, size, sha256 }))
+largeFiles.push(FILES.find(f => f.rel === TOKENS))
+const largeArchive = {
+  name: 'sera-stt-ko-174m-chunk-32-int8.tar.gz',
+  size: 125054164,
+  sha256: '59be47ede61680bcbb370d2964cd3a4a909cb905e41b36077d15383c27357628',
+  url: 'https://github.com/Mino-is-me/scheherazade-releases/releases/download/models-v1/sera-stt-ko-174m-chunk-32-int8.tar.gz',
+}
+const large = { ...small, id: '174m', label: 'Large · 174M', cacheName: 'stt-ko-174m-chunk-32', chunkSize: 32,
+  ARCHIVE: largeArchive, SERA_STT_MODEL_URL: largeArchive.url, TOTAL_BYTES: largeArchive.size, FILES: largeFiles,
+  ENCODER: largeFiles[0].rel, DECODER: largeFiles[1].rel, JOINER: largeFiles[2].rel }
+const MODELS = { '72m': small, '174m': large }
+function getModel(id = '72m') {
+  if (!Object.hasOwn(MODELS, id)) throw new Error(`Unknown STT model: ${id}`)
+  return MODELS[id]
+}
+// Legacy exports stay small so existing callers and installations retain their default.
+module.exports = { ...small, MODELS, getModel }
