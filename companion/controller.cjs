@@ -50,7 +50,7 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
     const displays = screen.getAllDisplays()
     display = displays.find(d => d.id === display?.id) || screen.getPrimaryDisplay()
     anchor = clampAnchor(anchor, display.workArea, size())
-    geometry = layout(anchor, display.workArea, !!bubble, size())
+    geometry = layout(anchor, display.workArea, !!bubble, size(), bubbleHeight || 320)
     win.setBounds(geometry.bounds)
     applyShape()
   }
@@ -153,7 +153,7 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
         break
       case 'shape':
         if (!Number.isFinite(body.height) || body.height < 0 || body.height > 320) bad()
-        bubbleHeight = body.height; applyShape(); break
+        bubbleHeight = body.height; reposition(); break
       case 'touch': touched = true; break
       case 'dismiss': collapse(); break
       case 'open':

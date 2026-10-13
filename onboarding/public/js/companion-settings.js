@@ -11,14 +11,14 @@
     if (s.intervalMinutes) $('interval').value = s.intervalMinutes
     if (s.sound !== undefined) $('sound').checked = !!s.sound
     $('save').disabled = !s.available
-    $('status').textContent = s.available ? '' : '앱에서만 사용할 수 있어요.'
+    $('status').textContent = s.available ? '' : 'Available in the desktop app only.'
   }
-  async function save(body, okText = '저장했어요.') {
+  async function save(body, okText = 'Saved.') {
     try { render(await post(body)); $('status').textContent = okText }
-    catch { $('status').textContent = '저장하지 못했어요. 다시 시도해 주세요.' }
+    catch { $('status').textContent = 'Could not save settings. Please try again.' }
   }
   try { render(await window.api('/api/companion')) }
-  catch { $('status').textContent = '설정을 불러오지 못했어요.' }
+  catch { $('status').textContent = 'Could not load settings.' }
   $('enabled').onchange = async () => { $('enabled').disabled = true; try { await save({ enabled: $('enabled').checked }) } finally { $('enabled').disabled = false } }
   for (const r of radios()) r.onchange = () => { if (r.checked) save({ variant: r.value }) }
   $('save').onclick = async () => {
