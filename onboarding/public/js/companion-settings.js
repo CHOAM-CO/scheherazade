@@ -1,30 +1,46 @@
-// Companion settings stay independent of the main window's layout and glass.
-// Toggle (COMPANION_ENABLED) and variant (COMPANION_VARIANT) save on change,
-// like the read-aloud and voice-input cards; interval/sound use the save button.
+// Enabled/variant save immediately; interval/sound remain a separate draft.
 ;(async function () {
   const $ = name => document.getElementById(`set-companion-${name}`)
   const radios = () => document.querySelectorAll('input[name="set-companion-variant"]')
   const post = body => window.api('/api/companion', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'settings', ...body }) })
-  function render(s) {
-    $('enabled').checked = !!s.enabled
-    for (const r of radios()) r.checked = r.value === (s.variant || 'face')
-    if (s.intervalMinutes) $('interval').value = s.intervalMinutes
-    if (s.sound !== undefined) $('sound').checked = !!s.sound
-    $('save').disabled = !s.available
-    $('status').textContent = s.available ? '' : 'Available in the desktop app only.'
+  const ko = (document.documentElement?.lang || navigator.language || 'en').startsWith('ko')
+  let server = null
+  let busy = false
+  $('status').setAttribute('role', 'status')
+  function controls() {
+    for (const el of [$('enabled'), ...radios(), $('save'), $('interval'), $('sound')]) el.disabled = busy || !server?.available
   }
-  async function save(body, okText = 'Saved.') {
-    try { render(await post(body)); $('status').textContent = okText }
-    catch { $('status').textContent = 'Could not save settings. Please try again.' }
+  function renderImmediate() {
+    $('enabled').checked = !!server?.enabled
+    for (const r of radios()) r.checked = r.value === (server?.variant || 'face')
   }
-  try { render(await window.api('/api/companion')) }
-  catch { $('status').textContent = 'Could not load settings.' }
-  $('enabled').onchange = async () => { $('enabled').disabled = true; try { await save({ enabled: $('enabled').checked }) } finally { $('enabled').disabled = false } }
-  for (const r of radios()) r.onchange = () => { if (r.checked) save({ variant: r.value }) }
-  $('save').onclick = async () => {
+  async function save(body) {
+    if (busy || !server?.available) return
+    busy = true; controls()
+    try {
+      server = await post(body)
+      renderImmediate() // Never replace the interval/sound draft on toggle saves.
+      if ('intervalMinutes' in body) $('interval').value = server.intervalMinutes
+      if ('sound' in body) $('sound').checked = !!server.sound
+      $('status').textContent = ko ? '저장됨' : 'Saved.'
+    } catch {
+      renderImmediate()
+      $('status').textContent = ko ? '저장 실패. 다시 시도해 주세요' : 'Could not save settings. Please try again.'
+    } finally { busy = false; controls() }
+  }
+  controls()
+  try {
+    server = await window.api('/api/companion')
+    renderImmediate()
+    if (server.intervalMinutes) $('interval').value = server.intervalMinutes
+    if (server.sound !== undefined) $('sound').checked = !!server.sound
+    $('status').textContent = server.available ? '' : (ko ? '데스크톱 앱에서만 사용 가능' : 'Available in the desktop app only.')
+  } catch { $('status').textContent = ko ? '설정 불러오기 실패' : 'Could not load settings.' }
+  controls()
+  $('enabled').onchange = () => save({ enabled: $('enabled').checked })
+  for (const r of radios()) r.onchange = () => { if (r.checked) return save({ variant: r.value }) }
+  $('save').onclick = () => {
     if (!$('interval').reportValidity()) return
-    $('save').disabled = true
-    try { await save({ intervalMinutes: Number($('interval').value), sound: $('sound').checked }) }
-    finally { $('save').disabled = false }
+    return save({ intervalMinutes: Number($('interval').value), sound: $('sound').checked })
   }
 })()
