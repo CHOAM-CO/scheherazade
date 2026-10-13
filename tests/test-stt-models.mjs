@@ -26,12 +26,13 @@ try {
   let routes = createRoutes(ctx)
   const settings = body => routes.find(r => r.match('/api/stt/settings')).handler(body, {})
   const status = () => routes.find(r => r.match('/api/stt/status')).handler({}, {})
-  await status(); assert.equal(result.body.modelId, '72m')
+  await status(); assert.equal(result.body.modelId, '174m', 'large is the default')
   assert.equal(result.body.models.length, 2)
   for (const modelId of ['__proto__', 'bad', {}, null]) {
     await settings({ modelId, enabled: true }); assert.equal(result.code, 400); assert.deepEqual(cfg, {})
   }
   await settings({ modelId: '174m', enabled: 'yes' }); assert.equal(result.code, 400); assert.deepEqual(cfg, {})
+  await settings({ modelId: '72m' }); assert.equal(cfg.STT_MODEL, '72m')
   await settings({ modelId: '174m' }); assert.equal(result.code, 200); assert.equal(cfg.STT_MODEL, '174m')
   assert.equal(result.body.totalBytes, getModel('174m').TOTAL_BYTES)
   assert.equal(result.body.download.state, 'idle')

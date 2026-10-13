@@ -53,7 +53,7 @@
       dumpPath.textContent = s.dumpDir || ''
       modelSelect.replaceChildren(...(s.models || []).map(m => {
         const option = document.createElement('option'); option.value = m.id
-        option.textContent = `${m.id === '72m' ? (ko ? '소형 · 72M (기본)' : 'Small · 72M (default)') : (ko ? '대형 · 174M' : 'Large · 174M')} · ${mb(m.totalBytes)} MiB`
+        option.textContent = `${m.id === '72m' ? (ko ? '소형 · 72M' : 'Small · 72M') : (ko ? '대형 · 174M (기본)' : 'Large · 174M (default)')} · ${mb(m.totalBytes)} MiB`
         return option
       }))
       modelSelect.value = s.modelId || '72m'

@@ -40,7 +40,7 @@ function createRoutes(ctx) {
     catch { return path.join(DATA_HOME, 'stt-dumps') }
   }
   const dumping = () => readAgentConfig().STT_DUMP === 'true'
-  let modelId = readAgentConfig().STT_MODEL === '174m' ? '174m' : '72m'
+  let modelId = readAgentConfig().STT_MODEL === '72m' ? '72m' : '174m' // large is the default (Mino 2026-10-14 00:57 '훨씬 좋아짐')
   const model = () => getModel(modelId)
   let pendingRecognition = 0
   let modelDir = null

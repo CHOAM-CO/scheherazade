@@ -295,7 +295,7 @@ sherpa-onnx, Apache-2.0). Korean only for now.
   These files contain your voice, remain locally until rotated or manually
   deleted, and are not deleted when the switch is turned off.
 - **STT_ENABLED**: on/off. The first enable downloads one ~56 MB speech model.
-- **STT_MODEL**: `small` (72M, ~56 MB, default) or `large` (174M, ~120 MB).
+- **STT_MODEL**: `large` (174M, ~120 MB, default) or `small` (72M, ~56 MB, faster start).
   Settings → 음성 입력 → 인식 모델. Switching downloads the other model once;
   large is slower to start and pads ~1.3 s of silence at the end of each turn.
 - Click the mic (a red dot means listening), talk, click again or press Esc.
