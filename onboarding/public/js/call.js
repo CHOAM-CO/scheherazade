@@ -22,7 +22,7 @@
   }
   function renderState() {
     panel.hidden = !enabled
-    const text = retrying ? '다시 보내는 중...' : (speaking || (!active && remoteSpeaking)) ? '말하는 중' : '듣는 중'
+    const text = retrying ? '다시 보내는 중...' : (speaking || (!active && remoteSpeaking)) ? '말하는 중' : utterance.waiting ? '듣는 중...' : '듣는 중'
     if (status.textContent !== text) status.textContent = text // Do not re-announce unchanged live text every tick.
   }
   const reply = core.createReplySpeech(text => { const clean = window.SeraTTSCore.cleanForSpeech(text); if (clean) { speechStopped = false; queue.enqueue(clean) } })

@@ -134,7 +134,9 @@ for (const toast of [false, true]) {
 console.log('TTS error routing: retries quiet, exhausted segments stop and alert on both surfaces')
 
 const aggregated = await fixture(); await aggregated.run(250)
-aggregated.win.SeraCall.final('첫 구절'); aggregated.advance(1100)
+aggregated.win.SeraCall.final('첫 구절'); await aggregated.run(250)
+assert.equal(aggregated.element('call-state').textContent, '듣는 중...')
+aggregated.advance(1100)
 assert.equal(aggregated.posted.filter(p => p.url === '/api/chat/in').length, 0)
 aggregated.win.SeraCall.partial('다음'); aggregated.advance(1500)
 assert.equal(aggregated.posted.filter(p => p.url === '/api/chat/in').length, 0)
