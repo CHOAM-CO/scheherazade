@@ -110,7 +110,7 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
     reposition()
     if (hidden) {
       if (tray) tray.setToolTip('세라 · 확인할 이야기가 있어요')
-      if (settings.sound && kind !== 'proactive') shell.beep()
+      if (settings.sound && !['proactive', 'retrying'].includes(kind)) shell.beep()
     } else if (win) win.showInactive()
   }
   function eligible() {
@@ -205,13 +205,14 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
         const chat = chatResult.status === 'fulfilled' ? chatResult.value : null
         connected = !!chat
         busy = !!chat?.state?.awaitingReplySince || !!chat?.draft || statusResult.value?.state === 'connecting'
+        const retryBubble = bubble?.kind === 'retrying'
         if (chat) {
           const seed = cursor === null
           for (const item of chat.items || []) {
             if (seed) continue
             if (speakable(item)) speech = [...speech, { seq: item.seq, text: item.text.slice(0, 16000) }].slice(-8)
             if (item.kind === 'message' && item.role === 'user' && awaiting === 'proactive') awaiting = null
-            const kind = classifyMessage(item, awaiting)
+            const kind = classifyMessage(item, awaiting) || (retryBubble && speakable(item) ? 'reply' : null)
             if (kind) {
               if (kind !== 'proactive' || (!fullscreen.fullscreen && fullscreen.known)) showBubble(kind, item.text, `chat-${item.seq}`)
               if (awaiting === 'proactive') awaiting = null
@@ -222,7 +223,11 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
         }
         const error = errorResult.status === 'fulfilled' ? errorResult.value : null
         providerHealthy = statusResult.value?.state === 'live' && !(error?.present && error.fresh)
-        if (error?.present && error.fresh && error.ts !== lastError) {
+        const retrying = error?.present && error.fresh && error.subtype === 'retrying'
+        if (retrying) {
+          if (bubble?.kind !== 'retrying') showBubble('retrying', '다시 보내는 중...', 'retrying')
+        } else if (errorResult.status === 'fulfilled' && bubble?.kind === 'retrying') collapse()
+        if (error?.present && error.fresh && !retrying && error.ts !== lastError) {
           lastError = error.ts
           const fromProactive = awaiting === 'proactive'
           awaiting = null

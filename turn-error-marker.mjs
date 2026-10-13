@@ -48,3 +48,19 @@ export function writeTurnErrorMarker (dataHome, { code, message, model, now = Da
 export function clearTurnErrorMarker (dataHome) {
   try { fs.unlinkSync(markerPath(dataHome)); return true } catch { return false } // absent = nothing to clear
 }
+
+// Only an explicit retry event is transient. Error text alone must never hide
+// an exhausted 529/overload result (or an auth/configuration failure).
+export function writeTurnRetryMarker (dataHome, event, now = Date.now()) {
+  if (event.type !== 'system' || event.subtype !== 'api_retry') return null
+  const marker = { ts: now, subtype: 'retrying', detail: String(event.error || event.error_status || '').slice(0, TURN_ERROR_DETAIL_MAX) }
+  writeJsonAtomic(markerPath(dataHome), marker, 0o600)
+  return marker
+}
+
+export function clearTurnRetryMarker (dataHome) {
+  try {
+    if (JSON.parse(fs.readFileSync(markerPath(dataHome), 'utf8')).subtype === 'retrying') return clearTurnErrorMarker(dataHome)
+  } catch { /* absent/corrupt */ }
+  return false
+}

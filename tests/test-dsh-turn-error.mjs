@@ -14,6 +14,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   writeTurnErrorMarker, clearTurnErrorMarker, turnErrorLogLine, markerPath, TURN_ERROR_DETAIL_MAX,
+  writeTurnRetryMarker, clearTurnRetryMarker,
 } from '../turn-error-marker.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -80,6 +81,20 @@ assert(copy.includes("turnErrorDivider: (subtype, detail) => `모델이 거절�
 assert(copy.includes("turnErrorDivider: (subtype, detail) => `Model rejected the request: ${detail"), 'en mirror next to it')
 const koBlock = copy.slice(copy.indexOf('quickbarKo: {'), copy.indexOf('turnErrorDivider: (subtype, detail) => `Model rejected'))
 assert(!/[—–]/.test(koBlock), 'no em/en dashes in the Korean copy block')
+
+console.log('7. retry status never hides an exhausted overload')
+for (const error of ['HTTP 529', 'overloaded', 'Please retry your request']) {
+  const retry = writeTurnRetryMarker(TMP, { type: 'system', subtype: 'api_retry', error, error_status: 529 })
+  assert(retry.subtype === 'retrying', `${error}: retry is a status, not an error`)
+  assert(JSON.parse(fs.readFileSync(markerPath(TMP))).subtype === 'retrying', 'transient marker reaches the shared UI route')
+  assert(clearTurnRetryMarker(TMP) && !fs.existsSync(markerPath(TMP)), 'answer clears retry status')
+  writeTurnRetryMarker(TMP, { type: 'system', subtype: 'api_retry', error })
+  writeTurnErrorMarker(TMP, { code: 'error_during_execution', message: error })
+  assert(!clearTurnRetryMarker(TMP), 'retry cleanup must not erase an exhausted error')
+  assert(JSON.parse(fs.readFileSync(markerPath(TMP))).subtype === 'error_during_execution', 'exhaustion replaces status with a real error')
+  assert(writeTurnRetryMarker(TMP, { type: 'result', is_error: true, error }) === null, 'error words alone never imply retrying')
+}
+clearTurnErrorMarker(TMP)
 
 fs.rmSync(TMP, { recursive: true, force: true })
 console.log(`\n${passed} passed, ${failed} failed`)

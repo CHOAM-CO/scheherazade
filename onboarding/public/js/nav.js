@@ -563,7 +563,7 @@
     } catch (err) {
       return // poll blip; leave the banner as it was
     }
-    if (!e || !e.present || !e.fresh || e.ts === turnErrorDismissedTs) { banner.hidden = true; return }
+    if (!e || !e.present || !e.fresh || e.subtype === 'retrying' || e.ts === turnErrorDismissedTs) { banner.hidden = true; return }
     $('nav-turnerror-text').textContent = NAV.turnError(e.subtype, e.detail, e.loginHint)
     const btn = $('nav-turnerror-dismiss')
     btn.textContent = NAV.turnErrorDismiss

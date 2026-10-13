@@ -143,9 +143,10 @@
   // "nothing in the app"): the nav banner is a strip above the page; the chat
   // pane itself gets a [system] divider line so the failed call annotates the
   // conversation where the user was waiting. One divider per marker ts.
-  const TURN_ERROR_POLL_MS = 10000
+  const TURN_ERROR_POLL_MS = 1000
   let turnErrorPolledAt = 0
   let turnErrorShownTs = 0
+  let retrying = false
   // The rail: one line for the states where a turn is NOT being worked on
   // (다시 붙는 중 / 세션 끊김 / Stopping…) and the elapsed chip's home when no
   // run fold is on screen. The dots ride inside it -- same element and same
@@ -938,7 +939,8 @@
     // While the live run fold is on screen it owns the step label, so the chip
     // rides ITS summary and the rail stays out of the way (one label on screen,
     // never two). Every other in-flight state is the rail's.
-    const railWanted = st.inFlight && !runEl
+    if (retrying && running) { label = document.documentElement.lang.startsWith('ko') ? '다시 보내는 중...' : 'Retrying...'; dots = false }
+    const railWanted = st.inFlight && (!runEl || retrying)
     if (runChipEl) runChipEl.textContent = chip
     if (railWanted) {
       turnDotsEl.classList.toggle('hidden', !dots)
@@ -1180,6 +1182,8 @@
     turnErrorPolledAt = now
     let e
     try { e = await window.api('/api/agent/turn-error') } catch { return }
+    retrying = !!(e?.present && e.fresh && e.subtype === 'retrying')
+    if (retrying) return
     if (!e || !e.present || !e.fresh || !Number(e.ts) || e.ts === turnErrorShownTs) return
     turnErrorShownTs = e.ts
     const Q = document.documentElement.lang.startsWith('ko') ? C.quickbarKo : C

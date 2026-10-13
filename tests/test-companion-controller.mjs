@@ -79,6 +79,27 @@ try {
   await test('later completion in same turn also returns', async () => { add('The final file is ready.'); await controller.poll(); assert.equal(controller.snapshot().bubble.text, 'The final file is ready.') })
   await test('blur collapses bubble', () => { windows[0].emit('blur'); assert.equal(controller.snapshot().bubble, null) })
   items.push({ seq: ++latest, kind: 'turn-end', role: 'agent' }); await controller.poll()
+  await test('529 retry shows one quiet status, not an error bubble', async () => {
+    error = { present: true, fresh: true, ts: 80, subtype: 'retrying', detail: 'HTTP 529 overloaded' }
+    await controller.poll()
+    assert.equal(controller.snapshot().bubble.kind, 'retrying')
+    assert.equal(controller.snapshot().bubble.text, '다시 보내는 중...')
+    assert.notEqual(controller.snapshot().ring, 'attention')
+    const id = controller.snapshot().bubble.id
+    error.ts++; await controller.poll()
+    assert.equal(controller.snapshot().bubble.id, id)
+  })
+  await test('successful retry replaces status with the answer', async () => {
+    error = { present: false }; add('Recovered answer.'); await controller.poll()
+    assert.equal(controller.snapshot().bubble.kind, 'reply')
+    assert.equal(controller.snapshot().bubble.text, 'Recovered answer.')
+  })
+  await test('exhausted overload replaces retry status with error', async () => {
+    error = { present: true, fresh: true, ts: 90, subtype: 'retrying', detail: 'retry your request' }; await controller.poll()
+    error = { present: true, fresh: true, ts: 91, subtype: 'error_during_execution', detail: 'HTTP 529 overloaded' }; await controller.poll()
+    assert.equal(controller.snapshot().bubble.kind, 'error')
+    await controller.command({ action: 'dismiss' })
+  })
   await test('fresh auth marker opens error', async () => { error = { present: true, fresh: true, ts: 100, subtype: 'AUTH' }; await controller.poll(); assert.equal(controller.snapshot().bubble.kind, 'error') })
   await test('dismissed auth marker does not repeat', async () => { await controller.command({ action: 'dismiss' }); await controller.poll(); assert.equal(controller.snapshot().bubble, null) })
   await test('known auth failure blocks proactive', async () => { clock += 120001; await controller.poll(); assert.equal(nudges, 0) })

@@ -46,7 +46,7 @@
     }
     $('approval').hidden = $('approval-note').hidden = b.kind !== 'approval-reply'
     $('main').hidden = b.kind !== 'approval-reply'
-    $('reply-form').hidden = b.kind === 'error'
+    $('reply-form').hidden = ['error', 'retrying'].includes(b.kind)
     $('bubble').classList.toggle('expects-reply', ['compose', 'question', 'approval-reply'].includes(b.kind) || !!$('reply').value)
     measureBubble()
   }

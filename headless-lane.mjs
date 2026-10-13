@@ -44,6 +44,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { killTree as procKillTree } from './proc.cjs'
 import { createTurnGate } from './turn-gate.mjs'
+import { writeTurnRetryMarker, clearTurnRetryMarker } from './turn-error-marker.mjs'
 
 const MEM = process.env.MEM
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude'
@@ -834,6 +835,7 @@ async function main() {
       return
     }
     if (e.type === 'assistant') {
+      if (!e.isApiErrorMessage && !e.error) clearTurnRetryMarker(MEM)
       // Standing-context sample: the newest API call's usage (see the v2.1
       // note atop the rotation constants). Guarded so a provider that omits
       // usage keeps the previous sample instead of zeroing pressure.
@@ -866,29 +868,11 @@ async function main() {
         }
       }
     } else if (e.type === 'system' && e.subtype === 'api_retry') {
-      // Upstream retry storm made VISIBLE (2026-08-13, the owner field log: inbound
-      // "님?" reaches stdin, then NOTHING). Mock-429 receipt (/tmp/sched-
-      // silentdead): the CLI answers 429 with up to max_retries=10 silent
-      // retries at retry_delay_ms=60000 -- ten minutes of dead air per turn --
-      // and the only trace is this stream event, which this handler used to
-      // fall through and drop. Worse, the event line itself reset the turn
-      // watchdog's activity clock, so the one net built for silent turns was
-      // disarmed by the very signal of the stall. The process is genuinely
-      // alive (waiting, not wedged), so the watchdog reset stands; the fix is
-      // honesty -- every retry logs, and from the second consecutive retry
-      // the error banner tells the user the lane is quota-walled instead of
-      // letting the panel look healthy through a ten-minute storm.
+      // Waiting is not a failed turn. Keep one transient status until the
+      // next assistant response; only an errored result gets an error banner.
       const waitS = Math.round((Number(e.retry_delay_ms) || 0) / 1000)
-      errLog(`upstream ${e.error_status || '?'} (${e.error || 'api error'}): retry ${e.attempt}/${e.max_retries}${waitS ? ` in ${waitS}s` : ''} -- provider rate/quota wall; the turn is WAITING, not dead`)
-      if (Number(e.attempt) >= 2) {
-        try {
-          writeJsonAtomic(path.join(MEM, '.last-turn-error.json'), {
-            ts: Date.now(),
-            subtype: 'rate_limited',
-            detail: `provider keeps answering ${e.error_status || 429} (${e.error || 'rate limit'}) -- retry ${e.attempt}/${e.max_retries}, ~${waitS}s apart. The turn resumes by itself if the quota window reopens; otherwise it errors out after the last retry. Heavy tasks burn provider quota fastest (each sub-turn re-sends the full prompt on no-cache lanes).`,
-          }, 0o600)
-        } catch (err) { log(`rate-limit marker write failed: ${err.message}`) }
-      }
+      log(`upstream ${e.error_status || '?'} (${e.error || 'api error'}): retry ${e.attempt}/${e.max_retries}${waitS ? ` in ${waitS}s` : ''}`)
+      try { writeTurnRetryMarker(MEM, e) } catch (err) { log(`retry marker write failed: ${err.message}`) }
     } else if (e.type === 'system' && e.subtype === 'init') {
       sawInit = true
       if (typeof e.session_id === 'string' && e.session_id) {
@@ -905,6 +889,7 @@ async function main() {
     } else if (e.type === 'control_response') {
       turnStopper.noteControlResponse(e)
     } else if (e.type === 'result' && turnStopper.noteResult()) {
+      clearTurnRetryMarker(MEM)
       // The soft stop landed (win32, see createTurnStopper): this result is
       // the cancelled turn's close (subtype error_during_execution on the
       // probed CLI). It is NOT an error turn -- no strike, no banner -- and it
