@@ -6,7 +6,7 @@
 // Every action except 'settings' is refused with 409 while it is off, here
 // AND in the controller, so nothing can open the window behind the toggle.
 const { readConfig: parseConfig, VARIANTS } = require('../../companion/model.cjs')
-const ACTIONS = new Set(['settings', 'pointer', 'shape', 'touch', 'dismiss', 'open', 'drag-start', 'drag-end', 'reply', 'main'])
+const ACTIONS = new Set(['settings', 'pointer', 'shape', 'touch', 'dismiss', 'open', 'drag-start', 'drag-end', 'reply', 'main', 'call-error', 'call-speaking'])
 
 function createRoutes(ctx) {
   const { sendJson, readJsonBody, readAgentConfig, writeAgentConfig } = ctx

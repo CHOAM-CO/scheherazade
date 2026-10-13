@@ -52,3 +52,7 @@ button.round svg { width: 18px; height: 18px; fill: none; stroke: currentColor; 
   button.round { background: #f4f2f8e6; color: #3b3f6b; border-color: #0000001f; }
   button.round:hover { background: #ffffff; }
 }
+
+/* Shared Face/orb call controls live in the native hit-tested bubble, never the hover toolbar. */
+.call-controls { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-shrink: 0; }
+.call-controls button { flex-shrink: 0; }

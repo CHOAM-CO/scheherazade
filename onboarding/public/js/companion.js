@@ -18,6 +18,18 @@
     if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`)
     return body
   }
+  window.SeraCompanionError = async message => {
+    // Expand the native window as well as the DOM; Face alone is only 64px.
+    try { render(await command('call-error', { message: String(message) })) }
+    catch { $('bubble').hidden = false }
+    $('failure').textContent = String(message); $('failure').hidden = false
+    measureBubble()
+  }
+  let callSpeaking = false
+  setInterval(() => {
+    const speaking = !!window.SeraCall?.speaking
+    if (speaking !== callSpeaking) command('call-speaking', { speaking }).then(() => { callSpeaking = speaking }).catch(() => {})
+  }, 250)
   function showFailure() { $('failure').hidden = false; $('failure').textContent = '보내지 못했어요. 연결을 확인하고 다시 보내 주세요.' }
   async function action(name, args) { try { render(await command(name, args)) } catch { showFailure() } }
   function render(state) {
@@ -70,7 +82,7 @@
   $('bubble').addEventListener('pointerdown', () => command('touch').catch(() => {}))
   $('bubble').addEventListener('input', () => command('touch').catch(() => {}))
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') action('dismiss')
+    if (e.key === 'Escape' && !window.SeraCall?.active) action('dismiss')
     // Space = pause/resume speech, never while typing in the reply box.
     if (e.code === 'Space' && current?.variant === 'orb' && !e.target.closest('input, textarea, button')) { e.preventDefault(); voice.togglePause() }
   })

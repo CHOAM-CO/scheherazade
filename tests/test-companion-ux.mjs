@@ -48,6 +48,35 @@ await test('bubble has no notification chrome and keeps conversational approval 
   assert.match(js, /command\('reply', \{ text \}\)/)
   assert.match(js, /e.key === 'Escape'/)
 })
+await test('companion error presenter expands Face and renders a text-only alert', async () => {
+  const elements = new Map(), commands = []
+  const element = id => {
+    if (!elements.has(id)) elements.set(id, { hidden: true, style: {}, dataset: {}, value: '', classList: { toggle() {}, add() {}, remove() {} },
+      setAttribute() {}, addEventListener() {}, getBoundingClientRect: () => ({ height: 140 }) })
+    return elements.get(id)
+  }
+  let state = { variant: 'face', bubble: null, ring: 'idle', connected: true }
+  const window = { getOnboardToken: () => 'test' }
+  vm.runInNewContext(read('onboarding/public/js/companion.js'), {
+    window, document: { getElementById: element, body: { dataset: {} }, addEventListener() {}, querySelectorAll: () => [] },
+    Audio: class {}, ResizeObserver: class { observe() {} }, setTimeout() {}, setInterval() {}, AbortSignal, URL, console,
+    fetch: async (route, opts) => {
+      if (route === '/api/companion' && opts.body) {
+        const body = JSON.parse(opts.body); commands.push(body)
+        if (body.action === 'call-error') state = { ...state, bubble: { id: 'error-1', kind: 'error', text: body.message } }
+      }
+      return { ok: true, json: async () => route === '/api/companion' ? state : {}, blob: async () => new Blob() }
+    },
+  })
+  await flush()
+  assert.equal(element('bubble').hidden, true)
+  await window.SeraCompanionError('<img onerror=unsafe> TTS 실패')
+  assert.equal(element('bubble').hidden, false)
+  assert.equal(element('failure').hidden, false)
+  assert.equal(element('failure').textContent, '<img onerror=unsafe> TTS 실패')
+  assert.ok(commands.some(c => c.action === 'call-error'))
+  assert.ok(commands.some(c => c.action === 'shape' && c.height === 140))
+})
 await test('macOS pointer enter/leave retains forwarded click-through and dynamic shape anchoring', async () => {
   const calls = [], windows = []
   class Window extends EventEmitter {
