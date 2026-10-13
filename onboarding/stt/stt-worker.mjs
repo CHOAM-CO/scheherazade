@@ -22,7 +22,10 @@ function load() {
   recognizer = new sherpa.OnlineRecognizer({
     featConfig: { sampleRate: SAMPLE_RATE, featureDim: 80 },
     modelConfig: { transducer: { encoder: p(ENCODER), decoder: p(DECODER), joiner: p(JOINER) }, tokens: p(TOKENS), numThreads: threads, provider: 'cpu', debug: 0 },
-    decodingMethod: 'greedy_search',
+    // modified_beam_search: the model card's KsponSpeech CER (8.6) is measured with beam 8; greedy on a
+    // 2,460-syllable vocab produced syllable soup on casual speech (owner's test 2026-10-13 21:32).
+    decodingMethod: 'modified_beam_search',
+    maxActivePaths: 8,
     enableEndpoint: 1,
     rule1MinTrailingSilence: 2.4,
     rule2MinTrailingSilence: 1.2,
