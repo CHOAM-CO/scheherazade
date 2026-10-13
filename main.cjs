@@ -1137,7 +1137,15 @@ function claudeAuthSourceFor(provider) {
       const r = await refreshClaudeCliToken()
       if (r && r.error) log(`route-proxy credential: ${provider} refresh skipped: ${r.error}`)
       const t = readClaudeCliToken()
-      return t.token ? t : null
+      if (t.token) return t
+      // Fallback (2026-10-13, resolveClaudeLaneToken order): the CLI login is
+      // dead, so use the 'claude-subscription' token Settings Re-login writes.
+      // Goes through that row's own source so a JSON blob still gets
+      // refreshed. Returning a token makes the proxy overwrite the lane's
+      // spawn-frozen ANTHROPIC_API_KEY header on this very request.
+      const sub = await claudeAuthSourceFor('claude-subscription')()
+      if (sub && sub.token) log(`route-proxy credential: ${provider} login unusable (${t.error}), using the stored claude-subscription token`)
+      return sub && sub.token ? sub : null
     }
     : async () => {
       // Both stored shapes (provider-env.cjs unwrapOAuthKey): bare oat ->
@@ -1755,8 +1763,11 @@ async function spawnRealAgentChildLocked() {
   // the spawn reads it, same loader the route proxy uses. Bare tokens: no-op.
   invalidateClaudeAuthSources('spawn')
   if (!CLAUDE_LOGIN_ROWS.includes(provider)) clearAuthMarker(`spawn on ${provider}`)
-  if (provider === 'claude-subscription') {
-    try { await claudeAuthSourceFor(provider)() } catch (e) { log(`${provider}: pre-spawn credential check threw: ${e && e.message ? e.message : String(e)}`) }
+  // claude-cli with a dead CLI login falls back to the subscription slot
+  // (buildProviderEnv below), so rotate that blob too before the read.
+  const preSpawnSub = provider === 'claude-subscription' || (provider === CLAUDE_CLI_PROVIDER_ID && !readClaudeCliToken().token)
+  if (preSpawnSub) {
+    try { await claudeAuthSourceFor('claude-subscription')() } catch (e) { log(`${provider}: pre-spawn credential check threw: ${e && e.message ? e.message : String(e)}`) }
   }
   const providerEnvResult = buildProviderEnv(provider, config, { readProviderKey })
   if (providerEnvResult.error) {

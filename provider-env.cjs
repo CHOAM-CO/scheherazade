@@ -735,6 +735,46 @@ function readClaudeCliToken() {
   return Number.isFinite(expiresAt) ? { token, expiresAt } : { token }
 }
 
+// Claude lane token resolution (2026-10-13, field report sanha: Settings
+// Re-login stored a fresh 'claude-subscription' token, but the claude-cli
+// route only ever read ~/.claude/.credentials.json, so Re-login changed
+// nothing and every turn kept 401ing). Order, per provider:
+//   claude-cli:          1. Claude Code CLI login (file / macOS keychain), if
+//                           valid (refresh already attempted by the caller)
+//                        2. stored 'claude-subscription' token (what Settings
+//                           Re-login writes), if present and not expired
+//                        3. error: the CLI read's own reason
+//   claude-subscription: the stored slot only (unchanged; empty -> not ready)
+// readCli() -> { token, expiresAt? } | { error }; readSub() -> raw stored
+// value (bare oat or JSON blob) | null. Pure given its readers, so the route
+// proxy's per-request loader and the spawn path share one order.
+function resolveClaudeLaneToken(provider, { readCli, readSub, now = Date.now }) {
+  const subToken = () => {
+    let raw = null
+    try { raw = readSub() } catch { return null }
+    const k = unwrapOAuthKey(raw)
+    if (!k || !k.token) return null
+    if (Number.isFinite(k.expiresAt) && k.expiresAt < now() + CLAUDE_CLI_TOKEN_HEADROOM_MS) return null
+    return k.expiresAt ? { token: k.token, expiresAt: k.expiresAt, source: 'claude-subscription' } : { token: k.token, source: 'claude-subscription' }
+  }
+  if (provider === CLAUDE_CLI_PROVIDER_ID) {
+    const c = readCli()
+    if (c && c.token) return { ...c, source: CLAUDE_CLI_PROVIDER_ID }
+    const s = subToken()
+    if (s) return s
+    return { error: (c && c.error) || 'no Claude login found' }
+  }
+  const s = subToken()
+  return s || { error: 'no Claude subscription token is on file' }
+}
+
+// Extra fix for the AUTH banner: only the claude-cli route with NO stored
+// subscription token can be revived by running `claude` in a terminal; with
+// a subscription token on file, Settings Re-login is the right fix already.
+function claudeAuthLoginHint(provider, hasSubscriptionToken) {
+  return provider === CLAUDE_CLI_PROVIDER_ID && !hasSubscriptionToken ? 'cli-terminal' : null
+}
+
 const PROVIDER_ROWS = [
   {
     // BYOK (0.2.2 harness swap, the owner 08-19 "클로드코드 아예 의존성째로
@@ -824,7 +864,10 @@ const PROVIDER_ROWS = [
     id: 'claude-cli',
     credential: 'none',
     pre: (config, deps) => {
-      const r = (deps && deps.readClaudeCliToken ? deps.readClaudeCliToken : readClaudeCliToken)()
+      // Order: CLI login, then the stored subscription token (resolveClaudeLaneToken).
+      const readCli = deps && deps.readClaudeCliToken ? deps.readClaudeCliToken : readClaudeCliToken
+      const readSub = () => (deps && typeof deps.readProviderKey === 'function' ? deps.readProviderKey('claude-subscription') : null)
+      const r = resolveClaudeLaneToken(CLAUDE_CLI_PROVIDER_ID, { readCli, readSub })
       if (r.error) {
         return {
           error: {
@@ -1441,6 +1484,8 @@ module.exports = {
   refreshClaudeCliToken,
   readClaudeCliToken,
   unwrapOAuthKey,
+  resolveClaudeLaneToken,
+  claudeAuthLoginHint,
   CLAUDE_CLI_PROVIDER_ID,
   resolveChatgptProxyPort,
   resolveCustomBaseUrl,

@@ -29,6 +29,26 @@ function createRoutes(staticCtx) {
   } = staticCtx
 
   const seedLib = require('../../cadence/seed.cjs')
+  const { claudeAuthLoginHint, unwrapOAuthKey } = require('../../provider-env.cjs')
+
+  // Claude chat-lane auth state (2026-10-13): the AUTH turn-error marker is
+  // the lane's own truth (written on an upstream 401, cleared on the next
+  // 2xx). The usage card reads a different credential, so it consults this
+  // instead of reporting a plain Connected while the lane is dead.
+  function readTurnErrorMarker() {
+    try { return JSON.parse(fs.readFileSync(path.join(DATA_HOME, '.last-turn-error.json'), 'utf8')) } catch { return null }
+  }
+  function claudeLaneAuthFailing() {
+    const m = readTurnErrorMarker()
+    const provider = (readAgentConfig().PROVIDER || '').trim()
+    return !!(m && String(m.subtype) === 'AUTH' && ['claude-cli', 'claude-subscription'].includes(provider))
+  }
+  function authLoginHint() {
+    const provider = (readAgentConfig().PROVIDER || '').trim()
+    let hasSub = false
+    try { hasSub = !!unwrapOAuthKey(readProviderKey('claude-subscription')) } catch { /* unreadable = none */ }
+    return claudeAuthLoginHint(provider, hasSub)
+  }
 
   // ── live window material (design-0023 P4) ───────────────────────────────
   // ONE owner of "apply the saved blur to the running window", replacing two
@@ -205,6 +225,8 @@ function createRoutes(staticCtx) {
           ts: Number(marker.ts),
           subtype: String(marker.subtype || 'error').slice(0, 80),
           detail: String(marker.detail || '').slice(0, 600),
+          // 'cli-terminal' | null: which extra fix the AUTH banner names.
+          loginHint: String(marker.subtype) === 'AUTH' ? authLoginHint() : null,
         })
         return
       },
@@ -320,7 +342,9 @@ function createRoutes(staticCtx) {
       handler: async (req, res) => {
         // ?force=1 = the Refresh button bypassing the 60s cache (2026-08-05,
         // the owner: manual refresh must actually parse). Page-enter loads omit it.
-        sendJson(res, 200, await fetchClaudeSubscriptionUsage({ force: /[?&]force=1(&|$)/.test(String(req.url || '')) }))
+        const u = await fetchClaudeSubscriptionUsage({ force: /[?&]force=1(&|$)/.test(String(req.url || '')) })
+        // Not cached with the meter: the lane can die or recover in between.
+        sendJson(res, 200, { ...u, laneAuthFailing: claudeLaneAuthFailing() })
         return
       },
     },
