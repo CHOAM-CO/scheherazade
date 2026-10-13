@@ -391,3 +391,12 @@ The extension popup kill switch detaches the agent without closing Chrome.
 `SEED_OATH_USER`와 `SEED_OATH_COMPANION`에 당시 두 이름 저장됨.
 서약 중 씨앗 변경 불가함. 설정에서 서약 해제 확인 후 변경 가능함.
 환류는 씨앗 블록 보존하며 주변 습관만 다듬음.
+
+## Call mode / 통화 모드
+
+`CALL_ENABLED` defaults to false. Enable Read aloud and Voice input first, then
+Call mode in Settings or the companion hover row. The microphone stays open;
+endpointed utterances send automatically. Turning off closes capture and clears
+speech. Recognition ignores microphone audio during playback to avoid speaker
+echo; interruption works only between sentences. Streaming-capable lanes speak
+complete sentences as they arrive; other lanes speak after completion.
