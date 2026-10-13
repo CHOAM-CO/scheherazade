@@ -34,7 +34,13 @@
     const modelLabel = document.createElement('label'); modelLabel.htmlFor = 'set-stt-model'; modelLabel.textContent = ko ? '인식 모델' : 'Recognition model'
     const modelSelect = document.createElement('select'); modelSelect.id = 'set-stt-model'
     modelRow.append(modelLabel, modelSelect)
-    card.append(label, note, row, modelRow, state, credit)
+    const dumpRow = document.createElement('div'); dumpRow.className = 'agent-control-row'
+    const dumpLabel = document.createElement('label'); dumpLabel.htmlFor = 'set-stt-dump'
+    dumpLabel.textContent = ko ? '들은 소리 파일로 남기기 (진단용)' : 'Save heard audio to files (diagnostics)'
+    const dumpBox = document.createElement('input'); dumpBox.type = 'checkbox'; dumpBox.id = 'set-stt-dump'
+    const dumpPath = document.createElement('span'); dumpPath.className = 'agent-control-hint'; dumpPath.style.overflowWrap = 'anywhere'
+    dumpRow.append(dumpLabel, dumpBox, dumpPath)
+    card.append(label, note, row, modelRow, dumpRow, state, credit)
     const tts = document.getElementById('set-tts')
     const group = document.getElementById('set-companion-mic')
     if (group) group.append(card)
@@ -43,6 +49,8 @@
     let timer = null
     function paint(s) {
       box.checked = s.enabled
+      dumpBox.checked = !!s.dump
+      dumpPath.textContent = s.dumpDir || ''
       modelSelect.replaceChildren(...(s.models || []).map(m => {
         const option = document.createElement('option'); option.value = m.id
         option.textContent = `${m.id === '72m' ? (ko ? '소형 · 72M (기본)' : 'Small · 72M (default)') : (ko ? '대형 · 174M' : 'Large · 174M')} · ${mb(m.totalBytes)} MiB`
@@ -66,6 +74,12 @@
       try { paint(await postJson('/api/stt/settings', { modelId: modelSelect.value })) }
       catch (e) { await refresh(); state.textContent = T.err(e.message) }
       finally { if (!timer) modelSelect.disabled = false }
+    }
+    dumpBox.onchange = async () => {
+      dumpBox.disabled = true
+      try { paint(await postJson('/api/stt/settings', { dump: dumpBox.checked })) }
+      catch (e) { await refresh(); state.textContent = T.err(e.message) }
+      finally { dumpBox.disabled = false }
     }
     box.onchange = async () => { box.disabled = true; try { paint(await postJson('/api/stt/settings', { enabled: box.checked })) } catch (e) { state.textContent = T.err(e.message) } finally { box.disabled = false } }
     refresh()

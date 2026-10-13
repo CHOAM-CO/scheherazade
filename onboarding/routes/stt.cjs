@@ -10,6 +10,7 @@
 // PCM chunks as application/octet-stream, and each reply carries the newest
 // partial plus any finals (endpoints) since the previous reply.
 const path = require('node:path')
+const { createDump } = require('../stt/dump.cjs')
 const { ensureModels, modelsPresent } = require('../stt/models.cjs')
 const { createEngine } = require('../stt/engine.cjs')
 const { MODELS, getModel, CREDIT } = require('../stt/manifest.cjs')
@@ -33,6 +34,12 @@ function readRawBody(req, limitBytes) {
 
 function createRoutes(ctx) {
   const { sendJson, readJsonBody, readAgentConfig, writeAgentConfig, getElectron, DATA_HOME, log } = ctx
+  function dumpDir() {
+    if (process.env.SERA_STT_DUMP_DIR) return path.resolve(process.env.SERA_STT_DUMP_DIR)
+    try { return path.join(getElectron().app.getPath('userData'), 'stt-dumps') }
+    catch { return path.join(DATA_HOME, 'stt-dumps') }
+  }
+  const dumping = () => readAgentConfig().STT_DUMP === 'true'
   let modelId = readAgentConfig().STT_MODEL === '174m' ? '174m' : '72m'
   const model = () => getModel(modelId)
   let pendingRecognition = 0
@@ -58,11 +65,11 @@ function createRoutes(ctx) {
   }
   const enabled = () => readAgentConfig().STT_ENABLED === 'true'
   function status() {
-    return { enabled: enabled(), credit: CREDIT, modelsPresent: modelsPresent(dir(), modelId), modelId, models: Object.values(MODELS).map(m => ({ id: m.id, label: m.label, totalBytes: m.TOTAL_BYTES })), totalBytes: model().TOTAL_BYTES, download: { ...download }, engine: engine ? engine.state : 'idle', engineError: engine?.lastError || null }
+    return { enabled: enabled(), dump: dumping(), dumpDir: dumpDir(), credit: CREDIT, modelsPresent: modelsPresent(dir(), modelId), modelId, models: Object.values(MODELS).map(m => ({ id: m.id, label: m.label, totalBytes: m.TOTAL_BYTES })), totalBytes: model().TOTAL_BYTES, download: { ...download }, engine: engine ? engine.state : 'idle', engineError: engine?.lastError || null }
   }
   function sweep() {
     const now = Date.now()
-    for (const [sid, x] of sessions) if (now - x.touched > SESSION_IDLE_MS) { x.s.cancel(); sessions.delete(sid) }
+    for (const [sid, x] of sessions) if (now - x.touched > SESSION_IDLE_MS) { x.s.cancel(); x.dump?.close(); sessions.delete(sid) }
   }
   function drainOut(x) { const finals = x.finals.splice(0); return { partial: x.partial, finals } }
 
@@ -81,6 +88,7 @@ function createRoutes(ctx) {
       method: 'POST', match: p => p === '/api/stt/settings',
       handler: async (req, res) => {
         const body = await readJsonBody(req)
+        if (body.dump !== undefined && typeof body.dump !== 'boolean') return sendJson(res, 400, { error: 'dump must be boolean' })
         if (body.enabled !== undefined && typeof body.enabled !== 'boolean') return sendJson(res, 400, { error: 'enabled must be boolean' })
         if (body.modelId !== undefined && (typeof body.modelId !== 'string' || !Object.hasOwn(MODELS, body.modelId))) return sendJson(res, 400, { error: 'unknown STT model' })
         if (body.modelId !== undefined && body.modelId !== modelId) {
@@ -90,9 +98,14 @@ function createRoutes(ctx) {
           modelId = body.modelId; modelDir = null
           Object.assign(download, { state: 'idle', done: 0, total: model().TOTAL_BYTES, file: null, error: null })
         }
+        if (body.dump !== undefined) {
+          writeAgentConfig({ STT_DUMP: String(body.dump) })
+          // Turning off stops capture immediately; turning on applies to new sessions.
+          if (!body.dump) for (const x of sessions.values()) { x.dump?.close(); x.dump = null }
+        }
         if (body.enabled !== undefined) writeAgentConfig({ STT_ENABLED: String(body.enabled) })
         if (enabled() && !modelsPresent(dir(), modelId)) startDownload()
-        if (!enabled() && engine) { for (const x of sessions.values()) x.s.cancel(); sessions.clear(); engine.close() }
+        if (!enabled() && engine) { for (const x of sessions.values()) { x.s.cancel(); x.dump?.close() }; sessions.clear(); engine.close() }
         sendJson(res, 200, status())
       },
     },
@@ -109,6 +122,7 @@ function createRoutes(ctx) {
           x.s = await eng().createSession(ev => {
             if (ev.type === 'final') { x.finals.push(ev.text); x.partial = '' } else x.partial = ev.text
           })
+          if (dumping()) x.dump = createDump(dumpDir(), x.s.id, log)
           sessions.set(x.s.id, x)
           sendJson(res, 200, { sid: x.s.id, sampleRate: 16000 })
         } catch (e) { sendJson(res, 500, { error: e.message }) } finally { pendingRecognition-- }
@@ -125,7 +139,7 @@ function createRoutes(ctx) {
         x.touched = Date.now()
         const pcm = new Float32Array(buf.length / 4)
         for (let i = 0; i < pcm.length; i++) pcm[i] = buf.readFloatLE(i * 4)
-        if (pcm.length) x.s.push(pcm)
+        if (pcm.length) { x.s.push(pcm); x.dump?.append(buf) }
         sendJson(res, 200, drainOut(x))
       },
     },
@@ -136,6 +150,7 @@ function createRoutes(ctx) {
         const x = sessions.get(String(body.sid || ''))
         if (!x) return sendJson(res, 404, { error: 'unknown session' })
         sessions.delete(body.sid)
+        x.dump?.close()
         if (body.cancel === true) { x.s.cancel(); return sendJson(res, 200, { finals: [], text: '' }) }
         pendingRecognition++
         try {

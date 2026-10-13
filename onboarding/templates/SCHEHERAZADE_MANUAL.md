@@ -281,6 +281,19 @@ A stop button sits in the chat while it speaks.
 Settings → 음성 입력 puts a mic button in the chat composer. Speech is
 transcribed on this device, offline (k2-fsa Zipformer Korean streaming,
 sherpa-onnx, Apache-2.0). Korean only for now.
+- **STT_DUMP**: on/off (`true`/`false` in config, default `false`). Settings →
+  음성 입력 → 들은 소리 파일로 남기기 (진단용). Enables diagnostic capture for new
+  sessions; switching off stops capture immediately. Saves the exact incoming
+  16 kHz mono Float32 PCM as `<ISO-timestamp>-<sid>.f32` while listening, then
+  converts it to a 16-bit PCM `.wav` on stop/cancel/session cleanup and removes
+  the `.f32`. Timestamp colons become hyphens for Windows compatibility.
+  Default folder: `<userData>/stt-dumps` (shown beside the checkbox), on Windows
+  `C:\Users\<user>\AppData\Roaming\scheherazade\stt-dumps`.
+  `SERA_STT_DUMP_DIR` overrides the folder. Keeps the newest 50 completed dump
+  files (active sessions are protected); disk failures are logged without
+  interrupting recognition. Abnormal app termination may leave `.f32` files.
+  These files contain your voice, remain locally until rotated or manually
+  deleted, and are not deleted when the switch is turned off.
 - **STT_ENABLED**: on/off. The first enable downloads one ~56 MB speech model.
 - **STT_MODEL**: `small` (72M, ~56 MB, default) or `large` (174M, ~120 MB).
   Settings → 음성 입력 → 인식 모델. Switching downloads the other model once;
