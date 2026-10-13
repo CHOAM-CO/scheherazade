@@ -18,7 +18,7 @@ async function fixture({ failMic = false, companion = true, toast = true, remote
   for (const id of ['ct-status', 'ct-mic', ...(companion ? ['b-mic', 'bubble', 'caption', 'failure'] : [])]) {
     const el = make(id); elements.set(id, el); root.append(el)
   }
-  let mode = 'idle', payload = { latest: 0, items: [], draft: '' }, enabled = true, turnError = {}, failPost = false
+  let mode = 'idle', payload = { latest: 0, items: [], draft: '', state: { awaitingReplySince: null } }, enabled = true, turnError = {}, failPost = false
   const audios = []; let now = 1000
   const win = {
     SeraCallCore: { ...require('../onboarding/public/js/call-core.cjs'), createUtteranceAggregator: opts => require('../onboarding/public/js/call-core.cjs').createUtteranceAggregator({ ...opts, setTimer: (fn, ms) => { deadlines.set(++timerId, { fn, at: now + ms }); return timerId }, clearTimer: id => deadlines.delete(id) }), createSegmentRetry: opts => require('../onboarding/public/js/call-core.cjs').createSegmentRetry({ ...opts, wait: () => Promise.resolve() }) },
@@ -34,7 +34,7 @@ async function fixture({ failMic = false, companion = true, toast = true, remote
     Audio: class { constructor() { this.paused = false; this.ended = false; this.duration = 2; audios.push(this) }; play() { this.playCalls = (this.playCalls || 0) + 1; return Promise.resolve() }; pause() { this.paused = true; this.onpause?.() } },
   })
   await tick(); await tick()
-  return { win, timers, spoken, audios, messages, bubbleErrors, posted, keys, root, element, setError: e => { turnError = e }, failPost: () => { failPost = true }, setPayload: p => { payload = p }, advance: ms => { now += ms; for (const [id, t] of [...deadlines]) if (t.at <= now && deadlines.delete(id)) t.fn() }, async run(ms) { for (const t of timers.filter(t => t.ms === ms)) await t.fn(); await tick(); await tick() } }
+  return { win, timers, spoken, audios, messages, bubbleErrors, posted, keys, root, element, setError: e => { turnError = e }, failPost: () => { failPost = true }, setPayload: p => { payload = { state: { awaitingReplySince: null }, ...p } }, advance: ms => { now += ms; for (const [id, t] of [...deadlines]) if (t.at <= now && deadlines.delete(id)) t.fn() }, async run(ms) { for (const t of timers.filter(t => t.ms === ms)) await t.fn(); await tick(); await tick() } }
 }
 // B2 must never claim active after a failed open.
 if (!process.env.CALL_CASE || process.env.CALL_CASE === 'B2') { const failed = await fixture({ failMic: true }); assert.equal(failed.win.SeraCall.active, false) }
@@ -114,7 +114,7 @@ assert.equal(remote.element('call-state').textContent, '말하는 중')
 remote.keys[0]({ key: 'Escape', preventDefault() {}, stopImmediatePropagation() {} }); await tick()
 assert.equal(remote.element('call-controls').hidden, true, 'Esc stops even a non-owning call surface')
 for (const toast of [false, true]) {
-  const f = await fixture({ toast }); f.failPost(); f.win.SeraCall.final('전송'); f.advance(1200); await tick()
+  const f = await fixture({ toast }); await f.run(250); f.failPost(); f.win.SeraCall.final('전송'); f.advance(1200); await tick()
   assert.deepEqual(toast ? f.messages : f.bubbleErrors, ['request failed'])
   assert.equal((toast ? f.bubbleErrors : f.messages).length, 0)
   const mic = await fixture({ toast, failMic: true })
@@ -143,3 +143,17 @@ assert.equal(aggregated.posted.find(p => p.url === '/api/chat/in').body.text, '�
 aggregated.win.SeraCall.final('종료 후 보내면 안 됨'); aggregated.win.SeraCall.stop(); aggregated.advance(15000)
 assert.equal(aggregated.posted.filter(p => p.url === '/api/chat/in').length, 1)
 console.log('call aggregation: delayed publication, resumed speech merge and hangup cancellation passed')
+
+const pending = await fixture(); await pending.run(250)
+const sentTurns = () => pending.posted.filter(p => p.url === '/api/chat/in').map(p => p.body.text)
+pending.win.SeraCall.final('sent'); pending.advance(1200); await tick()
+pending.setPayload({ latest: 1, items: [], state: { awaitingReplySince: 1000 } }); await pending.run(250)
+for (const text of ['older', 'newer']) { pending.win.SeraCall.final(text); pending.advance(1200); await tick() }
+assert.deepEqual(sentTurns(), ['sent'], '202 must not release the pending turn')
+pending.win.SeraCall.partial('resumed')
+pending.setPayload({ latest: 2, items: [], state: { awaitingReplySince: null } }); await pending.run(250)
+assert.deepEqual(sentTurns(), ['sent'], 'completion cannot send while new speech is in progress')
+pending.win.SeraCall.final('tail'); pending.advance(1200); await tick()
+assert.deepEqual(sentTurns(), ['sent', 'older newer tail'])
+pending.win.SeraCall.stop()
+console.log('renderer turn gate: wait for completion, replace with prepend, and merge resumed speech passed')

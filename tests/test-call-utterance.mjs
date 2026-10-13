@@ -32,3 +32,27 @@ function fixture(options = {}) {
   a.final('tail'); a.reset(); advance(20000); assert.deepEqual(sent, ['ab cd'])
 }
 console.log('utterance quiet window, concatenation, resumed speech, time/character caps and reset passed')
+
+{
+  const { a, sent, advance } = fixture()
+  a.final('sent'); advance(1200); a.setBlocked(true)
+  a.final('older'); advance(1200); a.final('newer'); advance(1200)
+  assert.deepEqual(sent, ['sent']); a.setBlocked(false)
+  assert.deepEqual(sent, ['sent', 'older newer'], 'replace pending, prepend older text')
+}
+{
+  const { a, sent, advance } = fixture()
+  a.setBlocked(true); a.final('waiting'); advance(1200)
+  a.partial('resuming'); a.setBlocked(false); advance(1000)
+  assert.deepEqual(sent, []); a.final('resumed'); advance(1200)
+  assert.deepEqual(sent, ['waiting resumed'])
+}
+{
+  const { a, sent, advance } = fixture({ capChars: 4 })
+  a.setBlocked(true); a.final('first'); a.final('second'); advance(12000)
+  assert.deepEqual(sent, []); a.setBlocked(false)
+  assert.deepEqual(sent, ['first second'], 'caps do not bypass the in-flight gate')
+  a.setBlocked(true); a.final('cancelled'); a.reset(); a.setBlocked(false)
+  assert.equal(sent.length, 1)
+}
+console.log('single pending turn replacement, prepend, resumed-speech merge and gated caps passed')

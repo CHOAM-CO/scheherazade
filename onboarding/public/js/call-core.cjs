@@ -91,11 +91,13 @@
   function createUtteranceAggregator({ send, windowMs = UTTERANCE_WINDOW_MS,
     capMs = UTTERANCE_CAP_MS, capChars = UTTERANCE_CAP_CHARS,
     setTimer = setTimeout, clearTimer = clearTimeout }) {
-    let text = '', silence = null, cap = null, recognizing = false
+    let text = '', silence = null, cap = null, recognizing = false, blocked = false, ready = false
     function clear() { clearTimer(silence); clearTimer(cap); silence = cap = null }
     function flush() {
       if (!text) return
-      const turn = text; text = ''; clear(); send(turn)
+      clear(); ready = true
+      if (blocked) return // One replaceable pending turn, never a FIFO of clauses.
+      const turn = text; text = ''; ready = false; send(turn)
     }
     function arm() {
       clearTimer(silence)
@@ -103,17 +105,25 @@
     }
     return {
       get waiting() { return !!text },
+      setBlocked(value) { blocked = value; if (!blocked && ready) flush() },
       final(fragment) {
         fragment = fragment.trim(); if (!fragment) return
-        if (!text) cap = setTimer(flush, capMs)
+        if (cap === null) cap = setTimer(flush, capMs)
+        ready = false
         text = text ? text + ' ' + fragment : fragment
         recognizing = false
         if (text.length >= capChars) flush(); else arm()
       },
       // A live hypothesis suspends the quiet deadline until its endpoint.
       // The cap still releases already finalized text during a long monologue.
-      partial(value) { recognizing = !!value.trim(); if (recognizing) { clearTimer(silence); silence = null } },
-      reset() { clear(); text = ''; recognizing = false },
+      partial(value) {
+        recognizing = !!value.trim()
+        if (recognizing) {
+          ready = false; clearTimer(silence); silence = null
+          if (text && cap === null) cap = setTimer(flush, capMs)
+        }
+      },
+      reset() { clear(); text = ''; recognizing = blocked = ready = false },
     }
   }
   function createSession({ send, closeMic, clearQueue, now = () => Date.now() }) {

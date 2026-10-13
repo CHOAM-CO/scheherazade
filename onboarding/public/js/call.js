@@ -63,9 +63,18 @@
     onState: state => { if (state === 'playing') queueStarted = Date.now(); if (state === 'idle') queueStarted = 0 },
     stopPlayback: () => { speaking = false; if (audio) { const a = audio; a._done(); a.pause() } },
   })
-  const utterance = core.createUtteranceAggregator({ send: text => { post('/api/chat/in', { text }).catch(e => presentError(e.message)) } })
+  let posting = false, turnRevision = 0
+  const utterance = core.createUtteranceAggregator({ send: text => {
+    const generation = session.generation
+    posting = true; turnRevision++; utterance.setBlocked(true)
+    post('/api/chat/in', { text }).catch(e => {
+      if (active && generation === session.generation) presentError(e.message)
+    }).finally(() => { if (generation === session.generation) posting = false })
+    // A 202 acknowledges delivery, NOT agent completion. Only a fresh /out
+    // state can release the single pending utterance below.
+  } })
   const session = core.createSession({ send: text => utterance.final(text), closeMic: () => window.SeraSTT?.cancel(), clearQueue: stopSpeech })
-  function off() { if (!active) return; active = false; utterance.reset(); session.stop(); cursor = null; reply.reset(); const mic = document.getElementById(companion ? 'b-mic' : 'ct-mic'); if (mic) mic.disabled = false }
+  function off() { if (!active) return; active = false; posting = false; turnRevision++; utterance.reset(); session.stop(); cursor = null; reply.reset(); const mic = document.getElementById(companion ? 'b-mic' : 'ct-mic'); if (mic) mic.disabled = false }
   window.SeraCall = { get active() { return active }, get speaking() { return active && core.suppressMic(queue.running && !speechStopped, speaking, lastEnd, Date.now()) }, stop() { enabled = false; retrying = false; off(); renderState(); post('/api/call', { enabled: false }).then(() => channel.postMessage({ enabled: false })).catch(e => presentError(e.message)) }, stopSpeech, final: text => session.final(text), partial: text => { utterance.partial(text); session.partial(text, stopSpeech) } }
   const button = document.createElement(settings ? 'input' : 'button')
   button.id = 'call-mode'; button.type = settings ? 'checkbox' : 'button'
@@ -93,7 +102,7 @@
       if (!companion && owns) { const c = await window.api('/api/companion'); owns = !(c.available && c.enabled) }
       if (!s.enabled || !owns) { off(); return }
       if (!active) {
-        window.SeraTTS?.stop(); window.SeraCompanionSpeechStop?.(); active = true; session.start(); ttsRetry.reset()
+        window.SeraTTS?.stop(); window.SeraCompanionSpeechStop?.(); active = true; session.start(); utterance.setBlocked(true); ttsRetry.reset()
         opening = true
         try { await window.SeraSTT?.start() } finally { opening = false }
         if (!active) window.SeraSTT?.cancel()
@@ -135,10 +144,15 @@
   })
   async function poll() {
     if (!active || busy) return
-    busy = true; const generation = session.generation
+    busy = true; const generation = session.generation, revision = turnRevision, canSettle = !posting
     try {
       const r = await window.api(`/api/chat/out?since=${cursor ?? 0}`)
       if (!active || generation !== session.generation) return
+      // Ignore status snapshots requested before/during publication; otherwise
+      // a delayed idle response can release another turn behind the new one.
+      if (canSettle && !posting && revision === turnRevision && r.state && Object.hasOwn(r.state, 'awaitingReplySince')) {
+        utterance.setBlocked(r.state.awaitingReplySince != null)
+      }
       if (cursor === null) { cursor = r.latest; reply.prime(r.draft || ''); return }
       for (const m of r.items || []) {
         if (m.role === 'user' || (m.kind && m.kind !== 'message') || !m.text || /^\[system\]/i.test(m.text)) continue
