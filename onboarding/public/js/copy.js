@@ -1018,8 +1018,10 @@ window.COPY = {
     // away would hide exactly the discriminator the user needs.
     // AUTH (0.4.3): a dead Claude login is not a transient model error -- say
     // what it means for the user. Cleared by the next successful call.
-    turnError: (subtype, detail) => subtype === 'AUTH'
-      ? `Claude login expired, agent cannot respond. Log in again in Settings > Model, or restart the agent. (${detail || 'HTTP 401'})`
+    // hint 'cli-terminal' (claude-cli route, no stored subscription token):
+    // running `claude` is the only other way back, so name it.
+    turnError: (subtype, detail, hint) => subtype === 'AUTH'
+      ? `Claude login expired, agent cannot respond. Log in again in Settings > Model, ${hint === 'cli-terminal' ? 'or log in again by running `claude` in a terminal, ' : ''}or restart the agent. (${detail || 'HTTP 401'})`
       : `Model call failed (${subtype}): ${detail || 'no detail from the provider'}`,
     turnErrorDismiss: 'Dismiss',
     muteRevert: (m) => `Go back to ${m}`,
@@ -1791,6 +1793,8 @@ window.COPY = {
     // future call site, harmless either way.
     providerNames: { chatgpt: 'ChatGPT (Codex)', ollama: 'Ollama Cloud', custom: 'Custom proxy' },
     providerConnected: 'Connected',
+    // Chat lane's Claude auth is 401ing even if the meter still reads.
+    claudeLaneAuthFailing: 'Chat token expired, re-login needed',
     providerNotConnected: 'Not connected',
     providerStatusUnknown: 'Status unavailable',
     providerConfigLoadError: "Couldn't read connection status — check Logs and retry.",

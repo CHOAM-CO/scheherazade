@@ -270,6 +270,7 @@
       body = laneBody('conn-usage-lane-claude', C.usageLaneClaude); laneNote(body, GEN(err.message)); return
     }
     setUsageStatus('claude', u.ok === true)
+    if (u.laneAuthFailing) setChip($('conn-provider-claude-status'), '', C.claudeLaneAuthFailing)
     body = laneBody('conn-usage-lane-claude', C.usageLaneClaude)
     if (!u.ok) {
       laneNote(body, u.branch === 'no_token' ? C.usageNoToken : (u.detail || C.usageError))
