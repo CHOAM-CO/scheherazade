@@ -7,12 +7,15 @@
   let active = false, speaking = false, cursor = null, busy = false, audio = null, lastEnd = 0, opening = false, syncing = false, playbackStarted = 0, queueStarted = 0, speechStopped = false, detachAudio = null
   const reply = core.createReplySpeech(text => { const clean = window.SeraTTSCore.cleanForSpeech(text); if (clean) { speechStopped = false; queue.enqueue(clean) } })
   function stopSpeech() { speechStopped = true; reply.abandon(); queue.stop(); speaking = false; lastEnd = 0 }
+  const ttsRetry = core.createSegmentRetry({ onLimit: e => { window.showToast?.(e.message); window.SeraCall.stop() } })
   const queue = window.SeraTTSCore.createSpeechQueue({
     synth: async text => {
       const generation = session.generation
-      const r = await fetch('/api/tts', { signal: AbortSignal.timeout(60000), method: 'POST', headers: { 'content-type': 'application/json', 'X-Onboard-Token': window.getOnboardToken() }, body: JSON.stringify({ text: window.SeraTTSCore.cleanForSpeech(text) }) })
-      if (!r.ok) throw new Error(`TTS ${r.status}`)
-      const blob = await r.blob()
+      const blob = await ttsRetry.run(async () => {
+        const r = await fetch('/api/tts', { signal: AbortSignal.timeout(60000), method: 'POST', headers: { 'content-type': 'application/json', 'X-Onboard-Token': window.getOnboardToken() }, body: JSON.stringify({ text: window.SeraTTSCore.cleanForSpeech(text) }) })
+        if (!r.ok) throw new Error(`TTS ${r.status}`)
+        return r.blob()
+      }, () => active && generation === session.generation && !speechStopped)
       if (!active || generation !== session.generation || speechStopped) throw new Error('Call speech cancelled')
       return URL.createObjectURL(blob)
     },
@@ -53,7 +56,7 @@
       if (!companion && owns) { const c = await window.api('/api/companion'); owns = !(c.available && c.enabled) }
       if (!s.enabled || !owns) { off(); return }
       if (!active) {
-        window.SeraTTS?.stop(); window.SeraCompanionSpeechStop?.(); active = true; session.start()
+        window.SeraTTS?.stop(); window.SeraCompanionSpeechStop?.(); active = true; session.start(); ttsRetry.reset()
         opening = true
         try { await window.SeraSTT?.start() } finally { opening = false }
         if (!active) window.SeraSTT?.cancel()
@@ -66,7 +69,7 @@
         off(); await post('/api/call', { enabled: false }); channel.postMessage({ enabled: false })
       }
       const mic = document.getElementById(companion ? 'b-mic' : 'ct-mic'); if (mic && active) mic.disabled = true
-    } catch { off() } finally { syncing = false }
+    } catch (e) { console.warn('[call settings]', e.message) } finally { syncing = false }
   }
   button[settings ? 'onchange' : 'onclick'] = async () => {
     const enabled = settings ? button.checked : button.getAttribute('aria-pressed') !== 'true'

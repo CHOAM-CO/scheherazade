@@ -61,6 +61,30 @@
     return audio.ended || (audio.paused && now - started > 500) || now - started > Math.min(120000, duration)
   }
   function suppressMic(running, audible, lastEnd, now) { return running || audible || (lastEnd > 0 && now - lastEnd < 300) }
+  // A failed segment gets one retry; only three exhausted segments end a call.
+  function createSegmentRetry({ onLimit, wait = () => new Promise(resolve => setTimeout(resolve, 250)) }) {
+    let failures = 0, epoch = 0
+    return {
+      reset() { failures = 0; epoch++ },
+      async run(request, valid = () => true) {
+        const e = epoch
+        for (let attempt = 0; attempt < 2; attempt++) {
+          if (e !== epoch || !valid()) throw new Error('Call segment cancelled')
+          try {
+            const result = await request()
+            if (e !== epoch || !valid()) throw new Error('Call segment cancelled')
+            failures = 0
+            return result
+          } catch (error) {
+            if (e !== epoch || !valid()) throw error
+            if (attempt === 0) { await wait(); continue }
+            if (++failures >= 3) onLimit(error)
+            throw error
+          }
+        }
+      },
+    }
+  }
   function createSession({ send, closeMic, clearQueue, now = () => Date.now() }) {
     let on = false, generation = 0
     const recent = new Map()
@@ -79,7 +103,7 @@
       stop() { on = false; generation++; closeMic(); clearQueue() },
     }
   }
-  const api = { split, createSession, createReplySpeech, micHealth, playbackExpired, suppressMic }
+  const api = { split, createSegmentRetry, createSession, createReplySpeech, micHealth, playbackExpired, suppressMic }
   if (typeof module !== 'undefined') module.exports = api
   else root.SeraCallCore = api
 })(typeof window !== 'undefined' ? window : globalThis)

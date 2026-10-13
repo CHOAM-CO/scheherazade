@@ -73,6 +73,7 @@
   let queue = []
   let queued = 0
   let inflight = null
+  let audioRetry = null
 
   function setMode(m) {
     mode = m
@@ -103,10 +104,11 @@
     if (inflight || !sid || (!flush && queued < CHUNK) || !queued) return inflight
     const requestEpoch = epoch
     const pcm = take(flush ? queued : Math.floor(queued / CHUNK) * CHUNK)
-    inflight = fetch('/api/stt/audio', { method: 'POST', headers: { 'content-type': 'application/octet-stream', 'X-Onboard-Token': token(), 'X-STT-Session': sid }, body: pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength) })
+    const request = () => fetch('/api/stt/audio', { signal: AbortSignal.timeout(10000), method: 'POST', headers: { 'content-type': 'application/octet-stream', 'X-Onboard-Token': token(), 'X-STT-Session': sid }, body: pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength) })
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+    inflight = (audioRetry ? audioRetry.run(request, () => requestEpoch === epoch && mode !== 'idle') : request())
       .then(r => { if (mode === 'idle' || requestEpoch !== epoch) return; if (window.SeraCall?.active) { window.SeraCall.partial(r.partial || ''); for (const text of r.finals) window.SeraCall.final(text); finals = []; base = ''; partial = r.partial || '' } else { finals.push(...r.finals); partial = r.partial || '' }; render() })
-      .catch(e => { console.warn('[stt]', e.message); if (window.SeraCall?.active && requestEpoch === epoch) window.SeraSTT.cancel() })
+      .catch(e => { console.warn('[stt]', e.message) })
       .finally(() => { inflight = null; if (mode === 'listening') pump() })
     return inflight
   }
@@ -144,6 +146,7 @@
   async function start() {
     if (mode !== 'idle' || !input) return
     const e = ++epoch
+    audioRetry = window.SeraCall?.active ? window.SeraCallCore.createSegmentRetry({ onLimit: () => { window.showToast?.(T.failed('3 consecutive audio uploads failed')); window.SeraCall.stop() } }) : null
     setMode('processing')
     base = input.value; finals = []; partial = ''; queue = []; queued = 0
     try {
