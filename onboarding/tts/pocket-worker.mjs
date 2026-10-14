@@ -60,8 +60,8 @@ async function handle(msg) {
   if (msg.op === 'load') return { voices: tts.voices, sampleRate: tts.sampleRate }
   if (msg.op === 'synth') {
     let voice = msg.voice
-    if (voice === 'default' || voice == null) voice = tts.voices[0]
-    else if (voice instanceof Float32Array) {
+    if (voice === 'default' || typeof voice === 'string' || voice == null) throw new Error('the baked default voice is not available; send a conditioning Float32Array')
+    if (voice instanceof Float32Array) {
       if (!cloned.has(msg.voiceKey)) cloned.set(msg.voiceKey, voice)
       voice = cloned.get(msg.voiceKey)
     }

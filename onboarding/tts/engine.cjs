@@ -2,8 +2,9 @@
 // Pocket-TTS Korean engine. The model (one int8 .onnx) is loaded once, lazily,
 // in a forked child (pocket-worker.mjs) so the ~1.5 GB inference footprint and
 // onnxruntime stay out of the server process. synth(text, voiceId) -> 24 kHz
-// 16-bit mono wav Buffer. Voices: 'default' (baked into the .onnx) plus user
+// 16-bit mono wav Buffer. Voices: the bundled read-only 'sera' (tts/voices/) plus user
 // voices cloned from a wav, cached as raw float32 conditioning in voicesDir.
+// The voice baked into the .onnx ('default') is never used or listed.
 const fs = require('node:fs')
 const path = require('node:path')
 const crypto = require('node:crypto')
@@ -11,6 +12,7 @@ const { fork } = require('node:child_process')
 const { DEFAULT_VOICE } = require('./manifest.cjs')
 
 const VOICE_ID = /^v[0-9a-f]{12}$/
+const BUILTIN_DIR = path.join(__dirname, 'voices')
 
 function createEngine(modelPath, { voicesDir = path.join(path.dirname(modelPath), 'voices'), threads = 2 } = {}) {
   let child = null
@@ -53,13 +55,13 @@ function createEngine(modelPath, { voicesDir = path.join(path.dirname(modelPath)
 
   function readCond(id) {
     if (!condCache.has(id)) {
-      const b = fs.readFileSync(path.join(voicesDir, `${id}.bin`))
+      const b = fs.readFileSync(path.join(id === DEFAULT_VOICE ? BUILTIN_DIR : voicesDir, `${id}.bin`))
       condCache.set(id, new Float32Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.length)))
     }
     return condCache.get(id)
   }
   function listVoices() {
-    const out = [{ id: DEFAULT_VOICE, name: null, builtin: true }]
+    const out = [{ id: DEFAULT_VOICE, name: 'Sera', builtin: true }]
     let names = []
     try { names = fs.readdirSync(voicesDir) } catch {}
     for (const f of names.filter(n => n.endsWith('.json')).sort()) {
@@ -73,8 +75,9 @@ function createEngine(modelPath, { voicesDir = path.join(path.dirname(modelPath)
 
   async function synth(text, voiceId = DEFAULT_VOICE) {
     await load()
-    const custom = voiceId !== DEFAULT_VOICE && VOICE_ID.test(voiceId) && hasVoice(voiceId)
-    const r = await call({ op: 'synth', text, voice: custom ? readCond(voiceId) : DEFAULT_VOICE, voiceKey: custom ? voiceId : null })
+    // Unknown / legacy ids (incl. 'default') fall back to the bundled Sera voice.
+    const id = voiceId !== DEFAULT_VOICE && VOICE_ID.test(voiceId) && hasVoice(voiceId) ? voiceId : DEFAULT_VOICE
+    const r = await call({ op: 'synth', text, voice: readCond(id), voiceKey: id })
     return Buffer.from(r.wav.buffer, r.wav.byteOffset, r.wav.byteLength)
   }
 

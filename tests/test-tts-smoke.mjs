@@ -49,7 +49,7 @@ try {
     check(wav.length > 50 * 1024, `${tag}: ${wav.length} bytes > 50 KB`)
     check(secs >= 2 && secs <= 8, `${tag}: ${secs.toFixed(2)} s audio in 2-8 s; synth ${runs.join(' / ')} ms (first/warm) -> ${file}`)
   }
-  await say('default', 'default')
+  await say('sera', 'sera')
   const ref = process.env.SERA_TTS_REF_WAV
   if (!ref || !fs.existsSync(ref)) console.log('  SKIP clone: set SERA_TTS_REF_WAV')
   else {
@@ -57,7 +57,7 @@ try {
     const v = await engine.addVoice('tamura_2', fs.readFileSync(ref))
     console.log(`  clone ${Date.now() - t0} ms from ${path.basename(ref)} (${v.refSeconds.toFixed(1)} s ref)`)
     const list = engine.listVoices()
-    check(list.length === 2 && list[1].id === v.id && list[1].name === 'tamura_2', `voice saved + listed (${v.id})`)
+    check(list.length === 2 && list[0].id === 'sera' && list[1].id === v.id && list[1].name === 'tamura_2', `voice saved + listed (${v.id})`)
     check(fs.statSync(path.join(voicesDir, `${v.id}.bin`)).size % (1024 * 4) === 0, 'conditioning .bin is T x 1024 float32')
     await say('clone-tamura_2', v.id)
     // A fresh engine (new worker) must reuse the saved conditioning without cloning.

@@ -1,6 +1,8 @@
 'use strict'
 // Pocket-TTS Korean 100M, int8 ONNX (one file: flow LM + Mimi decoder + text
-// embedding + SentencePiece tokenizer + voice encoder + baked voice tamura_1).
+// embedding + SentencePiece tokenizer + voice encoder + a baked voice tamura_1 that
+// Sera never uses or lists; the shipped default is the bundled 'sera' voice in
+// tts/voices/, cloned from a Supertonic 3 synthetic preset).
 // Exported 2026-10-13 from seastar105/pocket-tts-korean-100m (korean.yaml) with
 // thewh1teagle/pocket-tts-onnx export.py --quantize. Weights: CC BY 4.0
 // (Kyutai Pocket-TTS; seastar105 Korean fine-tune). Sera ships none of these
@@ -12,6 +14,6 @@ const FILES = [
 ].map(([rel, size, sha256, url]) => ({ rel, size, sha256, url }))
 const MODEL_FILE = FILES[0].rel
 const TOTAL_BYTES = FILES.reduce((n, f) => n + f.size, 0)
-const DEFAULT_VOICE = 'default' // the voice baked into the .onnx
+const DEFAULT_VOICE = 'sera' // bundled conditioning in tts/voices/sera.bin; the voice baked into the .onnx is unused
 const CREDIT = 'Pocket-TTS (Kyutai) · Korean 100M (seastar105) · CC BY 4.0'
 module.exports = { SERA_TTS_MODEL_URL, FILES, MODEL_FILE, TOTAL_BYTES, DEFAULT_VOICE, CREDIT }

@@ -51,9 +51,9 @@
       last = s
       box.checked = s.enabled
       sel.textContent = ''
-      for (const v of s.voices) { const o = document.createElement('option'); o.value = v.id; o.textContent = v.builtin ? T.voiceDefault : v.name; sel.appendChild(o) }
+      for (const v of s.voices) { const o = document.createElement('option'); o.value = v.id; o.textContent = v.builtin ? 'Sera' : v.name; sel.appendChild(o) }
       sel.value = s.voice
-      del.hidden = s.voice === 'default'
+      del.hidden = !!(s.voices.find(v => v.id === s.voice) || {}).builtin
       credit.textContent = s.credit || ''
       const d = s.download
       if (d.state === 'downloading') state.textContent = `${T.dl(d.done, d.total)}${d.total > 0 ? ` · ${Math.min(100, Math.round(d.done / d.total * 100))}%` : ''}`
@@ -91,7 +91,7 @@
     box.onchange = () => saveSettings({ enabled: box.checked })
     sel.onchange = () => saveSettings({ voice: sel.value })
     del.onclick = async () => {
-      if (sel.value === 'default') return
+      if (last && (last.voices.find(v => v.id === sel.value) || {}).builtin) return
       try { paint(await window.api('/api/tts/voices/delete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: sel.value }) })) } catch (e) { state.textContent = T.err(e.message) }
     }
     addBtn.onclick = () => {

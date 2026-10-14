@@ -92,5 +92,38 @@ ok(cleanForSpeech('가'.repeat(900)).length === MAX_CHARS, 'hard cap without bou
 }
 ok(manifest.FILES.length === 1 && manifest.TOTAL_BYTES === 226210253 && /^[0-9a-f]{64}$/.test(manifest.FILES[0].sha256) && manifest.FILES[0].url, `manifest intact (${manifest.TOTAL_BYTES} bytes)`)
 
+// built-in Sera voice + engine voice resolution (worker mocked via child_process.fork)
+{
+  const bin = fs.readFileSync(path.join(ROOT, 'onboarding/tts/voices/sera.bin'))
+  const meta = JSON.parse(fs.readFileSync(path.join(ROOT, 'onboarding/tts/voices/sera.json'), 'utf8'))
+  ok(bin.length > 0 && bin.length % (1024 * 4) === 0 && bin.length / 4096 === meta.frames, `sera.bin is N x 1024 float32 (${meta.frames} frames, ${bin.length} bytes)`)
+  ok(manifest.DEFAULT_VOICE === 'sera', 'DEFAULT_VOICE is sera')
+  const cp = req('node:child_process')
+  const calls = []
+  const realFork = cp.fork
+  cp.fork = () => {
+    const { EventEmitter } = req('node:events')
+    const c = new EventEmitter()
+    c.send = m => { calls.push(m); setImmediate(() => c.emit('message', m.op === 'synth' ? { id: m.id, ok: true, wav: new Uint8Array(4) } : { id: m.id, ok: true })) }
+    c.kill = () => {}
+    return c
+  }
+  const { createEngine } = req(path.join(ROOT, 'onboarding/tts/engine.cjs'))
+  cp.fork = realFork === cp.fork ? realFork : cp.fork
+  const vdir = fs.mkdtempSync(path.join(os.tmpdir(), 'sera-voices-'))
+  const eng = createEngine('/nonexistent.onnx', { voicesDir: vdir })
+  const list = eng.listVoices()
+  ok(list.length === 1 && list[0].id === 'sera' && list[0].name === 'Sera' && list[0].builtin && !list.some(v => v.id === 'default'), 'listVoices: Sera only, no default')
+  ok(eng.hasVoice('default') === false && eng.hasVoice('sera') === true, "hasVoice('default') false, 'sera' true")
+  for (const id of ['default', 'sera', 'v000000000000', undefined]) {
+    calls.length = 0
+    await eng.synth('x', id)
+    const s = calls.find(c => c.op === 'synth')
+    ok(s && s.voiceKey === 'sera' && s.voice instanceof Float32Array && s.voice.length === bin.length / 4, `synth(${id}) uses sera conditioning (voiceKey sera)`)
+  }
+  eng.close(); fs.rmSync(vdir, { recursive: true, force: true })
+  cp.fork = realFork
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

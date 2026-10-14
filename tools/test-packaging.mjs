@@ -421,6 +421,10 @@ if (IS_PREDIST) {
     ok('agent-tools ship as an extraResource next to app.asar (같이보기 windowshot helper)',
       asarResult.agentToolsShipped === true,
       'build.extraResources should carry onboarding/agent-tools -> agent-tools; without it syncAgentTools() no-ops on packaged installs (dev lane still finds the repo copy, so only packaged apps break) and the windowshot skill points at nothing')
+    for (const f of ['onboarding/tts/voices/sera.bin', 'onboarding/tts/voices/sera.json']) {
+      ok(`built-in read-aloud voice ${f} is a real member of the shipped app.asar`, asarEntries.has(f),
+        'the default Sera voice conditioning ships inside onboarding/** (asarUnpack onboarding/tts/**); without it read-aloud has no voice')
+    }
     for (const m of [...rootModules].sort()) {
       ok(`${m} is a real member of the shipped app.asar (${LANE === 'mac' ? 'mounted DMG, not staging' : `staged ${STAGE_DIR}, version-pinned`})`,
         asarEntries.has(m),

@@ -8,7 +8,7 @@ class Element {
 }
 ids.set('set-about', new Element()); ids.set('set-companion-voice', new Element())
 let fail = false
-let server = { enabled: false, voice: 'default', voices: [{ id: 'default', builtin: true }, { id: 'custom', name: 'Custom' }], download: { state: 'idle' }, modelsPresent: true }
+let server = { enabled: false, voice: 'sera', voices: [{ id: 'sera', builtin: true }, { id: 'custom', name: 'Custom' }], download: { state: 'idle' }, modelsPresent: true }
 const api = async (_url, opts) => {
   if (fail && opts) throw Error('offline')
   if (opts) server = { ...server, ...JSON.parse(opts.body) }
@@ -22,7 +22,7 @@ const box = ids.get('set-tts-enabled'), voice = ids.get('set-tts-voice'), status
 fail = true; box.checked = true; await box.onchange()
 assert.equal(box.checked, false); assert.match(status.textContent, /오류: offline/); assert.equal(box.disabled, false)
 voice.value = 'custom'; await voice.onchange()
-assert.equal(voice.value, 'default'); assert.match(status.textContent, /오류: offline/); assert.equal(voice.disabled, false)
+assert.equal(voice.value, 'sera'); assert.match(status.textContent, /오류: offline/); assert.equal(voice.disabled, false)
 fail = false; box.checked = true; await box.onchange()
 assert.equal(box.checked, true); assert.equal(status.textContent, '준비됨')
 voice.value = 'custom'; await voice.onchange()
