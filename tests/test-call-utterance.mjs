@@ -3,7 +3,7 @@ import { createRequire } from 'node:module'
 const { createUtteranceAggregator } = createRequire(import.meta.url)('../onboarding/public/js/call-core.cjs')
 function fixture(options = {}) {
   let now = 0, seq = 0; const timers = new Map(), sent = []
-  const a = createUtteranceAggregator({ send: t => sent.push(t),
+  const a = createUtteranceAggregator({ send: t => sent.push(t), windowMs: 1200,
     setTimer(fn, ms) { timers.set(++seq, { at: now + ms, fn }); return seq }, clearTimer(id) { timers.delete(id) }, ...options })
   function advance(ms) { const end = now + ms; for (;;) { const next = [...timers].sort((a,b) => a[1].at - b[1].at)[0]; if (!next || next[1].at > end) break; now = next[1].at; timers.delete(next[0]); next[1].fn() }; now = end }
   return { a, sent, advance, timers }

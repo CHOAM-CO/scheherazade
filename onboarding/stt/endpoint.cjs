@@ -5,7 +5,7 @@
 function endpointConfig(callMode = false) {
   return {
     rule1MinTrailingSilence: callMode === true ? 3.6 : 2.4,
-    rule2MinTrailingSilence: callMode === true ? 1.8 : 1.2,
+    rule2MinTrailingSilence: callMode === true ? 0.8 : 1.2,
     rule3MinUtteranceLength: callMode === true ? 12 : 20,
   }
 }

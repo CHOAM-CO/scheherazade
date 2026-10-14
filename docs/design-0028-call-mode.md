@@ -9,7 +9,7 @@ closes tracks and clears the TTS queue, with generation guards for late results.
 
 Endpointing uses the existing sherpa OnlineRecognizer enableEndpoint/isEndpoint
 and stream reset. Its non-empty finals become chat turns; whitespace is dropped.
-Current rule2 trailing silence is 1.2 seconds (not a renderer silence heuristic).
+Current rule2 trailing silence is 1.2 seconds (0.8 s in call mode since beta.9) (not a renderer silence heuristic).
 Audio chunks ~100 ms; chat draft poll 250 ms; first complete sentence queues
 immediately. Actual synthesis/model startup latency depends on hardware.
 

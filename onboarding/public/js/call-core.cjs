@@ -87,7 +87,7 @@
     }
   }
   // Call-only: endpoints are transcript fragments, not conversation turns.
-  const UTTERANCE_WINDOW_MS = 1200, UTTERANCE_CAP_MS = 12000, UTTERANCE_CAP_CHARS = 400
+  const UTTERANCE_WINDOW_MS = 300, UTTERANCE_CAP_MS = 12000, UTTERANCE_CAP_CHARS = 400
   function createUtteranceAggregator({ send, windowMs = UTTERANCE_WINDOW_MS,
     capMs = UTTERANCE_CAP_MS, capChars = UTTERANCE_CAP_CHARS,
     setTimer = setTimeout, clearTimer = clearTimeout }) {
