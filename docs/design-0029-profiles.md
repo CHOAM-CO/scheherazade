@@ -97,8 +97,10 @@ follow `AGENT_DATA_HOME`.
    profile; add `--profile <name>` to the loop argv so the ps-match at pid verify cannot
    adopt another profile's supervisor. The pidfile path already differs.
 4. `vendor/chromux/chromux.mjs:27` `CHROMUX_HOME` defaults to `~/.chromux` and nothing
-   sets it → export `CHROMUX_HOME=<data home>/.chromux` to children. Otherwise browser
-   profiles, run state and ports are shared between Seras.
+   sets it → for NAMED profiles only, export `CHROMUX_HOME=<data home>/.chromux` to
+   children. The default profile keeps `~/.chromux` untouched (existing users' browser
+   logins live there; review 2026-10-15 caught the first draft moving it). Otherwise
+   browser profiles, run state and ports are shared between Seras.
 5. `model-discovery.cjs:45` still reads `MEM` as a data-home input (allowMem default);
    pass `allowMem:false` like the other in-app callers.
 6. Windows notifications: `notify-agent-reply.cjs:59` AUMID and :101 title are fixed to
