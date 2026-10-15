@@ -88,5 +88,15 @@ try {
   ok('stopped deletion succeeds', (await request('DELETE', '/api/profiles/work')).body.ok)
   assert.deepEqual(trashed, [named, path.join(appData, 'scheherazade-work')])
   ok('both directories trashed', trashed.includes(named) && trashed.includes(path.join(appData, 'scheherazade-work')))
+  const leftover = path.join(appData, 'scheherazade-leftover')
+  await request('POST', '/api/profiles', { name: 'leftover' })
+  const leftoverData = path.join(home, 'Documents', 'Scheherazade-leftover')
+  routes = createRoutes({ ...ctx, getElectron: () => ({ app: { getPath: () => appData }, shell: { trashItem: async p => {
+    if (p === leftover) throw Error('permission denied')
+    fs.renameSync(p, `${p}.trashed`)
+  } } }) })
+  const partial = await request('DELETE', '/api/profiles/leftover')
+  ok('userData trash failure returns 500 and names leftover path', partial.status === 500 && partial.body.error.includes(leftover))
+  ok('partial deletion reports actual state', !fs.existsSync(leftoverData) && fs.existsSync(leftover))
 } finally { fs.rmSync(home, { recursive: true, force: true }) }
 console.log(`test-profiles-routes: pass=${pass} fail=0`)

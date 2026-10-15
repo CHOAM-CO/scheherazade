@@ -82,7 +82,9 @@ function createRoutes(ctx) {
       // design-0029: never trash the paired key store if data-home trash fails.
       try { await electron().shell.trashItem(p.dataHome) } catch (e) { e.status = 500; throw e }
       if (fs.existsSync(userData)) {
-        try { await electron().shell.trashItem(userData) } catch (e) { e.status = 500; throw e }
+        try { await electron().shell.trashItem(userData) } catch (e) {
+          fail(`Data home moved to Trash; userData remains at ${userData}: ${e.message}`, 500)
+        }
       }
       sendJson(res, 200, { ok: true })
     }),

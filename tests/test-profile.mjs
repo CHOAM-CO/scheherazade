@@ -78,4 +78,16 @@ check('creation prompt waits for Electron readiness', () => {
     check('sibling signature rejected', () => assert.equal(profiles.pidAlive(paths.dataHome, { name: 'work', readCommandLine: () => `${path.resolve('supervisor.mjs')} __loop --profile other` }), false))
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
 }
+// design-0029: compare the exact Windows ps/CIM spelling and bare POSIX spelling.
+check('Windows quoted supervisor path with spaces', () => {
+  const command = String.raw`"C:\a b\supervisor.mjs" __loop --profile x`
+  const script = String.raw`C:\a b\supervisor.mjs`
+  assert.equal(profiles.matchesSupervisor(command, `${script} __loop --profile x`, 'x'), true)
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'profile-quoted-pid-'))
+  try {
+    fs.writeFileSync(path.join(home, '.agent.pid'), String(process.pid))
+    assert.equal(profiles.pidAlive(home, { name: 'x', supervisorPath: script, readCommandLine: () => command }), true)
+  } finally { fs.rmSync(home, { recursive: true, force: true }) }
+})
+check('mac bare supervisor path with spaces', () => assert.equal(profiles.matchesSupervisor('/Applications/Sera App/supervisor.mjs __loop --profile x', '/Applications/Sera App/supervisor.mjs __loop --profile x', 'x'), true))
 console.log(`test-profile: pass=${pass} fail=0`)

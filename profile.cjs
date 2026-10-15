@@ -43,6 +43,7 @@ function pidAlive(dataHome, { name = '', readCommandLine = proc.readCommandLine,
   } catch { return false }
 }
 function hasProfileArgument(command, name) {
+  command = normalizeCommandLine(command)
   return new RegExp(`(?:^|\\s)--profile(?:=|\\s+)${validateName(name)}(?=\\s|$)`).test(command)
 }
 function processCommands() {
@@ -108,11 +109,17 @@ function listProfiles({ home = os.homedir(), appData, ...liveness }) {
     }).sort((a, b) => a.name.localeCompare(b.name))
 }
 function supervisorArgs(script, name) { return [script, '__loop', ...(name ? ['--profile', validateName(name)] : [])] }
+// design-0029: Windows quotes paths with spaces; POSIX ps may print them bare.
+function normalizeCommandLine(command) {
+  return String(command).replace(/(^|\s)"([^"\n]*)"(?=\s|$)/g, '$1$2').trim()
+}
 // design-0029: a default signature must not accept a named sibling's prefix.
 function matchesSupervisor(commandLine, signature, name) {
+  commandLine = normalizeCommandLine(commandLine)
+  signature = normalizeCommandLine(signature)
   const at = commandLine.indexOf(signature)
   if (at < 0) return false
   const tail = commandLine.slice(at + signature.length)
-  return (!tail || /^\s/.test(tail)) && (name || !/^\s+--profile(?:=|\s)/.test(tail))
+  return (!tail || /^\s/.test(tail)) && (!!name || !/^\s+--profile(?:=|\s)/.test(tail))
 }
-module.exports = { configureEnvironment, emptyUserData, cleanupEmptyUserData, ensureProfileConfig, launchArgs, windowRunning, processCommands, hasProfileArgument, matchesSupervisor, validateName, parseProfile, profilePaths, profileFromHome, listProfiles, pidAlive, supervisorArgs }
+module.exports = { normalizeCommandLine, configureEnvironment, emptyUserData, cleanupEmptyUserData, ensureProfileConfig, launchArgs, windowRunning, processCommands, hasProfileArgument, matchesSupervisor, validateName, parseProfile, profilePaths, profileFromHome, listProfiles, pidAlive, supervisorArgs }

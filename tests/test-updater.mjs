@@ -168,6 +168,18 @@ for (const [name, status, body] of [
     await single.emit('update-downloaded', '0.6.0')
     eq('default-only cached download always prompts without claiming', single.prompts.length, 1)
     eq('default-only restart unchanged', single.installs, 1)
+    let discoveries = 0
+    const flakyDefault = harness(103, { listProfiles: () => {
+      discoveries++
+      if (discoveries > 1) throw Error('discovery unavailable')
+      return [{ name: '', isDefault: true, dataHome: defaultHome, running: false }]
+    } })
+    await flakyDefault.emit('update-available', '0.6.0-flaky')
+    await flakyDefault.emit('update-downloaded', '0.6.0-flaky')
+    eq('known default-only install still prompts after sibling check throws', flakyDefault.prompts.length, 1)
+    eq('sibling check error alone never blocks default restart', flakyDefault.installs, 1)
+    flakyDefault.appEvents['before-quit']()
+    eq('default-only discovery failure retains install-on-quit', flakyDefault.mock.autoInstallOnAppQuit, true)
     fs.mkdirSync(sibling, { recursive: true })
     fs.writeFileSync(path.join(sibling, '.agent.pid'), String(process.pid))
     const guarded = harness()
@@ -197,6 +209,11 @@ for (const [name, status, body] of [
     await stale.emit('update-downloaded', '0.7.1')
     eq('dead owner claim reclaimed', stale.prompts.length, 1)
 
+    const quotedScript = String.raw`C:\a b\supervisor.mjs`
+    fs.writeFileSync(file('0.7.2'), JSON.stringify({ pid: 304, command: `${quotedScript} __loop --profile x` }))
+    const quotedOwner = harness(203, { readCommandLine: pid => pid === 304 ? String.raw`"C:\a b\supervisor.mjs" __loop --profile x` : command(pid) })
+    await quotedOwner.emit('update-downloaded', '0.7.2')
+    eq('quoted Windows owner is recognized without duplicate prompt', quotedOwner.prompts.length, 0)
     const first = harness(401), second = harness(402)
     await first.emit('update-available', '0.8.0')
     await second.emit('update-available', '0.8.0')

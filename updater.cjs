@@ -92,15 +92,24 @@ function initWindowsUpdater({ app, dialog, log, updater: injectedUpdater, profil
   const options = profileOptions || { appData: app.getPath('appData') }
   const ownPid = updaterDeps.pid || process.pid
   const current = require('./data-home.cjs').resolveDataHome({ allowMem: false })
-  const siblings = () => profiles.listProfiles(options).filter(p => p.dataHome !== current && p.running)
-  const multipleProfiles = () => profiles.listProfiles(options).some(p => !p.isDefault)
+  const listProfiles = updaterDeps.listProfiles || profiles.listProfiles
+  // design-0029: discovery failure is not evidence of a live sibling. In
+  // particular, default-only installs must retain their original restart path.
+  const siblings = () => {
+    try { return listProfiles(options).filter(p => p.dataHome !== current && p.running) }
+    catch (e) { log('updater: sibling check failed:', e.message); return [] }
+  }
+  const multipleProfiles = () => {
+    try { return listProfiles(options).some(p => !p.isDefault) }
+    catch (e) { log('updater: profile discovery failed:', e.message); return false }
+  }
   const claimPath = version => path.join(options.appData, `.scheherazade-update-${String(version).replace(/[^a-zA-Z0-9.-]/g, '_')}.pid`)
   const held = new Set()
   const ownerLive = record => {
     try {
       if (!Number.isInteger(record.pid) || record.pid <= 0 || !record.command) return false
       kill(record.pid, 0)
-      return readCommandLine(record.pid).trim() === record.command
+      return profiles.normalizeCommandLine(readCommandLine(record.pid)) === profiles.normalizeCommandLine(record.command)
     } catch { return false }
   }
   const readOwner = file => {
@@ -135,8 +144,7 @@ function initWindowsUpdater({ app, dialog, log, updater: injectedUpdater, profil
     }
   }
   function updateQuitSafety() {
-    try { autoUpdater.autoInstallOnAppQuit = siblings().length === 0 }
-    catch (e) { autoUpdater.autoInstallOnAppQuit = false; log('updater: sibling check failed:', e.message) }
+    autoUpdater.autoInstallOnAppQuit = siblings().length === 0
   }
   app.on?.('before-quit', () => {
     updateQuitSafety()
