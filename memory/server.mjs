@@ -117,6 +117,7 @@ const TOOLS = [
       properties: {
         table: { type: 'string', description: 'user_facts | open_threads' },
         id: { type: 'number', description: 'Row id to confirm' },
+        owner_profile: { type: 'string', description: 'Profile folder owning the row. Required when sibling ids collide; sibling rows are read-only.' },
         session: { type: 'string', description: 'Optional current session id, attributed onto the memory_events audit row.' },
       },
       required: ['table', 'id'],
@@ -130,6 +131,7 @@ const TOOLS = [
       properties: {
         table: { type: 'string', description: 'user_facts | open_threads | corrections | preferences' },
         id: { type: 'number', description: 'Row id to delete' },
+        owner_profile: { type: 'string', description: 'Profile folder owning the row. Required when sibling ids collide; sibling rows are read-only.' },
         session: { type: 'string', description: 'Optional current session id, attributed onto the memory_events audit row.' },
       },
       required: ['table', 'id'],
@@ -259,7 +261,7 @@ async function main() {
       // swallowed. This is the entire point of read-back-verify — a mismatch
       // MUST be visible, not caught-and-ignored.
       log(`Error in ${name}: ${err.message}`)
-      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true }
+      return { content: [{ type: 'text', text: `Error: ${err.code ? `${err.code}: ` : ''}${err.message}` }], isError: true }
     }
   })
 

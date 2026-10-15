@@ -845,7 +845,7 @@ export function createRequestHandler({ notify, token, onInbound = () => {}, inte
           catch (error) { return send(error.status || 400, { ok: false, ...(error.code ? { code: error.code } : {}), error: error.message }) }
         }
         const replyTo = sibling ? parsed.from.match(/\((default|[a-z0-9-]{1,24})\)$/)[1] : null
-        const inboundText = sibling ? `${text.trim()}\n(답장은 '다른 세라에게 말하기'로 ${replyTo}에게 보내. 대화는 왕복 한 번까지.)` : text
+        const inboundText = sibling && parsed.notice !== true ? `${text.trim()}\n(답장은 '다른 세라에게 말하기'로 ${replyTo}에게 보내. 대화는 왕복 한 번까지.)` : text
         const delivered = await deliverInbound(inboundText, { notify, sibling, from: parsed.from, hop: parsed.hop })
         if (!sibling) siblings.resetHops(dataHome)
         if (sibling) {

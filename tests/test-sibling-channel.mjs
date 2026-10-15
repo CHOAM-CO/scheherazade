@@ -104,6 +104,7 @@ try {
   // Notices leave both empty and existing budgets unchanged.
   siblings.resetHops(own)
   assert.equal((await inbound({ text: 'created', from: '시스템 (mitil)', sibling: true, notice: true })).status, 202)
+  assert.doesNotMatch(notifications.at(-1).params.content, /답장은/)
   assert.equal(siblings.nextHop(own), 1)
   siblings.receiveHop(own, 'mitil', 2)
   await inbound({ text: 'created again', from: '시스템 (mitil)', sibling: true, notice: true, hop: 999 })

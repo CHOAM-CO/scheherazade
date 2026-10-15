@@ -1119,8 +1119,14 @@ function siblingMemory({ search = '' } = {}) {
 }
 function queryOwn(args) { return memoryQuery(ensureDb(), args) }
 function query(args) { return mergeShared(memoryQuery(ensureDb(), args), readSiblings(db => memoryQuery(db, args))) }
-function confirm(args) { assertOwnTarget(args); return memoryConfirm(ensureDb(), args) }
-function remove(args) { assertOwnTarget(args); return memoryDelete(ensureDb(), args) }
+function assertMutationOwner(args) {
+  assertOwnTarget(args)
+  if (args?.owner_profile == null && readSiblings(db => memoryQuery(db, { table: args.table, filter: { id: args.id } })).some(result => result.material.rows.length > 0)) {
+    throw Object.assign(new Error('ambiguous_owner: this id exists in a sibling profile; pass owner_profile explicitly (own profile: ' + path.basename(DATA_HOME) + ')'), { status: 400, code: 'ambiguous_owner' })
+  }
+}
+function confirm(args) { assertMutationOwner(args); return memoryConfirm(ensureDb(), args) }
+function remove(args) { assertMutationOwner(args); return memoryDelete(ensureDb(), args) }
 function recallMaterial(args) { return mergeShared(memoryRecallMaterial(ensureDb(), args), readSiblings(db => memoryRecallMaterial(db, args)), args) }
 function journalWrite(args) { return journalWriteImpl(ensureDb(), args) }
 function journalRead(args) { return journalReadImpl(ensureDb(), args) }

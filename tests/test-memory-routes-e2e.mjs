@@ -115,6 +115,19 @@ chk('seed write landed (service API, singleton connection)', seeded.mode === 'in
     assert.throws(() => service[operation]({ table: 'user_facts', id: seeded.id, owner_profile: 'Scheherazade-sibling', data: { id: seeded.id, value: 'wrong owner' } }), error => error.code === 'sibling_read_only')
     chk(`sibling-scoped ${operation} is rejected before own-id lookup`, service.queryOwn({ table: 'user_facts' }).rows[0].value === 'e2e-probe')
   }
+  const { TOOLS } = await import('../memory/server.mjs')
+  for (const tool of ['memory_confirm', 'memory_delete']) {
+    chk(`${tool} exposes owner_profile`, TOOLS.find(entry => entry.name === tool).inputSchema.properties.owner_profile.type === 'string')
+  }
+  for (const operation of ['confirm', 'remove']) {
+    assert.throws(() => service[operation]({ table: 'user_facts', id: seeded.id }), error => error.code === 'ambiguous_owner')
+    chk(`unscoped colliding ${operation} refuses ambiguous owner`, service.queryOwn({ table: 'user_facts', filter: { id: seeded.id } }).rows[0].value === 'e2e-probe')
+    const local = service.write({ table: 'user_facts', data: { subject: 'fixture', predicate: operation, value: 'own-only', source_session: 'fixture' } })
+    service[operation]({ table: 'user_facts', id: local.id })
+    chk(`own-only ${operation} works without owner`, operation === 'remove' ? service.queryOwn({ table: 'user_facts', filter: { id: local.id } }).count === 0 : service.queryOwn({ table: 'user_facts', filter: { id: local.id } }).count === 1)
+  }
+  service.confirm({ table: 'user_facts', id: seeded.id, owner_profile: 'data' })
+  chk('explicit own owner permits colliding confirm', service.queryOwn({ table: 'user_facts', filter: { id: seeded.id } }).count === 1)
   chk('sibling database bytes unchanged by reads and rejected mutations', fs.readFileSync(siblingFile).equals(siblingBytes))
 
   // ── the 2026-08-04 boundary: reads are gated too ──────────────────────────
