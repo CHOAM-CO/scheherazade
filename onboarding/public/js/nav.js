@@ -90,7 +90,11 @@
     } catch (err) {
       throw new Error(`non-JSON response from ${path}: ${err.message}`)
     }
-    if (!res.ok) throw new Error(body.error || `HTTP ${res.status} from ${path}`)
+    if (!res.ok) {
+      const error = new Error(body.error || `HTTP ${res.status} from ${path}`)
+      error.status = res.status
+      throw error
+    }
     return body
   }
 
@@ -228,12 +232,13 @@
     { id: 'logs', href: '/logs', label: NAV.tabs.logs },
   ]
 
-  const SETTINGS_FAMILY = new Set(['settings', 'channels', 'appearance'])
+  const SETTINGS_FAMILY = new Set(['settings', 'channels', 'appearance', 'profiles'])
 
   // The raw page identity from the URL (never hand-set, so it can't drift).
   function rawPageId() {
     const path = window.location.pathname
     if (path.startsWith('/chat')) return 'chat'
+    if (path.startsWith('/profiles')) return 'profiles'
     if (path.startsWith('/channels')) return 'channels'
     if (path.startsWith('/connectors')) return 'connectors'
     if (path.startsWith('/settings')) return 'settings'
@@ -296,7 +301,7 @@
         '<button type="button" id="nav-turnerror-dismiss"></button>' +
       '</div>' +
       '<div class="nav-tabs"></div>'
-    $('nav-agent-label').textContent = NAV.label
+    $('nav-agent-label').textContent = window.profileLabel ? `[${window.profileLabel}] ${NAV.label}` : NAV.label
     const tabsEl = root.querySelector('.nav-tabs')
     for (const t of TABS) {
       const a = document.createElement('a')
@@ -316,6 +321,7 @@
         { id: 'settings', key: 'general', href: '/settings#set-identity' },
         { id: 'channels', key: 'channels', href: '/channels' },
         { id: 'appearance', key: 'appearance', href: '/appearance' },
+        { id: 'profiles', key: 'profiles', href: '/profiles.html' },
         { id: 'system', key: 'system', href: '/settings#set-sudo' },
         { id: 'permissions', key: 'permissions', href: '/settings#set-perms' },
       ]
@@ -382,7 +388,7 @@
     // 0.2.6 UI pass: the header names the agent, not its species — "세라",
     // not "AGENT" — whenever the spawn carries a name (dev-serve-ui has no
     // agentControls, so the copy label stays the fallback there).
-    if (spawnInfo && spawnInfo.name) $('nav-agent-label').textContent = spawnInfo.name
+    if (spawnInfo && spawnInfo.name) $('nav-agent-label').textContent = window.profileLabel ? `[${window.profileLabel}] ${spawnInfo.name}` : spawnInfo.name
     // spawn.live (route proxy, 2026-10-07): the model/effort the proxy sends
     // NOW; a live switch moves it without a respawn. Falls back to the birth
     // pick when main has no live record.
@@ -724,3 +730,18 @@
 
   document.addEventListener('DOMContentLoaded', initShell)
 })()
+
+// Named profiles stay identifiable across navigation, not only on their settings page.
+window.profilesReady = window.api('/api/profiles').then(result => {
+  if (!result.ok) throw new Error(result.error || window.COPY.profiles.failed)
+  window.profileLabel = result.current || ''
+  if (window.profileLabel) {
+    document.title = `[${window.profileLabel}] ${document.title}`
+    const label = document.getElementById('nav-agent-label')
+    if (label) label.textContent = `[${window.profileLabel}] ${label.textContent}`
+  }
+  return result
+}).catch(error => {
+  window.showToast(window.COPY.profiles.error(error))
+  return null
+})

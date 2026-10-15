@@ -1984,3 +1984,34 @@ window.UI_POLISH_COPY = {
   ko: { model: '모델과 추론 강도', soon: '준비 중', soonNote: '새 공급자가 여기에 추가될 예정', add: '공급자 추가 · OpenAI 호환 프록시', live: '라이브 경로, 라우트 프록시로 제공 중', next: '다음 메시지부터 적용. 프로토콜 변경 시에만 재시작 안내.', visionOn: '이미지 지원', visionOff: '이미지 미지원', general: '일반', channels: '채널', appearance: '화면', system: '시스템', permissions: '권한', identity: '프로필', identityNote: '채팅에 표시할 이름과 사진 설정', all: '전체', app: '앱', agent: '에이전트', engine: '엔진', info: '정보', warn: '경고', error: '오류', search: '로그 검색 (텍스트 또는 정규식)', wrap: '줄바꿈', pause: '일시 정지', resume: '계속', copy: '전체 복사', open: '파일 열기', newLines: n => `새 로그 ${n}줄`, file: p => `전체 기록 파일: ${p}` }
 }
 window.COPY.polish = window.UI_POLISH_COPY[(document.documentElement?.lang || 'en').startsWith('ko') ? 'ko' : 'en']
+
+// Profiles (design-0029): Korean uses the requested plain, informal register.
+window.COPY.profiles = {
+  title: '프로필', intro: '세라를 한 명 더 만드는 거야. 기억이랑 설정이 따로야.',
+  list: '이 컴퓨터의 세라', create: '새 세라 만들기', name: '프로필 이름',
+  helper: '영문 소문자, 숫자, 하이픈으로 1~24자. 이름은 나중에 바꿀 수 없어.',
+  invalid: '영문 소문자, 숫자, 하이픈으로 1~24자를 입력해줘',
+  reserved: 'default는 기본 세라를 위한 이름이야', duplicate: '이미 있는 이름이야',
+  running: '실행 중', stopped: '꺼짐', default: '기본', current: '현재',
+  open: '열기', shortcut: '바로가기 만들기', delete: '삭제', cancel: '취소',
+  closeFirst: '먼저 그 세라를 닫아줘', defaultReason: '기본 세라는 삭제할 수 없어',
+  confirm: name => `${name} 세라를 삭제할까? 기억과 설정이 있는 데이터 폴더와 앱 사용자 데이터 폴더, 두 폴더 모두 휴지통으로 옮겨져.`,
+  shared: '함께 쓰는 것', login: '로그인은 이 컴퓨터에서 하나야. 세라마다 모델은 다르게 고를 수 있어. 주간 사용량은 함께 써.',
+  update: '앱 설치와 업데이트는 하나야. 업데이트를 설치하려면 다른 세라도 닫아줘.',
+  bot: '세라마다 봇 토큰이 따로 필요해.',
+  cost: '세라를 하나 더 열면 에이전트 프로세스와 모델 세션도 하나씩 더 써.',
+  loading: '프로필을 불러오는 중', retry: '다시 불러오기', empty: '아직 프로필이 없어',
+  failed: '요청을 처리하지 못했어. 다시 시도해줘',
+  created: '새 세라를 만들었어', opened: '세라를 열었어', deleted: '두 폴더를 휴지통으로 옮겼어',
+  shortcutDone: path => `바로가기를 만들었어: ${path}`,
+  error(error) {
+    const message = String(error?.message || '')
+    if (error?.status === 409 || /running/i.test(message)) return this.closeFirst
+    if (/default/i.test(message)) return this.defaultReason
+    if (/exist|duplicate/i.test(message)) return this.duplicate
+    if (/invalid.*name|name.*invalid/i.test(message)) return this.invalid
+    if (!message || /non-JSON|fetch|network|HTTP |^[{[]/i.test(message)) return this.failed
+    return `처리하지 못했어: ${message}`
+  },
+}
+window.COPY.polish.profiles = window.COPY.profiles.title

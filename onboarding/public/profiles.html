@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Scheherazade - Profiles</title>
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <div id="app-nav"></div>
+    <div class="settings-layout">
+      <nav class="settings-rail"></nav>
+      <main class="settings-content" id="profiles-page">
+        <div class="page-header"><h1 data-profile-copy="title" id="profiles-title"></h1></div>
+        <p data-profile-copy="intro"></p>
+        <section class="category" aria-labelledby="profiles-list-title">
+          <h2 id="profiles-list-title" data-profile-copy="list"></h2>
+          <p id="profiles-status" role="status"></p>
+          <div id="profiles-list"></div>
+          <button type="button" class="secondary" id="profiles-retry" data-profile-copy="retry"></button>
+        </section>
+        <section class="category" aria-labelledby="profiles-create-title">
+          <h2 id="profiles-create-title" data-profile-copy="create"></h2>
+          <form id="profiles-form">
+            <div class="field">
+              <label for="profiles-name" data-profile-copy="name"></label>
+              <input id="profiles-name" name="name" required pattern="[a-z0-9-]{1,24}" maxlength="24" autocomplete="off" spellcheck="false" aria-describedby="profiles-helper profiles-validation" />
+              <p id="profiles-helper" data-profile-copy="helper"></p>
+              <p id="profiles-validation" role="status"></p>
+            </div>
+            <button id="profiles-create" type="submit" data-profile-copy="create" disabled></button>
+          </form>
+        </section>
+        <aside class="category" aria-labelledby="profiles-shared-title">
+          <h2 id="profiles-shared-title" data-profile-copy="shared"></h2>
+          <p data-profile-copy="login"></p><p data-profile-copy="update"></p><p data-profile-copy="bot"></p><p data-profile-copy="cost"></p>
+        </aside>
+      </main>
+    </div>
+  </div>
+  <div class="toast" role="status" aria-live="polite"></div>
+  <script src="/js/copy.js"></script>
+  <script src="/js/nav.js"></script>
+  <script src="/js/profiles.js"></script>
+</body>
+</html>

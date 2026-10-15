@@ -2189,3 +2189,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .call-mute .mute-slash { display: none; }
 .call-mute[aria-pressed="true"] { border-color: #e5484d; background: #e5484d18; }
 .call-mute[aria-pressed="true"] .mute-slash { display: block; stroke: #e5484d; stroke-width: 3; }
+
+/* Profiles reuse settings cards and controls; never use faint text for instructions. */
+#profiles-page p, #profiles-page label, #profiles-page .chip { color: var(--fg); }
+#profiles-page .button-row { flex-wrap: wrap; margin-top: var(--s3); }
+#profiles-page h3 { overflow-wrap: anywhere; }
