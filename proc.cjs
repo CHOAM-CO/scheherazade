@@ -52,9 +52,9 @@ function isPidAlive(pid) {
 function readCommandLine(pid) {
   if (IS_WIN) {
     return execFileSync(POWERSHELL_EXE, ['-NoProfile', '-Command',
-      `(Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}").CommandLine`], { encoding: 'utf8' }).trim()
+      `(Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}").CommandLine`], { encoding: 'utf8', timeout: 2000 }).trim()
   }
-  return execFileSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8' })
+  return execFileSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000 })
 }
 
 // Kill a pid AND its descendants.

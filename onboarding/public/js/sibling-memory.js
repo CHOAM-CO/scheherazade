@@ -1,6 +1,12 @@
 ;(async function () {
   const root = document.getElementById('sibling-memory')
-  if (!root) return
+  if (!root || document.querySelector('meta[name="has-siblings"]')?.content !== 'true') return
+  const copy = window.COPY.siblingMemory
+  root.hidden = false
+  const own = document.getElementById('own-memory-title'); own.hidden = false; own.textContent = copy.own
+  document.getElementById('sibling-memory-title').textContent = copy.title
+  document.getElementById('sibling-memory-toggle-label').textContent = copy.toggle
+  document.getElementById('sibling-memory-help').textContent = copy.help
   const toggle = document.getElementById('sibling-memory-toggle')
   const blocks = document.getElementById('sibling-memory-blocks')
   async function load() {
@@ -10,11 +16,11 @@
     for (const sibling of result.siblings || []) {
       const details = document.createElement('details')
       const summary = document.createElement('summary')
-      summary.textContent = `${sibling.name} (${sibling.profile}) · ${sibling.material.count}개 · 마지막 기록 ${sibling.material.lastWritten || '없음'}`
+      summary.textContent = copy.summary(sibling.name, sibling.profile, sibling.material.count, sibling.material.lastWritten)
       const form = document.createElement('form')
       const input = document.createElement('input')
-      input.type = 'search'; input.placeholder = '기억 검색'; input.setAttribute('aria-label', `${sibling.name} 기억 검색`)
-      const button = document.createElement('button'); button.textContent = '검색'
+      input.type = 'search'; input.placeholder = copy.search; input.setAttribute('aria-label', `${sibling.name} ${copy.search}`)
+      const button = document.createElement('button'); button.textContent = copy.submit
       const output = document.createElement('div'); output.setAttribute('role', 'status')
       form.append(input, button)
       form.onsubmit = async event => {
@@ -28,7 +34,7 @@
           item.textContent = row.value || row.summary || row.correct_behavior || row.body || ''
           output.append(item)
         }
-        if (!output.childNodes.length) output.textContent = '검색 결과 없음'
+        if (!output.childNodes.length) output.textContent = copy.empty
       }
       details.append(summary, form, output); blocks.append(details)
     }
@@ -46,5 +52,5 @@
       finally { toggle.disabled = false }
     }
     await load()
-  } catch (error) { blocks.textContent = '다른 세라 기억을 불러오지 못했어' }
+  } catch (error) { blocks.textContent = copy.failed }
 })()

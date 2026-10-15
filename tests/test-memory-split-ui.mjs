@@ -7,14 +7,14 @@ class Element {
   replaceChildren() { this.childNodes = [] }
   setAttribute() {}
 }
-const elements = Object.fromEntries(['sibling-memory', 'sibling-memory-toggle', 'sibling-memory-blocks'].map(id => [id, new Element('div')]))
+const elements = Object.fromEntries(['sibling-memory', 'sibling-memory-toggle', 'sibling-memory-blocks', 'own-memory-title', 'sibling-memory-title', 'sibling-memory-toggle-label', 'sibling-memory-help'].map(id => [id, new Element('div')]))
 const calls = []
-const window = { showToast: assert.fail, api: async (url, options) => {
+const window = { COPY: { siblingMemory: { own: '내 기억', title: '다른 세라 기억', toggle: '보기', help: '읽기 전용', search: '검색', submit: '검색', empty: '없음', failed: '실패', summary: (name, profile, count, date) => `${name} (${profile}) · ${count}개 · ${date}` } }, showToast: assert.fail, api: async (url, options) => {
   calls.push({ url, options })
   if (url === '/api/profiles/settings') return { ok: true, sharedMemoryRead: true }
   return { siblings: [{ name: '<unsafe>', profile: 'Scheherazade-work', material: { count: 3, lastWritten: '2026-10-15', rows: url.includes('?') ? [{ value: '<script>data</script>' }] : [] } }] }
 } }
-const document = { getElementById: id => elements[id], createElement: tag => new Element(tag) }
+const document = { querySelector: () => ({ content: 'true' }), getElementById: id => elements[id], createElement: tag => new Element(tag) }
 const source = fs.readFileSync(new URL('../onboarding/public/js/sibling-memory.js', import.meta.url), 'utf8')
 await vm.runInNewContext(source, { window, document })
 const blocks = elements['sibling-memory-blocks']
@@ -32,5 +32,9 @@ await elements['sibling-memory-toggle'].onchange()
 assert.equal(blocks.childNodes.length, 0)
 assert.equal(JSON.parse(calls.at(-1).options.body).sharedMemoryRead, false)
 const html = fs.readFileSync(new URL('../onboarding/public/memory.html', import.meta.url), 'utf8')
-assert(html.includes('내 기억') && html.includes('다른 세라 기억') && html.includes('/js/memory.js'))
+assert(html.includes('id="own-memory-title" hidden') && html.includes('id="sibling-memory" hidden') && html.includes('/js/memory.js'))
+calls.length = 0
+document.querySelector = () => ({ content: 'false' })
+await vm.runInNewContext(source, { window, document })
+assert.equal(calls.length, 0)
 console.log('test-memory-split-ui: pass=9 fail=0')

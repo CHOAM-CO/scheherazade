@@ -25,6 +25,7 @@ Companion mode, call mode, read-aloud, Korean speech-to-text, and now more than 
 - Credits unchanged (Pocket-TTS Kyutai / seastar105 CC BY 4.0).
 
 ## For developers
+- `profile_say` runs without a permission prompt, including in the default profile.
 - design-0029 profiles: `--profile <name>` parsed before userData is set (profile.cjs, main.cjs); data home `~/Documents/Scheherazade-<name>`, userData `<appData>/scheherazade-<name>`; AGENT_NAME derived; supervisor loop argv carries the profile; CHROMUX_HOME per data home; model-discovery allowMem:false; notification title; updater guard with per-version prompt-owner pid file. Routes: onboarding/routes/profiles.cjs (`/api/profiles` list/create/open/shortcut/delete, `default` reserved). Page: onboarding/public/profiles.html + js/profiles.js.
 - Tests: test-profile, test-profiles-routes, test-profiles-ui, test-supervisor, test-updater extended.
 - Betas 0.5.0-beta.1..10 notes remain in docs/ for the per-feature detail.

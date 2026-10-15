@@ -14,7 +14,7 @@ function createRoutes(ctx) {
   const list = () => profiles.listProfiles(options())
   const route = (method, match, handler) => ({ method, match, handler: async (req, res, callCtx, m) => {
     try { await handler(req, res, m) }
-    catch (e) { sendJson(res, e.status || 400, { ok: false, error: e.message }) }
+    catch (e) { sendJson(res, e.status || 400, { ok: false, ...(e.code ? { code: e.code } : {}), error: e.message }) }
   } })
   const fail = (message, status = 400) => { const e = new Error(message); e.status = status; throw e }
   const lookup = raw => {
@@ -32,7 +32,7 @@ function createRoutes(ctx) {
     route('POST', p => p.match(/^\/api\/profiles\/([^/]+)\/say$/), async (req, res, m) => {
       const { text } = await readJsonBody(req)
       const result = await siblings.say(ctx.DATA_HOME, decodeURIComponent(m[1]), text)
-      if (ctx.getMemoryService) (await ctx.getMemoryService()).journalWrite({ body: `[다른 세라에게 말하기: ${decodeURIComponent(m[1])}] ${text}` })
+      try { if (ctx.getMemoryService) (await ctx.getMemoryService()).journalWrite({ body: `[다른 세라에게 말하기: ${decodeURIComponent(m[1])}] ${text}` }) } catch (error) { console.error('[profiles] journal:', error.message) }
       sendJson(res, 200, result)
     }),
     route('GET', p => p === '/api/profiles/settings', async (req, res) => sendJson(res, 200, { ok: true, sharedMemoryRead: sharedEnabled() })),
@@ -54,16 +54,16 @@ function createRoutes(ctx) {
       if (fs.existsSync(p.dataHome)) fail('Profile already exists')
       if (!profiles.emptyUserData(p.userData)) fail('Profile userData is not empty')
       fs.mkdirSync(path.dirname(p.dataHome), { recursive: true })
-      fs.mkdirSync(p.dataHome)
-      fs.mkdirSync(p.userData, { recursive: true })
-      require('../profile-settings.cjs').copySettings(ctx.DATA_HOME, p.dataHome, name, copyFrom)
+      const staging = fs.mkdtempSync(path.join(path.dirname(p.dataHome), '.profile-create-'))
+      try {
+        require('../profile-settings.cjs').copySettings(ctx.DATA_HOME, staging, name, copyFrom)
+        fs.mkdirSync(p.userData, { recursive: true })
+        fs.renameSync(staging, p.dataHome)
+      } finally { fs.rmSync(staging, { recursive: true, force: true }) }
       const created = list().find(p => p.name === name)
-      const text = `${created.displayName}(${name})가 이 컴퓨터에 새로 생겼어`
-      await Promise.all(list().filter(p => p.name !== name && p.running).map(p => siblings.post(p, { text, from: '시스템', sibling: true }).catch(() => {})))
-      if (ctx.getMemoryService) {
-        const service = await ctx.getMemoryService()
-        service.journalWrite({ body: text })
-      }
+      const text = `${created?.displayName || name}(${name})가 이 컴퓨터에 새로 생겼어`
+      await Promise.all(list().filter(p => p.name !== name && p.running).map(p => siblings.post(p, { text, from: `시스템 (${profiles.profileFromHome(ctx.DATA_HOME) || 'default'})`, sibling: true }).catch(() => {})))
+      try { if (ctx.getMemoryService) (await ctx.getMemoryService()).journalWrite({ body: text }) } catch (error) { console.error('[profiles] journal:', error.message) }
       sendJson(res, 200, { ok: true, profile: created })
     }),
     route('POST', p => p.match(/^\/api\/profiles\/([^/]+)\/(open|shortcut)$/), async (req, res, m) => {

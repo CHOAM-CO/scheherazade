@@ -1,36 +1,33 @@
 // Read-only sibling access, deliberately independent of profile process discovery.
 import fs from 'node:fs'
+import { pathToFileURL } from 'node:url'
 import path from 'node:path'
 import siblings from '../sibling-profiles.cjs'
 import { DatabaseSync } from 'node:sqlite'
 export function createSharedMemory({ dataHome, open = file => new DatabaseSync(file, { readOnly: true }), log = console.error }) {
-  const cache = new Map()
+  const warned = new Map()
   return function readSiblings(read) {
     try { if (/^SHARED_MEMORY_READ=(?:0|false|off)\s*$/mi.test(fs.readFileSync(path.join(dataHome, '.agent-config'), 'utf8'))) return [] } catch {}
     const results = []
     for (const sibling of siblings.discover(dataHome)) {
-      const home = sibling.dataHome
-      const folder = sibling.folder
-      const file = path.join(home, 'memory.db')
+      const file = path.join(sibling.dataHome, 'memory.db')
       if (!fs.existsSync(file)) continue
+      let db, signature
       try {
         const stat = fs.statSync(file)
-        const signature = `${stat.ino}:${stat.mtimeMs}`
-        let entry = cache.get(file)
-        if (entry?.signature !== signature) {
-          entry?.db.close(); cache.delete(file)
-          const db = open(file)
-          db.exec('PRAGMA busy_timeout=0')
-          entry = { signature, db }; cache.set(file, entry)
-        }
-        let name = folder === 'Scheherazade' ? 'default' : folder.slice('Scheherazade'.length).replace(/^-/, '')
-        try { name = fs.readFileSync(path.join(home, '.agent-config'), 'utf8').match(/^DISPLAY_NAME=(.*)$/m)?.[1]?.trim().replace(/^(["'])(.*)\1$/, '$2') || name } catch {}
-        results.push({ name, profile: folder, material: read(entry.db) })
+        signature = `${stat.ino}:${stat.mtimeMs}:${stat.size}`
+        // A live writer needs WAL visibility; a stopped writer must leave no sidecars.
+        let alive = false
+        try { const pid = Number(fs.readFileSync(path.join(sibling.dataHome, '.agent.pid'), 'utf8')); if (pid > 0) { process.kill(pid, 0); alive = true } } catch (error) { alive = error.code === 'EPERM' }
+        const uri = pathToFileURL(file)
+        uri.searchParams.set('mode', 'ro')
+        if (!alive) uri.searchParams.set('immutable', '1')
+        db = open(uri.href)
+        db.exec('PRAGMA busy_timeout=0')
+        results.push({ name: siblings.displayName(sibling.dataHome), profile: sibling.folder, material: read(db) })
       } catch (error) {
-        try { cache.get(file)?.db.close() } catch {}
-        cache.delete(file)
-        log(`[memory] skipped sibling ${folder}: ${error.message}`)
-      }
+        if (warned.get(file) !== signature) { warned.set(file, signature); log(`[memory] skipped sibling ${sibling.folder}: ${error.message}`) }
+      } finally { try { db?.close() } catch {} }
     }
     return results
   }

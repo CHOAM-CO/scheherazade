@@ -1958,9 +1958,10 @@ function serveStatic(req, res, urlPath) {
     // and get Linux wrong three different ways. Same JSON GET /api/config
     // serves, so the pre-fetch page and the post-fetch page cannot disagree.
     const capsJson = htmlAttr(JSON.stringify(HOST.clientView()))
+    const hasSiblings = require('../sibling-profiles.cjs').discover(DATA_HOME).length > 0
     let injected = html.replace(
       '<head>',
-      `<head>\n    <meta name="onboard-token" content="${SERVER_TOKEN}">\n    <meta name="host-platform" content="${HOST.id}">\n    <meta name="host-capabilities" content="${capsJson}">`
+      `<head>\n    <meta name="has-siblings" content="${hasSiblings}">\n    <meta name="onboard-token" content="${SERVER_TOKEN}">\n    <meta name="host-platform" content="${HOST.id}">\n    <meta name="host-capabilities" content="${capsJson}">`
     )
     // Appearance overrides ride the SAME serve (Appearance tab, 2026-08-05):
     // injected before </head> so they land AFTER app.css's <link> and win

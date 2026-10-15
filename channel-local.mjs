@@ -611,8 +611,7 @@ export async function handleToolCall(name, args) {
     try {
       if (siblingTurn) throw Error('다른 세라에게서 온 메시지는 자동 전달하지 않기')
       try { await siblings.say(DATA_HOME, args?.name, args?.text) } catch (error) { if (error.message === 'profile_off') throw Error(`${args?.name}은 지금 꺼져 있어`); throw error }
-      const memory = await import('./memory/service.mjs')
-      memory.journalWrite({ body: `[다른 세라에게 말하기: ${args.name}] ${args.text}` })
+      try { const memory = await import('./memory/service.mjs'); memory.journalWrite({ body: `[다른 세라에게 말하기: ${args.name}] ${args.text}` }) } catch (error) { log(`sibling journal: ${error.message}`) }
       return { content: [{ type: 'text', text: '보냈어' }] }
     } catch (error) { return { content: [{ type: 'text', text: error.message }], isError: true } }
   }
@@ -726,7 +725,7 @@ export async function deliverInbound(text, { notify, now = localNow, from, sibli
     method: 'notifications/claude/channel',
     params: {
       content: sibling ? `[다른 세라 메시지: ${from}]\n자동으로 다른 세라에게 전달하지 않기\n${content}` : content,
-      meta: { sender: sibling ? (from === '시스템' ? 'SYSTEM' : from) : 'user', channelId: LOCAL_CHANNEL_ID, authorId: sibling ? 'sibling-profile' : 'local-user', timestamp: now(), ...(sibling ? { sibling: true } : {}) },
+      meta: { sender: sibling ? from : 'user', channelId: LOCAL_CHANNEL_ID, authorId: sibling ? 'sibling-profile' : 'local-user', timestamp: now(), ...(sibling ? { sibling: true } : {}) },
     },
   })
   return content
@@ -835,13 +834,13 @@ export function createRequestHandler({ notify, token, onInbound = () => {}, inte
         try { parsed = JSON.parse(body || '{}') } catch { return send(400, { error: 'bad json' }) }
         const text = parsed && parsed.text
         if (typeof text !== 'string' || !text.trim()) return send(400, { error: 'text required' })
+        if (text.length > 16000) return send(413, { error: 'text too long' })
+        if (parsed.from !== undefined && (typeof parsed.from !== 'string' || parsed.from.length > 160 || !/^[^<>\[\]\"'\r\n]{1,120} \((?:default|[a-z0-9-]{1,24})\)$/.test(parsed.from))) return send(400, { error: 'invalid from' })
         const sibling = parsed.sibling === true && typeof parsed.from === 'string'
         const delivered = await deliverInbound(text, { notify, sibling, from: parsed.from })
         siblingTurn = sibling
-        if (sibling && parsed.from === '시스템') { try { await mcp.sendToolListChanged() } catch {} }
         if (sibling) {
-          const memory = await import('./memory/service.mjs')
-          memory.journalWrite({ body: `[${parsed.from}] ${text}` })
+          try { const memory = await import('./memory/service.mjs'); memory.journalWrite({ body: `[${parsed.from}] ${text}` }) } catch (error) { log(`sibling journal: ${error.message}`) }
         }
         // Into the transcript only AFTER the notification resolved -- and as
         // `delivered` (the normalized content), so the record shows exactly

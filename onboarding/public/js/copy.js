@@ -1992,7 +1992,7 @@ window.COPY.profiles = {
   sharedMemory: '다른 세라 기억 보기',
   sharedMemoryHelp: '다른 세라에게 말한 기억도 누구에게 말했는지 표시해서 함께 봐. 끄면 이 세라 기억만 봐.',
   copySettings: '지금 세라 설정 가져오기',
-  copySettingsHelp: '이름, 성격·지침, 모델과 연결 설정을 가져와. 기억과 인증 정보, 채널 토큰은 가져오지 않아.',
+  copySettingsHelp: '성격·지침, 모델과 언어 설정을 가져와. 기억과 인증 정보, 채널 토큰은 가져오지 않아.',
   helper: '영문 소문자, 숫자, 하이픈으로 1~24자. 이름은 나중에 바꿀 수 없어.',
   invalid: '영문 소문자, 숫자, 하이픈으로 1~24자를 입력해줘',
   reserved: 'default는 기본 세라를 위한 이름이야', duplicate: '이미 있는 이름이야',
@@ -2052,3 +2052,13 @@ if (!(document.documentElement?.lang || 'en').startsWith('ko')) {
   }
 }
 window.COPY.polish.profiles = window.COPY.profiles.title
+
+window.COPY.siblingMemory = (document.documentElement?.lang || 'en').startsWith('ko') ? {
+  own: '내 기억', title: '다른 세라 기억', toggle: '다른 세라 기억 보기', help: '읽기 전용 · 검색만 가능',
+  search: '기억 검색', submit: '검색', empty: '검색 결과 없음', failed: '다른 세라 기억을 불러오지 못했어',
+  summary: (name, profile, count, date) => `${name} (${profile}) · ${count}개 · 마지막 기록 ${date || '없음'}`,
+} : {
+  own: 'My memories', title: 'Other Seras’ memories', toggle: 'Show other Seras’ memories', help: 'Read only · search only',
+  search: 'Search memories', submit: 'Search', empty: 'No results', failed: 'Could not load other Seras’ memories',
+  summary: (name, profile, count, date) => `${name} (${profile}) · ${count} · Last written ${date || 'none'}`,
+}

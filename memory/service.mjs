@@ -1091,9 +1091,23 @@ function siblingMemory({ search = '' } = {}) {
   try { if (/^SHARED_MEMORY_READ=(?:0|false|off)\s*$/mi.test(fs.readFileSync(path.join(DATA_HOME, '.agent-config'), 'utf8'))) return [] } catch {}
   const found = readSiblings(db => {
     const tables = ['user_facts', 'open_threads', 'corrections', 'preferences', 'journal_entries']
-    const rows = tables.flatMap(table => db.prepare(`SELECT * FROM ${table}`).all().map(row => ({ ...row, table })))
-    const dates = rows.flatMap(row => ['updated_at', 'created_at', 'last_touched_at', 'corrected_at', 'last_confirmed_at', 'written_at'].map(key => row[key]).filter(Boolean))
-    return { count: rows.length, lastWritten: dates.sort().at(-1) || null, rows: needle ? rows.filter(row => JSON.stringify(row).toLowerCase().includes(needle)).slice(0, 100) : [] }
+    let count = 0, lastWritten = null
+    const rows = []
+    for (const table of tables) {
+      try {
+        const columns = db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name)
+        const dates = ['updated_at', 'created_at', 'last_touched_at', 'corrected_at', 'last_confirmed_at', 'written_at'].filter(key => columns.includes(key))
+        const summary = db.prepare(`SELECT COUNT(*) AS count${dates.map(key => `, MAX(${key}) AS ${key}`).join('')} FROM ${table}`).get()
+        count += summary.count
+        for (const key of dates) if (summary[key] && (!lastWritten || summary[key] > lastWritten)) lastWritten = summary[key]
+        if (needle) {
+          const searchable = columns.filter(key => !['id'].includes(key))
+          const hits = db.prepare(`SELECT * FROM ${table} WHERE ${searchable.map(key => `instr(lower(CAST("${key}" AS TEXT)), ?) > 0`).join(' OR ')} LIMIT 100`).all(...searchable.map(() => needle))
+          rows.push(...hits.map(row => ({ ...row, table })))
+        }
+      } catch { /* A missing or older table does not hide the others. */ }
+    }
+    return { count, lastWritten, rows: rows.slice(0, 100) }
   })
   return siblingProfiles.discover(DATA_HOME).map(p => found.find(row => row.profile === p.folder) || { name: siblingProfiles.displayName(p.dataHome), profile: p.folder, material: { count: 0, lastWritten: null, rows: [] } })
 }
