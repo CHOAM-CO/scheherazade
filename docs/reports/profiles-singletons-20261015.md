@@ -78,7 +78,7 @@ Legend: DH=derived from data home, UD=Electron userData, HC=hardcoded
 
 ## 8. Updater / installer
 - updater.cjs:72-78 electron-updater autoDownload, autoInstallOnAppQuit; :102 quitAndInstall() after user prompt; quits THE process (before-quit tears down its own supervisor tree); other instances not restarted
-- package.json:235-239 publish github Mino-is-me/scheherazade-releases
+- package.json:235-239 publish github CHOAM-CO/scheherazade-releases
 - NSIS: package.json:212 target nsis x64, no "nsis" block (oneClick default true, per-user default install), artifactName :218; no perMachine/protocols entries
 - CLI args: none read. grep process.argv / app.commandLine in main.cjs, updater.cjs = no hits (main.cjs:620 'commandLine' is a ps var). Adding --profile needs new parse before :48.
 - app update replaces app files shared by all profiles (single install)

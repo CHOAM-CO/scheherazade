@@ -68,7 +68,7 @@ Nothing is published without `--publish`.
 | `--allow-dirty` | rehearsal: branch / clean-tree / tag checks become warnings. Refuses `--publish`, and refuses to touch the shared box |
 | `--rehearse-remote` | with `--allow-dirty` only: run the win/linux legs **for real** on the box, into rehearsal locations |
 | `--verify-only` | build nothing; open what `release/` already holds and check it. This is how a leg someone else ran gets checked here |
-| `--publish` | actually create the release on `Mino-is-me/scheherazade-releases` |
+| `--publish` | actually create the release on `CHOAM-CO/scheherazade-releases` |
 | `--clobber` | the release already exists: `gh release upload --clobber` instead of refusing |
 | `--notes <file>` | release notes; required by `--publish` |
 | `--keep-remote` | leave the remote build directory in place |
@@ -284,7 +284,7 @@ The eight assets:
 | linux | `Scheherazade-<v>-x86_64.AppImage`, `latest-linux.yml` |
 
 **The yml files are not optional.** electron-updater on every installed Windows
-copy resolves the newest release of `Mino-is-me/scheherazade-releases` and
+copy resolves the newest release of `CHOAM-CO/scheherazade-releases` and
 fetches `latest.yml` from its assets:
 
 - release without `latest.yml` → every update check errors (log-only; users
@@ -294,7 +294,7 @@ fetches `latest.yml` from its assets:
 - mac and Linux copies compare the release TAG via the GitHub API and link to
   the download page (unsigned build, no auto-install — see `updater.cjs`).
 
-The public feed is `Mino-is-me/scheherazade-releases` (`build.publish`,
+The public feed is `CHOAM-CO/scheherazade-releases` (`build.publish`,
 `updater.cjs`'s `UPDATE_OWNER`/`UPDATE_RELEASES_REPO`). The canonical private
 repo `CHOAM-CO/scheherazade` holds code and provenance; publishing there is a
 separate, manual `gh release create` and is not what installed apps poll.
@@ -303,7 +303,7 @@ separate, manual `gh release create` and is not what installed apps poll.
 
 ## 5. Post-ship
 
-- [ ] `gh release view v<version> --repo Mino-is-me/scheherazade-releases --json assets -q '.assets[].name'`
+- [ ] `gh release view v<version> --repo CHOAM-CO/scheherazade-releases --json assets -q '.assets[].name'`
       lists all eight.
 - [ ] Each `latest*.yml`'s `version:` matches the tag
       (`--verify-only` re-checks this locally against what you uploaded).

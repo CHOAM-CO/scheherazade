@@ -3744,7 +3744,7 @@ async function fetchImageCaption(imageBase64, mediaType) {
 // Cache: GitHub unauthenticated API allows 60 req/h/IP; 6h on success,
 // 10min on failure so a rate-limit blip cannot wedge the check until
 // restart.
-const UPDATE_RELEASES_REPO = 'Mino-is-me/scheherazade-releases'
+const UPDATE_RELEASES_REPO = 'CHOAM-CO/scheherazade-releases'
 let updateCheckCache = null // { at, payload }
 const { isNewerVersion, fetchLatestRelease } = require('./update-version.cjs')
 async function checkForUpdate(force = false) {

@@ -75,9 +75,9 @@ for (const [platform, isPackaged, expected, why] of [
 // reads app-update.yml/latest.yml instead. If a Linux auto-update lane ever
 // lands, these three rows are what has to change with it.
 ok('the notify feed is the public releases repo API',
-  updater.LATEST_API === 'https://api.github.com/repos/Mino-is-me/scheherazade-releases/releases/latest', updater.LATEST_API)
+  updater.LATEST_API === 'https://api.github.com/repos/CHOAM-CO/scheherazade-releases/releases/latest', updater.LATEST_API)
 ok('the notify prompt offers that repo\'s releases page',
-  updater.RELEASES_PAGE === 'https://github.com/Mino-is-me/scheherazade-releases/releases/latest', updater.RELEASES_PAGE)
+  updater.RELEASES_PAGE === 'https://github.com/CHOAM-CO/scheherazade-releases/releases/latest', updater.RELEASES_PAGE)
 {
   const src = fs.readFileSync(new URL('../updater.cjs', import.meta.url), 'utf8')
   ok('electron-updater is loaded ONLY on the auto row (win32) -- linux and mac never touch it',

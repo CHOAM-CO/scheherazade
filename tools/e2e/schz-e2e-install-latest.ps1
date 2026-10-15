@@ -26,7 +26,7 @@ param([switch]$ResolveOnly)
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'   # PS 5.1's progress bar makes a 150 MB download crawl
-$Feed = 'https://github.com/Mino-is-me/scheherazade-releases/releases/latest/download'
+$Feed = 'https://github.com/CHOAM-CO/scheherazade-releases/releases/latest/download'
 $Dir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Log = Join-Path $Dir 'install-latest.log'
 

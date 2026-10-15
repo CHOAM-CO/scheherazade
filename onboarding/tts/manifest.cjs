@@ -8,7 +8,7 @@
 // (Kyutai Pocket-TTS; seastar105 Korean fine-tune). Sera ships none of these
 // bytes; first enable fetches the file into userData/models/pocket-ko and
 // checks its sha256. SERA_TTS_MODEL_DIR overrides the directory (dev/tests).
-const SERA_TTS_MODEL_URL = 'https://github.com/Mino-is-me/scheherazade-releases/releases/download/models-v1/pocket-tts-ko-100m-int8.onnx'
+const SERA_TTS_MODEL_URL = 'https://github.com/CHOAM-CO/scheherazade-releases/releases/download/models-v1/pocket-tts-ko-100m-int8.onnx'
 const FILES = [
   ['pocket-tts-ko-100m-int8.onnx', 226210253, 'd944f9bb99f2aed1207e7ab359fc740716de647196ce23af14d76b40490e880d', SERA_TTS_MODEL_URL],
 ].map(([rel, size, sha256, url]) => ({ rel, size, sha256, url }))

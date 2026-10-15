@@ -4,7 +4,7 @@
 // Sera ships none of these bytes; first enable fetches one sha256-pinned tarball
 // from the models-v1 release, extracts it into userData/models/stt-ko and checks
 // each file's sha256 too. SERA_STT_MODEL_DIR overrides the directory (dev/tests).
-const SERA_STT_MODEL_URL = 'https://github.com/Mino-is-me/scheherazade-releases/releases/download/models-v1/sera-stt-ko-72m-int8.tar.gz'
+const SERA_STT_MODEL_URL = 'https://github.com/CHOAM-CO/scheherazade-releases/releases/download/models-v1/sera-stt-ko-72m-int8.tar.gz'
 const ARCHIVE = {
   name: 'sera-stt-ko-72m-int8.tar.gz',
   size: 58590777,
@@ -35,7 +35,7 @@ const largeArchive = {
   name: 'sera-stt-ko-174m-chunk-32-int8.tar.gz',
   size: 125054164,
   sha256: '59be47ede61680bcbb370d2964cd3a4a909cb905e41b36077d15383c27357628',
-  url: 'https://github.com/Mino-is-me/scheherazade-releases/releases/download/models-v1/sera-stt-ko-174m-chunk-32-int8.tar.gz',
+  url: 'https://github.com/CHOAM-CO/scheherazade-releases/releases/download/models-v1/sera-stt-ko-174m-chunk-32-int8.tar.gz',
 }
 const large = { ...small, id: '174m', label: 'Large · 174M', cacheName: 'stt-ko-174m-chunk-32', chunkSize: 32,
   ARCHIVE: largeArchive, SERA_STT_MODEL_URL: largeArchive.url, TOTAL_BYTES: largeArchive.size, FILES: largeFiles,

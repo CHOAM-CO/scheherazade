@@ -3,7 +3,7 @@
 // Why this file exists: until 0.1.4 every fix reached users by hand -- build
 // the exe/dmg, send the file, ask them to reinstall. That does not survive
 // more than a couple of users. This module closes the loop against the public
-// releases repo (Mino-is-me/scheherazade-releases) so "shipped" means
+// releases repo (CHOAM-CO/scheherazade-releases) so "shipped" means
 // "arrives on its own".
 //
 // Three modes, picked by pickUpdateMode():
@@ -41,7 +41,7 @@
 // (two products sharing one feed) no longer exists. The 0.2.1-0.2.8 test
 // builds pointed at the private CHOAM-CO/scheherazade repo (404 = updates
 // off); those installs need one manual reinstall to land on this feed.
-const UPDATE_OWNER = 'Mino-is-me'
+const UPDATE_OWNER = 'CHOAM-CO'
 const UPDATE_REPO = 'scheherazade-releases'
 const RELEASES_PAGE = `https://github.com/${UPDATE_OWNER}/${UPDATE_REPO}/releases/latest`
 const LATEST_API = `https://api.github.com/repos/${UPDATE_OWNER}/${UPDATE_REPO}/releases/latest`

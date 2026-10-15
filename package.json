@@ -240,7 +240,7 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "Mino-is-me",
+        "owner": "CHOAM-CO",
         "repo": "scheherazade-releases"
       }
     ]

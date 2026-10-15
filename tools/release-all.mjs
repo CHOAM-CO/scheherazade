@@ -99,7 +99,7 @@ const PRODUCT = (pkg.build && pkg.build.productName) || 'Scheherazade'
 // UPDATE_RELEASES_REPO, build.publish). Derived from build.publish so this
 // file cannot drift from what the app actually checks.
 const ghPublish = (pkg.build.publish || []).find((p) => p && p.provider === 'github') || {}
-const RELEASE_REPO = `${ghPublish.owner || 'Mino-is-me'}/${ghPublish.repo || 'scheherazade-releases'}`
+const RELEASE_REPO = `${ghPublish.owner || 'CHOAM-CO'}/${ghPublish.repo || 'scheherazade-releases'}`
 
 // The Windows box, and the WSL2 tree on it. One ssh alias reaches both.
 const WIN_HOST = process.env.SCHZ_WIN_HOST || 'magi-win'

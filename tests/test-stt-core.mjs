@@ -24,7 +24,7 @@ const ok = (cond, name) => { if (cond) { pass++; console.log(`  ok ${name}`) } e
 
 // manifest
 const HEX = /^[0-9a-f]{64}$/
-ok(manifest.ARCHIVE.url === manifest.SERA_STT_MODEL_URL && manifest.ARCHIVE.url.startsWith('https://github.com/Mino-is-me/scheherazade-releases/releases/download/models-v1/'), 'archive url is the models-v1 release asset')
+ok(manifest.ARCHIVE.url === manifest.SERA_STT_MODEL_URL && manifest.ARCHIVE.url.startsWith('https://github.com/CHOAM-CO/scheherazade-releases/releases/download/models-v1/'), 'archive url is the models-v1 release asset')
 ok(manifest.ARCHIVE.url.endsWith(manifest.ARCHIVE.name) && HEX.test(manifest.ARCHIVE.sha256) && manifest.ARCHIVE.size === 58590777, 'archive size + full sha256 pinned')
 ok(manifest.FILES.length === 4 && manifest.FILES.every(f => HEX.test(f.sha256) && Number.isInteger(f.size) && f.size > 0), 'four files, each with full sha256 + size')
 ok([manifest.ENCODER, manifest.DECODER, manifest.JOINER, manifest.TOKENS].every(n => manifest.FILES.some(f => f.rel === n)), 'encoder/decoder/joiner/tokens all pinned')
