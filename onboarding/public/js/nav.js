@@ -741,7 +741,4 @@ window.profilesReady = window.api('/api/profiles').then(result => {
     if (label) label.textContent = `[${window.profileLabel}] ${label.textContent}`
   }
   return result
-}).catch(error => {
-  window.showToast(window.COPY.profiles.error(error))
-  return null
-})
+}).catch(() => null) // design-0029: optional discovery (including 404) must never toast.

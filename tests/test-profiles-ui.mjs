@@ -90,6 +90,21 @@ assert.equal(label.textContent, '[work] Sera')
 server.current = ''; titleDocument.title = 'Scheherazade'
 await vm.runInNewContext(identity, { window: identityWindow, document: titleDocument })
 assert.equal(titleDocument.title, 'Scheherazade')
+// design-0029: optional global discovery must never toast, including missing routes.
+for (const error of [Error('network failed'), Object.assign(Error('missing route'), { status: 404 })]) {
+  const before = toasts.length
+  const failingWindow = { ...identityWindow, api: async () => { throw error } }
+  await vm.runInNewContext(identity, { window: failingWindow, document: titleDocument })
+  assert.equal(await failingWindow.profilesReady, null)
+  assert.equal(toasts.length, before)
+}
+for (const lang of ['en', 'ko']) {
+  const localized = { window: {}, document: { ...document, documentElement: { lang } }, navigator: { language: lang } }
+  vm.runInNewContext(read('onboarding/public/js/copy.js'), localized)
+  assert.equal(localized.window.COPY.polish.profiles, lang === 'en' ? 'Profiles' : '세라 프로필')
+  assert.notEqual(localized.window.COPY.polish.profiles, localized.window.COPY.polish.identity)
+  if (lang === 'en') assert.equal(localized.window.COPY.profiles.create, 'Create a Sera')
+}
 // Initial list failure leaves creation disabled and offers a working retry.
 fail = null; window.profilesReady = Promise.resolve(null)
 await vm.runInNewContext(read('onboarding/public/js/profiles.js'), context)

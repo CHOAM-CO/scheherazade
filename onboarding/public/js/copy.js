@@ -1987,7 +1987,7 @@ window.COPY.polish = window.UI_POLISH_COPY[(document.documentElement?.lang || 'e
 
 // Profiles (design-0029): Korean uses the requested plain, informal register.
 window.COPY.profiles = {
-  title: '프로필', intro: '세라를 한 명 더 만드는 거야. 기억이랑 설정이 따로야.',
+  title: '세라 프로필', intro: '세라를 한 명 더 만드는 거야. 기억이랑 설정이 따로야.',
   list: '이 컴퓨터의 세라', create: '새 세라 만들기', name: '프로필 이름',
   helper: '영문 소문자, 숫자, 하이픈으로 1~24자. 이름은 나중에 바꿀 수 없어.',
   invalid: '영문 소문자, 숫자, 하이픈으로 1~24자를 입력해줘',
@@ -2013,5 +2013,34 @@ window.COPY.profiles = {
     if (!message || /non-JSON|fetch|network|HTTP |^[{[]/i.test(message)) return this.failed
     return `처리하지 못했어: ${message}`
   },
+}
+// design-0029: profile management is distinct from editable Identity.
+if (!(document.documentElement?.lang || 'en').startsWith('ko')) {
+  window.COPY.profiles = {
+    title: 'Profiles', intro: 'Create another Sera with separate memories and settings.',
+    list: 'Seras on this computer', create: 'Create a Sera', name: 'Profile name',
+    helper: '1–24 lowercase letters, numbers or hyphens. Names cannot be changed.',
+    invalid: 'Enter 1–24 lowercase letters, numbers or hyphens',
+    reserved: 'default is reserved for your original Sera', duplicate: 'That name already exists',
+    running: 'Running', stopped: 'Stopped', default: 'Default', current: 'Current',
+    open: 'Open', shortcut: 'Create shortcut', delete: 'Delete', cancel: 'Cancel',
+    closeFirst: 'Close that Sera first', defaultReason: 'The default Sera cannot be deleted',
+    confirm: name => `Delete ${name}? Both its memories/settings folder and app user-data folder will move to the system’s deleted-items folder.`,
+    shared: 'Shared on this computer', login: 'Logins and weekly usage are shared. Each Sera can use a different model.',
+    update: 'The app installation and updates are shared. Close the other Seras before installing an update.',
+    bot: 'Each Sera needs a separate bot token.', cost: 'Each additional Sera uses another agent process and model session.',
+    loading: 'Loading profiles', retry: 'Retry', empty: 'No profiles yet', failed: 'The request failed. Please try again.',
+    created: 'Created a Sera', opened: 'Opened Sera', deleted: 'Both folders moved to the system’s deleted-items folder',
+    shortcutDone: path => `Shortcut created: ${path}`,
+    error(error) {
+      const message = String(error?.message || '')
+      if (error?.status === 409 || /running/i.test(message)) return this.closeFirst
+      if (/default/i.test(message)) return this.defaultReason
+      if (/exist|duplicate/i.test(message)) return this.duplicate
+      if (/invalid.*name|name.*invalid/i.test(message)) return this.invalid
+      if (!message || /non-JSON|fetch|network|HTTP |^[{[]/i.test(message)) return this.failed
+      return `Request failed: ${message}`
+    },
+  }
 }
 window.COPY.polish.profiles = window.COPY.profiles.title
