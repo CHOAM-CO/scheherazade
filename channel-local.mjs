@@ -832,9 +832,9 @@ export function createRequestHandler({ notify, token, onInbound = () => {}, inte
         const text = parsed && parsed.text
         if (typeof text !== 'string' || !text.trim()) return send(400, { error: 'text required' })
         if (text.length > 16000) return send(413, { error: 'text too long' })
-        if (parsed.from !== undefined && (typeof parsed.from !== 'string' || parsed.from.length > 160 || !/^[^<>\[\]\"'\r\n]{1,120} \((?:default|[a-z0-9-]{1,24})\)$/.test(parsed.from))) return send(400, { error: 'invalid from' })
+        if (parsed.from !== undefined && (typeof parsed.from !== 'string' || parsed.from.length > 160 || !/^[^<>\[\]\"'\r\n]{1,120} \((?:default|[a-z0-9-]{1,24})\)$/.test(parsed.from))) return send(400, { ok: false, code: 'bad_sender', error: '발신자 이름을 확인해 줘' })
         const sibling = parsed.sibling === true && typeof parsed.from === 'string'
-        if (sibling) {
+        if (sibling && parsed.notice !== true) {
           const sender = parsed.from.match(/\((default|[a-z0-9-]{1,24})\)$/)[1]
           try { siblings.receiveHop(dataHome, sender, parsed.hop) }
           catch (error) { return send(error.status || 400, { ok: false, ...(error.code ? { code: error.code } : {}), error: error.message }) }

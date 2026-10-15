@@ -50,8 +50,8 @@ try {
   assert.equal(blocked.isError, true)
   assert.equal(blocked.content[0].text, '대화가 길어져서 여기서 끊어. 사람이 이어 줘')
   assert.equal(peerNotifications.length, beforeRejection)
-  // Receiver drops the sender's receipt on a loop rejection.
-  assert.equal(siblings.nextHop(peer, 'default'), 1)
+  // Rejection must preserve the receiver's receipt.
+  assert.equal(siblings.nextHop(peer), 2)
 
   // A queued local human message resets the receipt, not a global turn flag.
   assert.equal((await inbound({ text: 'human asks a fresh question' })).status, 202)
@@ -69,13 +69,13 @@ try {
   assert.equal(platformNotifications[0].meta.sibling, undefined)
   assert.equal(siblings.nextHop(own, 'mitil'), 3)
 
-  // Forged high hops never deliver and clear only that sender's receipt.
+  // Forged high hops never deliver or clear existing receipts.
   const beforeForged = notifications.length
   const forged = await inbound({ text: 'forged', from: '미틸 (mitil)', sibling: true, hop: 999 })
   assert.equal(forged.status, 409)
   assert.equal(forged.body.code, 'sibling_loop')
   assert.equal(notifications.length, beforeForged)
-  assert.equal(siblings.nextHop(own, 'mitil'), 1)
+  assert.equal(siblings.nextHop(own), 3)
   for (const hop of [undefined, 0, -1, 1.5, '2', null]) {
     assert.equal((await inbound({ text: 'invalid hop', from: '미틸 (mitil)', sibling: true, hop })).status, 400)
   }
@@ -86,19 +86,68 @@ try {
   assert.equal(notifications.at(-1).params.meta.sender, '시스템 (mitil)')
   assert.notEqual(notifications.at(-1).params.meta.sender, 'SYSTEM')
 
-  // The exact 120-second boundary expires, and receipts are peer-specific.
-  siblings.receiveHop(own, 'mitil', 2, 1000)
-  assert.equal(siblings.nextHop(own, 'mitil', 120999), 3)
-  assert.equal(siblings.nextHop(own, 'mitil', 121000), 1)
+  // Notices leave both empty and existing budgets unchanged.
+  siblings.resetHops(own)
+  assert.equal((await inbound({ text: 'created', from: '시스템 (mitil)', sibling: true, notice: true })).status, 202)
+  assert.equal(siblings.nextHop(own), 1)
   siblings.receiveHop(own, 'mitil', 2)
-  assert.equal(siblings.nextHop(own, 'unrelated'), 1)
+  await inbound({ text: 'created again', from: '시스템 (mitil)', sibling: true, notice: true, hop: 999 })
+  assert.equal(siblings.nextHop(own), 3)
+
+  // Three profiles cannot evade the budget by changing the next destination.
+  const third = path.join(root, 'Scheherazade-third')
+  fs.mkdirSync(third)
+  fs.writeFileSync(path.join(third, '.agent-config'), 'PROFILE=third\nDISPLAY_NAME=Third\n')
+  const thirdNotifications = []
+  await listen(third, thirdNotifications)
+  siblings.resetHops(own); siblings.resetHops(peer)
+  await siblings.say(own, 'mitil', 'A to B')
+  await siblings.say(peer, 'third', 'B to C')
+  assert.equal(thirdNotifications.at(-1).params.meta.hop, 2)
+  const beforeThirdHop = notifications.length
+  await assert.rejects(siblings.say(third, 'default', 'C to A'), error => error.code === 'sibling_loop')
+  assert.equal(notifications.length, beforeThirdHop)
+
+  // Two sends 130 seconds apart still use the highest receipt, across targets.
+  const savedFetch = globalThis.fetch, savedNow = Date.now
+  const sent = []
+  let clock = 1000
+  try {
+    Date.now = () => clock
+    globalThis.fetch = async (url, options) => { sent.push(JSON.parse(options.body)); return { ok: true } }
+    await siblings.say(peer, 'third', 'first timed send')
+    clock += 130000
+    await siblings.say(peer, 'default', 'second timed send')
+    assert.deepEqual(sent.map(message => message.hop), [2, 2])
+  } finally { globalThis.fetch = savedFetch; Date.now = savedNow }
+  // A later lower receipt cannot reduce the high-water budget.
+  siblings.receiveHop(own, 'mitil', 2)
+  siblings.receiveHop(own, 'mitil', 1)
+  assert.equal(siblings.nextHop(own), 3)
   assert.equal((await peerInbound({ text: 'human on B' })).status, 202)
-  assert.equal(siblings.nextHop(peer, 'default'), 1)
+  assert.equal(siblings.nextHop(peer), 1)
+
+  // Sender labels with punctuation and long names are safe on the wire.
+  siblings.resetHops(own)
+  fs.writeFileSync(path.join(own, '.agent-config'), `DISPLAY_NAME=${'<["quoted"]>'.repeat(30)}\n`)
+  await siblings.say(own, 'mitil', 'sanitised sender')
+  const safeSender = peerNotifications.at(-1).params.meta.sender
+  assert(!/[<>[\]"']/.test(safeSender))
+  assert(safeSender.endsWith(' (default)'))
+  assert(safeSender.length <= 130)
+  assert.throws(() => siblings.senderLabel('safe', 'BAD'), error => error.code === 'bad_sender')
+  const badSender = await inbound({ text: 'bad', from: '<unsafe> (mitil)', sibling: true, hop: 1 })
+  assert.equal(badSender.body.code, 'bad_sender')
+  // Remote bad_sender responses are not misreported as profile_off.
+  try {
+    globalThis.fetch = async () => ({ ok: false, status: 400, json: async () => ({ code: 'bad_sender' }) })
+    await assert.rejects(siblings.say(own, 'mitil', 'bad remote sender'), error => error.code === 'bad_sender')
+  } finally { globalThis.fetch = savedFetch }
 
   const memory = await import('../memory/service.mjs')
   assert.match(memory.journalRead({}).rows.find(row => row.body.includes('hello')).body, /미틸 \(mitil\).*hello/)
   memory.close()
-  console.log('test-sibling-channel: all assertions passed (real loopback chain, human reset, Discord isolation, forged and invalid hops, expiry, SYSTEM spoof)')
+  console.log('test-sibling-channel: all assertions passed (real loopback chain, human reset, Discord isolation, forged and invalid hops, three-profile budget, no decay, notice isolation, safe sender, SYSTEM spoof)')
 } finally {
   for (const server of servers) await new Promise(resolve => server.close(resolve))
   siblings.resetHops(own); siblings.resetHops(peer)

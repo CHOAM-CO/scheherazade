@@ -29,7 +29,7 @@ function awareness(dataHome, liveness = {}) {
 }
 function failure(error, status) { return Object.assign(new Error(error), { status }) }
 const LOOP_ERROR = '대화가 길어져서 여기서 끊어. 사람이 이어 줘'
-// Process-local, bounded-age receipts, partitioned by receiver home and sender profile.
+// Process-local high-water receipts across ALL senders; only human input resets them.
 // Only local /in deliveries change these; platform notifications never do.
 const receivedHops = new Map()
 function hopState(dataHome) {
@@ -37,21 +37,22 @@ function hopState(dataHome) {
   if (!state) { state = new Map(); receivedHops.set(dataHome, state) }
   return state
 }
-function nextHop(dataHome, name, now = Date.now()) {
-  const state = hopState(dataHome)
-  const previous = state.get(name)
-  if (previous && now - previous.at < 120000) return previous.hop + 1
-  state.delete(name)
-  return 1
+function nextHop(dataHome) {
+  return 1 + Math.max(0, ...hopState(dataHome).values())
 }
-function receiveHop(dataHome, name, hop, now = Date.now()) {
-  const state = hopState(dataHome)
+function receiveHop(dataHome, name, hop) {
   if (!Number.isSafeInteger(hop) || hop < 1) throw failure('invalid sibling hop', 400)
-  if (hop > 2) {
-    state.delete(name)
-    throw Object.assign(failure(LOOP_ERROR, 409), { code: 'sibling_loop' })
+  if (hop > 2) throw Object.assign(failure(LOOP_ERROR, 409), { code: 'sibling_loop' })
+  const state = hopState(dataHome)
+  state.set(name, Math.max(state.get(name) || 0, hop))
+}
+function senderLabel(display, profile) {
+  const clean = String(display).replace(/[\"'<>\[\]\r\n]/g, '').trim().slice(0, 120) || 'Scheherazade'
+  const from = `${clean} (${profile || 'default'})`
+  if (!/^[^<>\[\]\"'\r\n]{1,120} \((?:default|[a-z0-9-]{1,24})\)$/.test(from)) {
+    throw Object.assign(failure('발신자 이름을 확인해 줘', 400), { code: 'bad_sender' })
   }
-  state.set(name, { hop, at: now })
+  return from
 }
 function resetHops(dataHome) { receivedHops.delete(dataHome) }
 async function post(p, payload) {
@@ -63,10 +64,11 @@ async function post(p, payload) {
       let body
       try { body = await response.json() } catch {}
       if (response.status === 409 && body?.code === 'sibling_loop') throw Object.assign(failure(LOOP_ERROR, 409), { code: 'sibling_loop' })
+      if (body?.code === 'bad_sender') throw Object.assign(failure('발신자 이름을 확인해 줘', 400), { code: 'bad_sender' })
       throw Error('listener unavailable')
     }
   } catch (error) {
-    if (error.code === 'sibling_loop') throw error
+    if (['sibling_loop', 'bad_sender'].includes(error.code)) throw error
     throw Object.assign(failure(`${displayName(p.dataHome) || p.name}은 지금 꺼져 있어`, 409), { code: 'profile_off' })
   }
 }
@@ -76,8 +78,8 @@ async function say(dataHome, name, text) {
   if (name !== 'default') { try { profiles.validateName(name) } catch { throw failure('Invalid profile name', 400) } }
   const p = discover(dataHome).find(p => (p.name || 'default') === name)
   if (!p) throw failure('Profile not found', 404)
-  const from = `${displayName(dataHome)} (${profiles.profileFromHome(dataHome) || 'default'})`
-  await post(p, { text: text.trim(), from, sibling: true, hop: nextHop(dataHome, name) })
+  const from = senderLabel(displayName(dataHome), profiles.profileFromHome(dataHome))
+  await post(p, { text: text.trim(), from, sibling: true, hop: nextHop(dataHome) })
   return { ok: true }
 }
-module.exports = { discover, displayName, awareness, post, say, nextHop, receiveHop, resetHops }
+module.exports = { discover, displayName, awareness, post, say, nextHop, receiveHop, resetHops, senderLabel }

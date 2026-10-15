@@ -50,6 +50,21 @@ try {
   ok('no memory or credentials', !fs.existsSync(path.join(copyHome, 'memory.db')) && !fs.existsSync(path.join(copyHome, '.credentials')))
   ok('MCP config never copied', !fs.existsSync(path.join(copyHome, '.mcp.json')))
   ok('receipt written', JSON.parse(fs.readFileSync(path.join(copyHome, '.profile-copy-receipt.json'))).copied.includes('self_persona.md'))
+  let renameAttempts = 0
+  const backoff = []
+  routes = createRoutes({ ...ctx, profileDelay: async ms => backoff.push(ms), profileRename: (from, to) => {
+    renameAttempts++
+    if (renameAttempts <= 5) throw Object.assign(Error('busy'), { code: ['EPERM', 'EBUSY', 'EACCES'][(renameAttempts - 1) % 3] })
+    fs.renameSync(from, to)
+  } })
+  ok('staged rename retries transient failures', (await request('POST', '/api/profiles', { name: 'retry', copyFrom: false })).status === 200)
+  assert.equal(renameAttempts, 6)
+  assert.deepEqual(backoff, [25, 50, 100, 200, 400])
+  routes = createRoutes({ ...ctx, profileDelay: async () => {}, profileRename: () => { throw Object.assign(Error('still busy'), { code: 'EBUSY' }) } })
+  ok('staged rename stops after five retries', (await request('POST', '/api/profiles', { name: 'retry-failed', copyFrom: false })).status === 400)
+  assert(!fs.existsSync(path.join(home, 'Documents', 'Scheherazade-retry-failed')))
+  assert(!fs.readdirSync(path.join(home, 'Documents')).some(name => name.startsWith('.profile-create-')))
+  routes = createRoutes(ctx)
   ok('settings default enabled', (await request('GET', '/api/profiles/settings')).body.sharedMemoryRead)
   await request('POST', '/api/profiles/settings', { sharedMemoryRead: false })
   ok('settings persists off', !(await request('GET', '/api/profiles/settings')).body.sharedMemoryRead)
@@ -102,7 +117,7 @@ try {
     await request('POST', '/api/profiles', { name: 'newborn', copyFrom: false })
     ok('creator records profile creation', memoryEvents.at(-1).body === 'Scheherazade(newborn)가 이 컴퓨터에 새로 생겼어')
     ok('sender records talk', memoryEvents.some(event => event.body === '[다른 세라에게 말하기: work] hello sibling'))
-    ok('create notifies running sibling once', received.length === 2 && received[1].body.from === '시스템 (default)' && received[1].body.text === 'Scheherazade(newborn)가 이 컴퓨터에 새로 생겼어')
+    ok('create notifies running sibling once', received.length === 2 && received[1].body.notice === true && received[1].body.from === '시스템 (default)' && received[1].body.text === 'Scheherazade(newborn)가 이 컴퓨터에 새로 생겼어')
   } finally { await new Promise(resolve => listener.close(resolve)) }
   ok('running delete refused', (await request('DELETE', '/api/profiles/work')).status === 409)
   ok('default delete refused', (await request('DELETE', '/api/profiles/default')).status === 400)
