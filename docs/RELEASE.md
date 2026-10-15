@@ -35,6 +35,9 @@ it, and what it refuses to do for you.
       `npm test -- --live` after a build.
 - [ ] Release notes drafted: `docs/release-notes-v<version>.md`. `--publish`
       requires a notes file — a release nobody can read is not a release.
+      Start from `docs/release-notes-TEMPLATE.md` and keep its headings: the
+      same file is pasted into Sera's "What's new" turn (quickbar.cjs), so it
+      is written for her to read aloud, not as a commit log (Mino 2026-10-15).
 - [ ] Commit pushed **and the tag pushed**. `gh release create` with no
       `--target` tags the remote default branch's CURRENT head, so an unpushed
       tag lands on the previous release's commit (caught live on 0.1.9). The
