@@ -141,6 +141,33 @@ follow `AGENT_DATA_HOME`.
 - `.agent-config` gains `PROFILE=<name>` (empty for default), written at creation, read
   back only to label the UI; the path is the truth, not this field.
 
+## Siblings know each other (Mino 2026-10-15 14:18, items 3/4/6)
+
+- **Awareness.** At session start (hooks/session-start or the harness context block
+  that already lists channels/schedules) the agent receives one line per sibling
+  profile: `다른 세라: <display name> (<profile>, 켜짐|꺼짐)`. When a profile is created,
+  every running sibling gets a system line "<display name>(<profile>)가 이 컴퓨터에 새로
+  생겼어" through its loopback chat channel, and the fact is written to the creator's
+  memory as an event. Default profile with no siblings: no line at all (byte-identical).
+- **Talk.** Every profile already runs a loopback chat API (`local-channel.json`: port +
+  token in its data home). Add a route `POST /api/profiles/:name/say {text}` that reads
+  the sibling's local-channel.json and posts into its `/in` with `from=<my display name>
+  (<my profile>)`; the receiving side renders it as a message from that Sera, not from
+  the user, and both sides keep it in memory. Expose it to the agent as a tool/quickbar
+  action "다른 세라에게 말하기" (name + text). A sibling that is off returns 409 with
+  "<name>은 지금 꺼져 있어". No loops: a message that originated from a sibling is never
+  auto-forwarded to another sibling.
+- **Memory settings per profile.** Settings > 메모리 shows two sections: 내 기억
+  (read/write, as today) and 다른 세라 기억 (one collapsible block per sibling, read-only,
+  search only, with the toggle 다른 세라 기억 보기 at the top). Counts and last-written
+  time per sibling come from the read-only connections already opened for search.
+- **E2E script (Mino 14:18), run on magi-win beside 클루카이 through the desktop driver
+  and each profile's loopback API:** 1) create profile `mitil` (display 미틸) with copy
+  settings; 2) ask 미틸 to pull what 클루카이 was told about Minecraft mods (shared memory
+  read); 3) ask 클루카이 whether she can see 미틸 exists (awareness); 4) 미틸 ↔ 클루카이
+  exchange one message each way (talk); 5) each writes a file and the other reads it
+  (file I/O through the agent); 6) Settings > 메모리 shows two sections.
+
 ## Deliverables for 0.5.0
 
 1. `--profile` parse + early `AGENT_DATA_HOME` / `setPath('userData')` in `main.cjs`;
