@@ -114,8 +114,14 @@ follow `AGENT_DATA_HOME`.
 
 ## Limits (say them in the UI copy, do not fight them)
 
-- Memory is not shared between profiles. A profile is a different person, not a second
-  window on the same one. A read-only shared "household" memory is a later design.
+- Memory: each profile WRITES only its own memory.db; it READS its siblings' memory.db
+  read-only when searching, and every hit carries the owning profile's name, so a
+  thing told to one Sera is known to the others as "that was told to <name>" rather
+  than retold (Mino 2026-10-15 14:11 "느슨한 격리", 14:15 "세라 = MAGI Portable": each
+  agent keeps its own journal, everyone may read the others'). Settings > 세라 프로필 has
+  a toggle "다른 세라 기억 보기", default ON; off = full isolation for people who want a
+  work Sera and a private Sera apart. Siblings are opened with SQLite read-only mode;
+  a locked or missing sibling db is skipped, never an error.
 - Two profiles cost two agent processes and two model sessions. On a weekly-metered
   login the meter is shared.
 - A profile cannot be renamed. It can be deleted (Settings > 프로필 > 삭제, confirm, both
@@ -125,7 +131,13 @@ follow `AGENT_DATA_HOME`.
 
 ## Settings
 
-- New page `프로필` under Settings (list, 열기, 새 세라 만들기, 바로가기 만들기, 삭제).
+- New page `세라 프로필` under Settings (list, 열기, 새 세라 만들기, 바로가기 만들기, 삭제).
+- 새 세라 만들기 has a checkbox "지금 세라 설정 가져오기" (default on): copies
+  DISPLAY_NAME, persona/instructions files, model and provider choice, and connection
+  settings from the current profile into the new data home. Never copies memory.db,
+  credentials (.credentials/*, bound to the other userData's crypto on Windows) or
+  channel tokens (one bot = one Sera); onboarding asks for those again.
+- Toggle "다른 세라 기억 보기" (see Limits), stored in the profile's .agent-config.
 - `.agent-config` gains `PROFILE=<name>` (empty for default), written at creation, read
   back only to label the UI; the path is the truth, not this field.
 
