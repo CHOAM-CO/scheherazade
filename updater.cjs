@@ -107,32 +107,34 @@ function initWindowsUpdater({ app, dialog, log, updater: injectedUpdater, profil
   autoUpdater.on('update-available', info => { downloadOwner = claim(info.version) })
   let promptedFor = ''
   autoUpdater.on('update-downloaded', async (info) => {
-    log(`updater: ${info.version} downloaded; installs on quit`)
-    if (!downloadOwner) { log('updater: sibling downloader owns prompt'); return }
-    if (promptedFor === info.version) return // interval re-checks must not re-nag
-    promptedFor = info.version
-    // design-0029: never offer to replace installed files under a live sibling.
-    const current = require('./data-home.cjs').resolveDataHome({ allowMem: false })
-    const siblings = profiles.listProfiles(options).filter(p => p.dataHome !== current && p.running)
-    if (siblings.length) {
-      await dialog.showMessageBox({ type: 'info', message: `Scheherazade ${info.version} 준비 완료`,
-        detail: `다른 세라 (${siblings.map(p => p.name || 'default').join(', ')})도 닫혀야 설치돼`,
-        buttons: ['나중에'], defaultId: 0, cancelId: 0 })
-      return
-    }
-    const { response } = await dialog.showMessageBox({
-      type: 'info',
-      message: `Scheherazade ${info.version} 준비 완료`,
-      detail:
-        '업데이트가 다운로드됐습니다. 지금 재시작해서 적용할까요?\n"나중에"를 선택해도 다음 종료 때 자동으로 설치됩니다.',
-      buttons: ['지금 재시작', '나중에'],
-      defaultId: 0,
-      cancelId: 1,
-    })
-    // quitAndInstall goes through app.quit(), so the before-quit handler in
-    // main.cjs still runs and the agent supervisor tree is torn down cleanly
-    // (same path as a user-initiated quit).
-    if (response === 0) autoUpdater.quitAndInstall()
+    try {
+      log(`updater: ${info.version} downloaded; installs on quit`)
+      if (!downloadOwner) { log('updater: sibling downloader owns prompt'); return }
+      if (promptedFor === info.version) return // interval re-checks must not re-nag
+      promptedFor = info.version
+      // design-0029: never offer to replace installed files under a live sibling.
+      const current = require('./data-home.cjs').resolveDataHome({ allowMem: false })
+      const siblings = profiles.listProfiles(options).filter(p => p.dataHome !== current && p.running)
+      if (siblings.length) {
+        await dialog.showMessageBox({ type: 'info', message: `Scheherazade ${info.version} 준비 완료`,
+          detail: `다른 세라 (${siblings.map(p => p.name || 'default').join(', ')})도 닫혀야 설치돼`,
+          buttons: ['나중에'], defaultId: 0, cancelId: 0 })
+        return
+      }
+      const { response } = await dialog.showMessageBox({
+        type: 'info',
+        message: `Scheherazade ${info.version} 준비 완료`,
+        detail:
+          '업데이트가 다운로드됐습니다. 지금 재시작해서 적용할까요?\n"나중에"를 선택해도 다음 종료 때 자동으로 설치됩니다.',
+        buttons: ['지금 재시작', '나중에'],
+        defaultId: 0,
+        cancelId: 1,
+      })
+      // quitAndInstall goes through app.quit(), so the before-quit handler in
+      // main.cjs still runs and the agent supervisor tree is torn down cleanly
+      // (same path as a user-initiated quit).
+      if (response === 0) autoUpdater.quitAndInstall()
+    } catch (err) { log('updater: restart prompt failed (non-fatal):', err.message) }
   })
   const check = () =>
     autoUpdater.checkForUpdates().catch((err) => {

@@ -58,12 +58,8 @@ if (PROFILE) {
 app.setPath('userData', selectedProfile.userData)
 // design-0029: browser state follows the data home, including explicit overrides.
 process.env.CHROMUX_HOME = require('node:path').join(process.env.AGENT_DATA_HOME || selectedProfile.dataHome, '.chromux')
-if (PROFILE && !require('node:fs').existsSync(selectedProfile.dataHome)) {
-  const choice = dialog.showMessageBoxSync({ type: 'question', message: `Create profile ${PROFILE}?`, buttons: ['Create', 'Cancel'], cancelId: 1 })
-  if (choice !== 0) { app.exit(0); throw new Error('Profile creation cancelled') }
-  require('node:fs').mkdirSync(selectedProfile.dataHome, { recursive: true })
-  require('node:fs').writeFileSync(require('node:path').join(selectedProfile.dataHome, '.agent-config'), `PROFILE=${PROFILE}\n`, { mode: 0o600 })
-}
+// design-0029: capture before log setup; native dialogs require Electron ready.
+const needsProfileCreation = !!PROFILE && !require('node:fs').existsSync(selectedProfile.dataHome)
 
 const { spawn } = require('node:child_process')
 // One process-control seam for all three platforms (design-0023 P3):
@@ -167,7 +163,7 @@ const { killOllamaDaemon } = require('./onboarding/ollama-daemon.cjs') // ensure
 // Sink dir is handed over here rather than computed in the module — see
 // log-buffer.cjs's own header on the require-cycle this avoids.
 const logBuffer = require('./onboarding/log-buffer.cjs')
-logBuffer.initSink(path.join(DATA_HOME, 'logs'))
+if (!needsProfileCreation) logBuffer.initSink(path.join(DATA_HOME, 'logs'))
 const { buildProviderEnv, resolveChatgptProxyPort, refreshClaudeCliToken, readClaudeCliToken, unwrapOAuthKey, CLAUDE_CLI_PROVIDER_ID, routeClassOf, credentialClassOf, decideRouteChange, ROUTE_PROXY_DUMMY_KEY } = require('./provider-env.cjs')
 const { probeUserFolders } = require('./tcc-probe.cjs')
 
@@ -2744,6 +2740,14 @@ const agentControls = {
 // ── boot sequence ────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
   try {
+    // design-0029: offer creation before onboarding seeds any profile files.
+    if (needsProfileCreation) {
+      const { response } = await dialog.showMessageBox({ type: 'question', message: `Create profile ${PROFILE}?`, buttons: ['Create', 'Cancel'], cancelId: 1 })
+      if (response !== 0) { app.quit(); return }
+      fs.mkdirSync(selectedProfile.dataHome, { recursive: true })
+      fs.writeFileSync(path.join(selectedProfile.dataHome, '.agent-config'), `PROFILE=${PROFILE}\n`, { flag: 'wx', mode: 0o600 })
+      logBuffer.initSink(path.join(DATA_HOME, 'logs'))
+    }
     // TCC folder-permission trigger (the owner directive, 2026-07-05): actually
     // touch Documents/Downloads/Desktop on this very first post-ready tick,
     // BEFORE the onboarding window even opens, so macOS's native TCC prompts
