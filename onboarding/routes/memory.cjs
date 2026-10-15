@@ -22,6 +22,14 @@ function createRoutes(staticCtx) {
   } = staticCtx
   return [
     {
+      method: 'GET', match: p => p === '/api/memory/siblings',
+      handler: async (req, res) => {
+        const service = await getMemoryService()
+        const url = new URL(req.url, 'http://localhost')
+        sendJson(res, 200, { ok: true, siblings: service.siblingMemory({ search: url.searchParams.get('search') || '' }) })
+      },
+    },
+    {
       method: 'POST', match: p => p === '/api/memory/ai-import',
       handler: async (req, res) => {
         try {

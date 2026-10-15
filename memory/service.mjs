@@ -1,4 +1,5 @@
 import { createSharedMemory, mergeShared } from './shared.mjs'
+import siblingProfiles from '../sibling-profiles.cjs'
 import candidateParser from './import-candidates.cjs'
 import { createHash } from 'node:crypto'
 // memory/service.mjs — the memory DATA LAYER (issue #9, PR-1).
@@ -1085,6 +1086,17 @@ function close() {
 
 function write(args) { return memoryWrite(ensureDb(), args) }
 const readSiblings = createSharedMemory({ dataHome: DATA_HOME, log })
+function siblingMemory({ search = '' } = {}) {
+  const needle = String(search).trim().toLowerCase()
+  try { if (/^SHARED_MEMORY_READ=(?:0|false|off)\s*$/mi.test(fs.readFileSync(path.join(DATA_HOME, '.agent-config'), 'utf8'))) return [] } catch {}
+  const found = readSiblings(db => {
+    const tables = ['user_facts', 'open_threads', 'corrections', 'preferences', 'journal_entries']
+    const rows = tables.flatMap(table => db.prepare(`SELECT * FROM ${table}`).all().map(row => ({ ...row, table })))
+    const dates = rows.flatMap(row => ['updated_at', 'created_at', 'last_touched_at', 'corrected_at', 'last_confirmed_at', 'written_at'].map(key => row[key]).filter(Boolean))
+    return { count: rows.length, lastWritten: dates.sort().at(-1) || null, rows: needle ? rows.filter(row => JSON.stringify(row).toLowerCase().includes(needle)).slice(0, 100) : [] }
+  })
+  return siblingProfiles.discover(DATA_HOME).map(p => found.find(row => row.profile === p.folder) || { name: siblingProfiles.displayName(p.dataHome), profile: p.folder, material: { count: 0, lastWritten: null, rows: [] } })
+}
 function query(args) { return mergeShared(memoryQuery(ensureDb(), args), readSiblings(db => memoryQuery(db, args))) }
 function confirm(args) { return memoryConfirm(ensureDb(), args) }
 function remove(args) { return memoryDelete(ensureDb(), args) }
@@ -1217,6 +1229,7 @@ function resolveImport({ id, decision } = {}, db = ensureDb()) {
 }
 
 export {
+  siblingMemory,
   stageImport, importMemoryFile, listPendingImports, resolveImport,
   // shared constants + verify helpers
   DDL,

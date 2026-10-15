@@ -46,6 +46,8 @@ assert.equal(read(query)[0].material.rows.length, 1)
 db.exec('ROLLBACK')
 const material = { open_threads: [], user_facts: [{ id: 1, subject: 'user', predicate: 'likes', value: 'tea', owner_display_name: 'Worker' }], corrections: [], preferences: [] }
 assert.match(prependMemoryContext('tea', {}, { recall: () => material }), /\[told to Worker\] user likes: tea/)
+assert.equal(prependMemoryContext('unchanged', {}, { recall: () => ({ open_threads: [], user_facts: [], corrections: [] }), awareness: () => [] }), 'unchanged')
+assert.equal(prependMemoryContext('hello', {}, { recall: () => ({ open_threads: [], user_facts: [], corrections: [] }), awareness: () => ['다른 세라: Worker (work, 꺼짐)'] }), '다른 세라: Worker (work, 꺼짐)\nhello')
 db.close()
 fs.rmSync(root, { recursive: true, force: true })
 console.log('test-memory-shared: shared-read assertions passed (no siblings, provenance, own tie, cache, toggle spy, locked, WAL writer, prompt)')

@@ -5,6 +5,7 @@ const path = require('node:path')
 const os = require('node:os')
 const { spawn } = require('node:child_process')
 const profiles = require('../../profile.cjs')
+const siblings = require('../../sibling-profiles.cjs')
 function createRoutes(ctx) {
   const { sendJson, readJsonBody, getElectron } = ctx
   const home = ctx.profileHome || os.homedir()
@@ -28,6 +29,12 @@ function createRoutes(ctx) {
   const readConfig = () => { try { return fs.readFileSync(configFile, 'utf8') } catch { return '' } }
   const sharedEnabled = () => !/^SHARED_MEMORY_READ=(?:0|false|off)\s*$/mi.test(readConfig())
   return [
+    route('POST', p => p.match(/^\/api\/profiles\/([^/]+)\/say$/), async (req, res, m) => {
+      const { text } = await readJsonBody(req)
+      const result = await siblings.say(ctx.DATA_HOME, decodeURIComponent(m[1]), text)
+      if (ctx.getMemoryService) (await ctx.getMemoryService()).journalWrite({ body: `[다른 세라에게 말하기: ${decodeURIComponent(m[1])}] ${text}` })
+      sendJson(res, 200, result)
+    }),
     route('GET', p => p === '/api/profiles/settings', async (req, res) => sendJson(res, 200, { ok: true, sharedMemoryRead: sharedEnabled() })),
     route('POST', p => p === '/api/profiles/settings', async (req, res) => {
       const { sharedMemoryRead } = await readJsonBody(req)
@@ -50,7 +57,14 @@ function createRoutes(ctx) {
       fs.mkdirSync(p.dataHome)
       fs.mkdirSync(p.userData, { recursive: true })
       require('../profile-settings.cjs').copySettings(ctx.DATA_HOME, p.dataHome, name, copyFrom)
-      sendJson(res, 200, { ok: true, profile: list().find(p => p.name === name) })
+      const created = list().find(p => p.name === name)
+      const text = `${created.displayName}(${name})가 이 컴퓨터에 새로 생겼어`
+      await Promise.all(list().filter(p => p.name !== name && p.running).map(p => siblings.post(p, { text, from: '시스템', sibling: true }).catch(() => {})))
+      if (ctx.getMemoryService) {
+        const service = await ctx.getMemoryService()
+        service.journalWrite({ body: text })
+      }
+      sendJson(res, 200, { ok: true, profile: created })
     }),
     route('POST', p => p.match(/^\/api\/profiles\/([^/]+)\/(open|shortcut)$/), async (req, res, m) => {
       const p = lookup(m[1])

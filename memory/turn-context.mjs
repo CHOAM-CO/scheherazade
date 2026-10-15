@@ -1,8 +1,10 @@
 // Read-only, per-turn context. Never persisted into the visible transcript.
 import { recallMaterial } from './service.mjs'
+import siblings from '../sibling-profiles.cjs'
+import { resolveDataHome } from '../data-home.cjs'
 const tag = (row, text) => row.owner_display_name ? `[told to ${row.owner_display_name}] ${text}` : text
 let warned = false
-export function prependMemoryContext(content, meta = {}, { recall = recallMaterial, essentials, log = console.error } = {}) {
+function prependStoredMemoryContext(content, meta = {}, { recall = recallMaterial, essentials, log = console.error } = {}) {
   if (typeof content !== 'string' || meta.sender === 'SYSTEM' || content.startsWith('[remembered-context]')) return content
   try {
     const material = recall({ topic: content })
@@ -28,4 +30,15 @@ export function prependMemoryContext(content, meta = {}, { recall = recallMateri
     if (!warned) { warned = true; log(`[memory-context] skipped: ${err.message}`) }
     return content
   }
+}
+
+// Headless harnesses do not all execute Claude's SessionStart hooks.
+// Discovery alone is read-only; a solitary default keeps the exact old bytes.
+export function prependMemoryContext(content, meta = {}, options = {}) {
+  const remembered = prependStoredMemoryContext(content, meta, options)
+  if (typeof content !== 'string' || meta.sender === 'SYSTEM' || content.startsWith('[remembered-context]')) return remembered
+  try {
+    const lines = options.awareness ? options.awareness() : siblings.awareness(resolveDataHome({ allowMem: false }))
+    return lines.length ? lines.join('\n') + '\n' + remembered : remembered
+  } catch { return remembered }
 }

@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import http from 'node:http'
+import siblings from '../sibling-profiles.cjs'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -10,7 +12,8 @@ const dataHome = path.join(home, 'Documents', 'Scheherazade')
 fs.mkdirSync(dataHome, { recursive: true })
 const trashed = []
 const spawned = []
-const ctx = { profileHome: home, DATA_HOME: dataHome,
+const memoryEvents = []
+const ctx = { getMemoryService: async () => ({ journalWrite: event => memoryEvents.push(event) }), profileHome: home, DATA_HOME: dataHome,
   profileLiveness: { readCommandLine: () => `${path.resolve('supervisor.mjs')} __loop --profile work`, listCommands: () => [] },
   getElectron: () => ({ app: { isPackaged: true, getPath: () => appData }, shell: { trashItem: async p => { trashed.push(p); fs.renameSync(p, `${p}.trashed`) } } }),
   profileSpawn: (executable, args, options) => {
@@ -32,6 +35,7 @@ async function request(method, url, body) {
 let pass = 0
 function ok(label, condition) { assert.ok(condition, label); pass++; console.log(`ok ${label}`) }
 try {
+  ok('awareness absent alone', siblings.awareness(dataHome).length === 0)
   fs.writeFileSync(path.join(dataHome, '.agent-config'), 'DISPLAY_NAME=Original\nMODEL=example\nDISCORD_TOKEN=secret\n')
   fs.writeFileSync(path.join(dataHome, '.env'), 'CONNECTION_URL=http://local\nAPI_KEY=secret\nPASSWORD=secret\n')
   fs.writeFileSync(path.join(dataHome, 'self_persona.md'), 'persona')
@@ -75,6 +79,29 @@ try {
   fs.writeFileSync(path.join(named, '.agent.pid'), String(process.pid))
   const list = (await request('GET', '/api/profiles')).body
   ok('display label and live pid', list.current === '' && list.profiles.find(p => p.name === 'work').displayName === 'Worker' && list.profiles.find(p => p.name === 'work').running)
+  ok('awareness labels sibling', siblings.awareness(dataHome, ctx.profileLiveness).some(line => line === '다른 세라: Worker (work, 켜짐)'))
+  ok('default is sibling of named', siblings.awareness(named).some(line => line.includes('(default, 꺼짐)')))
+  ok('say self rejected', (await request('POST', '/api/profiles/default/say', { text: 'hi' })).status === 400)
+  ok('say empty rejected', (await request('POST', '/api/profiles/work/say', { text: '  ' })).status === 400)
+  ok('say unknown', (await request('POST', '/api/profiles/missing/say', { text: 'hi' })).status === 404)
+  const off = await request('POST', '/api/profiles/work/say', { text: 'hi' })
+  ok('say off', off.status === 409 && off.body.error === 'profile_off')
+  const received = []
+  const listener = http.createServer(async (req, res) => {
+    let body = ''; for await (const chunk of req) body += chunk
+    received.push({ url: req.url, auth: req.headers.authorization, body: JSON.parse(body) })
+    res.writeHead(202); res.end('{}')
+  })
+  await new Promise(resolve => listener.listen(0, '127.0.0.1', resolve))
+  try {
+    fs.writeFileSync(path.join(named, 'local-channel.json'), JSON.stringify({ port: listener.address().port, token: 'sibling-test' }))
+    ok('say delivered', (await request('POST', '/api/profiles/work/say', { text: 'hello sibling' })).status === 200)
+    ok('say tags sender and origin', received[0].url === '/in' && received[0].auth === 'Bearer sibling-test' && received[0].body.from === 'Scheherazade (default)' && received[0].body.sibling === true && received[0].body.text === 'hello sibling')
+    await request('POST', '/api/profiles', { name: 'newborn', copyFrom: false })
+    ok('creator records profile creation', memoryEvents.at(-1).body === 'Scheherazade(newborn)가 이 컴퓨터에 새로 생겼어')
+    ok('sender records talk', memoryEvents.some(event => event.body === '[다른 세라에게 말하기: work] hello sibling'))
+    ok('create notifies running sibling once', received.length === 2 && received[1].body.from === '시스템' && received[1].body.text === 'Scheherazade(newborn)가 이 컴퓨터에 새로 생겼어')
+  } finally { await new Promise(resolve => listener.close(resolve)) }
   ok('running delete refused', (await request('DELETE', '/api/profiles/work')).status === 409)
   ok('default delete refused', (await request('DELETE', '/api/profiles/default')).status === 400)
   fs.writeFileSync(path.join(named, '.agent.pid'), '999999999')

@@ -10,6 +10,7 @@
       "mcp__agent-channel__reply",
       "mcp__agent-channel__send_file_to_discord",
       "mcp__agent-channel__read_channel_history",
+      "mcp__agent-channel__profile_say",
       "mcp__agent-channel__react",
       "mcp__agent-channel__routine",
       "mcp__memory__memory_write",

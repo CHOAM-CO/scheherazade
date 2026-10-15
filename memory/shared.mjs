@@ -1,18 +1,16 @@
 // Read-only sibling access, deliberately independent of profile process discovery.
 import fs from 'node:fs'
 import path from 'node:path'
+import siblings from '../sibling-profiles.cjs'
 import { DatabaseSync } from 'node:sqlite'
 export function createSharedMemory({ dataHome, open = file => new DatabaseSync(file, { readOnly: true }), log = console.error }) {
   const cache = new Map()
   return function readSiblings(read) {
     try { if (/^SHARED_MEMORY_READ=(?:0|false|off)\s*$/mi.test(fs.readFileSync(path.join(dataHome, '.agent-config'), 'utf8'))) return [] } catch {}
-    let entries
-    try { entries = fs.readdirSync(path.dirname(dataHome)) } catch { return [] }
     const results = []
-    for (const folder of entries.sort()) {
-      if (!folder.startsWith('Scheherazade')) continue
-      const home = path.join(path.dirname(dataHome), folder)
-      if (path.resolve(home) === path.resolve(dataHome)) continue
+    for (const sibling of siblings.discover(dataHome)) {
+      const home = sibling.dataHome
+      const folder = sibling.folder
       const file = path.join(home, 'memory.db')
       if (!fs.existsSync(file)) continue
       try {

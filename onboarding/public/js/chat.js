@@ -448,7 +448,13 @@
     // no "You" -- the picture is the one mark, and the asymmetry still does
     // the rest. createElement, never innerHTML. A picture that fails to load
     // hides its row instead of showing a broken-image icon (no fallback).
-    if (role === 'user' && lastRenderedRole !== 'user') {
+    if (role === 'user' && m.sibling) {
+      const label = document.createElement('div')
+      label.className = 'chat-meta'
+      label.textContent = m.from
+      pane.appendChild(label)
+    }
+    if (role === 'user' && !m.sibling && lastRenderedRole !== 'user') {
       const meta = document.createElement('div')
       meta.className = 'chat-meta chat-meta-user'
       meta.hidden = true // until the user slot resolves to a picture (or a time is present)

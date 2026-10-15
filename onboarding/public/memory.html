@@ -21,6 +21,7 @@
       </div>
       <p class="subtitle" id="m-subtitle"></p>
 
+      <h2 id="own-memory-title">내 기억</h2>
       <section class="category" aria-labelledby="ai-import-title">
         <h2 id="ai-import-title"></h2>
         <p id="ai-import-intro"></p>
@@ -62,6 +63,12 @@
           <div id="reader-body"></div>
         </section>
       </div>
+      <section class="category" id="sibling-memory" aria-labelledby="sibling-memory-title">
+        <h2 id="sibling-memory-title">다른 세라 기억</h2>
+        <label><input type="checkbox" id="sibling-memory-toggle" role="switch" checked>다른 세라 기억 보기</label>
+        <p>읽기 전용 · 검색만 가능</p>
+        <div id="sibling-memory-blocks"></div>
+      </section>
     </div>
 
     <div class="dialog-backdrop hidden" id="m-dialog">
@@ -80,5 +87,6 @@
     <script src="/js/nav.js"></script>
     <script src="/js/markdown.js"></script>
     <script src="/js/memory.js"></script>
+    <script src="/js/sibling-memory.js"></script>
   </body>
 </html>

@@ -257,6 +257,7 @@ try {
 } catch { /* fail open */ }
 
 const out = []
+try { out.push(...createRequire(import.meta.url)('../sibling-profiles.cjs').awareness(MEM)) } catch {}
 try {
   const config = fs.readFileSync(path.join(MEM, '.agent-config'), 'utf8')
   const field = (key) => {

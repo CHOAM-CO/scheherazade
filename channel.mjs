@@ -40,7 +40,7 @@ import {
 // routed to its handleToolCall deterministically (no model judgment beyond
 // echoing back the channelId it was handed, which is the existing contract).
 import {
-  LOCAL_CHANNEL_ID, handleToolCall as handleLocalToolCall, startLocalChatSurface,
+  LOCAL_CHANNEL_ID, handleToolCall as handleLocalToolCall, startLocalChatSurface, siblingTools,
 } from './channel-local.mjs'
 import { localDate } from './local-date.cjs'
 
@@ -327,6 +327,7 @@ const LOCAL_ROUTED_TOOLS = new Set(['reply', 'send_file_to_discord', 'read_chann
 // `surface` defaults to the live module state; passed explicitly only by unit
 // tests (the decision is otherwise pure given name/args/surface).
 function isLocalCall(name, args, surface = lastInboundSurface) {
+  if (name === 'profile_say') return true
   if (!LOCAL_ROUTED_TOOLS.has(name)) return false
   if (name === 'react') return true
   // An EXPLICIT channelId is honored exactly, as before: 'in-app' -> local,
@@ -358,7 +359,7 @@ const notifyInbound = createInboundNotifier({
   log,
 })
 
-mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
+mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...TOOLS, ...siblingTools()] }))
 
 const companionForward = createCompanionForwarder({ dataHome: DATA_HOME, ownBackend: 'discord', backendForChannelId: (id) => channelBackendsLib.backendForChannelId(id), log })
 const toolHandler = async (req) => {
@@ -907,7 +908,7 @@ async function boot() {
     // Every in-app inbound (a /in message OR a user reaction) flows through
     // this one notify callback -- mark the surface here so an omitted-channelId
     // reply routes back to the chat window (H1 surface tracking).
-    if (!IS_COMPANION) localSurface = await startLocalChatSurface({ notify: (n) => { lastInboundSurface = 'in-app'; return notifyInbound(n.params) }, log })
+    if (!IS_COMPANION) localSurface = await startLocalChatSurface({ notify: (n) => { lastInboundSurface = 'in-app'; if (n.params.meta?.sibling && n.params.meta.sender === 'SYSTEM') void mcp.sendToolListChanged().catch(() => {}); return notifyInbound(n.params) }, log })
   } catch (err) {
     log(`in-app chat surface failed to start (chat page off this session): ${err.message}`)
   }

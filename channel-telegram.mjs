@@ -41,7 +41,7 @@ import {
 // Always-on in-app chat (2026-08-05): hosted alongside Telegram; import is
 // side-effect-safe (isMainModule guard) -- full rationale in channel.mjs.
 import {
-  LOCAL_CHANNEL_ID, handleToolCall as handleLocalToolCall, startLocalChatSurface,
+  LOCAL_CHANNEL_ID, handleToolCall as handleLocalToolCall, startLocalChatSurface, siblingTools,
 } from './channel-local.mjs'
 
 // ── stdout hygiene (channel-runtime) ───────────────────────────────────────
@@ -406,6 +406,7 @@ const TOOLS = [
 // channelId; react has no other valid surface.
 const LOCAL_ROUTED_TOOLS = new Set(['reply', 'send_file_to_discord', 'read_channel_history', 'react'])
 function isLocalCall(name, args, surface = lastInboundSurface) {
+  if (name === 'profile_say') return true
   if (!LOCAL_ROUTED_TOOLS.has(name)) return false
   if (name === 'react') return true
   // Explicit channelId honored exactly ('in-app' -> local, else platform);
@@ -470,7 +471,7 @@ const notifyInbound = createInboundNotifier({
   log,
 })
 
-mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
+mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...TOOLS, ...siblingTools()] }))
 
 const companionForward = createCompanionForwarder({ dataHome: DATA_HOME, ownBackend: 'telegram', backendForChannelId: (id) => channelBackendsLib.backendForChannelId(id), log })
 const toolHandler = async (req) => {
@@ -776,7 +777,7 @@ async function boot() {
   // Always-on in-app chat surface, fail-soft (see channel.mjs's twin block).
   let localSurface = null
   try {
-    if (!IS_COMPANION) localSurface = await startLocalChatSurface({ notify: (n) => { lastInboundSurface = 'in-app'; return notifyInbound(n.params) }, log })
+    if (!IS_COMPANION) localSurface = await startLocalChatSurface({ notify: (n) => { lastInboundSurface = 'in-app'; if (n.params.meta?.sibling && n.params.meta.sender === 'SYSTEM') void mcp.sendToolListChanged().catch(() => {}); return notifyInbound(n.params) }, log })
   } catch (err) {
     log(`in-app chat surface failed to start (chat page off this session): ${err.message}`)
   }

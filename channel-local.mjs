@@ -1,3 +1,4 @@
+import siblings from './sibling-profiles.cjs'
 // channel-local.mjs — in-app chat counterpart to channel.mjs (the Discord MCP
 // channel). Same contract, same tool names, same notification method; the only
 // thing that changes is the wire: instead of a Discord gateway there is a
@@ -191,6 +192,7 @@ export async function enableTranscriptPersistence({ dataHome = DATA_HOME } = {})
       // mid-write generation may carry seq older than its own tail item.
       seq = Math.max(raw.seq, ...queue.map((m) => m.seq), 0)
       restored = queue.length
+      siblingTurn = [...queue].reverse().find(m => m.role === 'user')?.sibling === true
     }
   } catch { /* first run, or corrupt: empty transcript beats a dead channel */ }
   // design-0025: the mid-flight kill the previous life never got to record in
@@ -333,7 +335,7 @@ export function enqueueOutbound(text, { now = () => Date.now() } = {}) {
 
 // Called ONLY after deliverInbound resolves: a message the agent never
 // received must not appear in the transcript as if it had been.
-export function enqueueInbound(text, { now = () => Date.now() } = {}) {
+export function enqueueInbound(text, { now = () => Date.now(), from, sibling = false } = {}) {
   // A new question closes the window the flag lives in. A read that never got
   // its reply (a mute turn, a background turn that ended silently) would
   // otherwise sit armed and stamp a mark on an answer written from thin air
@@ -341,7 +343,7 @@ export function enqueueInbound(text, { now = () => Date.now() } = {}) {
   // The read happens after the inbound is enqueued, so the turn that did the
   // reading is untouched by this.
   memoryReadPending = false
-  return enqueue('user', text, now)
+  return enqueue('user', text, now, sibling ? { from, sibling: true } : null)
 }
 
 // A reaction is a transcript item too -- `text` mirrors the emoji so any
@@ -507,6 +509,9 @@ const mcp = new Server(
   { capabilities: { experimental: { 'claude/channel': {}, 'claude/channel/permission': {} }, tools: {} }, instructions: INSTRUCTIONS },
 )
 
+let siblingTurn = false
+const PROFILE_SAY_TOOL = { name: 'profile_say', description: '다른 세라에게 말하기. name은 프로필 이름, text는 메시지. 다른 세라에게서 온 메시지는 자동 전달하지 않기. 형제 세라 메시지를 받은 턴에는 사용 불가', inputSchema: { type: 'object', properties: { name: { type: 'string' }, text: { type: 'string' } }, required: ['name', 'text'], additionalProperties: false } }
+export function siblingTools() { return siblings.discover(DATA_HOME).length ? [PROFILE_SAY_TOOL] : [] }
 const TOOLS = [
   {
     name: 'reply',
@@ -592,7 +597,7 @@ const notifyInbound = createInboundNotifier({
 // createLaneInterrupter.
 const interruptLane = createLaneInterrupter({ dataHome: DATA_HOME, log })
 
-mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
+mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...TOOLS, ...siblingTools()] }))
 
 // Exported so tests exercise the real tool logic without connecting a
 // transport; the MCP handler below is a thin shell around this.
@@ -602,6 +607,15 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
 const checkOutboundDup = createOutboundDedup({ log })
 
 export async function handleToolCall(name, args) {
+  if (name === 'profile_say') {
+    try {
+      if (siblingTurn) throw Error('다른 세라에게서 온 메시지는 자동 전달하지 않기')
+      try { await siblings.say(DATA_HOME, args?.name, args?.text) } catch (error) { if (error.message === 'profile_off') throw Error(`${args?.name}은 지금 꺼져 있어`); throw error }
+      const memory = await import('./memory/service.mjs')
+      memory.journalWrite({ body: `[다른 세라에게 말하기: ${args.name}] ${args.text}` })
+      return { content: [{ type: 'text', text: '보냈어' }] }
+    } catch (error) { return { content: [{ type: 'text', text: error.message }], isError: true } }
+  }
   if (name === 'reply') {
     const text = args && args.text
     if (typeof text !== 'string' || text.trim() === '') {
@@ -706,13 +720,13 @@ export async function handleToolCall(name, args) {
 mcp.setRequestHandler(CallToolRequestSchema, async (req) => handleToolCall(req.params.name, req.params.arguments))
 
 // ── inbound: HTTP -> notification ─────────────────────────────────────────
-export async function deliverInbound(text, { notify, now = localNow } = {}) {
+export async function deliverInbound(text, { notify, now = localNow, from, sibling = false } = {}) {
   const content = String(text || '').trim() || '[empty message]'
   await notify({
     method: 'notifications/claude/channel',
     params: {
-      content,
-      meta: { sender: 'user', channelId: LOCAL_CHANNEL_ID, authorId: 'local-user', timestamp: now() },
+      content: sibling ? `[다른 세라 메시지: ${from}]\n자동으로 다른 세라에게 전달하지 않기\n${content}` : content,
+      meta: { sender: sibling ? (from === '시스템' ? 'SYSTEM' : from) : 'user', channelId: LOCAL_CHANNEL_ID, authorId: sibling ? 'sibling-profile' : 'local-user', timestamp: now(), ...(sibling ? { sibling: true } : {}) },
     },
   })
   return content
@@ -821,13 +835,20 @@ export function createRequestHandler({ notify, token, onInbound = () => {}, inte
         try { parsed = JSON.parse(body || '{}') } catch { return send(400, { error: 'bad json' }) }
         const text = parsed && parsed.text
         if (typeof text !== 'string' || !text.trim()) return send(400, { error: 'text required' })
-        const delivered = await deliverInbound(text, { notify })
+        const sibling = parsed.sibling === true && typeof parsed.from === 'string'
+        const delivered = await deliverInbound(text, { notify, sibling, from: parsed.from })
+        siblingTurn = sibling
+        if (sibling && parsed.from === '시스템') { try { await mcp.sendToolListChanged() } catch {} }
+        if (sibling) {
+          const memory = await import('./memory/service.mjs')
+          memory.journalWrite({ body: `[${parsed.from}] ${text}` })
+        }
         // Into the transcript only AFTER the notification resolved -- and as
         // `delivered` (the normalized content), so the record shows exactly
         // what the agent was handed. A failed deliverInbound throws past
         // this line: the client gets its error and keeps the input text, and
         // the transcript never claims a delivery that didn't happen.
-        enqueueInbound(delivered)
+        enqueueInbound(delivered, { from: parsed.from, sibling })
         // Durability parity with the reply path (handleToolCall, 5b024ba):
         // enqueueInbound only puts the item in memory and kicks a fire-and-
         // forget flush. Returning 202 at that point ACKed the user's message
