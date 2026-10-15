@@ -14,7 +14,7 @@ function createRoutes(ctx) {
   const list = () => profiles.listProfiles(options())
   const route = (method, match, handler) => ({ method, match, handler: async (req, res, callCtx, m) => {
     try { await handler(req, res, m) }
-    catch (e) { sendJson(res, e.status || 400, { ok: false, ...(e.code ? { code: e.code } : {}), error: e.message }) }
+    catch (e) { sendJson(res, e.status || 400, { ok: false, ...(e.code ? { code: e.code } : {}), ...(e.validNames ? { validNames: e.validNames } : {}), ...(e.matches ? { matches: e.matches } : {}), error: e.message }) }
   } })
   const fail = (message, status = 400) => { const e = new Error(message); e.status = status; throw e }
   const lookup = raw => {

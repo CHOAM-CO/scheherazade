@@ -100,9 +100,16 @@ try {
   ok('default is sibling of named', siblings.awareness(named).some(line => line.includes('(default, 꺼짐)')))
   ok('say self rejected', (await request('POST', '/api/profiles/default/say', { text: 'hi' })).status === 400)
   ok('say empty rejected', (await request('POST', '/api/profiles/work/say', { text: '  ' })).status === 400)
-  ok('say unknown', (await request('POST', '/api/profiles/missing/say', { text: 'hi' })).status === 404)
+  const missing = await request('POST', '/api/profiles/missing/say', { text: 'hi' })
+  ok('say unknown includes valid names', missing.status === 404 && missing.body.validNames.includes('work') && missing.body.error.includes('work'))
   const off = await request('POST', '/api/profiles/work/say', { text: 'hi' })
-  ok('say off', off.status === 409 && off.body.code === 'profile_off' && off.body.error === 'Worker은 지금 꺼져 있어')
+  ok('say off', off.status === 409 && off.body.code === 'profile_off' && off.body.error.startsWith('Worker은 지금 꺼져 있어') && off.body.validNames.includes('work'))
+  const displayOff = await request('POST', '/api/profiles/wOrKeR/say', { text: 'hi' })
+  ok('display alias resolves case-insensitively', displayOff.status === 409 && displayOff.body.code === 'profile_off')
+  fs.writeFileSync(path.join(isolated.body.profile.dataHome, '.agent-config'), 'PROFILE=isolated\nDISPLAY_NAME=WORKER\n')
+  const ambiguous = await request('POST', '/api/profiles/worker/say', { text: 'hi' })
+  ok('display ambiguity includes matching names', ambiguous.status === 400 && ambiguous.body.matches.includes('work') && ambiguous.body.matches.includes('isolated') && ambiguous.body.validNames.includes('work'))
+  fs.writeFileSync(path.join(isolated.body.profile.dataHome, '.agent-config'), 'PROFILE=isolated\n')
   const received = []
   const listener = http.createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk
@@ -118,6 +125,7 @@ try {
     ok('creator records profile creation', memoryEvents.at(-1).body === 'Scheherazade(newborn)가 이 컴퓨터에 새로 생겼어')
     ok('sender records talk', memoryEvents.some(event => event.body === '[다른 세라에게 말하기: work] hello sibling'))
     ok('create notifies running sibling once', received.length === 2 && received[1].body.notice === true && received[1].body.from === '시스템 (default)' && received[1].body.text === 'Scheherazade(newborn)가 이 컴퓨터에 새로 생겼어')
+    ok('display alias route delivers', (await request('POST', '/api/profiles/worker/say', { text: 'display route' })).status === 200 && received.at(-1).body.text === 'display route')
   } finally { await new Promise(resolve => listener.close(resolve)) }
   ok('running delete refused', (await request('DELETE', '/api/profiles/work')).status === 409)
   ok('default delete refused', (await request('DELETE', '/api/profiles/default')).status === 400)

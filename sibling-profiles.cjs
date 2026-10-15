@@ -13,9 +13,10 @@ function discover(dataHome) {
     try { const config = fs.readFileSync(path.join(p.dataHome, '.agent-config'), 'utf8'); return !p.name || config.match(/^PROFILE=(.*)$/m)?.[1]?.trim().replace(/^(['"])(.*)\1$/, '$2') === p.name } catch { return false }
   }).sort((a, b) => a.name.localeCompare(b.name))
 }
-function displayName(home) {
-  try { return fs.readFileSync(path.join(home, '.agent-config'), 'utf8').match(/^DISPLAY_NAME=(.*)$/m)?.[1]?.trim().replace(/^(['"])(.*)\1$/, '$2') || 'Scheherazade' } catch { return 'Scheherazade' }
+function configuredDisplayName(home) {
+  try { return fs.readFileSync(path.join(home, '.agent-config'), 'utf8').match(/^DISPLAY_NAME=(.*)$/m)?.[1]?.trim().replace(/^(['"])(.*)\1$/, '$2') || '' } catch { return '' }
 }
+function displayName(home) { return configuredDisplayName(home) || 'Scheherazade' }
 const liveCache = new Map()
 function cachedAlive(p, liveness) {
   const old = liveCache.get(p.dataHome)
@@ -72,14 +73,32 @@ async function post(p, payload) {
     throw Object.assign(failure(`${displayName(p.dataHome) || p.name}은 지금 꺼져 있어`, 409), { code: 'profile_off' })
   }
 }
-async function say(dataHome, name, text) {
-  if (typeof text !== 'string' || !text.trim()) throw failure('text required', 400)
-  if (name === (profiles.profileFromHome(dataHome) || 'default')) throw failure('self', 400)
-  if (name !== 'default') { try { profiles.validateName(name) } catch { throw failure('Invalid profile name', 400) } }
-  const p = discover(dataHome).find(p => (p.name || 'default') === name)
-  if (!p) throw failure('Profile not found', 404)
-  const from = senderLabel(displayName(dataHome), profiles.profileFromHome(dataHome))
-  await post(p, { text: text.trim(), from, sibling: true, hop: nextHop(dataHome) })
-  return { ok: true }
+function describe(dataHome) {
+  return discover(dataHome).map(p => ({ name: p.name || 'default', displayName: displayName(p.dataHome), running: cachedAlive(p, {}) }))
 }
-module.exports = { discover, displayName, awareness, post, say, nextHop, receiveHop, resetHops, senderLabel }
+async function say(dataHome, name, text) {
+  const available = discover(dataHome)
+  const validNames = available.map(p => p.name || 'default')
+  try {
+    if (typeof text !== 'string' || !text.trim()) throw failure('text required', 400)
+    if (typeof name !== 'string' || !name.trim()) throw failure('name required', 400)
+    const requested = name.trim()
+    if (requested === (profiles.profileFromHome(dataHome) || 'default')) throw failure('self', 400)
+    // Resolve only against discovered siblings; user input never becomes a path.
+    let p = available.find(p => (p.name || 'default') === requested)
+    if (!p) {
+      const matches = available.filter(p => configuredDisplayName(p.dataHome).toLowerCase() === requested.toLowerCase())
+      if (matches.length > 1) throw Object.assign(failure(`이름이 겹쳐. 프로필 이름으로 골라 줘: ${matches.map(p => p.name || 'default').join(', ')}`, 400), { code: 'ambiguous_profile', matches: matches.map(p => p.name || 'default') })
+      p = matches[0]
+    }
+    if (!p) throw failure('Profile not found', 404)
+    const from = senderLabel(displayName(dataHome), profiles.profileFromHome(dataHome))
+    await post(p, { text: text.trim(), from, sibling: true, hop: nextHop(dataHome) })
+    return { ok: true }
+  } catch (error) {
+    error.validNames = validNames
+    if ([404, 409].includes(error.status)) error.message += ` (사용 가능한 name: ${validNames.join(', ') || '없음'})`
+    throw error
+  }
+}
+module.exports = { discover, displayName, awareness, post, say, nextHop, receiveHop, resetHops, senderLabel, describe }

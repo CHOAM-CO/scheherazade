@@ -509,7 +509,12 @@ const mcp = new Server(
 )
 
 const PROFILE_SAY_TOOL = { name: 'profile_say', description: '다른 세라에게 말하기. name은 프로필 이름, text는 메시지. 다른 세라에게서 온 메시지는 자동 전달하지 않기. 자동 대화는 최대 2홉까지 허용', inputSchema: { type: 'object', properties: { name: { type: 'string' }, text: { type: 'string' } }, required: ['name', 'text'], additionalProperties: false } }
-export function siblingTools() { return siblings.discover(DATA_HOME).length ? [PROFILE_SAY_TOOL] : [] }
+export function siblingTools(dataHome = DATA_HOME) {
+  const available = siblings.describe(dataHome)
+  if (!available.length) return []
+  const targets = available.map(p => `${p.name} (${p.displayName.replace(/\s+/g, ' ')}, ${p.running ? '켜짐' : '꺼짐'})`).join(', ')
+  return [{ ...PROFILE_SAY_TOOL, description: `${PROFILE_SAY_TOOL.description}. name은 아래 프로필 이름이나 표시 이름. 기본 세라의 name은 default. 현재 대상: ${targets}` }]
+}
 const TOOLS = [
   {
     name: 'reply',
@@ -839,7 +844,9 @@ export function createRequestHandler({ notify, token, onInbound = () => {}, inte
           try { siblings.receiveHop(dataHome, sender, parsed.hop) }
           catch (error) { return send(error.status || 400, { ok: false, ...(error.code ? { code: error.code } : {}), error: error.message }) }
         }
-        const delivered = await deliverInbound(text, { notify, sibling, from: parsed.from, hop: parsed.hop })
+        const replyTo = sibling ? parsed.from.match(/\((default|[a-z0-9-]{1,24})\)$/)[1] : null
+        const inboundText = sibling ? `${text.trim()}\n(답장은 '다른 세라에게 말하기'로 ${replyTo}에게 보내. 대화는 왕복 한 번까지.)` : text
+        const delivered = await deliverInbound(inboundText, { notify, sibling, from: parsed.from, hop: parsed.hop })
         if (!sibling) siblings.resetHops(dataHome)
         if (sibling) {
           try { const memory = await import('./memory/service.mjs'); memory.journalWrite({ body: `[${parsed.from}] ${text}` }) } catch (error) { log(`sibling journal: ${error.message}`) }

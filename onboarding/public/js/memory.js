@@ -198,9 +198,11 @@
   // One of the four fact tables, with the delete control per row.
   async function viewTable(seq, table) {
     const body = resetReader(C.categories[table].label, F.tableIntro(displayName))
-    let rows
+    let rows, ownerProfile
     try {
-      rows = (await api(`/api/memory/${table}`)).rows
+      const result = await api(`/api/memory/${table}`)
+      rows = result.rows
+      ownerProfile = result.ownerProfile
     } catch (err) {
       if (seq !== state.renderSeq) return
       body.appendChild(emptyState(GEN(err.message)))
@@ -226,7 +228,7 @@
         const confirmed = await confirmDelete(C.deleteDialog(displayName))
         if (!confirmed) return
         try {
-          await api(`/api/memory/${table}/${row.id}`, { method: 'DELETE' })
+          await api(`/api/memory/${table}/${row.id}?owner_profile=${encodeURIComponent(ownerProfile)}`, { method: 'DELETE' })
           showToast(C.deleteToast)
           if (state.view.key === `table:${table}`) viewTable(++state.renderSeq, table)
         } catch (err) {

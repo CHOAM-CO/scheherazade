@@ -78,9 +78,9 @@ function createService(staticCtx) {
 
   // corrections: the still_active count (memory/service.mjs:729's own query,
   // reached through the memory routes' access path instead of a second SQLite
-  // connection idiom -- getMemoryService() -> service.query()).
+  // connection idiom -- getMemoryService() -> service.queryOwn()).
   //
-  // The existsSync guard is load-bearing, not defensive: service.query() runs
+  // The existsSync guard is load-bearing, not defensive: service.queryOwn() runs
   // ensureDb(), which opens the file and runs the DDL, so asking a question
   // with no db present would CREATE memory.db. A fresh install must not grow a
   // database because the chat header polled.
@@ -88,7 +88,7 @@ function createService(staticCtx) {
     try {
       if (!fs.existsSync(memoryDbPath())) return 0
       const service = await getMemoryService()
-      const { count } = service.query({ table: 'corrections', filter: { still_active: 1 } })
+      const { count } = service.queryOwn({ table: 'corrections', filter: { still_active: 1 } })
       return Number.isInteger(count) && count > 0 ? count : 0
     } catch (err) {
       // Loud here, silent to the caller: the pile is a nudge, and a nudge that

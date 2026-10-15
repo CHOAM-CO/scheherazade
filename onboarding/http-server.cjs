@@ -1838,7 +1838,7 @@ function collapseSessionEvents(todays) {
 // fleet already landed on elsewhere (boot-handoff date-only note filter).
 async function getSessionEvents() {
   const service = await getMemoryService()
-  const { rows } = service.query({ table: 'memory_events' })
+  const { rows } = service.queryOwn({ table: 'memory_events' })
   if (rows.length === 0) return { date: null, events: [] }
   const sorted = [...rows].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
   const latestDate = sorted[0].at.slice(0, 10)
@@ -1849,7 +1849,7 @@ async function getSessionEvents() {
     let preview = null
     if (ev.event !== 'delete' && CATEGORY_TABLES.includes(ev.table_name)) {
       try {
-        const { rows: rowMatch } = service.query({ table: ev.table_name, filter: { id: ev.row_id } })
+        const { rows: rowMatch } = service.queryOwn({ table: ev.table_name, filter: { id: ev.row_id } })
         if (rowMatch.length === 1) preview = rowMatch[0]
       } catch (_err) {
         // Row may have since been deleted/edited out from under this event

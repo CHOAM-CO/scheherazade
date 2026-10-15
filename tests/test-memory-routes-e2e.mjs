@@ -14,6 +14,8 @@
 //
 // Run: node tests/test-memory-routes-e2e.mjs
 
+import assert from 'node:assert/strict'
+import { DatabaseSync } from 'node:sqlite'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -53,13 +55,20 @@ const chk = (n, c, d) => {
   if (c) { pass++; console.log('  ok  ', n) } else { fail++; console.log('  FAIL', n, d === undefined ? '' : d) }
 }
 
-// Seed one category row through the service API -- the same code path the
-// routes use, so what the wire returns below is a genuine read-back.
-const seeded = service.write({
-  table: 'user_facts',
-  data: { subject: 'user', predicate: 'name', value: 'e2e-probe', source_session: 'sess-e2e' },
-})
-chk('seed write landed (service API, singleton connection)', seeded.mode === 'insert' && seeded.id > 0, JSON.stringify(seeded))
+// A populated sibling with colliding ids must never feed the editable own panel.
+const siblingHome = path.join(tmp, 'Scheherazade-sibling')
+fs.mkdirSync(siblingHome)
+fs.writeFileSync(path.join(siblingHome, '.agent-config'), 'PROFILE=sibling\nDISPLAY_NAME=Sibling\n')
+const siblingFile = path.join(siblingHome, 'memory.db')
+const siblingDb = new DatabaseSync(siblingFile)
+siblingDb.exec(service.DDL)
+const siblingFact = service.memoryWrite(siblingDb, { table: 'user_facts', data: { subject: 'user', predicate: 'game', value: 'sibling Minecraft', source_session: 'fixture' } })
+service.memoryWrite(siblingDb, { table: 'open_threads', data: { summary: 'sibling thread', opened_session: 'fixture' } })
+service.memoryWrite(siblingDb, { table: 'preferences', data: { key: 'sibling preference', value: 'sibling short', source_session: 'fixture' } })
+service.memoryWrite(siblingDb, { table: 'corrections', data: { what_was_wrong: 'sibling wrong', correct_behavior: 'sibling right', corrected_session: 'fixture' } })
+siblingDb.exec("INSERT INTO journal_entries(date,body,created_at,updated_at) VALUES('2026-10-15','sibling journal','2026-10-15','2026-10-15')")
+siblingDb.close()
+const siblingBytes = fs.readFileSync(siblingFile)
 
 const srv = await createOnboardingServer()
 const port = srv.server.address().port
@@ -71,6 +80,42 @@ try {
   // the closed bypass — bare HTML 403s now (pinned in route-dispatch-e2e).
   const token = SERVER_TOKEN
   const auth = { 'x-onboard-token': token }
+
+  for (const table of ['user_facts', 'open_threads', 'preferences', 'corrections']) {
+    const result = await (await fetch(`${base}/api/memory/${table}`, { headers: auth })).json()
+    chk(`empty own ${table} excludes sibling rows`, result.rows.length === 0 && result.ownerProfile === 'data')
+  }
+  const emptyEvents = await (await fetch(`${base}/api/memory/session-events`, { headers: auth })).json()
+  chk('empty own session feed excludes sibling audit events', emptyEvents.events.length === 0 && emptyEvents.date === null)
+  const pending = await (await fetch(`${base}/api/pending-signal`, { headers: auth })).json()
+  chk('own pending count excludes sibling corrections', pending.sources.corrections === 0)
+  const emptyJournal = await (await fetch(`${base}/api/journal`, { headers: auth })).json()
+  chk('own journal excludes sibling journal', emptyJournal.rows.length === 0)
+  const siblingPanel = await (await fetch(`${base}/api/memory/siblings?search=sibling`, { headers: auth })).json()
+  chk('sibling block alone contains all five sibling categories', siblingPanel.siblings[0].material.count === 5 && siblingPanel.siblings[0].material.rows.length === 5)
+  const merged = service.query({ table: 'user_facts' })
+  chk('agent query remains merged with provenance', merged.rows.length === 1 && merged.rows[0].owner_profile === 'Scheherazade-sibling')
+  chk('agent recall remains merged with provenance', service.recallMaterial({ topic: 'Minecraft' }).user_facts.some(row => row.owner_profile === 'Scheherazade-sibling'))
+  const missingOwnDelete = await fetch(`${base}/api/memory/user_facts/${siblingFact.id}`, { method: 'DELETE', headers: auth })
+  chk('deleting sibling-only id returns 404, not 500', missingOwnDelete.status === 404)
+// Seed one category row through the service API -- the same code path the
+// routes use, so what the wire returns below is a genuine read-back.
+const seeded = service.write({
+  table: 'user_facts',
+  data: { subject: 'user', predicate: 'name', value: 'e2e-probe', source_session: 'sess-e2e' },
+})
+chk('seed write landed (service API, singleton connection)', seeded.mode === 'insert' && seeded.id > 0, JSON.stringify(seeded))
+
+  chk('fixture deliberately collides own and sibling ids', seeded.id === siblingFact.id)
+  const ownFeed = await (await fetch(`${base}/api/memory/session-events`, { headers: auth })).json()
+  chk('colliding session preview resolves only own row', ownFeed.events.length === 1 && ownFeed.events[0].preview?.value === 'e2e-probe')
+  const foreignDelete = await fetch(`${base}/api/memory/user_facts/${seeded.id}?owner_profile=Scheherazade-sibling`, { method: 'DELETE', headers: auth })
+  chk('sibling-scoped delete cannot delete colliding own id', foreignDelete.status === 400 && service.queryOwn({ table: 'user_facts' }).rows[0].value === 'e2e-probe')
+  for (const operation of ['remove', 'confirm', 'write']) {
+    assert.throws(() => service[operation]({ table: 'user_facts', id: seeded.id, owner_profile: 'Scheherazade-sibling', data: { id: seeded.id, value: 'wrong owner' } }), error => error.code === 'sibling_read_only')
+    chk(`sibling-scoped ${operation} is rejected before own-id lookup`, service.queryOwn({ table: 'user_facts' }).rows[0].value === 'e2e-probe')
+  }
+  chk('sibling database bytes unchanged by reads and rejected mutations', fs.readFileSync(siblingFile).equals(siblingBytes))
 
   // ── the 2026-08-04 boundary: reads are gated too ──────────────────────────
   const noTokRead = await fetch(`${base}/api/memory/user_facts`)
@@ -118,7 +163,7 @@ try {
   chk('DELETE row with the token is 200', del.status === 200, del.status)
   const afterDel = await (await fetch(`${base}/api/memory/user_facts`, { headers: auth })).json()
   chk('the row is really gone', !afterDel.rows.some((r) => r.id === seeded.id), JSON.stringify(afterDel.rows))
-  const audit = service.query({ table: 'memory_events', filter: { event: 'delete', row_id: seeded.id } })
+  const audit = service.queryOwn({ table: 'memory_events', filter: { event: 'delete', row_id: seeded.id } })
   chk('the delete left its audit row (action auditable, content gone)', audit.count === 1, JSON.stringify(audit))
 
   const del404 = await fetch(`${base}/api/memory/user_facts/999999`, { method: 'DELETE', headers: auth })

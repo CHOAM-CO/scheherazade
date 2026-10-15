@@ -1084,7 +1084,13 @@ function close() {
   }
 }
 
-function write(args) { return memoryWrite(ensureDb(), args) }
+function assertOwnTarget(args) {
+  const owner = args?.owner_profile ?? args?.data?.owner_profile
+  if (owner != null && owner !== path.basename(DATA_HOME)) {
+    throw Object.assign(new Error('Sibling memories are read-only; choose an own-profile row'), { status: 400, code: 'sibling_read_only' })
+  }
+}
+function write(args) { assertOwnTarget(args); return memoryWrite(ensureDb(), args) }
 const readSiblings = createSharedMemory({ dataHome: DATA_HOME, log })
 function siblingMemory({ search = '' } = {}) {
   const needle = String(search).trim().toLowerCase()
@@ -1111,9 +1117,10 @@ function siblingMemory({ search = '' } = {}) {
   })
   return siblingProfiles.discover(DATA_HOME).map(p => found.find(row => row.profile === p.folder) || { name: siblingProfiles.displayName(p.dataHome), profile: p.folder, material: { count: 0, lastWritten: null, rows: [] } })
 }
+function queryOwn(args) { return memoryQuery(ensureDb(), args) }
 function query(args) { return mergeShared(memoryQuery(ensureDb(), args), readSiblings(db => memoryQuery(db, args))) }
-function confirm(args) { return memoryConfirm(ensureDb(), args) }
-function remove(args) { return memoryDelete(ensureDb(), args) }
+function confirm(args) { assertOwnTarget(args); return memoryConfirm(ensureDb(), args) }
+function remove(args) { assertOwnTarget(args); return memoryDelete(ensureDb(), args) }
 function recallMaterial(args) { return mergeShared(memoryRecallMaterial(ensureDb(), args), readSiblings(db => memoryRecallMaterial(db, args)), args) }
 function journalWrite(args) { return journalWriteImpl(ensureDb(), args) }
 function journalRead(args) { return journalReadImpl(ensureDb(), args) }
@@ -1267,6 +1274,7 @@ export {
   close,
   getDb,
   write,
+  queryOwn,
   query,
   confirm,
   remove,

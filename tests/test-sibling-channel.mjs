@@ -18,6 +18,9 @@ try {
   fs.mkdirSync(peer)
   fs.writeFileSync(path.join(peer, '.agent-config'), 'PROFILE=mitil\nDISPLAY_NAME=미틸\n')
   assert.equal(local.siblingTools()[0].name, 'profile_say')
+  assert.match(local.siblingTools()[0].description, /mitil \(미틸, 꺼짐\)/)
+  assert.match(local.siblingTools(peer)[0].description, /default \(Original, 꺼짐\)/)
+  assert.match(local.siblingTools()[0].description, /기본 세라의 name은 default/)
   const notifications = []
   const peerNotifications = []
   async function listen(dataHome, received) {
@@ -34,27 +37,39 @@ try {
   const inbound = await listen(own, notifications)
   const peerInbound = await listen(peer, peerNotifications)
 
+  // Display-name resolution uses exact, case-insensitive config values.
+  fs.writeFileSync(path.join(peer, '.agent-config'), 'PROFILE=mitil\nDISPLAY_NAME=MiTiL\n')
+  assert.match(local.siblingTools()[0].description, /mitil \(MiTiL, 꺼짐\)/)
+  await siblings.say(own, 'mItIl', 'display alias')
+  assert.equal(peerNotifications.at(-1).params.meta.hop, 1)
+  fs.writeFileSync(path.join(peer, '.agent-config'), 'PROFILE=mitil\nDISPLAY_NAME=미틸\n')
+
   // A -> B (hop 1), B -> A (hop 2), A -> B (hop 3) is rejected.
   await siblings.say(own, 'mitil', 'first')
   assert.equal(peerNotifications.at(-1).params.meta.hop, 1)
-  await siblings.say(peer, 'default', 'hello')
+  await siblings.say(peer, 'oRiGiNaL', 'hello')
   assert.equal(notifications.at(-1).params.meta.sender, '미틸 (mitil)')
   assert.equal(notifications.at(-1).params.meta.sibling, true)
   assert.equal(notifications.at(-1).params.meta.hop, 2)
   assert.match(notifications.at(-1).params.content, /자동으로 다른 세라에게 전달하지 않기/)
+  assert(notifications.at(-1).params.content.endsWith("(답장은 '다른 세라에게 말하기'로 mitil에게 보내. 대화는 왕복 한 번까지.)"))
+  assert(peerNotifications.at(-1).params.content.endsWith("(답장은 '다른 세라에게 말하기'로 default에게 보내. 대화는 왕복 한 번까지.)"))
   const rows = local.readOutbound(0).items
   assert.equal(rows.at(-1).from, '미틸 (mitil)')
   assert.equal(rows.at(-1).sibling, true)
   const beforeRejection = peerNotifications.length
   const blocked = await local.handleToolCall('profile_say', { name: 'mitil', text: 'echo' })
   assert.equal(blocked.isError, true)
-  assert.equal(blocked.content[0].text, '대화가 길어져서 여기서 끊어. 사람이 이어 줘')
+  assert.match(blocked.content[0].text, /^대화가 길어져서 여기서 끊어. 사람이 이어 줘/)
+  assert.match(blocked.content[0].text, /사용 가능한 name: mitil/)
   assert.equal(peerNotifications.length, beforeRejection)
   // Rejection must preserve the receiver's receipt.
   assert.equal(siblings.nextHop(peer), 2)
 
   // A queued local human message resets the receipt, not a global turn flag.
   assert.equal((await inbound({ text: 'human asks a fresh question' })).status, 202)
+  assert.equal(notifications.at(-1).params.content, 'human asks a fresh question')
+  assert(!notifications.at(-1).params.content.includes('답장은'))
   const fresh = await local.handleToolCall('profile_say', { name: 'mitil', text: 'new conversation' })
   assert.equal(fresh.isError, undefined)
   assert.equal(peerNotifications.at(-1).params.meta.hop, 1)
@@ -107,6 +122,22 @@ try {
   const beforeThirdHop = notifications.length
   await assert.rejects(siblings.say(third, 'default', 'C to A'), error => error.code === 'sibling_loop')
   assert.equal(notifications.length, beforeThirdHop)
+
+  // Ambiguous display names enumerate canonical names without any delivery.
+  fs.writeFileSync(path.join(third, '.agent-config'), 'PROFILE=third\nDISPLAY_NAME=미틸\n')
+  await assert.rejects(siblings.say(own, '미틸', 'ambiguous'), error => {
+    assert.equal(error.status, 400)
+    assert.equal(error.code, 'ambiguous_profile')
+    assert.deepEqual(error.matches, ['mitil', 'third'])
+    assert.deepEqual(error.validNames, ['mitil', 'third'])
+    return true
+  })
+  // Canonical profile names still disambiguate duplicate display names.
+  siblings.resetHops(own)
+  await siblings.say(own, 'third', 'canonical target')
+  assert.equal(thirdNotifications.at(-1).params.meta.hop, 1)
+  await assert.rejects(siblings.say(own, 'no such sera', 'missing'), error => error.status === 404 && error.validNames.includes('mitil') && error.message.includes('third'))
+  fs.writeFileSync(path.join(third, '.agent-config'), 'PROFILE=third\nDISPLAY_NAME=Third\n')
 
   // Two sends 130 seconds apart still use the highest receipt, across targets.
   const savedFetch = globalThis.fetch, savedNow = Date.now

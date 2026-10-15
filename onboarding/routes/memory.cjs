@@ -128,7 +128,7 @@ function createRoutes(staticCtx) {
       handler: async (req, res, callCtx) => {
         const { scanPointers: _s, defaultSources } = require('../../memory/pointer-scan.cjs')
         const service = await getMemoryService()
-        const { rows } = service.query({ table: 'imported_pointers' })
+        const { rows } = service.queryOwn({ table: 'imported_pointers' })
         // Coverage notes are static per tool; the counts are live from the table.
         // Deliberately does NOT re-scan -- reading the page must never touch the
         // user's files. Opt-in means opt-in.
@@ -206,8 +206,8 @@ function createRoutes(staticCtx) {
           return
         }
         const service = await getMemoryService()
-        const { rows } = service.query({ table })
-        sendJson(res, 200, { table, rows })
+        const { rows } = service.queryOwn({ table })
+        sendJson(res, 200, { table, rows, ownerProfile: path.basename(DATA_HOME) })
         return
       },
     },
@@ -222,7 +222,17 @@ function createRoutes(staticCtx) {
           return
         }
         const service = await getMemoryService()
-        service.remove({ table, id }) // throws loud on 0-row match -- caught below -> 404/500
+        const owner = new URL(req.url, 'http://localhost').searchParams.get('owner_profile')
+        if (owner !== null && owner !== path.basename(DATA_HOME)) {
+          sendJson(res, 400, { code: 'sibling_read_only', error: 'Sibling memories are read-only' })
+          return
+        }
+        // Never try a merged lookup: a sibling id may collide with a local id.
+        if (!service.queryOwn({ table, filter: { id } }).rows.length) {
+          sendJson(res, 404, { error: 'Own memory row not found' })
+          return
+        }
+        service.remove({ table, id, owner_profile: path.basename(DATA_HOME) })
         sendJson(res, 200, { ok: true })
         return
       },
