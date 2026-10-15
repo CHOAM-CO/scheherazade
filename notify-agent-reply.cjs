@@ -98,7 +98,8 @@ function initReplyNotifications({ app, Notification, BrowserWindow, DATA_HOME, l
         if (focused) return
         const last = fresh[fresh.length - 1]
         const n = new Notification({
-          title: fresh.length > 1 ? `Scheherazade (${fresh.length})` : 'Scheherazade',
+          // design-0029: distinguish profile toasts without changing the AUMID.
+          title: (fresh.length > 1 ? `Scheherazade (${fresh.length})` : 'Scheherazade') + (require('./profile.cjs').profileFromHome(DATA_HOME) ? ` [${require('./profile.cjs').profileFromHome(DATA_HOME)}]` : ''),
           body: firstLine(last.text),
           silent: false,
         })

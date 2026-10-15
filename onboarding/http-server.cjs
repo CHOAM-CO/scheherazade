@@ -159,7 +159,9 @@ const REPO_ROOT = path.join(__dirname, '..')
 const PUBLIC_DIR = path.join(__dirname, 'public')
 const PUBLIC_DIR_RESOLVED = path.resolve(PUBLIC_DIR)
 
-const AGENT_NAME = 'scheherazade'
+// design-0029: portable channel temp dirs must not cross profiles.
+const PROFILE_NAME = require('../profile.cjs').profileFromHome(process.env.AGENT_DATA_HOME || '')
+const AGENT_NAME = PROFILE_NAME ? `scheherazade-${PROFILE_NAME}` : 'scheherazade'
 
 // ── DATA_HOME: fixed, product-keyed data directory ──────────────────────
 // DATA_HOME must NOT be keyed on AGENT_NAME, and definitely not on
@@ -3841,7 +3843,8 @@ const API_ROUTES = [
   ...require('./routes/autonomy.cjs').createRoutes(staticCtx), // G6
   ...require('./routes/permissions.cjs').createRoutes(staticCtx), // G7
   ...require('./routes/memory.cjs').createRoutes(staticCtx), // G8
-  ...require('./routes/settings.cjs').createRoutes(staticCtx), // G9
+  ...require('./routes/settings.cjs').createRoutes(staticCtx),
+  ...require('./routes/profiles.cjs').createRoutes(staticCtx), // design-0029 // G9
   ...require('./routes/setup-token.cjs').createRoutes(staticCtx), // G10
   ...require('./routes/companion.cjs').createRoutes(staticCtx),
   ...require('./routes/chat.cjs').createRoutes(staticCtx), // G11

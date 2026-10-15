@@ -67,9 +67,9 @@ async function fetchLatestTag(fetchImpl = fetch, current = '') {
   return (await fetchLatestRelease({ repo: `${UPDATE_OWNER}/${UPDATE_REPO}`, current, fetchImpl })).tag_name
 }
 
-function initWindowsUpdater({ app, dialog, log }) {
+function initWindowsUpdater({ app, dialog, log, updater: injectedUpdater, profileOptions }) {
   // Required lazily so the mac/dev paths never load electron-updater at all.
-  const { autoUpdater } = require('electron-updater')
+  const { autoUpdater } = injectedUpdater ? { autoUpdater: injectedUpdater } : require('electron-updater')
   autoUpdater.allowPrerelease = isPrerelease(app.getVersion())
   autoUpdater.allowDowngrade = false
   autoUpdater.autoDownload = true
@@ -82,11 +82,44 @@ function initWindowsUpdater({ app, dialog, log }) {
   autoUpdater.on('update-available', (info) => {
     log(`updater: ${info.version} available, downloading in background`)
   })
+  // design-0029: one downloader owns the prompt, even with several instances.
+  const fs = require('node:fs')
+  const path = require('node:path')
+  const profiles = require('./profile.cjs')
+  const options = profileOptions || { appData: app.getPath('appData') }
+  function claim(version) {
+    const file = path.join(options.appData, `.scheherazade-update-${String(version).replace(/[^a-zA-Z0-9.-]/g, '_')}.pid`)
+    try {
+      try {
+        const pid = Number(fs.readFileSync(file, 'utf8'))
+        if (pid === process.pid) return true
+        if (Number.isInteger(pid) && pid > 0) {
+          try { process.kill(pid, 0); return false } catch (e) { if (e.code !== 'ESRCH') return false }
+        }
+        fs.unlinkSync(file)
+      } catch (e) { if (e.code !== 'ENOENT') throw e }
+      fs.mkdirSync(options.appData, { recursive: true })
+      fs.writeFileSync(file, String(process.pid), { flag: 'wx' })
+      return true
+    } catch (e) { log('updater: prompt ownership unavailable:', e.message); return false }
+  }
+  let downloadOwner = false
+  autoUpdater.on('update-available', info => { downloadOwner = claim(info.version) })
   let promptedFor = ''
   autoUpdater.on('update-downloaded', async (info) => {
     log(`updater: ${info.version} downloaded; installs on quit`)
+    if (!downloadOwner) { log('updater: sibling downloader owns prompt'); return }
     if (promptedFor === info.version) return // interval re-checks must not re-nag
     promptedFor = info.version
+    // design-0029: never offer to replace installed files under a live sibling.
+    const current = require('./data-home.cjs').resolveDataHome({ allowMem: false })
+    const siblings = profiles.listProfiles(options).filter(p => p.dataHome !== current && p.running)
+    if (siblings.length) {
+      await dialog.showMessageBox({ type: 'info', message: `Scheherazade ${info.version} 준비 완료`,
+        detail: `다른 세라 (${siblings.map(p => p.name || 'default').join(', ')})도 닫혀야 설치돼`,
+        buttons: ['나중에'], defaultId: 0, cancelId: 0 })
+      return
+    }
     const { response } = await dialog.showMessageBox({
       type: 'info',
       message: `Scheherazade ${info.version} 준비 완료`,
@@ -154,7 +187,7 @@ function initAutoUpdate({ app, dialog, shell, log }) {
   return mode
 }
 
-module.exports = {
+module.exports = { initWindowsUpdater,
   initAutoUpdate,
   // exported for tests
   parseVersion,

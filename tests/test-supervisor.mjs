@@ -36,6 +36,8 @@ import {
   runLoop,
 } from '../supervisor.mjs'
 
+// design-0029: use the very argv/signature builder used by main.
+import profiles from '../profile.cjs'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 // ── orphan reaper ───────────────────────────────────────────────────────────
@@ -187,6 +189,12 @@ console.log('\n-- failure marker (shape shared with channel.mjs writeFailureMark
 // ── 6. identity check (Bug-1 class: stale/recycled pids) ───────────────────
 console.log('\n-- isOurSupervisor: never trust, never force-kill an unverified pid')
 {
+  const named = profiles.supervisorArgs('/some/install/supervisor.mjs', 'work').join(' ')
+  ok('named supervisor argv includes profile', named.endsWith('__loop --profile work'))
+  ok('named signature rejects sibling', !profiles.matchesSupervisor('node /some/install/supervisor.mjs __loop --profile other', named, 'work'))
+  ok('named signature rejects prefix sibling', !profiles.matchesSupervisor(`node ${named}2`, named, 'work'))
+  ok('default signature unchanged', profiles.supervisorArgs('/some/install/supervisor.mjs', '').join(' ') === '/some/install/supervisor.mjs __loop')
+  ok('default never adopts named', !profiles.matchesSupervisor(`node ${named}`, '/some/install/supervisor.mjs __loop', ''))
   const SIG = '/some/install/supervisor.mjs __loop'
   const alive = process.pid // a real, live pid -- ours
   ok('contiguous signature match -> verified',
@@ -230,9 +238,9 @@ console.log('\n-- main.cjs seam: one launcher, one stopper, one signature')
   ok('no BASH_BIN / run.sh launcher constants survive',
     !mainSrc.includes('BASH_BIN') && !mainSrc.includes('RUN_SH_PATH'))
   ok('every platform spawns supervisor.mjs under ELECTRON_RUN_AS_NODE, detached',
-    /spawn\(process\.execPath, \[SUPERVISOR_MJS_PATH, '__loop'\], \{[\s\S]*?ELECTRON_RUN_AS_NODE: '1'[\s\S]*?detached: true/.test(mainSrc))
+    /spawn\(process\.execPath, SUPERVISOR_ARGV, \{[\s\S]*?ELECTRON_RUN_AS_NODE: '1'[\s\S]*?detached: true/.test(mainSrc))
   ok('the spawn is NOT platform-branched (one lane, not a win32 fork)',
-    (mainSrc.match(/SUPERVISOR_MJS_PATH, '__loop'/g) || []).length === 1)
+    (mainSrc.match(/spawn\(process\.execPath, SUPERVISOR_ARGV/g) || []).length === 1)
   // Upgrade path: an install coming from <=0.2.20 can still have a live bash
   // supervisor on this PIDFILE. Recognizing it is what stops a double-spawn
   // onto one Discord token; spawning one is what must never happen again.

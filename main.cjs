@@ -45,7 +45,25 @@ const { app, BrowserWindow, shell, dialog } = require('electron')
 // Windows DPAPI is per-user, not per-app: win credentials survive as-is.
 // Must run before app.whenReady(). (inline require: the shared `path` const
 // below this block isn't initialized yet when this line runs)
-app.setPath('userData', require('node:path').join(app.getPath('appData'), 'scheherazade'))
+// design-0029: select both homes before any require-time data-home resolution.
+const profiles = require('./profile.cjs')
+let PROFILE
+try { PROFILE = profiles.parseProfile(process.argv) }
+catch (e) { dialog.showErrorBox('Invalid profile', e.message); app.exit(1); throw e }
+const selectedProfile = profiles.profilePaths(PROFILE, { appData: app.getPath('appData') })
+if (PROFILE) {
+  process.env.AGENT_DATA_HOME = selectedProfile.dataHome
+  process.env.AGENT_NAME = selectedProfile.agentName
+}
+app.setPath('userData', selectedProfile.userData)
+// design-0029: browser state follows the data home, including explicit overrides.
+process.env.CHROMUX_HOME = require('node:path').join(process.env.AGENT_DATA_HOME || selectedProfile.dataHome, '.chromux')
+if (PROFILE && !require('node:fs').existsSync(selectedProfile.dataHome)) {
+  const choice = dialog.showMessageBoxSync({ type: 'question', message: `Create profile ${PROFILE}?`, buttons: ['Create', 'Cancel'], cancelId: 1 })
+  if (choice !== 0) { app.exit(0); throw new Error('Profile creation cancelled') }
+  require('node:fs').mkdirSync(selectedProfile.dataHome, { recursive: true })
+  require('node:fs').writeFileSync(require('node:path').join(selectedProfile.dataHome, '.agent-config'), `PROFILE=${PROFILE}\n`, { mode: 0o600 })
+}
 
 const { spawn } = require('node:child_process')
 // One process-control seam for all three platforms (design-0023 P3):
@@ -78,6 +96,7 @@ const os = require('node:os')
 // (whose first-boot side effects mkdir/seed the canonical home -- a later
 // fold-in would then see "both" and silently strand the 02 data).
 ;(() => {
+  if (PROFILE) return // design-0029: legacy fold-in belongs only to default.
   const fold = (from, to, label) => {
     try {
       if (!fs.existsSync(from)) return
@@ -552,7 +571,9 @@ const SUPERVISOR_MJS_PATH = toUnpackedPath(path.join(__dirname, 'supervisor.mjs'
 // The CONTIGUOUS spawn signature every identity check matches on. See
 // isOurSupervisor below for why contiguity (not two independent substring
 // tests) is load-bearing.
-const SUPERVISOR_SIGNATURE = `${SUPERVISOR_MJS_PATH} __loop`
+// design-0029: argv and verification must use the same profile signature.
+const SUPERVISOR_ARGV = profiles.supervisorArgs(SUPERVISOR_MJS_PATH, PROFILE)
+const SUPERVISOR_SIGNATURE = SUPERVISOR_ARGV.join(' ')
 // Upgrade path, recognition ONLY: an install updating from <=0.2.20 can have a
 // live `bash .../run.sh __loop` supervisor on this same PIDFILE. Nothing here
 // can spawn one any more, but failing to RECOGNIZE it would read a live agent
@@ -628,7 +649,7 @@ function readSupervisorCommandLine(pid) {
     log(`readSupervisorCommandLine(${pid}): process lookup failed (${err.message}) -- treating as UNVERIFIED, fail-safe`)
     return null
   }
-  if (commandLine.includes(SUPERVISOR_SIGNATURE) || commandLine.includes(LEGACY_BASH_SIGNATURE)) return commandLine
+  if (profiles.matchesSupervisor(commandLine, SUPERVISOR_SIGNATURE, PROFILE) || (!PROFILE && commandLine.includes(LEGACY_BASH_SIGNATURE))) return commandLine
   return null
 }
 
@@ -1986,7 +2007,7 @@ async function spawnRealAgentChildLocked() {
   // restores 'failed' after our 'connecting' stamp and marker disappearance
   // deliberately does not reset that state. No live supervisor is adopted here.
   fs.rmSync(AGENT_FAILFILE, { force: true })
-  const child = spawn(process.execPath, [SUPERVISOR_MJS_PATH, '__loop'], {
+  const child = spawn(process.execPath, SUPERVISOR_ARGV, {
     cwd: DATA_HOME,
     env: { ...supervisorEnv, ELECTRON_RUN_AS_NODE: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],

@@ -8,6 +8,7 @@
 // boot path. It must not.
 
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
@@ -139,6 +140,37 @@ for (const [name, status, body] of [
   })
   ok('packaged non-win init returns a real mode', mode === 'notify' || mode === 'auto')
   ok('init itself never throws / logs mode', calls.some((l) => l.includes('mode=')))
+}
+
+// design-0029: real live sibling pid, mocked Electron/updater UI boundary.
+{
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sera-updater-profile-'))
+  const appData = path.join(home, 'appdata')
+  const sibling = path.join(home, 'Documents', 'Scheherazade-work')
+  fs.mkdirSync(sibling, { recursive: true })
+  fs.writeFileSync(path.join(sibling, '.agent.pid'), String(process.pid))
+  const events = {}
+  let installs = 0
+  const prompts = []
+  const mock = { on: (event, fn) => { (events[event] ||= []).push(fn) }, checkForUpdates: async () => {}, quitAndInstall: () => installs++ }
+  const emit = async (event, info) => { for (const fn of events[event] || []) await fn(info) }
+  try {
+    updater.initWindowsUpdater({ app: { getVersion: () => '0.5.0', getPath: () => appData },
+      dialog: { showMessageBox: async options => { prompts.push(options); return { response: 0 } } },
+      log: () => {}, updater: mock, profileOptions: { home, appData } })
+    await emit('update-downloaded', { version: '0.6.0' })
+    eq('non-downloader does not prompt', prompts.length, 0)
+    await emit('update-available', { version: '0.6.0' })
+    await emit('update-downloaded', { version: '0.6.0' })
+    eq('live sibling prompt only offers later', prompts[0].buttons, ['나중에'])
+    ok('live sibling is named', prompts[0].detail.includes('다른 세라 (work)도 닫혀야 설치돼'))
+    eq('live sibling never installs immediately', installs, 0)
+    fs.writeFileSync(path.join(sibling, '.agent.pid'), '999999999')
+    await emit('update-available', { version: '0.6.1' })
+    await emit('update-downloaded', { version: '0.6.1' })
+    eq('dead sibling restores restart option', prompts[1].buttons, ['지금 재시작', '나중에'])
+    eq('restart installs', installs, 1)
+  } finally { fs.rmSync(home, { recursive: true, force: true }) }
 }
 
 console.log(`\ntest-updater: pass=${pass} fail=${fail}`)

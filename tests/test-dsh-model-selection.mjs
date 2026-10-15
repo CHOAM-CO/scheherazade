@@ -113,6 +113,8 @@ const markerPath = '/fixture/.agent-failed.json'
 const markerFiles = new Map([[markerPath, { code: 'model_selection_failed', reason: message }]])
 setAgentStatus('failed', 'model_selection_failed', message)
 const context = vm.createContext({
+  // design-0029: main's spawn argv is now built once with the profile.
+  SUPERVISOR_ARGV: ['/fixture/supervisor.mjs', '__loop'],
   agentChild: null, agentSupervisorPid: null, shuttingDown: false,
   routeProxy: { server: { listening: true } }, lastSpawnEnv: {},
   readAgentConfig: () => ({ MODEL: 'claude-opus-5-5', PROVIDER: 'claude' }),

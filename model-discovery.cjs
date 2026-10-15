@@ -42,7 +42,7 @@ function mergeModels(bundled, discovered, seenAtBuild = []) {
   return [...rows.values()]
 }
 function discoveryCachePath() {
-  return path.join(resolveDataHome(), 'model-catalog-cache.json')
+  return path.join(resolveDataHome({ allowMem: false }) /* design-0029: ignore shell MEM */, 'model-catalog-cache.json')
 }
 function initialRows() {
   const saved = readJson(discoveryCachePath())

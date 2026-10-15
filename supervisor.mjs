@@ -36,12 +36,16 @@ import { createRequire } from 'node:module'
 // best of four hand-copies. They now live in proc.cjs and every caller
 // (main.cjs, the onboarding server, ollama-daemon) shares them.
 import { isPidAlive, readCommandLine as procReadCommandLine, killTree, sweepByPattern, gracefulStop, resolveOnPath } from './proc.cjs'
+// design-0029: every supervisor entry point carries the selected identity.
+import profiles from './profile.cjs'
 import { resolveDataHome } from './data-home.cjs'
 import { localDate, localStamp, agentTimeZone } from './local-date.cjs'
 
 const SELF_PATH = fileURLToPath(import.meta.url)
 const SCRIPT_DIR = path.dirname(SELF_PATH)
 const IS_WIN = process.platform === 'win32'
+const PROFILE = profiles.profileFromHome(resolveDataHome({ allowMem: false }))
+const PROFILE_SIGNATURE = profiles.supervisorArgs(SELF_PATH, PROFILE).join(' ')
 
 // ── auto-answer layer: REMOVED (design-0020, headless topology) ─────────────
 // The expect-parity dialog matcher (trust / confirm / local development /
@@ -314,15 +318,15 @@ export function isOurSupervisor(pid, opts = {}) {
 // it reaps ours -- there is no `run.sh stop` left to delegate to). Remove this
 // verdict once no install can still be running a 0.2.x lane.
 export function classifyPidfileOwner(pid, {
-  signature = `${SELF_PATH} __loop`,
+  signature = PROFILE_SIGNATURE,
   readCommandLine = defaultReadCommandLine,
 } = {}) {
   if (!pid || !isPidAlive(pid)) return 'stale'
   let cmd
   try { cmd = readCommandLine(pid) } catch { return 'stale' }
   if (!cmd) return 'stale'
-  if (cmd.includes(signature)) return 'ours'
-  if (cmd.includes(LEGACY_BASH_SIGNATURE)) return 'legacy_supervisor'
+  if (profiles.matchesSupervisor(cmd, signature, signature.includes(' --profile '))) return 'ours'
+  if (!PROFILE && cmd.includes(LEGACY_BASH_SIGNATURE)) return 'legacy_supervisor'
   return 'stale'
 }
 
@@ -1039,7 +1043,7 @@ function startAgent(cfg) {
   clearFailureMarker(cfg.failfile)
   fs.mkdirSync(path.join(cfg.mem, 'logs'), { recursive: true })
   const out = fs.openSync(cfg.logfile, 'a')
-  const child = cpSpawn(process.execPath, [SELF_PATH, '__loop'], {
+  const child = cpSpawn(process.execPath, profiles.supervisorArgs(SELF_PATH, PROFILE), {
     detached: true,
     stdio: ['ignore', out, out],
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
