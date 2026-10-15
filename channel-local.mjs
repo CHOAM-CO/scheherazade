@@ -192,7 +192,6 @@ export async function enableTranscriptPersistence({ dataHome = DATA_HOME } = {})
       // mid-write generation may carry seq older than its own tail item.
       seq = Math.max(raw.seq, ...queue.map((m) => m.seq), 0)
       restored = queue.length
-      siblingTurn = [...queue].reverse().find(m => m.role === 'user')?.sibling === true
     }
   } catch { /* first run, or corrupt: empty transcript beats a dead channel */ }
   // design-0025: the mid-flight kill the previous life never got to record in
@@ -509,8 +508,7 @@ const mcp = new Server(
   { capabilities: { experimental: { 'claude/channel': {}, 'claude/channel/permission': {} }, tools: {} }, instructions: INSTRUCTIONS },
 )
 
-let siblingTurn = false
-const PROFILE_SAY_TOOL = { name: 'profile_say', description: '다른 세라에게 말하기. name은 프로필 이름, text는 메시지. 다른 세라에게서 온 메시지는 자동 전달하지 않기. 형제 세라 메시지를 받은 턴에는 사용 불가', inputSchema: { type: 'object', properties: { name: { type: 'string' }, text: { type: 'string' } }, required: ['name', 'text'], additionalProperties: false } }
+const PROFILE_SAY_TOOL = { name: 'profile_say', description: '다른 세라에게 말하기. name은 프로필 이름, text는 메시지. 다른 세라에게서 온 메시지는 자동 전달하지 않기. 자동 대화는 최대 2홉까지 허용', inputSchema: { type: 'object', properties: { name: { type: 'string' }, text: { type: 'string' } }, required: ['name', 'text'], additionalProperties: false } }
 export function siblingTools() { return siblings.discover(DATA_HOME).length ? [PROFILE_SAY_TOOL] : [] }
 const TOOLS = [
   {
@@ -609,8 +607,7 @@ const checkOutboundDup = createOutboundDedup({ log })
 export async function handleToolCall(name, args) {
   if (name === 'profile_say') {
     try {
-      if (siblingTurn) throw Error('다른 세라에게서 온 메시지는 자동 전달하지 않기')
-      try { await siblings.say(DATA_HOME, args?.name, args?.text) } catch (error) { if (error.message === 'profile_off') throw Error(`${args?.name}은 지금 꺼져 있어`); throw error }
+      await siblings.say(DATA_HOME, args?.name, args?.text)
       try { const memory = await import('./memory/service.mjs'); memory.journalWrite({ body: `[다른 세라에게 말하기: ${args.name}] ${args.text}` }) } catch (error) { log(`sibling journal: ${error.message}`) }
       return { content: [{ type: 'text', text: '보냈어' }] }
     } catch (error) { return { content: [{ type: 'text', text: error.message }], isError: true } }
@@ -719,13 +716,13 @@ export async function handleToolCall(name, args) {
 mcp.setRequestHandler(CallToolRequestSchema, async (req) => handleToolCall(req.params.name, req.params.arguments))
 
 // ── inbound: HTTP -> notification ─────────────────────────────────────────
-export async function deliverInbound(text, { notify, now = localNow, from, sibling = false } = {}) {
+export async function deliverInbound(text, { notify, now = localNow, from, sibling = false, hop } = {}) {
   const content = String(text || '').trim() || '[empty message]'
   await notify({
     method: 'notifications/claude/channel',
     params: {
       content: sibling ? `[다른 세라 메시지: ${from}]\n자동으로 다른 세라에게 전달하지 않기\n${content}` : content,
-      meta: { sender: sibling ? from : 'user', channelId: LOCAL_CHANNEL_ID, authorId: sibling ? 'sibling-profile' : 'local-user', timestamp: now(), ...(sibling ? { sibling: true } : {}) },
+      meta: { sender: sibling ? from : 'user', channelId: LOCAL_CHANNEL_ID, authorId: sibling ? 'sibling-profile' : 'local-user', timestamp: now(), ...(sibling ? { sibling: true, hop } : {}) },
     },
   })
   return content
@@ -789,7 +786,7 @@ export async function deliverSystemTurn(content, { notify, now = localNow } = {}
 // access control on a shared machine -- any local process could otherwise
 // post messages as the user, and the agent has tools. The token is written
 // next to the port in DATA_HOME, which only this user can read.
-export function createRequestHandler({ notify, token, onInbound = () => {}, interrupt = null }) {
+export function createRequestHandler({ notify, token, onInbound = () => {}, interrupt = null, dataHome = DATA_HOME }) {
   return async function handle(req, res) {
     const send = (code, obj) => {
       res.writeHead(code, { 'content-type': 'application/json' })
@@ -837,8 +834,13 @@ export function createRequestHandler({ notify, token, onInbound = () => {}, inte
         if (text.length > 16000) return send(413, { error: 'text too long' })
         if (parsed.from !== undefined && (typeof parsed.from !== 'string' || parsed.from.length > 160 || !/^[^<>\[\]\"'\r\n]{1,120} \((?:default|[a-z0-9-]{1,24})\)$/.test(parsed.from))) return send(400, { error: 'invalid from' })
         const sibling = parsed.sibling === true && typeof parsed.from === 'string'
-        const delivered = await deliverInbound(text, { notify, sibling, from: parsed.from })
-        siblingTurn = sibling
+        if (sibling) {
+          const sender = parsed.from.match(/\((default|[a-z0-9-]{1,24})\)$/)[1]
+          try { siblings.receiveHop(dataHome, sender, parsed.hop) }
+          catch (error) { return send(error.status || 400, { ok: false, ...(error.code ? { code: error.code } : {}), error: error.message }) }
+        }
+        const delivered = await deliverInbound(text, { notify, sibling, from: parsed.from, hop: parsed.hop })
+        if (!sibling) siblings.resetHops(dataHome)
         if (sibling) {
           try { const memory = await import('./memory/service.mjs'); memory.journalWrite({ body: `[${parsed.from}] ${text}` }) } catch (error) { log(`sibling journal: ${error.message}`) }
         }
