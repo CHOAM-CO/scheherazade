@@ -67,7 +67,7 @@ async function fetchLatestTag(fetchImpl = fetch, current = '') {
   return (await fetchLatestRelease({ repo: `${UPDATE_OWNER}/${UPDATE_REPO}`, current, fetchImpl })).tag_name
 }
 
-function initWindowsUpdater({ app, dialog, log, updater: injectedUpdater, profileOptions }) {
+function initWindowsUpdater({ app, dialog, log, updater: injectedUpdater, profileOptions, updaterDeps = {} }) {
   // Required lazily so the mac/dev paths never load electron-updater at all.
   const { autoUpdater } = injectedUpdater ? { autoUpdater: injectedUpdater } : require('electron-updater')
   autoUpdater.allowPrerelease = isPrerelease(app.getVersion())
@@ -82,59 +82,108 @@ function initWindowsUpdater({ app, dialog, log, updater: injectedUpdater, profil
   autoUpdater.on('update-available', (info) => {
     log(`updater: ${info.version} available, downloading in background`)
   })
-  // design-0029: one downloader owns the prompt, even with several instances.
-  const fs = require('node:fs')
+  // design-0029: default-only installs retain the original no-lock updater path.
+  const fs = updaterDeps.fs || require('node:fs')
   const path = require('node:path')
   const profiles = require('./profile.cjs')
+  const proc = require('./proc.cjs')
+  const readCommandLine = updaterDeps.readCommandLine || proc.readCommandLine
+  const kill = updaterDeps.kill || process.kill
   const options = profileOptions || { appData: app.getPath('appData') }
-  function claim(version) {
-    const file = path.join(options.appData, `.scheherazade-update-${String(version).replace(/[^a-zA-Z0-9.-]/g, '_')}.pid`)
+  const ownPid = updaterDeps.pid || process.pid
+  const current = require('./data-home.cjs').resolveDataHome({ allowMem: false })
+  const siblings = () => profiles.listProfiles(options).filter(p => p.dataHome !== current && p.running)
+  const multipleProfiles = () => profiles.listProfiles(options).some(p => !p.isDefault)
+  const claimPath = version => path.join(options.appData, `.scheherazade-update-${String(version).replace(/[^a-zA-Z0-9.-]/g, '_')}.pid`)
+  const held = new Set()
+  const ownerLive = record => {
     try {
-      try {
-        const pid = Number(fs.readFileSync(file, 'utf8'))
-        if (pid === process.pid) return true
-        if (Number.isInteger(pid) && pid > 0) {
-          try { process.kill(pid, 0); return false } catch (e) { if (e.code !== 'ESRCH') return false }
-        }
-        fs.unlinkSync(file)
-      } catch (e) { if (e.code !== 'ENOENT') throw e }
-      fs.mkdirSync(options.appData, { recursive: true })
-      fs.writeFileSync(file, String(process.pid), { flag: 'wx' })
-      return true
-    } catch (e) { log('updater: prompt ownership unavailable:', e.message); return false }
+      if (!Number.isInteger(record.pid) || record.pid <= 0 || !record.command) return false
+      kill(record.pid, 0)
+      return readCommandLine(record.pid).trim() === record.command
+    } catch { return false }
   }
+  const readOwner = file => {
+    try { return JSON.parse(fs.readFileSync(file, 'utf8')) } catch (e) { if (e.code === 'ENOENT' || e instanceof SyntaxError) return null; throw e }
+  }
+  function release(file) {
+    try {
+      if (readOwner(file)?.pid === ownPid) fs.unlinkSync(file)
+    } catch (e) { log('updater: claim cleanup failed:', e.message) }
+    held.delete(file)
+  }
+  function claim(version) {
+    if (!multipleProfiles()) return true
+    const file = claimPath(version)
+    try {
+      // A receipt suppresses late cached-download events after the claim is released.
+      const shown = readOwner(`${file}.shown`)
+      if (shown && ownerLive(shown)) return false
+      const owner = readOwner(file)
+      if (owner && ownerLive(owner)) return owner.pid === ownPid
+      if (owner || fs.existsSync(file)) fs.unlinkSync(file)
+      const command = readCommandLine(ownPid).trim()
+      if (!command) return false
+      fs.mkdirSync(options.appData, { recursive: true })
+      fs.writeFileSync(file, JSON.stringify({ pid: ownPid, command }), { flag: 'wx' })
+      held.add(file)
+      return true
+    } catch (e) {
+      // EEXIST means another process won; never unlink its claim.
+      log('updater: sibling downloader owns prompt:', e.message)
+      return false
+    }
+  }
+  function updateQuitSafety() {
+    try { autoUpdater.autoInstallOnAppQuit = siblings().length === 0 }
+    catch (e) { autoUpdater.autoInstallOnAppQuit = false; log('updater: sibling check failed:', e.message) }
+  }
+  app.on?.('before-quit', () => {
+    updateQuitSafety()
+    for (const file of [...held]) release(file)
+  })
+  let downloadVersion = ''
   let downloadOwner = false
-  autoUpdater.on('update-available', info => { downloadOwner = claim(info.version) })
+  autoUpdater.on('update-available', info => {
+    downloadVersion = info.version
+    downloadOwner = claim(info.version)
+    updateQuitSafety()
+  })
   let promptedFor = ''
   autoUpdater.on('update-downloaded', async (info) => {
+    const file = claimPath(info.version)
     try {
       log(`updater: ${info.version} downloaded; installs on quit`)
-      if (!downloadOwner) { log('updater: sibling downloader owns prompt'); return }
-      if (promptedFor === info.version) return // interval re-checks must not re-nag
+      updateQuitSafety()
+      if (promptedFor === info.version) return
+      if (!(downloadVersion === info.version && downloadOwner) && !claim(info.version)) {
+        log('updater: sibling downloader owns prompt')
+        return
+      }
       promptedFor = info.version
-      // design-0029: never offer to replace installed files under a live sibling.
-      const current = require('./data-home.cjs').resolveDataHome({ allowMem: false })
-      const siblings = profiles.listProfiles(options).filter(p => p.dataHome !== current && p.running)
-      if (siblings.length) {
+      if (held.has(file)) {
+        const record = readOwner(file)
+        fs.writeFileSync(`${file}.shown`, JSON.stringify(record))
+        held.add(`${file}.shown`)
+        release(file) // design-0029: receipt prevents duplicates after prompt ownership is released.
+      }
+      const live = siblings()
+      if (live.length) {
         await dialog.showMessageBox({ type: 'info', message: `Scheherazade ${info.version} 준비 완료`,
-          detail: `다른 세라 (${siblings.map(p => p.name || 'default').join(', ')})도 닫혀야 설치돼`,
+          detail: `다른 세라 (${live.map(p => p.name || 'default').join(', ')})도 닫혀야 설치돼`,
           buttons: ['나중에'], defaultId: 0, cancelId: 0 })
         return
       }
       const { response } = await dialog.showMessageBox({
-        type: 'info',
-        message: `Scheherazade ${info.version} 준비 완료`,
-        detail:
-          '업데이트가 다운로드됐습니다. 지금 재시작해서 적용할까요?\n"나중에"를 선택해도 다음 종료 때 자동으로 설치됩니다.',
-        buttons: ['지금 재시작', '나중에'],
-        defaultId: 0,
-        cancelId: 1,
+        type: 'info', message: `Scheherazade ${info.version} 준비 완료`,
+        detail: '업데이트가 다운로드됐습니다. 지금 재시작해서 적용할까요?\n"나중에"를 선택해도 다음 종료 때 자동으로 설치됩니다.',
+        buttons: ['지금 재시작', '나중에'], defaultId: 0, cancelId: 1,
       })
-      // quitAndInstall goes through app.quit(), so the before-quit handler in
-      // main.cjs still runs and the agent supervisor tree is torn down cleanly
-      // (same path as a user-initiated quit).
-      if (response === 0) autoUpdater.quitAndInstall()
+      // Recheck after a modal prompt: a sibling may have started meanwhile.
+      updateQuitSafety()
+      if (response === 0 && autoUpdater.autoInstallOnAppQuit) autoUpdater.quitAndInstall()
     } catch (err) { log('updater: restart prompt failed (non-fatal):', err.message) }
+    finally { if (held.has(file)) release(file) }
   })
   const check = () =>
     autoUpdater.checkForUpdates().catch((err) => {

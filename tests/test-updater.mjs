@@ -142,34 +142,87 @@ for (const [name, status, body] of [
   ok('init itself never throws / logs mode', calls.some((l) => l.includes('mode=')))
 }
 
-// design-0029: real live sibling pid, mocked Electron/updater UI boundary.
+// design-0029: mocked OS process identity, real claim files and updater events.
 {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sera-updater-profile-'))
   const appData = path.join(home, 'appdata')
   const sibling = path.join(home, 'Documents', 'Scheherazade-work')
-  fs.mkdirSync(sibling, { recursive: true })
-  fs.writeFileSync(path.join(sibling, '.agent.pid'), String(process.pid))
-  const events = {}
-  let installs = 0
-  const prompts = []
-  const mock = { on: (event, fn) => { (events[event] ||= []).push(fn) }, checkForUpdates: async () => {}, quitAndInstall: () => installs++ }
-  const emit = async (event, info) => { for (const fn of events[event] || []) await fn(info) }
-  try {
-    updater.initWindowsUpdater({ app: { getVersion: () => '0.5.0', getPath: () => appData },
+  const defaultHome = path.join(home, 'Documents', 'Scheherazade')
+  fs.mkdirSync(defaultHome, { recursive: true })
+  const command = pid => `sera-main-${pid}`
+  function harness(pid = 101, overrides = {}) {
+    const events = {}, appEvents = {}, prompts = []
+    let installs = 0
+    const mock = { on: (event, fn) => { (events[event] ||= []).push(fn) }, checkForUpdates: async () => {}, quitAndInstall: () => installs++ }
+    updater.initWindowsUpdater({ app: { getVersion: () => '0.5.0', getPath: () => appData, on: (event, fn) => { appEvents[event] = fn } },
       dialog: { showMessageBox: async options => { prompts.push(options); return { response: 0 } } },
-      log: () => {}, updater: mock, profileOptions: { home, appData } })
-    await emit('update-downloaded', { version: '0.6.0' })
-    eq('non-downloader does not prompt', prompts.length, 0)
-    await emit('update-available', { version: '0.6.0' })
-    await emit('update-downloaded', { version: '0.6.0' })
-    eq('live sibling prompt only offers later', prompts[0].buttons, ['나중에'])
-    ok('live sibling is named', prompts[0].detail.includes('다른 세라 (work)도 닫혀야 설치돼'))
-    eq('live sibling never installs immediately', installs, 0)
+      log: () => {}, updater: mock,
+      profileOptions: { home, appData, listCommands: () => [], readCommandLine: () => `${path.resolve('supervisor.mjs')} __loop --profile work` },
+      updaterDeps: { pid, kill: () => {}, readCommandLine: command, ...overrides },
+    })
+    return { mock, prompts, appEvents, get installs() { return installs }, emit: async (event, version) => { for (const fn of events[event] || []) await fn({ version }) } }
+  }
+  const file = version => path.join(appData, `.scheherazade-update-${version}.pid`)
+  try {
+    const single = harness(101, { fs: { ...fs, writeFileSync: () => { throw Error('single-profile must not claim') } } })
+    await single.emit('update-downloaded', '0.6.0')
+    eq('default-only cached download always prompts without claiming', single.prompts.length, 1)
+    eq('default-only restart unchanged', single.installs, 1)
+    fs.mkdirSync(sibling, { recursive: true })
+    fs.writeFileSync(path.join(sibling, '.agent.pid'), String(process.pid))
+    const guarded = harness()
+    await guarded.emit('update-downloaded', '0.6.1')
+    eq('downloaded without available acquires claim and prompts', guarded.prompts.length, 1)
+    eq('live sibling prompt only offers later', guarded.prompts[0].buttons, ['나중에'])
+    ok('live sibling is named', guarded.prompts[0].detail.includes('다른 세라 (work)도 닫혀야 설치돼'))
+    eq('live sibling disables install-on-quit', guarded.mock.autoInstallOnAppQuit, false)
+    eq('live sibling never installs immediately', guarded.installs, 0)
+    ok('claim removed after prompt', !fs.existsSync(file('0.6.1')))
+    guarded.appEvents['before-quit']()
+    eq('before-quit with live sibling still blocks install', guarded.mock.autoInstallOnAppQuit, false)
+    ok('quit clears prompt receipt', !fs.existsSync(`${file('0.6.1')}.shown`))
     fs.writeFileSync(path.join(sibling, '.agent.pid'), '999999999')
-    await emit('update-available', { version: '0.6.1' })
-    await emit('update-downloaded', { version: '0.6.1' })
-    eq('dead sibling restores restart option', prompts[1].buttons, ['지금 재시작', '나중에'])
-    eq('restart installs', installs, 1)
+    guarded.appEvents['before-quit']()
+    eq('last quit re-enables automatic install', guarded.mock.autoInstallOnAppQuit, true)
+    await guarded.emit('update-downloaded', '0.6.2')
+    eq('dead sibling restores restart option', guarded.prompts[1].buttons, ['지금 재시작', '나중에'])
+    eq('restart installs', guarded.installs, 1)
+
+    fs.writeFileSync(file('0.7.0'), JSON.stringify({ pid: 303, command: 'old-recycled-command' }))
+    const recycled = harness(202)
+    await recycled.emit('update-downloaded', '0.7.0')
+    eq('recycled live owner pid cannot suppress prompt', recycled.prompts.length, 1)
+    fs.writeFileSync(file('0.7.1'), JSON.stringify({ pid: 303, command: command(303) }))
+    const stale = harness(202, { kill: pid => { if (pid === 303) throw Object.assign(Error('gone'), { code: 'ESRCH' }) } })
+    await stale.emit('update-downloaded', '0.7.1')
+    eq('dead owner claim reclaimed', stale.prompts.length, 1)
+
+    const first = harness(401), second = harness(402)
+    await first.emit('update-available', '0.8.0')
+    await second.emit('update-available', '0.8.0')
+    await second.emit('update-downloaded', '0.8.0')
+    eq('competing live claim suppresses sibling prompt', second.prompts.length, 0)
+    await first.emit('update-downloaded', '0.8.0')
+    await second.emit('update-downloaded', '0.8.0')
+    eq('owner prompts once', first.prompts.length, 1)
+    eq('late sibling event does not repeat prompt', second.prompts.length, 0)
+    await first.emit('update-available', '0.8.1')
+    ok('available holds claim', fs.existsSync(file('0.8.1')))
+    first.appEvents['before-quit']()
+    ok('quit removes outstanding claim', !fs.existsSync(file('0.8.1')))
+
+    let raced = false
+    const racer = harness(501, { fs: { ...fs, writeFileSync: (filename, content, options) => {
+      if (filename === file('0.9.0') && options?.flag === 'wx') {
+        raced = true
+        fs.writeFileSync(filename, JSON.stringify({ pid: 502, command: command(502) }))
+        throw Object.assign(Error('winner created claim'), { code: 'EEXIST' })
+      }
+      return fs.writeFileSync(filename, content, options)
+    } } })
+    await racer.emit('update-downloaded', '0.9.0')
+    ok('EEXIST race does not prompt', raced && racer.prompts.length === 0)
+    eq('EEXIST never removes winning claim', JSON.parse(fs.readFileSync(file('0.9.0'), 'utf8')).pid, 502)
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
 }
 
