@@ -1,3 +1,4 @@
+import { createSharedMemory, mergeShared } from './shared.mjs'
 import candidateParser from './import-candidates.cjs'
 import { createHash } from 'node:crypto'
 // memory/service.mjs — the memory DATA LAYER (issue #9, PR-1).
@@ -1083,10 +1084,11 @@ function close() {
 }
 
 function write(args) { return memoryWrite(ensureDb(), args) }
-function query(args) { return memoryQuery(ensureDb(), args) }
+const readSiblings = createSharedMemory({ dataHome: DATA_HOME, log })
+function query(args) { return mergeShared(memoryQuery(ensureDb(), args), readSiblings(db => memoryQuery(db, args))) }
 function confirm(args) { return memoryConfirm(ensureDb(), args) }
 function remove(args) { return memoryDelete(ensureDb(), args) }
-function recallMaterial(args) { return memoryRecallMaterial(ensureDb(), args) }
+function recallMaterial(args) { return mergeShared(memoryRecallMaterial(ensureDb(), args), readSiblings(db => memoryRecallMaterial(db, args)), args) }
 function journalWrite(args) { return journalWriteImpl(ensureDb(), args) }
 function journalRead(args) { return journalReadImpl(ensureDb(), args) }
 

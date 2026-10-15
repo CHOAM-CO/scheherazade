@@ -1989,6 +1989,10 @@ window.COPY.polish = window.UI_POLISH_COPY[(document.documentElement?.lang || 'e
 window.COPY.profiles = {
   title: '세라 프로필', intro: '세라를 한 명 더 만드는 거야. 기억이랑 설정이 따로야.',
   list: '이 컴퓨터의 세라', create: '새 세라 만들기', name: '프로필 이름',
+  sharedMemory: '다른 세라 기억 보기',
+  sharedMemoryHelp: '다른 세라에게 말한 기억도 누구에게 말했는지 표시해서 함께 봐. 끄면 이 세라 기억만 봐.',
+  copySettings: '지금 세라 설정 가져오기',
+  copySettingsHelp: '이름, 성격·지침, 모델과 연결 설정을 가져와. 기억과 인증 정보, 채널 토큰은 가져오지 않아.',
   helper: '영문 소문자, 숫자, 하이픈으로 1~24자. 이름은 나중에 바꿀 수 없어.',
   invalid: '영문 소문자, 숫자, 하이픈으로 1~24자를 입력해줘',
   reserved: 'default는 기본 세라를 위한 이름이야', duplicate: '이미 있는 이름이야',
@@ -2019,6 +2023,10 @@ if (!(document.documentElement?.lang || 'en').startsWith('ko')) {
   window.COPY.profiles = {
     title: 'Profiles', intro: 'Create another Sera with separate memories and settings.',
     list: 'Seras on this computer', create: 'Create a Sera', name: 'Profile name',
+    sharedMemory: 'Read other Seras’ memories',
+    sharedMemoryHelp: 'Read memories told to other Seras with their names attached. Turn off to keep this Sera isolated.',
+    copySettings: 'Copy this Sera’s settings',
+    copySettingsHelp: 'Copy name, persona, instructions, model and connection settings, but not memories, credentials or channel tokens.',
     helper: '1–24 lowercase letters, numbers or hyphens. Names cannot be changed.',
     invalid: 'Enter 1–24 lowercase letters, numbers or hyphens',
     reserved: 'default is reserved for your original Sera', duplicate: 'That name already exists',

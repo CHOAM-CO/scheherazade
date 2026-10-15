@@ -24,12 +24,24 @@ function createRoutes(ctx) {
     if (!p) fail('Profile not found', 404)
     return p
   }
+  const configFile = path.join(ctx.DATA_HOME, '.agent-config')
+  const readConfig = () => { try { return fs.readFileSync(configFile, 'utf8') } catch { return '' } }
+  const sharedEnabled = () => !/^SHARED_MEMORY_READ=(?:0|false|off)\s*$/mi.test(readConfig())
   return [
+    route('GET', p => p === '/api/profiles/settings', async (req, res) => sendJson(res, 200, { ok: true, sharedMemoryRead: sharedEnabled() })),
+    route('POST', p => p === '/api/profiles/settings', async (req, res) => {
+      const { sharedMemoryRead } = await readJsonBody(req)
+      if (typeof sharedMemoryRead !== 'boolean') fail('sharedMemoryRead must be boolean')
+      const config = readConfig().replace(/^SHARED_MEMORY_READ=.*(?:\n|$)/gm, '')
+      fs.writeFileSync(configFile, config + (config && !config.endsWith('\n') ? '\n' : '') + `SHARED_MEMORY_READ=${sharedMemoryRead ? '1' : '0'}\n`, { mode: 0o600 })
+      sendJson(res, 200, { ok: true, sharedMemoryRead })
+    }),
     route('GET', p => p === '/api/profiles', async (req, res) => sendJson(res, 200, {
-      ok: true, current: profiles.profileFromHome(ctx.DATA_HOME), profiles: list(),
+      ok: true, current: profiles.profileFromHome(ctx.DATA_HOME), profiles: list(), sharedMemoryRead: sharedEnabled(),
     })),
     route('POST', p => p === '/api/profiles', async (req, res) => {
-      const { name } = await readJsonBody(req)
+      const { name, copyFrom = true } = await readJsonBody(req)
+      if (typeof copyFrom !== "boolean") fail("copyFrom must be boolean")
       profiles.validateName(name)
       const p = profiles.profilePaths(name, options())
       if (fs.existsSync(p.dataHome)) fail('Profile already exists')
@@ -37,7 +49,7 @@ function createRoutes(ctx) {
       fs.mkdirSync(path.dirname(p.dataHome), { recursive: true })
       fs.mkdirSync(p.dataHome)
       fs.mkdirSync(p.userData, { recursive: true })
-      fs.writeFileSync(path.join(p.dataHome, '.agent-config'), `PROFILE=${name}\n`, { flag: 'wx', mode: 0o600 })
+      require('../profile-settings.cjs').copySettings(ctx.DATA_HOME, p.dataHome, name, copyFrom)
       sendJson(res, 200, { ok: true, profile: list().find(p => p.name === name) })
     }),
     route('POST', p => p.match(/^\/api\/profiles\/([^/]+)\/(open|shortcut)$/), async (req, res, m) => {

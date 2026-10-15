@@ -32,6 +32,24 @@ async function request(method, url, body) {
 let pass = 0
 function ok(label, condition) { assert.ok(condition, label); pass++; console.log(`ok ${label}`) }
 try {
+  fs.writeFileSync(path.join(dataHome, '.agent-config'), 'DISPLAY_NAME=Original\nMODEL=example\nDISCORD_TOKEN=secret\n')
+  fs.writeFileSync(path.join(dataHome, '.env'), 'CONNECTION_URL=http://local\nAPI_KEY=secret\nPASSWORD=secret\n')
+  fs.writeFileSync(path.join(dataHome, 'self_persona.md'), 'persona')
+  fs.writeFileSync(path.join(dataHome, 'memory.db'), 'never copy')
+  fs.mkdirSync(path.join(dataHome, '.credentials'))
+  const copied = await request('POST', '/api/profiles', { name: 'copy' })
+  const copyHome = copied.body.profile.dataHome
+  ok('copies persona', fs.readFileSync(path.join(copyHome, 'self_persona.md'), 'utf8') === 'persona')
+  ok('filters config tokens', fs.readFileSync(path.join(copyHome, '.agent-config'), 'utf8') === 'DISPLAY_NAME=Original\nMODEL=example\nPROFILE=copy\n')
+  ok('filters env secrets', fs.readFileSync(path.join(copyHome, '.env'), 'utf8') === 'CONNECTION_URL=http://local\n')
+  ok('no memory or credentials', !fs.existsSync(path.join(copyHome, 'memory.db')) && !fs.existsSync(path.join(copyHome, '.credentials')))
+  ok('receipt written', JSON.parse(fs.readFileSync(path.join(copyHome, '.profile-copy-receipt.json'))).copied.includes('self_persona.md'))
+  ok('settings default enabled', (await request('GET', '/api/profiles/settings')).body.sharedMemoryRead)
+  await request('POST', '/api/profiles/settings', { sharedMemoryRead: false })
+  ok('settings persists off', !(await request('GET', '/api/profiles/settings')).body.sharedMemoryRead)
+  const isolated = await request('POST', '/api/profiles', { name: 'isolated', copyFrom: false })
+  ok('copyFrom false only creates fresh config', fs.readFileSync(path.join(isolated.body.profile.dataHome, '.agent-config'), 'utf8') === 'PROFILE=isolated\n' && !fs.existsSync(path.join(isolated.body.profile.dataHome, 'self_persona.md')))
+  fs.unlinkSync(path.join(dataHome, '.agent-config'))
   ok('lists historic default', (await request('GET', '/api/profiles')).body.profiles[0].isDefault)
   for (const name of ['default', '../bad', 'BAD', '', 'a'.repeat(25)]) ok(`reject ${name}`, (await request('POST', '/api/profiles', { name })).status === 400)
   fs.mkdirSync(path.join(appData, 'scheherazade-work'), { recursive: true })

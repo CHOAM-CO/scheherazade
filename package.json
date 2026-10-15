@@ -145,6 +145,7 @@
       "memory/**",
       "memory/entity-index.mjs",
       "memory/service.mjs",
+      "memory/shared.mjs",
       "memory/turn-context.mjs",
       "channel.mjs",
       "channel-slack.mjs",

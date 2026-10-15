@@ -14,6 +14,8 @@
       <main class="settings-content" id="profiles-page">
         <div class="page-header"><h1 data-profile-copy="title" id="profiles-title"></h1></div>
         <p data-profile-copy="intro"></p>
+        <label><input type="checkbox" role="switch" id="profiles-shared-memory" checked /><span data-profile-copy="sharedMemory"></span></label>
+        <p data-profile-copy="sharedMemoryHelp"></p>
         <section class="category" aria-labelledby="profiles-list-title">
           <h2 id="profiles-list-title" data-profile-copy="list"></h2>
           <p id="profiles-status" role="status"></p>
@@ -29,6 +31,8 @@
               <p id="profiles-helper" data-profile-copy="helper"></p>
               <p id="profiles-validation" role="status"></p>
             </div>
+            <label><input type="checkbox" id="profiles-copy-settings" checked /><span data-profile-copy="copySettings"></span></label>
+            <p data-profile-copy="copySettingsHelp"></p>
             <button id="profiles-create" type="submit" data-profile-copy="create" disabled></button>
           </form>
         </section>

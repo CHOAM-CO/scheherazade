@@ -1,5 +1,6 @@
 // Read-only, per-turn context. Never persisted into the visible transcript.
 import { recallMaterial } from './service.mjs'
+const tag = (row, text) => row.owner_display_name ? `[told to ${row.owner_display_name}] ${text}` : text
 let warned = false
 export function prependMemoryContext(content, meta = {}, { recall = recallMaterial, essentials, log = console.error } = {}) {
   if (typeof content !== 'string' || meta.sender === 'SYSTEM' || content.startsWith('[remembered-context]')) return content
@@ -8,12 +9,12 @@ export function prependMemoryContext(content, meta = {}, { recall = recallMateri
     if (![material.open_threads, material.user_facts, material.corrections, material.preferences || []].some(rows => rows.length)) return content
     const stable = (essentials ? essentials() : material.stable_essentials || []).filter(r => /^user(?:\.|$)/i.test(r.subject) && r.confidence >= 0.9)
       .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id).slice(0, 5)
-    const facts = [...(material.relevant_facts || material.user_facts).slice(0, 10), ...stable].filter((r, i, rows) => rows.findIndex(x => x.id === r.id) === i)
+    const facts = [...(material.relevant_facts || material.user_facts).slice(0, 10), ...stable].filter((r, i, rows) => rows.findIndex(x => x.id === r.id && x.owner_profile === r.owner_profile) === i)
     const sections = [
-      ['Open threads', material.open_threads.slice(0, 5).map(r => r.summary)],
-      ['Facts (historical; confirm when consequential)', facts.map(r => `${r.subject} ${r.predicate}: ${r.value}`)],
-      ['Active corrections', material.corrections.slice(0, 5).map(r => `${r.what_was_wrong} → ${r.correct_behavior}`)],
-      ['Preferences', (material.preferences || []).slice(0, 3).map(r => `${r.key}: ${r.value}`)],
+      ['Open threads', material.open_threads.slice(0, 5).map(r => tag(r, r.summary))],
+      ['Facts (historical; confirm when consequential)', facts.map(r => tag(r, `${r.subject} ${r.predicate}: ${r.value}`))],
+      ['Active corrections', material.corrections.slice(0, 5).map(r => tag(r, `${r.what_was_wrong} → ${r.correct_behavior}`))],
+      ['Preferences', (material.preferences || []).slice(0, 3).map(r => tag(r, `${r.key}: ${r.value}`))],
     ]
     // Allocate each category its own budget so verbose facts cannot starve corrections.
     // Per-category budgets only; rows are never cut individually (a long fact

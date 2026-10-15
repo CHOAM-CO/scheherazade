@@ -19,6 +19,8 @@
     $('name').setAttribute('aria-invalid', String(!!$('name').value && !!error))
     $('create').disabled = busy || !state || !!error
     $('name').disabled = busy
+    $('copy-settings').disabled = busy
+    $('shared-memory').disabled = busy || !state
     $('retry').disabled = busy
     for (const { button, blocked } of controls) button.disabled = busy || blocked
   }
@@ -28,6 +30,7 @@
     return result
   }
   function render() {
+    $('shared-memory').checked = state.sharedMemoryRead !== false
     controls.length = 0
     $('list').replaceChildren()
     $('status').textContent = state.profiles.length ? '' : C.empty
@@ -93,6 +96,10 @@
     try { await task() } catch (error) { window.showToast(C.error(error)) }
     finally { busy = false; update(); focusAfter?.focus(); focusAfter = null }
   }
+  $('shared-memory').onchange = () => perform(async () => {
+    await request('/api/profiles/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sharedMemoryRead: $('shared-memory').checked }) })
+    await refresh()
+  })
   $('name').oninput = update
   $('retry').onclick = () => perform(refresh)
   $('form').onsubmit = event => {
@@ -100,7 +107,7 @@
     if (!state || validation()) return
     return perform(async () => {
       const name = $('name').value
-      await request('/api/profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) })
+      await request('/api/profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, copyFrom: $('copy-settings').checked }) })
       $('name').value = ''
       window.showToast(C.created)
       await refresh()

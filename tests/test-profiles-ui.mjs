@@ -9,7 +9,8 @@ class Element {
   setAttribute(key, value) { this.attributes[key] = value }
   focus() { assert.equal(this.disabled, false); this.focused = true }
 }
-const elements = Object.fromEntries(['title', 'name', 'validation', 'create', 'retry', 'list', 'status', 'form'].map(key => [`profiles-${key}`, new Element()]))
+const elements = Object.fromEntries(['title', 'name', 'validation', 'create', 'retry', 'list', 'status', 'form', 'copy-settings', 'shared-memory'].map(key => [`profiles-${key}`, new Element()]))
+elements['profiles-copy-settings'].checked = true
 const document = { documentElement: { lang: 'ko' }, querySelector: () => null, querySelectorAll: () => [], getElementById: id => elements[id], createElement: () => new Element() }
 const server = { ok: true, current: 'work', profiles: [
   { name: '', displayName: '세라', running: true, isDefault: true },
@@ -27,6 +28,7 @@ const window = { showToast: text => toasts.push(text), confirmDialog: async text
     const { name } = JSON.parse(options.body)
     server.profiles.push({ name, displayName: name, running: false })
   }
+  if (url === '/api/profiles/settings') server.sharedMemoryRead = JSON.parse(options.body).sharedMemoryRead
   if (options.method === 'DELETE') server.profiles = server.profiles.filter(p => url !== `/api/profiles/${p.name}`)
   return { ok: true, path: '/shortcuts/rest.command' }
 } }
@@ -36,6 +38,11 @@ await vm.runInNewContext(read('onboarding/public/js/profiles.js'), context)
 const $ = key => elements[`profiles-${key}`]
 const row = index => $('list').children[index]
 const actions = index => row(index).children.at(-1).children
+assert.equal($('shared-memory').checked, true)
+$('shared-memory').checked = false
+await $('shared-memory').onchange()
+assert.equal(server.sharedMemoryRead, false)
+assert(read('onboarding/public/profiles.html').includes('id="profiles-copy-settings" checked'))
 assert.equal($('list').children.length, 3)
 assert.equal(row(1).children[0].textContent, '<script>unsafe</script> (work)')
 assert.equal(actions(0)[2].disabled, true)
@@ -48,7 +55,8 @@ for (const name of ['', 'Upper', 'with space', 'a'.repeat(25), 'default', 'work'
 }
 $('name').value = 'new-sera'; $('name').oninput(); assert.equal($('create').disabled, false)
 await $('form').onsubmit({ preventDefault() {} })
-assert.equal(JSON.parse(calls.find(c => c.options?.body).options.body).name, 'new-sera')
+assert.equal(JSON.parse(calls.find(c => c.url === '/api/profiles' && c.options?.body)?.options.body).copyFrom, true)
+assert.equal(JSON.parse(calls.find(c => c.url === '/api/profiles' && c.options?.body).options.body).name, 'new-sera')
 assert(calls.some(c => c.url === '/api/profiles/new-sera/open'))
 assert.equal($('name').value, '')
 assert.equal($('name').focused, true)
