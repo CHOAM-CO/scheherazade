@@ -13,6 +13,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import profiles from '../profile.cjs'
 import { DEFAULT_AGENT_NAME, resolveDataHome, resolveMemoryDb } from '../data-home.cjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -95,6 +96,14 @@ console.log('\n-- the copies are gone: no site computes this on its own')
   ok('data-home.cjs ships (build.files)', pkg.build.files.includes('data-home.cjs'))
   ok('data-home.cjs is unpacked (hooks + supervisor run outside the asar)',
     pkg.build.asarUnpack.includes('data-home.cjs'))
+}
+
+// design-0029: data home and Electron userData must stay paired.
+for (const name of ['', 'work']) {
+  const p = profiles.profilePaths(name, { home: HOME, appData: '/appdata' })
+  const suffix = name ? `-${name}` : ''
+  ok(`profile ${name || 'default'} data-home mapping`, p.dataHome === D(`Scheherazade${suffix}`))
+  ok(`profile ${name || 'default'} userData mapping`, p.userData === path.join('/appdata', `scheherazade${suffix}`))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

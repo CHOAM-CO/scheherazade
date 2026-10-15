@@ -11,7 +11,8 @@ fs.mkdirSync(dataHome, { recursive: true })
 const trashed = []
 const spawned = []
 const ctx = { profileHome: home, DATA_HOME: dataHome,
-  getElectron: () => ({ app: { getPath: () => appData }, shell: { trashItem: async p => { trashed.push(p); fs.renameSync(p, `${p}.trashed`) } } }),
+  profileLiveness: { readCommandLine: () => `${path.resolve('supervisor.mjs')} __loop --profile work`, listCommands: () => [] },
+  getElectron: () => ({ app: { isPackaged: true, getPath: () => appData }, shell: { trashItem: async p => { trashed.push(p); fs.renameSync(p, `${p}.trashed`) } } }),
   profileSpawn: (executable, args, options) => {
     const child = new EventEmitter()
     child.unref = () => { child.unreferenced = true }
@@ -33,7 +34,9 @@ function ok(label, condition) { assert.ok(condition, label); pass++; console.log
 try {
   ok('lists historic default', (await request('GET', '/api/profiles')).body.profiles[0].isDefault)
   for (const name of ['default', '../bad', 'BAD', '', 'a'.repeat(25)]) ok(`reject ${name}`, (await request('POST', '/api/profiles', { name })).status === 400)
+  fs.mkdirSync(path.join(appData, 'scheherazade-work'), { recursive: true })
   const created = await request('POST', '/api/profiles', { name: 'work' })
+  ok('reuses empty userData', fs.existsSync(path.join(appData, 'scheherazade-work')))
   ok('creates profile', created.body.profile.name === 'work' && !created.body.profile.running)
   const named = created.body.profile.dataHome
   ok('writes PROFILE', fs.readFileSync(path.join(named, '.agent-config'), 'utf8') === 'PROFILE=work\n')
@@ -43,6 +46,11 @@ try {
   ok('named exact spawn contract', JSON.stringify(spawned[0].args) === '["--profile","work"]' && spawned[0].options.detached && spawned[0].child.unreferenced)
   ok('default opens', (await request('POST', '/api/profiles/default/open')).body.ok)
   ok('default no profile argv', spawned[1].args.length === 0)
+  routes = createRoutes({ ...ctx, getElectron: () => ({ app: { isPackaged: false, getAppPath: () => '/development/sera', getPath: () => appData } }) })
+  await request('POST', '/api/profiles/work/open')
+  assert.deepEqual(spawned[2].args, ['/development/sera', '--profile', 'work'])
+  ok('unpackaged real route argv', spawned[2].executable === process.execPath)
+  routes = createRoutes(ctx)
   ok('default env untainted', !('AGENT_DATA_HOME' in spawned[1].options.env) && !('ELECTRON_RUN_AS_NODE' in spawned[1].options.env))
   ok('duplicate rejected', (await request('POST', '/api/profiles', { name: 'work' })).status === 400)
   fs.writeFileSync(path.join(named, '.agent-config'), 'PROFILE=work\nDISPLAY_NAME=Worker\n')
@@ -52,6 +60,13 @@ try {
   ok('running delete refused', (await request('DELETE', '/api/profiles/work')).status === 409)
   ok('default delete refused', (await request('DELETE', '/api/profiles/default')).status === 400)
   fs.writeFileSync(path.join(named, '.agent.pid'), '999999999')
+  routes = createRoutes({ ...ctx, profileLiveness: { listCommands: () => [{ pid: process.pid, command: `${process.execPath} --profile work` }] } })
+  ok('window open without agent prevents deletion', (await request('DELETE', '/api/profiles/work')).status === 409)
+  const failedTrash = []
+  routes = createRoutes({ ...ctx, getElectron: () => ({ app: { getPath: () => appData }, shell: { trashItem: async p => { failedTrash.push(p); throw Error('trash denied') } } }) })
+  ok('data home trash failure returns 500', (await request('DELETE', '/api/profiles/work')).status === 500)
+  ok('data home failure preserves pairing', failedTrash.length === 1 && failedTrash[0] === named && fs.existsSync(named) && fs.existsSync(path.join(appData, 'scheherazade-work')))
+  routes = createRoutes(ctx)
   const shortcut = await request('POST', '/api/profiles/work/shortcut')
   ok('shortcut exists', shortcut.status === 200 && fs.existsSync(shortcut.body.path))
   for (const platform of ['darwin', 'linux']) {
@@ -64,13 +79,14 @@ try {
     ok(`${platform} default plain shortcut`, defaultShortcut.body.ok && !fs.readFileSync(defaultShortcut.body.path, 'utf8').includes('--profile'))
   }
   let shortcutLink
-  routes = createRoutes({ ...ctx, profilePlatform: 'win32', getElectron: () => ({ app: { getPath: key => key === 'desktop' ? home : appData }, shell: { writeShortcutLink: (file, operation, options) => { shortcutLink = options; return true } } }) })
+  routes = createRoutes({ ...ctx, profilePlatform: 'win32', getElectron: () => ({ app: { isPackaged: true, getPath: key => key === 'desktop' ? home : appData }, shell: { writeShortcutLink: (file, operation, options) => { shortcutLink = options; return true } } }) })
   await request('POST', '/api/profiles/default/shortcut')
   ok('windows default plain shortcut', shortcutLink.args === '')
   await request('POST', '/api/profiles/work/shortcut')
   ok('windows named shortcut', shortcutLink.args === '--profile work')
   routes = createRoutes(ctx)
   ok('stopped deletion succeeds', (await request('DELETE', '/api/profiles/work')).body.ok)
+  assert.deepEqual(trashed, [named, path.join(appData, 'scheherazade-work')])
   ok('both directories trashed', trashed.includes(named) && trashed.includes(path.join(appData, 'scheherazade-work')))
 } finally { fs.rmSync(home, { recursive: true, force: true }) }
 console.log(`test-profiles-routes: pass=${pass} fail=0`)

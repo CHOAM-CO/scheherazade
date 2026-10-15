@@ -9,7 +9,7 @@ function createRoutes(ctx) {
   const { sendJson, readJsonBody, getElectron } = ctx
   const home = ctx.profileHome || os.homedir()
   const electron = () => getElectron()
-  const options = () => ({ home, appData: electron().app.getPath('appData') })
+  const options = () => ({ home, appData: electron().app.getPath('appData'), ...ctx.profileLiveness })
   const list = () => profiles.listProfiles(options())
   const route = (method, match, handler) => ({ method, match, handler: async (req, res, callCtx, m) => {
     try { await handler(req, res, m) }
@@ -32,7 +32,8 @@ function createRoutes(ctx) {
       const { name } = await readJsonBody(req)
       profiles.validateName(name)
       const p = profiles.profilePaths(name, options())
-      if (fs.existsSync(p.dataHome) || fs.existsSync(p.userData)) fail('Profile already exists')
+      if (fs.existsSync(p.dataHome)) fail('Profile already exists')
+      if (!profiles.emptyUserData(p.userData)) fail('Profile userData is not empty')
       fs.mkdirSync(path.dirname(p.dataHome), { recursive: true })
       fs.mkdirSync(p.dataHome)
       fs.mkdirSync(p.userData, { recursive: true })
@@ -41,11 +42,11 @@ function createRoutes(ctx) {
     }),
     route('POST', p => p.match(/^\/api\/profiles\/([^/]+)\/(open|shortcut)$/), async (req, res, m) => {
       const p = lookup(m[1])
-      const args = p.name ? ['--profile', p.name] : []
+      const args = profiles.launchArgs(electron().app, p.name)
       if (m[2] === 'open') {
         // Never leak the current profile's env into a sibling/default launch.
         const env = { ...process.env }
-        delete env.AGENT_DATA_HOME; delete env.AGENT_NAME; delete env.CHROMUX_HOME; delete env.ELECTRON_RUN_AS_NODE
+        delete env.AGENT_DATA_HOME; delete env.AGENT_NAME; delete env.CHROMUX_HOME; delete env.ELECTRON_RUN_AS_NODE; delete env.SERA_PROFILE
         const child = (ctx.profileSpawn || spawn)(process.execPath, args, { detached: true, stdio: 'ignore', env })
         await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
         child.unref()
@@ -78,8 +79,11 @@ function createRoutes(ctx) {
       // A live Electron window can exist without an agent pid yet.
       if (p.name === profiles.profileFromHome(ctx.DATA_HOME)) fail('Cannot delete current profile', 409)
       const userData = profiles.profilePaths(p.name, options()).userData
-      if (fs.existsSync(userData)) await electron().shell.trashItem(userData)
-      await electron().shell.trashItem(p.dataHome)
+      // design-0029: never trash the paired key store if data-home trash fails.
+      try { await electron().shell.trashItem(p.dataHome) } catch (e) { e.status = 500; throw e }
+      if (fs.existsSync(userData)) {
+        try { await electron().shell.trashItem(userData) } catch (e) { e.status = 500; throw e }
+      }
       sendJson(res, 200, { ok: true })
     }),
   ]

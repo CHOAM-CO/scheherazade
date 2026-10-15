@@ -160,7 +160,7 @@ const PUBLIC_DIR = path.join(__dirname, 'public')
 const PUBLIC_DIR_RESOLVED = path.resolve(PUBLIC_DIR)
 
 // design-0029: portable channel temp dirs must not cross profiles.
-const PROFILE_NAME = require('../profile.cjs').profileFromHome(process.env.AGENT_DATA_HOME || '')
+const PROFILE_NAME = process.env.SERA_PROFILE || '' // design-0029: an explicit data-home override is not profile selection.
 const AGENT_NAME = PROFILE_NAME ? `scheherazade-${PROFILE_NAME}` : 'scheherazade'
 
 // ── DATA_HOME: fixed, product-keyed data directory ──────────────────────

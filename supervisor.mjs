@@ -44,7 +44,8 @@ import { localDate, localStamp, agentTimeZone } from './local-date.cjs'
 const SELF_PATH = fileURLToPath(import.meta.url)
 const SCRIPT_DIR = path.dirname(SELF_PATH)
 const IS_WIN = process.platform === 'win32'
-const PROFILE = profiles.profileFromHome(resolveDataHome({ allowMem: false }))
+const PROFILE = profiles.parseProfile(process.argv) || process.env.SERA_PROFILE || ''
+if (PROFILE) profiles.validateName(PROFILE) // design-0029: main passes identity explicitly.
 const PROFILE_SIGNATURE = profiles.supervisorArgs(SELF_PATH, PROFILE).join(' ')
 
 // ── auto-answer layer: REMOVED (design-0020, headless topology) ─────────────

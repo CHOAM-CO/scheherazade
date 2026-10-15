@@ -38,6 +38,14 @@ import {
 
 // design-0029: use the very argv/signature builder used by main.
 import profiles from '../profile.cjs'
+// design-0029: custom data-home spelling must not change default identity.
+{
+  const custom = path.join(os.tmpdir(), 'Scheherazade-override')
+  const source = fs.readFileSync(new URL('../supervisor.mjs', import.meta.url), 'utf8')
+  const declaration = source.match(/const PROFILE = (.*)/)[1]
+  const selected = Function('profiles', 'process', `return ${declaration}`)(profiles, { argv: ['node', 'supervisor.mjs', 'stop'], env: { AGENT_DATA_HOME: custom, SERA_PROFILE: '' } })
+  if (selected !== '') throw Error('Custom data-home incorrectly selected a named supervisor')
+}
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 // ── orphan reaper ───────────────────────────────────────────────────────────

@@ -49,15 +49,10 @@ const { app, BrowserWindow, shell, dialog } = require('electron')
 const profiles = require('./profile.cjs')
 let PROFILE
 try { PROFILE = profiles.parseProfile(process.argv) }
-catch (e) { dialog.showErrorBox('Invalid profile', e.message); app.exit(1); throw e }
+catch (e) { dialog.showErrorBox('Invalid profile', e.message); app.exit(1); return }
 const selectedProfile = profiles.profilePaths(PROFILE, { appData: app.getPath('appData') })
-if (PROFILE) {
-  process.env.AGENT_DATA_HOME = selectedProfile.dataHome
-  process.env.AGENT_NAME = selectedProfile.agentName
-}
+profiles.configureEnvironment(PROFILE, selectedProfile, process.env)
 app.setPath('userData', selectedProfile.userData)
-// design-0029: browser state follows the data home, including explicit overrides.
-process.env.CHROMUX_HOME = require('node:path').join(process.env.AGENT_DATA_HOME || selectedProfile.dataHome, '.chromux')
 // design-0029: capture before log setup; native dialogs require Electron ready.
 const needsProfileCreation = !!PROFILE && !require('node:fs').existsSync(selectedProfile.dataHome)
 
@@ -2743,9 +2738,8 @@ app.whenReady().then(async () => {
     // design-0029: offer creation before onboarding seeds any profile files.
     if (needsProfileCreation) {
       const { response } = await dialog.showMessageBox({ type: 'question', message: `Create profile ${PROFILE}?`, buttons: ['Create', 'Cancel'], cancelId: 1 })
-      if (response !== 0) { app.quit(); return }
-      fs.mkdirSync(selectedProfile.dataHome, { recursive: true })
-      fs.writeFileSync(path.join(selectedProfile.dataHome, '.agent-config'), `PROFILE=${PROFILE}\n`, { flag: 'wx', mode: 0o600 })
+      if (response !== 0) { profiles.cleanupEmptyUserData(selectedProfile.userData); app.quit(); return }
+      profiles.ensureProfileConfig(selectedProfile.dataHome, PROFILE)
       logBuffer.initSink(path.join(DATA_HOME, 'logs'))
     }
     // TCC folder-permission trigger (the owner directive, 2026-07-05): actually
