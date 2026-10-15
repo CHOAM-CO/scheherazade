@@ -15,6 +15,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 import {
+  selectSweepPids,
   isPidAlive,
   killTree,
   gracefulStop,
@@ -235,6 +236,36 @@ console.log('\n-- no second copy of the process-control primitives')
   ok('proc.cjs ships (build.files)', pkg.build.files.includes('proc.cjs'))
   ok('proc.cjs is a REAL file on disk (asarUnpack) -- supervisor.mjs runs unpacked',
     pkg.build.asarUnpack.includes('proc.cjs'))
+}
+
+// Two profiles share the install path, never the ownership path.
+{
+  const home = String.raw`C:\Users\minom\Documents\Scheherazade`
+  const other = home + '-mitil'
+  const script = String.raw`C:\Program Files\Scheherazade\dsh-lane.mjs`
+  const rows = [
+    { ProcessId: 101, CommandLine: `Scheherazade.exe "${script}" --data-home "${home}"` },
+    { ProcessId: 102, CommandLine: `Scheherazade.exe "${script}" --data-home "${other}"` },
+    { ProcessId: 103, CommandLine: `node ${script} --data-home ${home}` },
+    { ProcessId: 104, CommandLine: `node ${script} --data-home ${other}` },
+    { ProcessId: 105, CommandLine: 'Scheherazade.exe' },
+    { ProcessId: 106, CommandLine: `node "${script}"` },
+  ]
+  const select = (dataHome, pattern = script, input = rows) => selectSweepPids(input, pattern, { dataHome, platform: 'win32', ownPid: 999 })
+  ok('default sweep selects only own quoted/unquoted lane pids', JSON.stringify(select(home)) === '[101,103]')
+  ok('mitil spawn sweep never selects default or unrelated exe', JSON.stringify(select(other)) === '[102,104]')
+  ok('missing profile identity fails closed', select(undefined).length === 0)
+  ok('Windows path matching is case insensitive', select(home.toUpperCase()).length === 2)
+  ok('own pid excluded', selectSweepPids(rows, script, { dataHome: home, platform: 'win32', ownPid: 101 }).join() === '103')
+  for (const filename of ['lane.runtime.patch.yml', 'lane.patch.yml', '.mcp.json']) {
+    const suffix = filename === '.mcp.json' ? filename : `.dsh-lane-home\\${filename}`
+    const option = filename === '.mcp.json' ? '--mcp-config' : '--patch'
+    const leaves = [home, other].flatMap((h, i) => [
+      { ProcessId: 200 + i, CommandLine: `node engine ${option} "${h}\\${suffix}"` },
+      { ProcessId: 300 + i, CommandLine: `node engine ${option} ${h}\\${suffix}` },
+    ])
+    ok(`quoted/unquoted ${filename} leaves stay profile scoped`, select(home, `${option} ${home}\\${suffix}`, leaves).join() === '200,300')
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

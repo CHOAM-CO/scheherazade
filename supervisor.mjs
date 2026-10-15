@@ -342,10 +342,12 @@ const defaultReadCommandLine = procReadCommandLine
 // iteration), so that is what this replicates; the design doc's "at
 // supervisor start" phrasing was imprecise about run.sh:372's location. It
 // runs only when OUR child handle is dead, so the only things it can reach
-// are leaves that outlived their supervisor. stop-path blind sweeps
+// are leaves that outlived their supervisor in THIS data home. Legacy
+// lanes without the explicit argv identity fail closed rather than risking
+// a sibling profile; leaf engine patch/MCP paths already carry identity. stop-path blind sweeps
 // (run.sh:455,475) are DROPPED; the handle replaces them (verdict 1).
-function sweepOrphansDefault(pkillPattern, log) {
-  sweepByPattern(pkillPattern, { log })
+function sweepOrphansDefault(pkillPattern, log, dataHome) {
+  sweepByPattern(pkillPattern, { log, dataHome })
 }
 
 // ── stall/thrash watchdog (v0.0.15 Root B fix) ──────────────────────────────
@@ -703,7 +705,7 @@ function spawnHeadlessChild(cfg, { now = () => Date.now(), log, watchdogBounces 
   for (const k of Object.keys(baseEnv)) {
     if (k !== 'PATH' && k.toUpperCase() === 'PATH') delete baseEnv[k]
   }
-  const child = cpSpawn(process.execPath, [cfg.laneKind === 'dsh' ? DSH_LANE_PATH : HEADLESS_LANE_PATH], {
+  const child = cpSpawn(process.execPath, [cfg.laneKind === 'dsh' ? DSH_LANE_PATH : HEADLESS_LANE_PATH, '--data-home', cfg.mem], {
     cwd: cfg.mem, // run.sh run_loop `cd "$MEM"` parity
     // stdin unused by the lane; stdout/stderr flow through to the
     // supervisor's own stdout (-> logfile), replacing expect's log_user 1.
@@ -866,12 +868,12 @@ export async function runLoop(cfg, deps = {}) {
   const watchdogBounces = []
   const spawnChild = deps.spawnChild || ((c) => spawnHeadlessChild(c, { now, log, watchdogBounces }))
   const sweepOrphans = deps.sweepOrphans || (() => {
-    sweepOrphansDefault(cfg.pkillPattern, log)
+    sweepOrphansDefault(cfg.pkillPattern, log, cfg.mem)
     // Second pattern (design-0020): an orphaned `claude -p` leaf whose lane
     // died by SIGKILL before it could TERM its child. Lane parity with
     // run.sh's PKILL_LEAF_PATTERN sweep.
-    if (cfg.pkillLeafPattern) sweepOrphansDefault(cfg.pkillLeafPattern, log)
-    if (cfg.legacyDshLeafPattern) sweepOrphansDefault(cfg.legacyDshLeafPattern, log)
+    if (cfg.pkillLeafPattern) sweepOrphansDefault(cfg.pkillLeafPattern, log, cfg.mem)
+    if (cfg.legacyDshLeafPattern) sweepOrphansDefault(cfg.legacyDshLeafPattern, log, cfg.mem)
   })
   const installSignalHandler = deps.installSignalHandler || ((h) => {
     for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => h(sig))

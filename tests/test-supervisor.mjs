@@ -92,7 +92,7 @@ console.log('\n-- one lane: supervisor.mjs execs the lane on its own runtime')
     !fs.readFileSync(path.join(ROOT, 'main.cjs'), 'utf8').includes("'/bin/bash'"))
   ok('supervisor spawns the SAME lane script on its own runtime (dsh lane switched by cfg.laneKind, 0.2.1)',
     supSrc.includes("new URL('./headless-lane.mjs', import.meta.url)") &&
-    supSrc.includes("cpSpawn(process.execPath, [cfg.laneKind === 'dsh' ? DSH_LANE_PATH : HEADLESS_LANE_PATH]"))
+    supSrc.includes("cpSpawn(process.execPath, [cfg.laneKind === 'dsh' ? DSH_LANE_PATH : HEADLESS_LANE_PATH, '--data-home', cfg.mem]"))
   for (const key of ['AGENT_NAME: cfg.agentName', 'MEM: cfg.mem', 'CLAUDE_BIN: cfg.claudeBin', 'MODEL: cfg.model']) {
     ok(`supervisor child env carries ${key.split(':')[0]}`, supSrc.includes(key))
   }
@@ -116,9 +116,9 @@ console.log('\n-- one lane: supervisor.mjs execs the lane on its own runtime')
   // it did not get dropped.
   const procSrc = fs.readFileSync(path.join(ROOT, 'proc.cjs'), 'utf8')
   ok('win orphan sweep excludes its own powershell ($PID) -- self-kill regression',
-    procSrc.includes('-and $_.ProcessId -ne $PID }'))
+    procSrc.includes('pid === Number(ownPid)') && !procSrc.includes('Stop-Process -Id'))
   ok('the supervisor sweeps through proc.cjs, not a private copy',
-    supSrc.includes('sweepByPattern(pkillPattern, { log })') && !supSrc.includes('Get-CimInstance Win32_Process'))
+    supSrc.includes('sweepByPattern(pkillPattern, { log, dataHome })') && !supSrc.includes('Get-CimInstance Win32_Process'))
 }
 
 // ── 2b. the lane's claude argv (the ONE argv builder) ──────────────────────

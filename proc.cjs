@@ -79,28 +79,58 @@ function killTree(pid, signal = 'SIGTERM') {
   }
 }
 
-// Sweep every process whose command line contains `pattern` (orphan cleanup
-// only -- live children are killed by handle).
-// win32 receipt (2026-08-18, magi-win live repro): the sweep powershell's OWN
-// command line contains `*<pattern>*`, so the Where-Object matched the sweep
-// process itself and Stop-Process -Force killed it mid-pipeline -- exit
-// 0xFFFFFFFF, empty output, "orphan sweep failed" on EVERY win boot, and no
-// orphan ever actually swept. `-ne <ourPid>` excludes the caller (node), not
-// this powershell child; POSIX pkill never matches itself, which is why only
-// win32 broke. Fix: also exclude $PID (powershell's own-process variable).
-function sweepByPattern(pattern, { log = () => {} } = {}) {
+// Fail closed: a shared install/script path is never process ownership.
+// Paths may be quoted or unquoted in CIM/ps; require a path boundary so
+// Scheherazade cannot select Scheherazade-mitil or ScheherazadeBackup.
+function selectSweepPids(rows, pattern, { dataHome, platform = process.platform, ownPid = process.pid } = {}) {
+  if (!dataHome || !pattern) return []
+  const normalize = (s) => platform === 'win32' ? String(s).replace(/\\/g, '/').toLowerCase() : String(s)
+  const scope = normalize(dataHome).replace(/\/$/, '')
+  const needle = normalize(pattern)
+  return rows.filter((row) => {
+    const pid = Number(row.ProcessId)
+    if (!Number.isInteger(pid) || pid <= 0 || pid === Number(ownPid)) return false
+    const cmd = normalize(row.CommandLine || '')
+    if (!cmd.replace(/["']/g, '').includes(needle.replace(/["']/g, ''))) return false
+    let at = cmd.indexOf(scope)
+    while (at >= 0) {
+      const before = cmd[at - 1]
+      const after = cmd[at + scope.length]
+      if ((!before || /[\s"'=]/.test(before)) && (!after || /[\s"'/]/.test(after))) return true
+      at = cmd.indexOf(scope, at + 1)
+    }
+    return false
+  }).map((row) => Number(row.ProcessId))
+}
+
+function sweepByPattern(pattern, { dataHome, log = () => {} } = {}) {
+  if (!dataHome) return // never fall back to a global pattern kill
   try {
+    let rows
     if (IS_WIN) {
-      const escaped = String(pattern).replace(/'/g, "''")
-      execFileSync(POWERSHELL_EXE, ['-NoProfile', '-Command',
-        `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${escaped}*' -and $_.ProcessId -ne ${process.pid} -and $_.ProcessId -ne $PID } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`],
-        { encoding: 'utf8' })
+      // No pattern/path interpolated into PowerShell: the enumerator cannot
+      // match itself, and all selection happens in the tested JS seam.
+      const out = execFileSync(POWERSHELL_EXE, ['-NoProfile', '-Command',
+        'Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress'],
+        { encoding: 'utf8', timeout: 5000 })
+      const parsed = JSON.parse(out || '[]')
+      rows = Array.isArray(parsed) ? parsed : [parsed]
     } else {
-      execFileSync('pkill', ['-f', '--', String(pattern)], { encoding: 'utf8' })
+      const out = execFileSync('ps', ['-axww', '-o', 'pid=,command='], { encoding: 'utf8', timeout: 5000 })
+      rows = out.split('\n').flatMap((line) => {
+        const m = line.match(/^\s*(\d+)\s+(.*)$/)
+        return m ? [{ ProcessId: Number(m[1]), CommandLine: m[2] }] : []
+      })
+    }
+    for (const pid of selectSweepPids(rows, pattern, { dataHome })) {
+      // Re-read immediately before signalling: fail closed on recycled pids.
+      const cmd = readCommandLine(pid)
+      if (!selectSweepPids([{ ProcessId: pid, CommandLine: cmd }], pattern, { dataHome }).length) continue
+      log(`orphan sweep: stopping pid ${pid} under ${dataHome}`)
+      try { process.kill(pid, 'SIGTERM') } catch (err) { if (err.code !== 'ESRCH') log(`orphan pid ${pid}: ${err.message}`) }
     }
   } catch (err) {
-    // pkill exit 1 = "no process matched" -- the normal case, not an error.
-    if (err.status !== 1) log(`orphan sweep failed (${err.message}) -- continuing`)
+    log(`orphan sweep failed (${err.message}) -- continuing`)
   }
 }
 
@@ -257,6 +287,7 @@ module.exports = {
   readCommandLine,
   killTree,
   sweepByPattern,
+  selectSweepPids,
   gracefulStop,
   resolveOnPath,
   listenerPids,
