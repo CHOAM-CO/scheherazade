@@ -15,6 +15,8 @@ Companion mode, call mode, read-aloud, Korean speech-to-text, and now more than 
 - If you make a second Sera and want her on Discord, Slack or Telegram, she needs her own bot token; one token drives one Sera.
 
 ## Known issues
+- 이미 켜져 있던 세라는 새 세라가 생겨도 "다른 세라에게 말하기"를 다음에 다시 켤 때부터 쓸 수 있어.
+- 기본 세라 폴더에 .agent-config가 없으면 다른 세라 목록에 안 보여.
 - Updating while two Seras are open: the installer needs both closed. The update prompt will say which other Sera is still running and offer "나중에"; it installs on the last quit.
 - A profile name cannot be changed after creation. Pick a short lowercase name.
 - Companion mode does not draw over exclusive-fullscreen games.

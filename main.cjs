@@ -55,6 +55,8 @@ profiles.configureEnvironment(PROFILE, selectedProfile, process.env)
 app.setPath('userData', selectedProfile.userData)
 // design-0029: capture before log setup; native dialogs require Electron ready.
 const needsProfileCreation = !!PROFILE && !require('node:fs').existsSync(selectedProfile.dataHome)
+// All window entry points stay closed while the creation dialog is pending.
+let profileLaunchReady = !needsProfileCreation
 
 const { spawn } = require('node:child_process')
 // One process-control seam for all three platforms (design-0023 P3):
@@ -324,6 +326,7 @@ function readSavedMacMaterial() {
 }
 
 function createMainWindow(url) {
+  if (!profileLaunchReady) return null
   const win = new BrowserWindow({
     width: 1120,
     height: 760,
@@ -2737,10 +2740,11 @@ app.whenReady().then(async () => {
   try {
     // design-0029: offer creation before onboarding seeds any profile files.
     if (needsProfileCreation) {
-      const { response } = await dialog.showMessageBox({ type: 'question', message: `Create profile ${PROFILE}?`, buttons: ['Create', 'Cancel'], cancelId: 1 })
+      const { response } = await dialog.showMessageBox({ type: 'question', message: `${PROFILE} 세라를 새로 만들까?`, detail: `폴더: ~/Documents/Scheherazade-${PROFILE}`, buttons: ['만들기', '취소'], defaultId: 0, cancelId: 1 })
       if (response !== 0) { profiles.cleanupEmptyUserData(selectedProfile.userData); app.quit(); return }
       profiles.ensureProfileConfig(selectedProfile.dataHome, PROFILE)
       logBuffer.initSink(path.join(DATA_HOME, 'logs'))
+      profileLaunchReady = true
     }
     // TCC folder-permission trigger (the owner directive, 2026-07-05): actually
     // touch Documents/Downloads/Desktop on this very first post-ready tick,
@@ -2827,6 +2831,7 @@ app.whenReady().then(async () => {
   // fatal() as its catch, so a config that went bad after boot killed the app
   // on a dock click.
   reopenMainWindow = () => {
+    if (!profileLaunchReady) return
     if (BrowserWindow.getAllWindows().some(w => !w.isSeraCompanion)) return
     if (onboardingServerUrl) {
       // Through /boot again: the Electron session usually still holds the

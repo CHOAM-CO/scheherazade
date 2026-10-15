@@ -15,10 +15,49 @@ check('named paired paths/name', () => assert.deepEqual(profiles.profilePaths('w
 check('creation prompt waits for Electron readiness', () => {
   const main = fs.readFileSync(new URL('../main.cjs', import.meta.url), 'utf8')
   const ready = main.indexOf('app.whenReady().then(async () => {')
-  assert(main.indexOf('message: `Create profile') > ready)
+  assert(main.indexOf('message: `${PROFILE} 세라를 새로 만들까?`') > ready)
+  assert(main.indexOf('if (!profileLaunchReady) return null') < main.indexOf('const win = new BrowserWindow'))
   assert(main.indexOf('profiles.parseProfile(process.argv)') < main.indexOf("app.setPath('userData'"))
   assert(main.indexOf("app.setPath('userData'") < main.indexOf("require('./onboarding/http-server.cjs')"))
 })
+// Execute the actual prompt block while a deferred dialog is open, then accept/cancel.
+{
+  const main = fs.readFileSync(new URL('../main.cjs', import.meta.url), 'utf8')
+  const start = main.indexOf('    if (needsProfileCreation) {', main.indexOf('app.whenReady().then(async () => {'))
+  const prompt = main.slice(start, main.indexOf('    // TCC folder-permission trigger', start))
+  for (const response of [0, 1]) {
+    let resolveDialog, options
+    const calls = []
+    const context = {
+      needsProfileCreation: true, PROFILE: 'new', profileLaunchReady: false,
+      selectedProfile: { dataHome: '/named/new', userData: '/appdata/new' }, DATA_HOME: '/named/new', path,
+      dialog: { showMessageBox: opts => { options = opts; return new Promise(resolve => { resolveDialog = resolve }) } },
+      profiles: { cleanupEmptyUserData: dir => calls.push(['cleanup', dir]), ensureProfileConfig: (dir, name) => calls.push(['config', dir, name]) },
+      app: { quit: () => calls.push(['quit']) }, logBuffer: { initSink: dir => calls.push(['logs', dir]) },
+    }
+    const pending = vm.runInNewContext(`(async () => { ${prompt}; return 'boot' })()`, context)
+    assert.equal(context.profileLaunchReady, false)
+    assert.deepEqual(calls, [])
+    assert.equal(options.message, 'new 세라를 새로 만들까?')
+    assert.equal(options.detail, '폴더: ~/Documents/Scheherazade-new')
+    assert.deepEqual(Array.from(options.buttons), ['만들기', '취소'])
+    // Run the real pre-constructor window gate while the dialog is pending.
+    const gate = main.slice(main.indexOf('function createMainWindow(url) {'), main.indexOf('  const win = new BrowserWindow'))
+    assert.equal(vm.runInNewContext(`${gate} throw Error('created a window'); }; createMainWindow('unused')`, context), null)
+    resolveDialog({ response })
+    const result = await pending
+    if (response === 1) {
+      assert.equal(result, undefined)
+      assert.equal(context.profileLaunchReady, false)
+      assert.deepEqual(calls, [['cleanup', '/appdata/new'], ['quit']])
+    } else {
+      assert.equal(result, 'boot')
+      assert.equal(context.profileLaunchReady, true)
+      assert.deepEqual(calls, [['config', '/named/new', 'new'], ['logs', path.join('/named/new', 'logs')]])
+    }
+    check(`unknown-profile ${response ? 'cancel' : 'accept'} stays windowless until decided`, () => {})
+  }
+}
 // design-0029: execute the actual early main block, including its return paths.
 {
   const main = fs.readFileSync(new URL('../main.cjs', import.meta.url), 'utf8')
