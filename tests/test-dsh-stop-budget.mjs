@@ -11,7 +11,7 @@ const start = source.indexOf('export function createTurnControl')
 const end = source.indexOf('// ── engine boot', start)
 const context = { setTimeout, clearTimeout, process, execFileAsync: promisify(execFile), require: () => ({ POWERSHELL_EXE: 'C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe' }) }
 vm.createContext(context)
-vm.runInContext(source.slice(start, end).replaceAll('export ', '') + '\nthis.create = createTurnControl; this.roots = toolProcessRoots; this.kill = killOwnedTools; this.rows = ownedProcessRows; this.isMcp = isMcpTransport', context)
+vm.runInContext(source.slice(start, end).replaceAll('export ', '') + '\nthis.create = createTurnControl; this.roots = toolProcessRoots; this.kill = killOwnedTools; this.rows = ownedProcessRows; this.isMcp = isMcpTransport; this.snapshot = turnInfrastructureSnapshot; this.bounded = boundedInfrastructure; this.startMillis = processStartMillis', context)
 let clear = 0; let kills = 0; let resolveCancel
 const control = context.create({ cancel: () => new Promise(resolve => { resolveCancel = resolve }), clearPending: () => ++clear, killTools: () => { kills++ }, timeoutMs: 50 })
 const generation = control.generation
@@ -267,3 +267,28 @@ for (const [command, config] of [[escapedWrapper, wrappedServers], ['node /Appli
   ], platform: 'darwin', signal: pid => dead.push(pid), isInfrastructure: row => context.isMcp(row, config) })
   assert.deepEqual(dead, [13], 'lazy transport fallback protects descendants but kills mid-turn tool')
 }
+
+const turnTime = Date.parse('2026-10-16T04:00:00Z')
+const snapshotRows = [
+  {pid: 11, ppid: 10, startTime: '2026-10-16T03:59:58Z', command: 'old infrastructure'},
+  {pid: 12, ppid: 10, startTime: '2026-10-16T04:00:01Z', command: 'already spawned tool'},
+  {pid: 13, ppid: 10, startTime: '2026-10-16T03:59:59Z', command: 'inside margin tool'},
+  {pid: 14, ppid: 10, startTime: '2026-10-16T04:00:02Z', command: 'node /app/channel-local.mjs'}
+]
+const baseline = context.snapshot(snapshotRows, 10, turnTime)
+assert.deepEqual([...baseline.keys()], [11], 'only processes predating turn minus 1.5 seconds enter baseline')
+const timeKills = []
+await context.kill(10, baseline, {readRows: async () => snapshotRows, platform: 'darwin',
+  signal: pid => timeKills.push(pid), isInfrastructure: row => context.isMcp(row, servers)})
+assert.deepEqual(timeKills.sort(), [12, 13], 'delayed snapshot tools die; old identity and new matched transport survive')
+assert.equal(context.startMillis('/Date(1792123200000)/'), 1792123200000)
+assert.equal(context.startMillis('Fri 16 Oct 13:00:00 2026'), Date.parse('Fri Oct 16 13:00:00 2026'))
+let heartbeat = false
+const slowSnapshot = new Promise(resolve => setTimeout(() => resolve(baseline), 20))
+const waitSnapshot = context.bounded(slowSnapshot, 100)
+await new Promise(resolve => setTimeout(() => { heartbeat = true; resolve() }, 0))
+assert.equal(heartbeat, true, 'event loop services HTTP work while snapshot enumeration is pending')
+assert.equal(await waitSnapshot, baseline)
+assert.equal((await context.bounded(new Promise(() => {}), 5)).size, 0, 'hung snapshot is bounded')
+assert.doesNotMatch(source, /execFileSync/)
+assert.match(source, /const turnTime = Number.isFinite\(eventTime\) \? eventTime : receivedAt/)

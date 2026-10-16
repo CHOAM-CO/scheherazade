@@ -29,7 +29,7 @@
 import { prependMemoryContext } from './memory/turn-context.mjs'
 import { writeTurnErrorMarker, clearTurnErrorMarker, turnErrorLogLine } from './turn-error-marker.mjs'
 import { createServer } from 'node:http'
-import { spawn, execFile, execFileSync } from 'node:child_process'
+import { spawn, execFile } from 'node:child_process'
 import { readAgentConfig } from './channel-runtime.mjs'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
@@ -650,6 +650,32 @@ export function isMcpTransport (row, servers) {
   })
 }
 
+export function processStartMillis (value) {
+  if (typeof value === 'number') return value < 1e12 ? value * 1000 : value
+  const cim = String(value || '').match(/^\/Date\((\d+)(?:[+-]\d+)?\)\/$/)
+  if (cim) return Number(cim[1])
+  // macOS lstart prints weekday/day/month; Linux prints weekday/month/day.
+  return Date.parse(String(value || '').replace(/^(\w+)\s+(\d+)\s+(\w+)\s+/, '$1 $3 $2 '))
+}
+
+export function turnInfrastructureSnapshot (rows, enginePid, turnTime) {
+  const descendants = new Set(toolProcessRoots(rows, enginePid))
+  // Only identities older than turn/start minus 1.5 seconds are baseline infra.
+  // Newer processes are tools even if enumeration/event delivery was delayed;
+  // positively matched transports (and descendants) are protected at Stop too.
+  return new Map(rows.filter(row => descendants.has(row.pid) && row.startTime &&
+    processStartMillis(row.startTime) < turnTime - 1500).map(row => [row.pid, row.startTime]))
+}
+
+export async function boundedInfrastructure (pending, timeoutMs = 10000) {
+  let timer
+  try {
+    return await Promise.race([pending, new Promise(resolve => {
+      timer = setTimeout(() => resolve(new Map()), timeoutMs)
+    })])
+  } finally { clearTimeout(timer) }
+}
+
 export async function ownedProcessRows ({ platform = process.platform, run = execFileAsync, powershell = require('./proc.cjs').POWERSHELL_EXE } = {}) {
   if (platform === 'win32') {
     const { stdout } = await run(powershell, ['-NoProfile', '-Command',
@@ -657,7 +683,7 @@ export async function ownedProcessRows ({ platform = process.platform, run = exe
     const parsed = JSON.parse(stdout || '[]')
     return (Array.isArray(parsed) ? parsed : [parsed]).map(r => ({ pid: r.ProcessId, ppid: r.ParentProcessId, name: r.Name, command: r.CommandLine || '', startTime: r.CreationDate }))
   }
-  const { stdout } = await run('ps', ['-axww', '-o', 'pid=,ppid=,lstart=,command='], { encoding: 'utf8', timeout: 3000 })
+  const { stdout } = await run('ps', ['-axww', '-o', 'pid=,ppid=,lstart=,command='], { encoding: 'utf8', timeout: 3000, maxBuffer: 32 * 1024 * 1024 })
   return stdout.split('\n').flatMap(line => {
     const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\S+\s+\S+\s+\d+)\s+(.+)$/)
     return m ? [{ pid: Number(m[1]), ppid: Number(m[2]), startTime: m[3], command: m[4] }] : []
@@ -1072,7 +1098,7 @@ async function main () {
     killTools: async () => {
       let servers = {}
       try { servers = JSON.parse(fs.readFileSync(MCP_CONFIG_FILE, 'utf8')).mcpServers || {} } catch {}
-      return killOwnedTools(child.pid, await turnInfrastructure, { isInfrastructure: row => isMcpTransport(row, servers) })
+      return killOwnedTools(child.pid, await boundedInfrastructure(turnInfrastructure), { isInfrastructure: row => isMcpTransport(row, servers) })
     }
   })
   // Deliver a mute turn's composed text as the real chat message. Unlike
@@ -1135,14 +1161,13 @@ async function main () {
       if (sid !== sessionId || !event) return
       if (control.blocked) return
       if (event.type === 'turn/start') {
-        // Capture synchronously before handling any tool events for this turn.
-        turnInfrastructure = ownedProcessRows({ run: (command, args, options) =>
-          ({ stdout: execFileSync(command, args, options) })
-        }).then(rows => {
-          const descendants = new Set(toolProcessRoots(rows, child.pid))
-          return new Map(rows.filter(row => descendants.has(row.pid) && row.startTime)
-            .map(row => [row.pid, row.startTime]))
-        }).catch(error => { errLog(`turn infrastructure snapshot: ${error.message}`); return new Map() })
+        const receivedAt = Date.now()
+        const eventTime = processStartMillis(event.timestamp ?? event.time ?? event.createdAt ?? event.data?.timestamp)
+        const turnTime = Number.isFinite(eventTime) ? eventTime : receivedAt
+        // Launch without awaiting: the Stop HTTP handler stays responsive.
+        turnInfrastructure = ownedProcessRows()
+          .then(rows => turnInfrastructureSnapshot(rows, child.pid, turnTime))
+          .catch(error => { errLog(`turn infrastructure snapshot: ${error.message}`); return new Map() })
         turnText = ''; sawTextThisTurn = false; sawReplyThisTurn = false
         activeTurnGeneration = control.generation
         control.begin(false, turnConfig)
