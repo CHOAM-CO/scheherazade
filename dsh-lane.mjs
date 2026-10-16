@@ -618,18 +618,19 @@ export function toolProcessRoots (rows, enginePid) {
 }
 
 // Tokenize quoted command lines before matching configured MCP argv.
-// Shell wrappers expose their payload after /c or -c; substring matches are unsafe.
+// Shell wrappers expose their payload after /c or -c; ps can flatten quoted paths.
 export function isMcpTransport (row, servers) {
   const normalize = value => String(value || '').replace(/\\/g, '/').toLowerCase()
   const basename = value => normalize(value).split('/').pop().replace(/\.(exe|cmd)$/, '')
   const tokenize = command => [...String(command || '').matchAll(/"([^"]*)"|'([^']*)'|([^\s]+)/g)]
     .map(match => match[1] ?? match[2] ?? match[3]).filter(Boolean)
-  let argv = tokenize(row.command)
+  const decoded = String(row.command || '').replace(/\^(.)/g, '$1')
+  let argv = tokenize(decoded)
   if (/^(cmd|sh|bash|zsh)$/.test(basename(argv[0]))) {
     const boundary = argv.findIndex(arg => /^(\/c|-c)$/i.test(arg))
     if (boundary >= 0) {
-      const payload = argv.slice(boundary + 1)
-      argv = payload.length === 1 ? tokenize(payload[0]) : payload
+      const payloadText = decoded.replace(/^.*?\s(?:\/c|-c)\s+/i, '').replace(/^"(.*)"$/, '$1')
+      argv = tokenize(payloadText)
     }
   }
   return Object.values(servers || {}).some(server => {
@@ -639,7 +640,13 @@ export function isMcpTransport (row, servers) {
       ? normalize(argv[0]).replace(/\.(exe|cmd)$/, '') === expected.replace(/\.(exe|cmd)$/, '')
       : basename(argv[0]) === basename(expected)
     const args = server.args || []
-    return commandMatches && (args.length ? args.every((arg, index) => normalize(argv[index + 1]) === normalize(arg)) : argv.length === 1)
+    // Flattened POSIX argv loses quoting around script paths containing spaces.
+    // Also tolerate cross-spawn cmd payload quoting; match configured identities.
+    const flat = normalize(decoded).replace(/["']/g, '')
+    const identity = args.find(arg => /[/\\]/.test(String(arg)) && !String(arg).startsWith('-'))
+    const fallback = identity && commandMatches && flat.includes(normalize(identity)) &&
+      !/[\w./-]/.test(flat.slice(flat.indexOf(normalize(identity)) + normalize(identity).length, flat.indexOf(normalize(identity)) + normalize(identity).length + 1))
+    return Boolean(fallback) || commandMatches && (args.length ? args.every((arg, index) => normalize(argv[index + 1]) === normalize(arg)) : argv.length === 1)
   })
 }
 

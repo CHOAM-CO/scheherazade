@@ -254,3 +254,16 @@ await context.kill(10, new Map([[11, 'original'], [13, 'old']]), {
 })
 assert.deepEqual(identityKills.sort(), [12, 13], 'turn-start infrastructure survives, mid-turn tools and reused PIDs die')
 assert.match(source, /turnInfrastructure = ownedProcessRows/)
+
+const escapedWrapper = 'cmd.exe /d /s /c "npx ^"-y^" ^"@pkg/server^""'
+const spacedServer = { spaced: { command: 'node', args: ['/Applications/Sera App/resources/server.mjs'] } }
+assert.equal(context.isMcp({command: escapedWrapper}, wrappedServers), true, 'cross-spawn caret quotes decoded')
+assert.equal(context.isMcp({command: 'node /Applications/Sera App/resources/server.mjs'}, spacedServer), true, 'flattened spaced POSIX path matched')
+for (const [command, config] of [[escapedWrapper, wrappedServers], ['node /Applications/Sera App/resources/server.mjs', spacedServer]]) {
+  const dead = []
+  await context.kill(10, new Map(), { readRows: async () => [
+    {pid: 11, ppid: 10, command}, {pid: 12, ppid: 11, command: 'server child'},
+    {pid: 13, ppid: 10, command: 'mid-turn tool'}
+  ], platform: 'darwin', signal: pid => dead.push(pid), isInfrastructure: row => context.isMcp(row, config) })
+  assert.deepEqual(dead, [13], 'lazy transport fallback protects descendants but kills mid-turn tool')
+}
