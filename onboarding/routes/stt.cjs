@@ -94,11 +94,11 @@ function createRoutes(ctx) {
       if ((previous === 'true') !== b.enabled) {
         const content = callContext[b.lang === 'ko' ? 'ko' : 'en'][b.enabled ? 'start' : 'stop']
         try {
-          if (ctx.sendCallNotice) noticeDelivered = await ctx.sendCallNotice(content)
+          if (ctx.sendCallNotice) noticeDelivered = await ctx.sendCallNotice(content, { deferUntilUser: true })
           else {
             const bridge = createSignalService({ ...ctx, fs: ctx.fs || require('node:fs'), path })
             const endpoint = bridge.readChannelEndpoint()
-            noticeDelivered = !!endpoint && (await bridge.postSystemTurn(endpoint, content)).status === 202
+            noticeDelivered = !!endpoint && (await bridge.postSystemTurn(endpoint, content, { deferUntilUser: true })).status === 202
           }
         } catch { noticeDelivered = false }
         if (!noticeDelivered) log?.('[call] Context notice could not reach the agent')

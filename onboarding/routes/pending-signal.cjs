@@ -293,12 +293,12 @@ function createService(staticCtx) {
 
   // {status: 0} = the channel could not be reached at all (dead port from a
   // stale file, or a hung socket past the timeout).
-  async function postSystemTurn(ep, content) {
+  async function postSystemTurn(ep, content, { deferUntilUser = false } = {}) {
     try {
       const r = await fetch(`http://127.0.0.1:${ep.port}/system-turn`, {
         method: 'POST',
         headers: { authorization: `Bearer ${ep.token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ content, ...(deferUntilUser ? { deferUntilUser: true } : {}) }),
         signal: AbortSignal.timeout(CHANNEL_TIMEOUT_MS),
       })
       let parsed = null

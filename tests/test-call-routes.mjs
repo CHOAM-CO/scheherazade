@@ -48,7 +48,7 @@ try {
   const live = createRoutes({ DATA_HOME: '.', fs: { readFileSync: () => JSON.stringify({ port: server.address().port, token: 'fixture-secret' }) }, readAgentConfig: () => cfg, writeAgentConfig: fields => Object.assign(cfg, fields), readJsonBody: async () => body, sendJson: (_res, status, data) => { result = { status, data } } }).find(r => r.method === 'POST' && r.match('/api/call'))
   body = { enabled: true }; await live.handler({}, {}, call)
   assert.equal(result.data.noticeDelivered, true)
-  assert.deepEqual(received, [{ url: '/system-turn', authorization: 'Bearer fixture-secret', body: { content: copy.en.start } }])
+  assert.deepEqual(received, [{ url: '/system-turn', authorization: 'Bearer fixture-secret', body: { content: copy.en.start, deferUntilUser: true } }])
   const before = notices.length
   body = { enabled: false }
   await post.handler({}, {}, { agentControls: { companion: () => ({ setCallEnabled() { throw new Error('native failed') } }) } })

@@ -180,6 +180,11 @@ for (const origin of ['voice', 'text', undefined, 'unknown']) {
 const voiceBoot = await renderContext.render('hello', { origin: 'voice', bootGreeting: true })
 assert.equal(voiceBoot[0].text, 'boot-token\n[voice transcription]\nhello')
 
+const noted = await renderContext.render('hello', { origin: 'voice', systemNote: 'Call mode off' })
+assert.match(noted[0].text, /context only, do not reply to this note/)
+assert.match(noted[0].text, /Call mode off/)
+assert.ok(noted[0].text.endsWith('[voice transcription]\nhello'))
+
 // Windows-shaped test runs on every host and simulates an already-dead root.
 const taskkills = []
 await context.kill(10, new Set(), {

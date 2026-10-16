@@ -77,6 +77,12 @@ console.log('\n1. <channel> tag matches stop-reply-guard\'s exact parser')
   assert(evt.type === 'user' && evt.message.role === 'user' && evt.message.content[0].type === 'text',
     'renderUserEvent wraps the tag in a stream-json user event')
 
+  const noted = JSON.parse(renderUserEvent({ content: 'hello', meta: { systemNote: 'Call mode off' } }))
+  const noteText = noted.message.content[0].text
+  assert(noteText.includes('[system note: context only, do not reply to this note]') && noteText.includes('Call mode off'),
+    'deferred call context reaches Claude only alongside the user turn, with no-reply instruction')
+  assert(noteText.endsWith('hello</channel>'), 'the user content remains separate from the call note')
+
   // Slack thread attrs (2026-08-11): rendered only when supplied, and the
   // guard's parser must still extract channelId/body with them present.
   const threaded = renderChannelTag({ content: 'in thread', meta: { channelId: 'C1', messageTs: '1786414200.000010', threadTs: '1786414183.323289' } })

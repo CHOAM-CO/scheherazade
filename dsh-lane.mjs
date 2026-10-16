@@ -1479,7 +1479,9 @@ async function main () {
   // parts (inline routes) ride AFTER the text part.
   async function renderInbound (content, meta) {
     const modelContent = meta?.origin === 'voice' ? `[voice transcription]\n${content}` : content
-    const tagged = meta?.bootGreeting ? `${bootGreetingMarker}\n${modelContent}` : modelContent
+    const contextual = meta?.systemNote
+      ? `[system note: context only, do not reply to this note]\n${meta.systemNote}\n[/system note]\n${modelContent}` : modelContent
+    const tagged = meta?.bootGreeting ? `${bootGreetingMarker}\n${contextual}` : contextual
     const built = await buildPromptContent(prependMemoryContext(tagged, meta))
     return [{ type: 'text', text: renderChannelTag({ content: built.text, meta: meta || {} }) }, ...built.parts]
   }

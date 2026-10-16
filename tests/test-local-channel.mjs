@@ -270,6 +270,29 @@ console.log('\n7. HTTP: posting a message')
   assert((await call(handler, { method: 'GET', url: '/nope' })).code === 404, 'unknown path -> 404')
 }
 
+console.log('\n7.1 call notices defer context without starting a reply turn')
+{
+  resetQueueForTest()
+  const seen = []
+  let failNext = false
+  const handler = createRequestHandler({ notify: async n => { if (failNext) { failNext = false; throw new Error('offline') }; seen.push(n) }, token: TOKEN })
+  for (const content of ['Call mode on', 'Call mode off']) {
+    const r = await call(handler, { method: 'POST', url: '/system-turn', body: JSON.stringify({ content, deferUntilUser: true }) })
+    assert(r.code === 202, 'call context accepted without waking the agent')
+    assert(seen.length === 0, 'call start/off sends no model notification or reply turn')
+    assert(readOutbound(0).items.length === 0, 'call context creates no visible chat message')
+  }
+  failNext = true
+  const failed = await call(handler, { method: 'POST', url: '/in', body: JSON.stringify({ text: 'hello', origin: 'voice' }) })
+  assert(failed.code === 500, 'failed user delivery retains the pending note')
+  const next = await call(handler, { method: 'POST', url: '/in', body: JSON.stringify({ text: 'hello', origin: 'voice' }) })
+  assert(next.code === 202 && seen.length === 1, 'only the user message starts a model turn')
+  assert(seen[0].params.meta.systemNote === 'Call mode off', 'latest call state attaches to next user metadata')
+  assert(seen[0].params.content === 'hello' && readOutbound(0).items[0].text === 'hello', 'call note is absent from visible transcript')
+  await call(handler, { method: 'POST', url: '/in', body: JSON.stringify({ text: 'again' }) })
+  assert(!seen[1].params.meta.systemNote, 'delivered context is consumed exactly once')
+}
+
 console.log('\n7a. HTTP: POST /interrupt (turn-level STOP, 0.3.1)')
 // The stop seam's contract at the channel edge: the interrupter's fixed
 // reason enum is passed through UNCHANGED (the proxy above maps one

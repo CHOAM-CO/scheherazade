@@ -723,13 +723,13 @@ export async function handleToolCall(name, args) {
 mcp.setRequestHandler(CallToolRequestSchema, async (req) => handleToolCall(req.params.name, req.params.arguments))
 
 // ── inbound: HTTP -> notification ─────────────────────────────────────────
-export async function deliverInbound(text, { notify, now = localNow, from, sibling = false, hop, origin = 'text' } = {}) {
+export async function deliverInbound(text, { notify, now = localNow, from, sibling = false, hop, origin = 'text', systemNote } = {}) {
   const content = String(text || '').trim() || '[empty message]'
   await notify({
     method: 'notifications/claude/channel',
     params: {
       content: sibling ? `[다른 세라 메시지: ${from}]\n자동으로 다른 세라에게 전달하지 않기\n${content}` : content,
-      meta: { sender: sibling ? from : 'user', channelId: LOCAL_CHANNEL_ID, authorId: sibling ? 'sibling-profile' : 'local-user', timestamp: now(), origin: origin === 'voice' ? 'voice' : 'text', ...(sibling ? { sibling: true, hop } : {}) },
+      meta: { sender: sibling ? from : 'user', channelId: LOCAL_CHANNEL_ID, authorId: sibling ? 'sibling-profile' : 'local-user', timestamp: now(), origin: origin === 'voice' ? 'voice' : 'text', ...(systemNote ? { systemNote } : {}), ...(sibling ? { sibling: true, hop } : {}) },
     },
   })
   return content
@@ -794,6 +794,9 @@ export async function deliverSystemTurn(content, { notify, now = localNow } = {}
 // post messages as the user, and the agent has tools. The token is written
 // next to the port in DATA_HOME, which only this user can read.
 export function createRequestHandler({ notify, token, onInbound = () => {}, interrupt = null, dataHome = DATA_HOME }) {
+  // Call state is context for the next user turn, never an independent prompt.
+  // Latest state wins when call mode starts and stops without intervening speech.
+  let pendingSystemNote = null
   return async function handle(req, res) {
     const send = (code, obj) => {
       res.writeHead(code, { 'content-type': 'application/json' })
@@ -848,7 +851,9 @@ export function createRequestHandler({ notify, token, onInbound = () => {}, inte
         }
         const replyTo = sibling ? parsed.from.match(/\((default|[a-z0-9-]{1,24})\)$/)[1] : null
         const inboundText = sibling && parsed.notice !== true ? `${text.trim()}\n(답장은 '다른 세라에게 말하기'로 ${replyTo}에게 보내. 대화는 왕복 한 번까지.)` : text
-        const delivered = await deliverInbound(inboundText, { notify, sibling, from: parsed.from, hop: parsed.hop, origin: parsed.origin })
+        const systemNote = sibling ? undefined : pendingSystemNote
+        const delivered = await deliverInbound(inboundText, { notify, sibling, from: parsed.from, hop: parsed.hop, origin: parsed.origin, systemNote })
+        if (!sibling && pendingSystemNote === systemNote) pendingSystemNote = null
         if (!sibling) siblings.resetHops(dataHome)
         if (sibling) {
           try { const memory = await import('./memory/service.mjs'); memory.journalWrite({ body: `[${parsed.from}] ${text}` }) } catch (error) { log(`sibling journal: ${error.message}`) }
@@ -981,7 +986,9 @@ export function createRequestHandler({ notify, token, onInbound = () => {}, inte
       // SYSTEM-authored turn into this process's own notifyInbound. The
       // Electron route above it (onboarding/routes/pending-signal.cjs) is the
       // only caller, and what starts it is a click on the chat header's "!".
-      // Body {content} through the same reader /in uses. Nothing enters the
+      // Body {content}, optionally deferUntilUser:true for context-only call notes.
+      // Deferred notes never notify the model until an actual user message arrives.
+      // Nothing enters the
       // transcript: this is a message TO the agent, not the user's half of the
       // conversation (the /interrupt and /clear rule). Auth and the Host check
       // are the shared gates above -- there is no second auth path here.
@@ -995,6 +1002,10 @@ export function createRequestHandler({ notify, token, onInbound = () => {}, inte
         try { parsed = JSON.parse(body || '{}') } catch { return send(400, { error: 'bad json' }) }
         const content = parsed && parsed.content
         if (typeof content !== 'string' || !content.trim()) return send(400, { error: 'content required' })
+        if (parsed.deferUntilUser === true) {
+          pendingSystemNote = content.trim()
+          return send(202, { ok: true })
+        }
         await deliverSystemTurn(content, { notify })
         return send(202, { ok: true })
       }
