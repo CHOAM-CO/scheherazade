@@ -6,7 +6,7 @@
   const ko = (document.documentElement?.lang || navigator.language || 'en').startsWith('ko')
   const T = ko
     ? { label: '읽어주기', note: '답장을 이 기기에서 바로 음성으로 읽어줍니다 (오프라인). 처음 켤 때 음성 모델을 한 번 받습니다', toggle: '답장 소리 내어 읽기', voice: '목소리', voiceDefault: '기본 목소리', add: 'wav로 목소리 추가', adding: '목소리 만드는 중', addName: '목소리 이름', added: n => `목소리 추가됨: ${n}`, remove: '삭제', needModel: '먼저 읽어주기를 켜서 음성 모델을 받아야 합니다', dl: (d, t) => `음성 모델 받는 중 ${mb(d)} / ${mb(t)} MB`, ready: '준비됨', loading: '음성 엔진 불러오는 중', missing: t => `켜면 음성 모델 ${mb(t)} MB를 받음`, err: e => `오류: ${e}`, stop: '읽기 멈춤' }
-    : { label: 'Read aloud', note: 'Replies are spoken on this device (offline). The first enable downloads the voice model once.', toggle: 'Speak replies', voice: 'Voice', voiceDefault: 'Default voice', add: 'Add a voice from a wav', adding: 'Creating voice', addName: 'Voice name', added: n => `Voice added: ${n}`, remove: 'Delete', needModel: 'Turn read-aloud on first so the voice model is downloaded', dl: (d, t) => `Downloading voice model ${mb(d)} / ${mb(t)} MB`, ready: 'Ready', loading: 'Loading voice engine', missing: t => `Enabling downloads ${mb(t)} MB`, err: e => `Error: ${e}`, stop: 'Stop reading' }
+    : { label: 'Read aloud', note: 'Replies are spoken on this device (offline). The first enable downloads the voice model once.', toggle: 'Speak replies', voice: 'Voice', voiceDefault: 'Default voice', add: 'Add a voice from a wav', adding: 'Creating voice', addName: 'Voice name', added: n => `Voice added: ${n}`, remove: 'Delete', needModel: 'Turn read-aloud on first so the voice model is downloaded', dl: (d, t) => `Downloading voice model ${mb(d)} / ${mb(t)} MB`, ready: 'Ready', loading: 'Loading voice engine', missing: t => `Enabling downloads ${mb(t)} MB`, err: e => `Error: ${e}`, stop: 'Stop voice' }
   function mb(n) { return Math.round((n || 0) / 1048576) }
   const token = () => window.getOnboardToken?.() || ''
   const getStatus = () => window.api('/api/tts/status')
@@ -34,7 +34,9 @@
     const addBtn = document.createElement('button'); addBtn.type = 'button'; addBtn.className = 'secondary'; addBtn.id = 'set-tts-add'; addBtn.textContent = T.add
     const file = document.createElement('input'); file.type = 'file'; file.accept = '.wav,audio/wav,audio/x-wav'; file.hidden = true
     const nameIn = document.createElement('input'); nameIn.type = 'text'; nameIn.id = 'set-tts-voice-name'; nameIn.placeholder = T.addName; nameIn.maxLength = 40
-    row3.append(nameIn, addBtn, file)
+    const nameLabel = document.createElement('label'); nameLabel.htmlFor = nameIn.id; nameLabel.textContent = T.addName
+    file.setAttribute('aria-label', T.add)
+    row3.append(nameLabel, nameIn, addBtn, file)
     const state = document.createElement('div'); state.className = 'agent-control-hint'; state.id = 'set-tts-state'
     const credit = document.createElement('div'); credit.className = 'agent-control-hint'; credit.id = 'set-tts-credit'
     card.append(label, note, row, row2, row3, state, credit)
@@ -141,15 +143,16 @@
     return queue
   }
   function mountStop() {
-    const pane = document.getElementById('chat-pane') || document.querySelector('.chat-pane, main')
-    if (!pane || stopBtn) return
+    const bar = document.querySelector('.chat-composer-bar')
+    if (!bar || stopBtn) return
     stopBtn = document.createElement('button')
     stopBtn.className = 'secondary tts-stop'
     stopBtn.textContent = T.stop
     stopBtn.hidden = true
-    stopBtn.style.cssText = 'position:fixed;right:20px;bottom:96px;z-index:50'
+    stopBtn.type = 'button'
+    stopBtn.title = ko ? '답장 음성 재생 멈춤' : 'Stop speaking the reply aloud'
     stopBtn.onclick = () => queue?.stop()
-    document.body.appendChild(stopBtn)
+    bar.insertBefore(stopBtn, document.getElementById('ct-stop') || document.getElementById('ct-send'))
   }
   // Audio-once rule (design-0027): while the desktop companion is on, it plays
   // read-aloud itself (one renderer, one AudioContext), so the chat stays silent.

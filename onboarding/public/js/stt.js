@@ -9,7 +9,7 @@
   const ko = (document.documentElement?.lang || navigator.language || 'en').startsWith('ko')
   const T = ko
     ? { label: '음성 입력', note: '말하면 이 기기에서 바로 글자로 받아 적습니다 (오프라인). 처음 켤 때 음성 인식 모델을 한 번 받습니다', toggle: '채팅에 마이크 버튼 표시', dl: (d, t) => `음성 인식 모델 받는 중 ${mb(d)} / ${mb(t)} MB`, ready: '준비됨', missing: t => `켜면 음성 인식 모델 ${mb(t)} MB를 받음`, err: e => `오류: ${e}`, mic: '음성 입력', listening: '듣는 중 (Esc로 멈춤)', processing: '받아 적는 중', denied: '마이크 권한이 없습니다. 시스템 설정에서 마이크를 허용해 주세요', failed: e => `음성 입력 오류: ${e}` }
-    : { label: 'Voice input', note: 'Speech is transcribed on this device (offline). The first enable downloads the speech model once.', toggle: 'Show the mic button in chat', dl: (d, t) => `Downloading speech model ${mb(d)} / ${mb(t)} MB`, ready: 'Ready', missing: t => `Enabling downloads ${mb(t)} MB`, err: e => `Error: ${e}`, mic: 'Voice input', listening: 'Listening (Esc to stop)', processing: 'Transcribing', denied: 'No microphone permission. Allow the microphone in System Settings.', failed: e => `Voice input error: ${e}` }
+    : { label: 'Voice input', note: 'Speech is transcribed on this device (offline). The first enable downloads the speech model once.', toggle: 'Enable voice input for chat, companion and calls', dl: (d, t) => `Downloading speech model ${mb(d)} / ${mb(t)} MB`, ready: 'Ready', missing: t => `Enabling downloads ${mb(t)} MB`, err: e => `Error: ${e}`, mic: 'Voice input', listening: 'Listening (Esc to stop)', processing: 'Transcribing', denied: 'No microphone permission. Allow the microphone in System Settings.', failed: e => `Voice input error: ${e}` }
   function mb(n) { return Math.round((n || 0) / 1048576) }
   const token = () => window.getOnboardToken?.() || ''
   const getStatus = () => window.api('/api/stt/status')
@@ -81,7 +81,7 @@
       catch (e) { await refresh(); state.textContent = T.err(e.message) }
       finally { dumpBox.disabled = false }
     }
-    box.onchange = async () => { box.disabled = true; try { paint(await postJson('/api/stt/settings', { enabled: box.checked })) } catch (e) { state.textContent = T.err(e.message) } finally { box.disabled = false } }
+    box.onchange = async () => { box.disabled = true; try { paint(await postJson('/api/stt/settings', { enabled: box.checked })) } catch (e) { box.checked = !box.checked; state.textContent = T.err(e.message) } finally { box.disabled = false } }
     refresh()
   }
 
@@ -218,7 +218,7 @@
     if (!input || !bar || btn) return
     const style = document.createElement('style')
     style.textContent = `
-      .stt-mic { position: relative; width: 32px; height: 32px; padding: 0; border-radius: var(--radius-m); display: inline-flex; align-items: center; justify-content: center; }
+      .stt-mic { position: relative; }
       .stt-mic svg { width: 16px; height: 16px; }
       .stt-mic[data-state="listening"]::after { content: ''; position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: #e5484d; animation: stt-pulse 1.2s ease-in-out infinite; }
       .stt-mic[data-state="processing"] { opacity: 0.6; }
@@ -228,7 +228,7 @@
     btn = document.createElement('button')
     btn.type = 'button'
     btn.id = 'ct-mic'
-    btn.className = 'secondary stt-mic'
+    btn.className = 'secondary icon-button stt-mic'
     btn.hidden = true
     btn.setAttribute('aria-label', T.mic)
     btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>'

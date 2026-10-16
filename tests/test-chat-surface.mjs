@@ -203,7 +203,7 @@ assert(header.includes('id="ct-quickbar"'), 'quickbar sits in the header row (Mi
 assert(header.indexOf('id="ct-quickbar"') < header.indexOf('ct-lane-chip'), 'quickbar comes before the lane chip (left side)')
 assert(!header.includes('ct-pending'), 'old pending mark removed from header')
 assert(header.includes('ct-lane-chip') && header.includes('ct-new-convo'), 'lane and new conversation remain in header')
-assert(html.includes('<nav class="chat-quickbar" id="ct-quickbar"'), 'quickbar nav present')
+assert(html.includes('<nav class="button-row chat-quickbar" id="ct-quickbar"'), 'quickbar nav present')
 for (const name of ['whats-new', 'look-back', 'browse', 'dream', 'today']) assert(html.includes(`id="qb-${name}"`), `quickbar ${name} button present`)
 assert(html.includes('class="qb-dot" hidden'), 'dot starts hidden')
 assert(js.includes('initQuickbar()'), 'quickbar initialized')
@@ -215,7 +215,7 @@ assert(js.includes('s.hasUpdate || s.unseenNotes || s.pending.total > 0'), 'all 
 assert(js.includes('setInterval(() => { refresh(); refreshBrowse() }, PENDING_MS)'), 'status uses existing polling cadence')
 assert(js.includes("button.setAttribute('aria-label', text)") && js.includes('button.title = text'), 'tooltip and accessible labels share copy')
 assert(copy.includes('quickbarKo:') && copy.includes('qbWhatsNew:'), 'Korean and English copy provided')
-assert(css.includes('.chat-quickbar { display: flex; flex-direction: row') && css.includes('.chat-page-header .chat-lane-chip { margin-left: auto; }'), 'quickbar is a horizontal row in the header; lane chip + New conversation pushed right')
+assert(css.includes('.button-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); }') && css.includes('.chat-quickbar { flex-wrap: nowrap; }') && css.includes('.chat-page-header .chat-lane-chip { margin-left: auto; }'), 'quickbar is a horizontal row in the header; lane chip + New conversation pushed right')
 assert(css.includes('.qb-dot[hidden] { display: none; }'), 'hidden dot does not flash')
 assert(js.includes("e.key === 'Escape'") && js.includes("document.addEventListener('pointerdown'"), 'popover dismisses with Escape and outside click')
 
