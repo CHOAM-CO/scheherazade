@@ -190,10 +190,19 @@ await context.kill(10, new Set(), {
 assert.deepEqual(taskkills, [11], 'only taskkill roots, tolerate dead pids')
 let enumCommand
 await context.rows({ platform: 'win32', powershell: 'C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe', run: async (command, _args, options) => {
-  enumCommand = command; assert.equal(options.timeout, 10000)
+  enumCommand = command; assert.equal(options.timeout, 10000); assert.equal(options.maxBuffer, 32 * 1024 * 1024)
   return { stdout: '{"ProcessId":42,"ParentProcessId":10,"CommandLine":"node channel-local.mjs"}' }
 } })
 assert.match(enumCommand, /System32/)
+
+// Actually capture more than execFile's default 1 MB through the listing seam.
+const largeRows = await context.rows({
+  platform: 'win32', powershell: 'fixture-powershell',
+  run: (_command, _args, options) => promisify(execFile)(process.execPath, ['-e',
+    'process.stdout.write(JSON.stringify(Array.from({length:7000},(_,i)=>({ProcessId:i+1,ParentProcessId:1,Name:"node",CommandLine:"x".repeat(300)}))))'
+  ], options)
+})
+assert.equal(largeRows.length, 7000, 'large Windows listing exceeds 1 MB without overflow')
 
 // Real HTTP requests drive the actual lane ingest handler, not a fake route.
 // Each failure mode must allow the next inbound through, including Windows kill errors.
