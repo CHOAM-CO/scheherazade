@@ -116,7 +116,28 @@ await context.kill(10, new Set(), {
   readRows: async () => [{ pid: 11, ppid: 10, command: 'node /app/channel-local.mjs' }, { pid: 12, ppid: 11, command: 'sh work' }],
   platform: 'darwin', signal: pid => killed.push(pid), isInfrastructure: row => context.isMcp(row, servers)
 })
-assert.deepEqual(killed, [12], 'late MCP transport survives, its dispatched tool does not')
+assert.deepEqual(killed, [], 'late MCP transport and its child survive')
+
+assert.equal(context.isMcp({ command: 'node /app/channel-local.mjs-extra' }, servers), false, 'argv tokens cannot match path substrings')
+assert.equal(context.isMcp({ command: 'other-node /app/channel-local.mjs' }, servers), false, 'executable match is exact')
+assert.equal(context.isMcp({ command: 'mcp-server' }, { plain: { command: 'mcp-server' } }), true, 'argument-free transport matches')
+assert.equal(context.isMcp({ command: 'mcp-server unrelated' }, { plain: { command: 'mcp-server' } }), false)
+const wrappedServers = { wrapped: { command: 'npx', args: ['-y', '@pkg/server'] } }
+assert.equal(context.isMcp({ command: 'cmd.exe /d /s /c "npx -y @pkg/server"' }, wrappedServers), true)
+for (const platform of ['darwin', 'win32']) {
+  const signalled = []
+  await context.kill(10, new Set([99]), {
+    readRows: async () => [
+      { pid: 11, ppid: 10, command: 'cmd.exe /d /s /c "npx -y @pkg/server"' },
+      { pid: 12, ppid: 11, command: 'node actual-server.js' },
+      { pid: 13, ppid: 12, command: 'node browser-helper.js' },
+      { pid: 99, ppid: 10, command: 'node unrelated-tool.js' }
+    ], platform, signal: pid => signalled.push(pid),
+    run: async (_command, args) => signalled.push(Number(args[1])),
+    isInfrastructure: row => context.isMcp(row, wrappedServers)
+  })
+  assert.deepEqual(signalled, [99], `${platform}: wrapper descendants survive, stale snapshot does not protect a tool`)
+}
 
 const textStart = source.indexOf('  function eventMessageText (d) {')
 const textEnd = source.indexOf('\n  // Turn-close accounting', textStart)
@@ -161,12 +182,12 @@ assert.equal(voiceBoot[0].text, 'boot-token\n[voice transcription]\nhello')
 
 // Windows-shaped test runs on every host and simulates an already-dead root.
 const taskkills = []
-await context.kill(10, new Set([11]), {
+await context.kill(10, new Set(), {
   platform: 'win32',
   readRows: async () => [{ pid: 11, ppid: 10 }, { pid: 12, ppid: 11 }, { pid: 13, ppid: 12 }, { pid: 14, ppid: 11 }],
   run: async (_command, args) => { taskkills.push(Number(args[1])); throw Object.assign(new Error('already gone'), { code: 128 }) }
 })
-assert.deepEqual(taskkills.sort(), [12, 14], 'only taskkill roots, tolerate dead pids')
+assert.deepEqual(taskkills, [11], 'only taskkill roots, tolerate dead pids')
 let enumCommand
 await context.rows({ platform: 'win32', powershell: 'C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe', run: async (command, _args, options) => {
   enumCommand = command; assert.equal(options.timeout, 10000)

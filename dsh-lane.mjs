@@ -617,16 +617,29 @@ export function toolProcessRoots (rows, enginePid) {
   return rows.filter(r => r.pid !== Number(enginePid) && descendants.has(r.pid)).map(r => r.pid)
 }
 
-// Compare configured MCP command+arguments, not a one-time PID snapshot.
-// This protects lazy/restarted transports without protecting their tool children.
+// Tokenize quoted command lines before matching configured MCP argv.
+// Shell wrappers expose their payload after /c or -c; substring matches are unsafe.
 export function isMcpTransport (row, servers) {
-  const normalize = value => String(value || '').replace(/\\/g, '/').replace(/["']/g, '').toLowerCase()
-  const command = normalize(row.command)
+  const normalize = value => String(value || '').replace(/\\/g, '/').toLowerCase()
+  const basename = value => normalize(value).split('/').pop().replace(/\.(exe|cmd)$/, '')
+  const tokenize = command => [...String(command || '').matchAll(/"([^"]*)"|'([^']*)'|([^\s]+)/g)]
+    .map(match => match[1] ?? match[2] ?? match[3]).filter(Boolean)
+  let argv = tokenize(row.command)
+  if (/^(cmd|sh|bash|zsh)$/.test(basename(argv[0]))) {
+    const boundary = argv.findIndex(arg => /^(\/c|-c)$/i.test(arg))
+    if (boundary >= 0) {
+      const payload = argv.slice(boundary + 1)
+      argv = payload.length === 1 ? tokenize(payload[0]) : payload
+    }
+  }
   return Object.values(servers || {}).some(server => {
-    if (!server?.command) return false
-    const executable = normalize(server.command).split('/').pop().replace(/\.(exe|cmd)$/, '')
-    const args = (server.args || []).map(normalize)
-    return args.length > 0 && command.includes(executable) && args.every(arg => command.includes(arg))
+    if (!server?.command || !argv.length) return false
+    const expected = normalize(server.command)
+    const commandMatches = expected.includes('/')
+      ? normalize(argv[0]).replace(/\.(exe|cmd)$/, '') === expected.replace(/\.(exe|cmd)$/, '')
+      : basename(argv[0]) === basename(expected)
+    const args = server.args || []
+    return commandMatches && (args.length ? args.every((arg, index) => normalize(argv[index + 1]) === normalize(arg)) : argv.length === 1)
   })
 }
 
@@ -648,7 +661,14 @@ export async function killOwnedTools (enginePid, infrastructure = new Set(), {
   platform = process.platform, readRows = ownedProcessRows, run = execFileAsync, signal = process.kill, isInfrastructure = () => false
 } = {}) {
   const rows = await readRows()
-  for (const row of rows) if (isInfrastructure(row)) infrastructure.add(row.pid)
+  // Recompute from live command lines on every stop; never trust stale boot PIDs.
+  infrastructure = new Set(rows.filter(isInfrastructure).map(row => row.pid))
+  for (let changed = true; changed;) {
+    changed = false
+    for (const row of rows) if (infrastructure.has(row.ppid) && !infrastructure.has(row.pid)) {
+      infrastructure.add(row.pid); changed = true
+    }
+  }
   const owned = new Set(toolProcessRoots(rows, enginePid).filter(pid => !infrastructure.has(pid)))
   // taskkill recursively removes each root. Never taskkill its dead children again.
   const targets = platform === 'win32'
@@ -1036,22 +1056,14 @@ async function main () {
   const bootGreetingMarker = `[boot-greeting:${randomBytes(16).toString('hex')}]`
   let activeTurnGeneration = 0
   let turnConfig = await readAgentConfig(MEM)
-  // MCP transport processes are infrastructure, not dispatched tools. Keep
-  // them alive so the interrupt response and the next turn remain reachable.
-  const infrastructure = new Set()
-  async function refreshInfrastructure () {
-    try {
-      for (const pid of toolProcessRoots(await ownedProcessRows(), child.pid)) infrastructure.add(pid)
-    } catch (e) { errLog(`process snapshot unavailable: ${e.message}`) }
-  }
-  await refreshInfrastructure()
+  // Resolve transport ownership from live argv on each stop, including lazy servers.
   const control = createTurnControl({
     cancel: () => client.cancel(sessionId),
     clearPending: () => writePending([]),
     killTools: () => {
       let servers = {}
       try { servers = JSON.parse(fs.readFileSync(MCP_CONFIG_FILE, 'utf8')).mcpServers || {} } catch {}
-      return killOwnedTools(child.pid, infrastructure, { isInfrastructure: row => isMcpTransport(row, servers) })
+      return killOwnedTools(child.pid, new Set(), { isInfrastructure: row => isMcpTransport(row, servers) })
     }
   })
   // Deliver a mute turn's composed text as the real chat message. Unlike
