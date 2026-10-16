@@ -14,6 +14,22 @@ let superseding, once = false
 const selection = createLaneModelRetry(async model => ({ ok: model === 'new', reason: 'no endpoint' }), { wait: async () => { if (!once) { once = true; superseding = selection('new') } }, attempts: 3 })
 assert.equal((await selection('old')).reason, 'superseded')
 assert.equal((await superseding).ok, true)
+// A slower old request cannot apply after the latest selection.
+let finishOld
+const applied = []
+const ordered = createLaneModelRetry(async model => {
+  if (model === 'old') await new Promise(resolve => { finishOld = resolve })
+  applied.push(model)
+  return { ok: true }
+})
+const oldRequest = ordered('old')
+await new Promise(resolve => setImmediate(resolve))
+const newRequest = ordered('new')
+assert.deepEqual(applied, [])
+finishOld()
+assert.equal((await oldRequest).reason, 'superseded')
+assert.equal((await newRequest).ok, true)
+assert.deepEqual(applied, ['old', 'new'])
 console.log('PASS boot model selection retries endpoint readiness and latest selection wins')
 const fs = require('node:fs')
 const os = require('node:os')
