@@ -29,13 +29,15 @@
 import { prependMemoryContext } from './memory/turn-context.mjs'
 import { writeTurnErrorMarker, clearTurnErrorMarker, turnErrorLogLine } from './turn-error-marker.mjs'
 import { createServer } from 'node:http'
-import { spawn, execFileSync } from 'node:child_process'
+import { spawn, execFile } from 'node:child_process'
 import { readAgentConfig } from './channel-runtime.mjs'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { createRequire } from 'node:module'
+import { promisify } from 'node:util'
+const execFileAsync = promisify(execFile)
 
 const require = createRequire(import.meta.url)
 const { bootBoundary } = require('./boot-progress.cjs')
@@ -585,7 +587,7 @@ export function createTurnControl ({ cancel, clearPending, killTools, timeoutMs 
         await bounded(() => cancellation)
         if (!cleared) throw new Error('pending FIFO clear failed')
         return { ok: true, stopped: true }
-      })().finally(() => { stopping = null })
+      })().finally(() => { blocked = false; stopping = null })
       return stopping
     }
   }
@@ -603,36 +605,39 @@ export function toolProcessRoots (rows, enginePid) {
   return rows.filter(r => r.pid !== Number(enginePid) && descendants.has(r.pid)).map(r => r.pid)
 }
 
-function ownedProcessRows () {
-  let rows
-  if (process.platform === 'win32') {
-    const raw = execFileSync('powershell.exe', ['-NoProfile', '-Command',
-      'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Json -Compress'], { encoding: 'utf8', timeout: 3000 })
-    const parsed = JSON.parse(raw || '[]')
-    rows = (Array.isArray(parsed) ? parsed : [parsed]).map(r => ({ pid: r.ProcessId, ppid: r.ParentProcessId, name: r.Name }))
-  } else {
-    rows = execFileSync('ps', ['-axo', 'pid=,ppid=,comm='], { encoding: 'utf8', timeout: 3000 }).split('\n').flatMap(line => {
-      const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.+)$/)
-      return m ? [{ pid: Number(m[1]), ppid: Number(m[2]), name: m[3] }] : []
-    })
+export async function ownedProcessRows ({ platform = process.platform, run = execFileAsync, powershell = require('./proc.cjs').POWERSHELL_EXE } = {}) {
+  if (platform === 'win32') {
+    const { stdout } = await run(powershell, ['-NoProfile', '-Command',
+      'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress'], { encoding: 'utf8', timeout: 10000 })
+    const parsed = JSON.parse(stdout || '[]')
+    return (Array.isArray(parsed) ? parsed : [parsed]).map(r => ({ pid: r.ProcessId, ppid: r.ParentProcessId, name: r.Name, command: r.CommandLine || '' }))
   }
-  return rows
+  const { stdout } = await run('ps', ['-axww', '-o', 'pid=,ppid=,command='], { encoding: 'utf8', timeout: 3000 })
+  return stdout.split('\n').flatMap(line => {
+    const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.+)$/)
+    return m ? [{ pid: Number(m[1]), ppid: Number(m[2]), command: m[3] }] : []
+  })
 }
 
-export function killOwnedTools (enginePid, infrastructure = new Set()) {
-  const rows = ownedProcessRows()
-  const roots = toolProcessRoots(rows, enginePid).filter(pid => !infrastructure.has(pid))
-  const owned = new Set(roots)
-  for (let changed = true; changed;) {
-    changed = false
-    for (const r of rows) if (owned.has(r.ppid) && !owned.has(r.pid) && !infrastructure.has(r.pid)) { owned.add(r.pid); changed = true }
-  }
-  for (const pid of [...owned].reverse()) {
+export async function killOwnedTools (enginePid, infrastructure = new Set(), {
+  platform = process.platform, readRows = ownedProcessRows, run = execFileAsync, signal = process.kill
+} = {}) {
+  const rows = await readRows()
+  const owned = new Set(toolProcessRoots(rows, enginePid).filter(pid => !infrastructure.has(pid)))
+  // taskkill recursively removes each root. Never taskkill its dead children again.
+  const targets = platform === 'win32'
+    ? rows.filter(r => owned.has(r.pid) && !owned.has(r.ppid)).map(r => r.pid)
+    : [...owned].reverse()
+  await Promise.all(targets.map(async pid => {
     try {
-      if (process.platform === 'win32') require('./proc.cjs').killTree(pid, 'SIGKILL')
-      else process.kill(pid, 'SIGKILL')
-    } catch (e) { if (e.code !== 'ESRCH') throw e }
-  }
+      if (platform === 'win32') await run('taskkill', ['/PID', String(pid), '/T', '/F'], { timeout: 3000 })
+      else signal(pid, 'SIGKILL')
+    } catch (error) {
+      // taskkill exits non-zero for processes that exited during enumeration.
+      if (platform === 'win32' && typeof error.code === 'number') return
+      if (error.code !== 'ESRCH') throw error
+    }
+  }))
 }
 
 // ── engine boot ─────────────────────────────────────────────────────────────
@@ -1006,7 +1011,13 @@ async function main () {
   let turnConfig = await readAgentConfig(MEM)
   // MCP transport processes are infrastructure, not dispatched tools. Keep
   // them alive so the interrupt response and the next turn remain reachable.
-  const infrastructure = new Set(toolProcessRoots(ownedProcessRows(), child.pid))
+  const infrastructure = new Set()
+  async function refreshInfrastructure () {
+    try {
+      for (const pid of toolProcessRoots(await ownedProcessRows(), child.pid)) infrastructure.add(pid)
+    } catch (e) { errLog(`process snapshot unavailable: ${e.message}`) }
+  }
+  await refreshInfrastructure()
   const control = createTurnControl({
     cancel: () => client.cancel(sessionId),
     clearPending: () => writePending([]),
@@ -1236,6 +1247,7 @@ async function main () {
           promoteTurnText(lastInboundChannelId === 'in-app' ? line : `도구 호출 ${exceeded}회 넘어서 멈췄어`)
           control.interrupt().then(() => { openTurn = false; postPresence('done', 'turn-end') })
             .catch(e => errLog(`tool budget stop failed: ${e.message}`))
+            .finally(() => { openTurn = false; control.resume() })
           return
         }
         if (/__reply$/.test(String(d.name || '')) && d.callId) bootReplyCalls.add(d.callId)
@@ -1470,6 +1482,7 @@ async function main () {
         postPresence('done', 'turn-end')
         send(200, result)
       }).catch(e => { errLog(`session.cancel failed: ${e.message}`); send(504, { ok: false, error: e.message }) })
+        .finally(() => { openTurn = false; control.resume() })
       return
     }
     // POST /select-model {model, effort} (2026-10-07, route proxy live

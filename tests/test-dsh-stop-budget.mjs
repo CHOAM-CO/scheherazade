@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import vm from 'node:vm'
-import { spawn, spawnSync, execFileSync } from 'node:child_process'
+import { promisify } from 'node:util'
+import { createServer } from 'node:http'
+import { spawn, spawnSync, execFileSync, execFile } from 'node:child_process'
 
 const source = fs.readFileSync(new URL('../dsh-lane.mjs', import.meta.url), 'utf8')
 const start = source.indexOf('export function createTurnControl')
-const end = source.indexOf('export function killOwnedTools', start)
-const context = { setTimeout, clearTimeout }
+const end = source.indexOf('// ── engine boot', start)
+const context = { setTimeout, clearTimeout, process, execFileAsync: promisify(execFile), require: () => ({ POWERSHELL_EXE: 'C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe' }) }
 vm.createContext(context)
-vm.runInContext(source.slice(start, end).replaceAll('export function', 'function') + '\nthis.create = createTurnControl; this.roots = toolProcessRoots', context)
+vm.runInContext(source.slice(start, end).replaceAll('export ', '') + '\nthis.create = createTurnControl; this.roots = toolProcessRoots; this.kill = killOwnedTools; this.rows = ownedProcessRows', context)
 let clear = 0; let kills = 0; let resolveCancel
 const control = context.create({ cancel: () => new Promise(resolve => { resolveCancel = resolve }), clearPending: () => ++clear, killTools: () => { kills++ }, timeoutMs: 50 })
 const generation = control.generation
@@ -27,6 +29,7 @@ control.resume()
 assert.equal(control.valid(control.generation), true)
 const failure = context.create({ cancel: () => Promise.reject(new Error('offline')), clearPending: () => true, killTools: () => {}, timeoutMs: 10 })
 await assert.rejects(failure.interrupt(), /offline/)
+assert.equal(failure.blocked, false, 'failed cancel releases gate')
 const timeout = context.create({ cancel: () => new Promise(() => {}), clearPending: () => true, killTools: () => {}, timeoutMs: 5 })
 await assert.rejects(timeout.interrupt(), /timed out/)
 control.begin(false)
@@ -83,13 +86,7 @@ if (process.platform !== 'win32') {
   `], { stdio: ['ignore', 'pipe', 'inherit'] })
   const toolPid = await new Promise(resolve => engine.stdout.once('data', data => resolve(Number(String(data).trim()))))
   try {
-    const killStart = source.indexOf('function ownedProcessRows')
-    const killEnd = source.indexOf('// ── engine boot', killStart)
-    const killContext = { process, execFileSync, Set }
-    vm.createContext(killContext)
-    vm.runInContext(source.slice(start, end).replaceAll('export function', 'function') +
-      source.slice(killStart, killEnd).replaceAll('export function', 'function') + '\nthis.kill = killOwnedTools', killContext)
-    killContext.kill(engine.pid)
+    await context.kill(engine.pid)
     process.kill(engine.pid, 0)
     let alive = true
     for (let i = 0; i < 50 && alive; i++) {
@@ -99,4 +96,49 @@ if (process.platform !== 'win32') {
     assert.equal(alive, false, 'owned tool exits, engine survives')
   } finally { engine.kill('SIGKILL') }
 }
-console.log('PASS: immediate stop, awaited failure/timeout, inbox+wakes, generation, budgets, thinking-only guard, owned POSIX kill')
+// Windows-shaped test runs on every host and simulates an already-dead root.
+const taskkills = []
+await context.kill(10, new Set([11]), {
+  platform: 'win32',
+  readRows: async () => [{ pid: 11, ppid: 10 }, { pid: 12, ppid: 11 }, { pid: 13, ppid: 12 }, { pid: 14, ppid: 11 }],
+  run: async (_command, args) => { taskkills.push(Number(args[1])); throw Object.assign(new Error('already gone'), { code: 128 }) }
+})
+assert.deepEqual(taskkills.sort(), [12, 14], 'only taskkill roots, tolerate dead pids')
+let enumCommand
+await context.rows({ platform: 'win32', powershell: 'C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe', run: async (command, _args, options) => {
+  enumCommand = command; assert.equal(options.timeout, 10000)
+  return { stdout: '{"ProcessId":42,"ParentProcessId":10,"CommandLine":"node channel-local.mjs"}' }
+} })
+assert.match(enumCommand, /System32/)
+
+// Real HTTP requests drive the actual lane ingest handler, not a fake route.
+// Each failure mode must allow the next inbound through, including Windows kill errors.
+for (const mode of ['cancel', 'timeout', 'fifo', 'kill']) {
+  const lane = { ...context, createServer, Buffer, JSON, Promise, Date,
+    childExited: false, openTurn: true, tokenOk: () => true,
+    turnText: '', turnHadUserInbound: false, sawTextThisTurn: false, sawReplyThisTurn: false,
+    streamTimer: null, streamBuf: '', postPresence: () => {}, errLog: () => {}, log: () => {},
+    readPending: () => [], writePending: () => true, opensMuteGate: () => true,
+    lastInboundChannelId: 'in-app', renderInbound: async () => [], readAgentConfig: async () => ({}),
+    MEM: '', sessionId: 'test', client: { prompt: async () => {} }, bootBoundary: () => {},
+    turnConfig: {}, nextBootTurn: false
+  }
+  lane.control = context.create({
+    cancel: () => mode === 'cancel' ? Promise.reject(new Error('cancel failed')) : mode === 'timeout' ? new Promise(() => {}) : Promise.resolve(),
+    clearPending: () => mode !== 'fifo',
+    killTools: async () => { if (mode === 'kill') throw new Error('kill failed') }, timeoutMs: 5
+  })
+  vm.createContext(lane)
+  const routeStart = source.indexOf('  const server = createServer((req, res) => {')
+  const routeEnd = source.indexOf("\n  server.listen(0, '127.0.0.1'", routeStart)
+  vm.runInContext(source.slice(routeStart, routeEnd) + '\nthis.httpServer = server', lane)
+  await new Promise(resolve => lane.httpServer.listen(0, '127.0.0.1', resolve))
+  const url = `http://127.0.0.1:${lane.httpServer.address().port}`
+  try {
+    const stopped = await fetch(url + '/interrupt', { method: 'POST' })
+    assert.equal(stopped.status, 504, mode)
+    const next = await fetch(url + '/inbound', { method: 'POST', body: JSON.stringify({ content: 'try again' }) })
+    assert.equal(next.status, 200, `new inbound accepted after ${mode} failure`)
+  } finally { await new Promise(resolve => lane.httpServer.close(resolve)) }
+}
+console.log('PASS: stop recovery over HTTP, Windows root kill, async enumeration, budgets and owned POSIX kill')

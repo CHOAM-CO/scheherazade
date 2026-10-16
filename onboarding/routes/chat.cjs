@@ -32,6 +32,7 @@
 // Loopback round trips; generous only because /in does a notification write
 // under load. Not in staticCtx: single owner, this file.
 const CHAT_PROXY_TIMEOUT_MS = 5_000
+const CHAT_INTERRUPT_TIMEOUT_MS = 25_000
 const CHAT_STATUS_TIMEOUT_MS = 1_500
 
 function createRoutes(staticCtx) {
@@ -179,7 +180,7 @@ function createRoutes(staticCtx) {
           sendJson(res, 503, { error: 'chat channel is not running', reason: 'not_running' })
           return
         }
-        const r = await proxyToChannel(ep, '/interrupt', { method: 'POST', body: {} })
+        const r = await proxyToChannel(ep, '/interrupt', { method: 'POST', body: {}, timeoutMs: CHAT_INTERRUPT_TIMEOUT_MS })
         if (r.status === 0) {
           sendJson(res, 502, { error: 'chat channel did not answer', reason: 'unreachable' })
           return
