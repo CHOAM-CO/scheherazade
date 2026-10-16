@@ -10,7 +10,7 @@ const start = source.indexOf('export function createTurnControl')
 const end = source.indexOf('// ── engine boot', start)
 const context = { setTimeout, clearTimeout, process, execFileAsync: promisify(execFile), require: () => ({ POWERSHELL_EXE: 'C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe' }) }
 vm.createContext(context)
-vm.runInContext(source.slice(start, end).replaceAll('export ', '') + '\nthis.create = createTurnControl; this.roots = toolProcessRoots; this.kill = killOwnedTools; this.rows = ownedProcessRows', context)
+vm.runInContext(source.slice(start, end).replaceAll('export ', '') + '\nthis.create = createTurnControl; this.roots = toolProcessRoots; this.kill = killOwnedTools; this.rows = ownedProcessRows; this.isMcp = isMcpTransport', context)
 let clear = 0; let kills = 0; let resolveCancel
 const control = context.create({ cancel: () => new Promise(resolve => { resolveCancel = resolve }), clearPending: () => ++clear, killTools: () => { kills++ }, timeoutMs: 50 })
 const generation = control.generation
@@ -33,11 +33,20 @@ assert.equal(failure.blocked, false, 'failed cancel releases gate')
 const timeout = context.create({ cancel: () => new Promise(() => {}), clearPending: () => true, killTools: () => {}, timeoutMs: 5 })
 await assert.rejects(timeout.interrupt(), /timed out/)
 control.begin(false)
+for (let i = 0; i < 100; i++) assert.equal(control.tool(false), 0, 'reply calls excluded')
 for (let i = 0; i < 60; i++) assert.equal(control.tool(), 0)
+assert.equal(control.warning().budget, 60)
+assert.equal(control.warning(), null)
 assert.equal(control.tool(), 60)
 control.begin(true)
 for (let i = 0; i < 12; i++) assert.equal(control.tool(), 0)
 assert.equal(control.tool(), 12, 'boot budget is lower')
+control.begin(false)
+control.claimPrompt('ordinary queued message', 'secret-boot-marker', {})
+for (let i = 0; i < 13; i++) assert.equal(control.tool(), 0)
+control.claimPrompt('secret-boot-marker greeting', 'secret-boot-marker', {})
+for (let i = 0; i < 12; i++) assert.equal(control.tool(), 0)
+assert.equal(control.tool(), 12, 'boot budget belongs to claimed prompt, not next turn')
 control.begin(false, { DSH_TOOL_BUDGET: '2' })
 assert.equal(control.tool(), 0); assert.equal(control.tool(), 0); assert.equal(control.tool(), 2)
 assert.deepEqual(Array.from(context.roots([{ pid: 10, ppid: 1 }, { pid: 11, ppid: 10 }, { pid: 12, ppid: 11 }, { pid: 20, ppid: 1 }], 10)), [11, 12])
@@ -74,7 +83,7 @@ idle(); assert.equal((await outcome).accepted, true)
 assert.match(source, /else if \(turnHadUserInbound && sawTextThisTurn\)/)
 assert.match(source, /if \(control.blocked\) return/)
 assert.match(source, /if \(!control.valid\(generation\)\) return/)
-assert.match(source, /const exceeded = control.tool\(\)/)
+assert.match(source, /const exceeded = control.tool\(!isReplyClassTool\(d.name\)\)/)
 assert.match(source, /control.interrupt\(\).then/)
 // Real POSIX process ownership: kill a dispatched child, preserve its engine.
 if (process.platform !== 'win32') {
@@ -96,6 +105,16 @@ if (process.platform !== 'win32') {
     assert.equal(alive, false, 'owned tool exits, engine survives')
   } finally { engine.kill('SIGKILL') }
 }
+const servers = { channel: { command: 'node', args: ['/app/channel-local.mjs'] } }
+assert.equal(context.isMcp({ command: 'node /app/channel-local.mjs' }, servers), true)
+assert.equal(context.isMcp({ command: 'node /app/do-work.mjs' }, servers), false)
+const killed = []
+await context.kill(10, new Set(), {
+  readRows: async () => [{ pid: 11, ppid: 10, command: 'node /app/channel-local.mjs' }, { pid: 12, ppid: 11, command: 'sh work' }],
+  platform: 'darwin', signal: pid => killed.push(pid), isInfrastructure: row => context.isMcp(row, servers)
+})
+assert.deepEqual(killed, [12], 'late MCP transport survives, its dispatched tool does not')
+
 // Windows-shaped test runs on every host and simulates an already-dead root.
 const taskkills = []
 await context.kill(10, new Set([11]), {

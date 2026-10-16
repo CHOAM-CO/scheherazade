@@ -559,6 +559,7 @@ export function createTurnControl ({ cancel, clearPending, killTools, timeoutMs 
   let blocked = false
   let calls = 0
   let budget = 60
+  let warned = false
   return {
     get generation () { return generation },
     get blocked () { return blocked },
@@ -566,10 +567,18 @@ export function createTurnControl ({ cancel, clearPending, killTools, timeoutMs 
     resume () { blocked = false },
     begin (boot, config = {}) {
       calls = 0
+      warned = false
       const n = Number(config[boot ? 'DSH_BOOT_TOOL_BUDGET' : 'DSH_TOOL_BUDGET'])
       budget = Number.isInteger(n) && n > 0 ? n : (boot ? 12 : 60)
     },
-    tool () { return ++calls > budget ? budget : 0 },
+    claimPrompt (text, marker, config) {
+      if (String(text).includes(marker)) this.begin(true, config)
+    },
+    tool (count = true) { return count && ++calls > budget ? budget : 0 },
+    warning () {
+      if (!warned && calls >= Math.ceil(budget * 0.8)) { warned = true; return { calls, budget } }
+      return null
+    },
     interrupt () {
       if (stopping) return stopping
       generation++
@@ -605,6 +614,19 @@ export function toolProcessRoots (rows, enginePid) {
   return rows.filter(r => r.pid !== Number(enginePid) && descendants.has(r.pid)).map(r => r.pid)
 }
 
+// Compare configured MCP command+arguments, not a one-time PID snapshot.
+// This protects lazy/restarted transports without protecting their tool children.
+export function isMcpTransport (row, servers) {
+  const normalize = value => String(value || '').replace(/\\/g, '/').replace(/["']/g, '').toLowerCase()
+  const command = normalize(row.command)
+  return Object.values(servers || {}).some(server => {
+    if (!server?.command) return false
+    const executable = normalize(server.command).split('/').pop().replace(/\.(exe|cmd)$/, '')
+    const args = (server.args || []).map(normalize)
+    return args.length > 0 && command.includes(executable) && args.every(arg => command.includes(arg))
+  })
+}
+
 export async function ownedProcessRows ({ platform = process.platform, run = execFileAsync, powershell = require('./proc.cjs').POWERSHELL_EXE } = {}) {
   if (platform === 'win32') {
     const { stdout } = await run(powershell, ['-NoProfile', '-Command',
@@ -620,9 +642,10 @@ export async function ownedProcessRows ({ platform = process.platform, run = exe
 }
 
 export async function killOwnedTools (enginePid, infrastructure = new Set(), {
-  platform = process.platform, readRows = ownedProcessRows, run = execFileAsync, signal = process.kill
+  platform = process.platform, readRows = ownedProcessRows, run = execFileAsync, signal = process.kill, isInfrastructure = () => false
 } = {}) {
   const rows = await readRows()
+  for (const row of rows) if (isInfrastructure(row)) infrastructure.add(row.pid)
   const owned = new Set(toolProcessRoots(rows, enginePid).filter(pid => !infrastructure.has(pid)))
   // taskkill recursively removes each root. Never taskkill its dead children again.
   const targets = platform === 'win32'
@@ -1007,7 +1030,8 @@ async function main () {
   // SOFT path -- no engine kill, no lane reboot, no --resume. openTurn is the
   // 409 gate: set when a prompt goes out, cleared at turn/end.
   let openTurn = false
-  let nextBootTurn = false
+  const bootGreetingMarker = `[boot-greeting:${randomBytes(16).toString('hex')}]`
+  let activeTurnGeneration = 0
   let turnConfig = await readAgentConfig(MEM)
   // MCP transport processes are infrastructure, not dispatched tools. Keep
   // them alive so the interrupt response and the next turn remain reachable.
@@ -1021,17 +1045,21 @@ async function main () {
   const control = createTurnControl({
     cancel: () => client.cancel(sessionId),
     clearPending: () => writePending([]),
-    killTools: () => killOwnedTools(child.pid, infrastructure)
+    killTools: () => {
+      let servers = {}
+      try { servers = JSON.parse(fs.readFileSync(MCP_CONFIG_FILE, 'utf8')).mcpServers || {} } catch {}
+      return killOwnedTools(child.pid, infrastructure, { isInfrastructure: row => isMcpTransport(row, servers) })
+    }
   })
   // Deliver a mute turn's composed text as the real chat message. Unlike
   // postPresence this is DELIVERY, not presence -- so it verifies the POST
   // landed and falls back to the nudge when it did not (channel down, port
   // stale). channel-local's promote branch enqueues the text as a normal
   // agent message and retires the draft in the same breath.
-  function promoteTurnText (text, generation = control.generation) {
-    if (!control.valid(generation)) return
+  function promoteTurnText (text, generation = control.generation, receipt = false) {
+    if (!receipt && !control.valid(generation)) return
     const fail = (why) => {
-      if (!control.valid(generation)) return
+      if (receipt || !control.valid(generation)) return
       errLog(`mute promotion failed (${why}) -- falling back to the nudge`)
       sendMuteNudge()
     }
@@ -1084,10 +1112,11 @@ async function main () {
       if (control.blocked) return
       if (event.type === 'turn/start') {
         turnText = ''; sawTextThisTurn = false; sawReplyThisTurn = false
-        control.begin(nextBootTurn, turnConfig)
-        nextBootTurn = false
+        activeTurnGeneration = control.generation
+        control.begin(false, turnConfig)
         openTurn = true
-      }
+      } else if (activeTurnGeneration !== control.generation) return
+      if (event.type === 'user/message') control.claimPrompt(eventMessageText(event.data), bootGreetingMarker, turnConfig)
       // Settlement notice (any event type that carries the injected user
       // message): retire the child from the roster by its own id.
       try {
@@ -1240,13 +1269,16 @@ async function main () {
       } else if (event.type === 'tool/call') {
         const d = event.data || {}
         log(`tool> ${d.name || '?'}`)
-        const exceeded = control.tool()
+        const exceeded = control.tool(!isReplyClassTool(d.name))
+        const warning = control.warning()
+        if (warning) promoteTurnText(`Tool budget warning: ${warning.calls}/${warning.budget} calls used.`)
         if (exceeded) {
           const line = `Stopped after exceeding ${exceeded} tool calls.`
           // In-app copy is English; the platform channel uses Korean.
-          promoteTurnText(lastInboundChannelId === 'in-app' ? line : `도구 호출 ${exceeded}회 넘어서 멈췄어`)
-          control.interrupt().then(() => { openTurn = false; postPresence('done', 'turn-end') })
-            .catch(e => errLog(`tool budget stop failed: ${e.message}`))
+          control.interrupt().then(() => {
+            postPresence('done', 'turn-end')
+            promoteTurnText(lastInboundChannelId === 'in-app' ? line : `도구 호출 ${exceeded}회 넘어서 멈췄어`, control.generation, true)
+          }).catch(e => errLog(`tool budget stop failed: ${e.message}`))
             .finally(() => { openTurn = false; control.resume() })
           return
         }
@@ -1429,7 +1461,8 @@ async function main () {
   // would hide the markers from the caption pass behind escaping. Image
   // parts (inline routes) ride AFTER the text part.
   async function renderInbound (content, meta) {
-    const built = await buildPromptContent(prependMemoryContext(content, meta))
+    const tagged = meta?.bootGreeting ? `${bootGreetingMarker}\n${content}` : content
+    const built = await buildPromptContent(prependMemoryContext(tagged, meta))
     return [{ type: 'text', text: renderChannelTag({ content: built.text, meta: meta || {} }) }, ...built.parts]
   }
 
@@ -1440,7 +1473,6 @@ async function main () {
     for (const p of stale) {
       try {
         if (opensMuteGate({ channelId: (p.meta || {}).channelId, content: p.content })) turnHadUserInbound = true
-        if (p.meta?.bootGreeting) nextBootTurn = true
         await client.prompt(sessionId, await renderInbound(p.content, p.meta))
         if (p.meta?.bootGreeting) bootBoundary('greeting ingested', null, MEM)
         openTurn = true
@@ -1578,7 +1610,6 @@ async function main () {
       lastInboundChannelId = String((payload.meta || {}).channelId || 'in-app')
       openTurn = true // /interrupt is answerable from here until turn/end
       const generation = control.generation
-      if (payload.meta?.bootGreeting) nextBootTurn = true
       Promise.all([renderInbound(content, payload.meta), readAgentConfig(MEM)])
         .then(([parts, config]) => {
           if (!control.valid(generation)) return
