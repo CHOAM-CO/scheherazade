@@ -10,13 +10,23 @@ diff --git a/node_modules/@deepseek-ai/dsh-host-apiproxy/lib/index.js b/node_mod
  				const { sessionId } = request.payload;
  				const agent = ctx.agents.get(sessionId);
  				if (agent === void 0) return Promise.resolve(err(request, {
-@@ -2901,7 +2901,8 @@
+@@ -2901,7 +2901,18 @@
  					details: { sessionId }
  				}));
  				if (hasSubagentOwner(agent.session, agent)) return Promise.resolve(err(request, subagentOwnershipError(sessionId)));
 -				agent.cancel({ kind: "user" }, { keepInbox: true });
-+				agent.cancel({ kind: "user" }, { keepInbox: false });
-+				await agent.whenIdle();
++				const owned = new Set([agent]);
++				for (let changed = true; changed;) {
++					changed = false;
++					for (const candidate of ctx.agents.list()) {
++						if (!owned.has(candidate) && [...owned].some((parent) => ctx.agents.isOwnedBy(candidate.id, parent))) {
++							owned.add(candidate);
++							changed = true;
++						}
++					}
++				}
++				for (const target of owned) target.cancel({ kind: "user" }, { keepInbox: false });
++				await Promise.all([...owned].map((target) => target.whenIdle()));
  				return Promise.resolve(ok(request, { accepted: true }));
  			}
  		},

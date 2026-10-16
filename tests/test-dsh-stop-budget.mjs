@@ -46,17 +46,26 @@ const forward = spawnSync('git', ['apply', '--check', patchPath.pathname], { cwd
 if (forward.status !== 0) execFileSync('git', ['apply', '--check', '--reverse', patchPath.pathname], { cwd, stdio: 'pipe' })
 const patch = fs.readFileSync(patchPath, 'utf8')
 assert.match(patch, /keepInbox: false/)
-assert.match(patch, /await agent.whenIdle\(\)/)
+assert.match(patch, /target.whenIdle\(\)/)
 const gateway = fs.readFileSync(new URL('../node_modules/@deepseek-ai/dsh-host-apiproxy/lib/index.js', import.meta.url), 'utf8')
-const patched = gateway.includes('agent.cancel({ kind: "user" }, { keepInbox: false });') ? gateway : gateway.replace('cancel(request) {\n\t\t\t\tconst { sessionId }', 'async cancel(request) {\n\t\t\t\tconst { sessionId }').replace('agent.cancel({ kind: "user" }, { keepInbox: true });', 'agent.cancel({ kind: "user" }, { keepInbox: false });\n\t\t\t\tawait agent.whenIdle();')
+// Reconstruct the patched method from the unified diff additions, without
+// writing the installed dependency. Context stays from the actual package.
+const added = patch.split('\n').filter(line => line.startsWith('+') && !line.startsWith('+++')).map(line => line.slice(1))
+const replacement = added.slice(1).join('\n')
+const patched = gateway.includes('for (const target of owned)') ? gateway : gateway
+  .replace('cancel(request) {\n\t\t\t\tconst { sessionId }', 'async cancel(request) {\n\t\t\t\tconst { sessionId }')
+  .replace('agent.cancel({ kind: "user" }, { keepInbox: true });', replacement.trimStart())
 const method = patched.slice(patched.indexOf('async cancel(request) {'), patched.indexOf('\n\t\t},\n\t\tsubagents:', patched.indexOf('async cancel(request) {'))).trim()
 let inbox = ['queued']; let wake = true; let aborted = false; let idle
 const agent = { session: {}, cancel (_cause, options) { aborted = true; if (!options.keepInbox) { inbox = []; wake = false } }, whenIdle: () => new Promise(resolve => { idle = resolve }) }
-const sandbox = { ctx: { agents: new Map([['s', agent]]) }, hasSubagentOwner: () => false, ok: (_req, value) => value, err: () => { throw new Error('unexpected error') } }
+let childCancelled = false
+const child = { id: 'child', cancel (_cause, opts) { childCancelled = !opts.keepInbox }, whenIdle: async () => {} }
+const registry = { get: () => agent, list: () => [agent, child], isOwnedBy: (id, parent) => id === 'child' && parent === agent }
+const sandbox = { ctx: { agents: registry }, hasSubagentOwner: () => false, ok: (_req, value) => value, err: () => { throw new Error('unexpected error') } }
 vm.createContext(sandbox)
 vm.runInContext('this.handler = ({' + method + '})', sandbox)
 const outcome = sandbox.handler.cancel({ payload: { sessionId: 's' } })
-assert.equal(aborted, true); assert.deepEqual(inbox, []); assert.equal(wake, false)
+assert.equal(aborted, true); assert.deepEqual(inbox, []); assert.equal(wake, false); assert.equal(childCancelled, true)
 idle(); assert.equal((await outcome).accepted, true)
 // Thinking has no visible-text flag, so the existing mute recovery does not fire.
 assert.match(source, /else if \(turnHadUserInbound && sawTextThisTurn\)/)
