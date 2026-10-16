@@ -57,3 +57,15 @@ try {
   assert.equal(notices.length, before)
   console.log('call context authenticated HTTP system-turn delivery and native rollback passed')
 } finally { await new Promise(resolve => server.close(resolve)) }
+
+for (const callEnabled of ['true', 'false']) {
+  for (const stt of ['true', 'false']) {
+    for (const tts of ['true', 'false']) {
+      cfg = { CALL_ENABLED: callEnabled, STT_ENABLED: stt, TTS_ENABLED: tts }
+      await get.handler({}, {})
+      assert.equal(result.data.allowed, stt === 'true' && tts === 'true')
+      assert.equal(result.data.enabled, callEnabled === 'true' && stt === 'true' && tts === 'true')
+    }
+  }
+}
+console.log('Call status uses shared effective-call predicate across all prerequisite combinations passed')

@@ -10,6 +10,7 @@
 // PCM chunks as application/octet-stream, and each reply carries the newest
 // partial plus any finals (endpoints) since the previous reply.
 const path = require('node:path')
+const { isCallAllowed, isCallEnabled } = require('../call-state.cjs')
 const callContext = require('../call-context.cjs')
 const { createService: createSignalService } = require('./pending-signal.cjs')
 const { createDump } = require('../stt/dump.cjs')
@@ -77,12 +78,12 @@ function createRoutes(ctx) {
 
   return [
     { method: 'GET', match: p => p === '/api/call', handler: async (_req, res) => {
-      const c = readAgentConfig(); sendJson(res, 200, { enabled: c.CALL_ENABLED === 'true' && c.STT_ENABLED === 'true' && c.TTS_ENABLED === 'true', allowed: c.STT_ENABLED === 'true' && c.TTS_ENABLED === 'true' })
+      const c = readAgentConfig(); sendJson(res, 200, { enabled: isCallEnabled(c), allowed: isCallAllowed(c) })
     } },
     { method: 'POST', match: p => p === '/api/call', handler: async (req, res, call = {}) => {
       const b = await readJsonBody(req), c = readAgentConfig()
       if (typeof b.enabled !== 'boolean') return sendJson(res, 400, { error: 'enabled must be boolean' })
-      if (b.enabled && (c.STT_ENABLED !== 'true' || c.TTS_ENABLED !== 'true')) return sendJson(res, 409, { error: 'Enable read aloud and voice input first' })
+      if (b.enabled && !isCallAllowed(c)) return sendJson(res, 409, { error: 'Enable read aloud and voice input first' })
       const previous = c.CALL_ENABLED || 'false'
       writeAgentConfig({ CALL_ENABLED: String(b.enabled) })
       try { call.agentControls?.companion?.()?.setCallEnabled(b.enabled) }

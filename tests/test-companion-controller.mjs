@@ -163,7 +163,7 @@ try {
     await controller.command({ action: 'settings', enabled: false })
   })
   await test('persisted call restores temporary orb at boot without enabling companion preference', () => {
-    const config = { CALL_ENABLED: 'true', COMPANION_ENABLED: 'false', COMPANION_VARIANT: 'face' }
+    const config = { CALL_ENABLED: 'true', STT_ENABLED: 'true', TTS_ENABLED: 'true', COMPANION_ENABLED: 'false', COMPANION_VARIANT: 'face' }
     const resumed = createCompanion({
       electron: { app: new EventEmitter(), BrowserWindow: Window, screen, Tray, Menu: { buildFromTemplate: x => x }, nativeImage: { createFromPath: () => ({ resize: () => ({}) }) }, shell: { beep() {} } },
       home, url, bootPathFor: () => '/boot?t=test-token', openMain() {}, autoPoll: false,
@@ -180,6 +180,25 @@ try {
       assert.equal(resumed.snapshot().enabled, false)
       assert.equal(windows.at(-1).dead, true)
     } finally { resumed.dispose() }
+  })
+  await test('stale persisted call with disabled prerequisites opens no window and clears intent', () => {
+    for (const [stt, tts] of [['false', 'false'], ['true', 'false'], ['false', 'true']]) {
+      const config = { CALL_ENABLED: 'true', STT_ENABLED: stt, TTS_ENABLED: tts, COMPANION_ENABLED: 'false' }
+      const before = windows.length
+      const resumed = createCompanion({
+        electron: { app: new EventEmitter(), BrowserWindow: Window, screen, Tray, Menu: {}, nativeImage: {}, shell: {} },
+        home, url, bootPathFor: () => '/boot?t=test-token', openMain() {}, autoPoll: false,
+        readConfig: () => ({ ...config }), writeConfig: fields => Object.assign(config, fields),
+        probeOverride: () => { throw new Error('Disabled call must not probe fullscreen') },
+      })
+      try {
+        assert.equal(windows.length, before)
+        assert.equal(resumed.snapshot().callHud, false)
+        assert.equal(resumed.snapshot().enabled, false)
+        assert.equal(resumed.active, false)
+        assert.equal(config.CALL_ENABLED, 'false')
+      } finally { resumed.dispose() }
+    }
   })
   await test('disabled poll produces no traffic', async () => { const n = requests.length; await controller.poll(); assert.equal(requests.length, n) })
 } finally {

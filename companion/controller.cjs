@@ -1,6 +1,7 @@
 'use strict'
 
 const path = require('node:path')
+const { isCallEnabled } = require('../onboarding/call-state.cjs')
 const { readState, writeState, initialAnchor, clampAnchor, layout, hitShape, fullscreenDecision, canProactive, classifyMessage, readConfig: parseConfig, sizeOf, VARIANTS, speakable } = require('./model.cjs')
 const { createFullscreenProbe } = require('./fullscreen.cjs')
 
@@ -310,7 +311,9 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
     if (win) win.destroy()
   }
   app.once('before-quit', dispose)
-  if (readConfig().CALL_ENABLED === 'true') setCallEnabled(true)
+  const bootConfig = readConfig()
+  if (bootConfig.CALL_ENABLED === 'true' && !isCallEnabled(bootConfig)) writeConfig({ CALL_ENABLED: 'false' })
+  if (isCallEnabled(bootConfig)) setCallEnabled(true)
   else if (settings.enabled) { start(); ensureWindow(); fullscreen = probe(); applyVisibility() }
   return { snapshot, command, setCallEnabled, dispose, poll, isWindow: candidate => candidate === win,
     get active() { return listening },
