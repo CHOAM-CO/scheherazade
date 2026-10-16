@@ -9,6 +9,7 @@
   <body>
     <div class="app-shell">
       <div class="card" id="wizard-card">
+        <p class="field-hint" id="wizard-progress" role="status"></p>
         <!-- Step 0 -->
         <section class="step" data-step="0">
           <h1 id="s0-title"></h1>
@@ -81,10 +82,11 @@
           <h1 id="s2-title"></h1>
           <p id="s2-body"></p>
           <div class="field">
+            <label for="s2-name">Name</label>
             <input type="text" id="s2-name" />
           </div>
           <div class="step-actions">
-            <span></span>
+            <button class="secondary" id="s2-back" type="button">Back</button>
             <button id="s2-next"></button>
           </div>
         </section>
@@ -92,15 +94,15 @@
         <!-- Step 3: persona -->
         <section class="step hidden" data-step="3">
           <h1 id="s3-title"></h1>
-          <div id="seed-choice" class="field"><h2>씨앗 하나</h2><p>함께 자라갈 중심 하나를 골라 줘</p>
-          <div class="radio-row"><label><input type="radio" name="seed" value="curiosity">호기심</label><label><input type="radio" name="seed" value="care">돌봄</label><label><input type="radio" name="seed" value="mischief">장난기</label><label><input type="radio" name="seed" value="custom">직접 쓰기</label></div>
-          <input id="seed-text" maxlength="120" placeholder="짧은 한 줄"></div>
+          <div id="seed-choice" class="field"><h2 id="seed-title">A starting trait</h2><p id="seed-note">Choose a starting point for your companion.</p>
+          <div class="radio-row"><label><input type="radio" name="seed" value="curiosity"><span id="seed-curiosity-label">Curiosity</span></label><label><input type="radio" name="seed" value="care"><span id="seed-care-label">Care</span></label><label><input type="radio" name="seed" value="mischief"><span id="seed-mischief-label">Playfulness</span></label><label><input type="radio" name="seed" value="custom"><span id="seed-custom-label">Write your own</span></label></div>
+          <label for="seed-text" id="seed-text-label">Your starting trait</label><input type="text" id="seed-text" maxlength="120" placeholder="One short sentence"></div>
           <div class="field">
             <label id="s3-q1-label"></label>
             <div class="radio-row" id="s3-q1-options"></div>
           </div>
           <div class="field">
-            <label id="s3-q2-label"></label>
+            <label for="s3-q2-text" id="s3-q2-label"></label>
             <input type="text" id="s3-q2-text" />
             <div class="chips" id="s3-q2-chips"></div>
           </div>
@@ -108,9 +110,9 @@
             <label id="s3-q3-label"></label>
             <div class="radio-row">
               <label><input type="radio" name="s3-q3" value="yes" /> <span id="s3-q3-yes-prefix"></span></label>
-              <input type="time" id="s3-q3-start" value="09:00" style="width: auto" />
+              <input type="time" aria-label="Available from" id="s3-q3-start" value="09:00" style="width: auto" />
               <span>~</span>
-              <input type="time" id="s3-q3-end" value="22:00" style="width: auto" />
+              <input type="time" aria-label="Available until" id="s3-q3-end" value="22:00" style="width: auto" />
               <span id="s3-q3-yes-suffix"></span>
               <label><input type="radio" name="s3-q3" value="no" /> <span id="s3-q3-no"></span></label>
             </div>
@@ -118,7 +120,7 @@
           </div>
           <div class="status-line failure hidden" id="s3-status"></div>
           <div class="step-actions">
-            <span></span>
+            <button class="secondary" id="s3-back" type="button">Back</button>
             <button id="s3-next"></button>
           </div>
         </section>

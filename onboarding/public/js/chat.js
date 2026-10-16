@@ -1096,20 +1096,26 @@
       details.append(summary); popover.append(details)
       const pathLabel = document.createElement('p'); pathLabel.textContent = Q.qbExtensionPath; details.append(pathLabel)
       const pathText = document.createElement('code'); pathText.textContent = browseStatus?.extensionPath || ''; details.append(pathText)
-      const copy = document.createElement('button'); copy.textContent = Q.qbCopy; copy.type = 'button'; details.append(copy)
+      const copy = document.createElement('button'); copy.textContent = Q.qbCopy; copy.className = 'secondary'; copy.type = 'button'; details.append(copy)
       const guide = document.createElement('a'); guide.href = '/api/settings/browse-live/install'; guide.textContent = Q.qbInstall; guide.target = '_blank'; guide.rel = 'noopener'; popover.append(guide)
       const pair = document.createElement('button'); pair.textContent = document.documentElement.lang.startsWith('ko') ? 'Chrome 확장 프로그램 연결' : 'Connect Chrome extension'; pair.type = 'button'; popover.append(pair)
       const line = document.createElement('p'); line.setAttribute('role', 'status'); line.textContent = browseStatus?.paired ? Q.qbPaired : browseStatus?.extensionPresent === false ? (document.documentElement.lang.startsWith('ko') ? '확장 프로그램 없음' : 'Extension missing') : (document.documentElement.lang.startsWith('ko') ? '연결되지 않음' : 'Not paired'); popover.prepend(line)
       toggle.onchange = async () => {
         toggle.disabled = true
         try { await window.api('/api/settings/browse-live', { method: 'POST', body: JSON.stringify({ browseLive: toggle.checked }) }); await refreshBrowse() }
-        catch (e) { toggle.checked = !toggle.checked; line.textContent = e.message }
+        catch (e) { toggle.checked = !toggle.checked; line.textContent = window.COPY.genericError(e.message) }
         finally { toggle.disabled = false }
       }
-      copy.onclick = async () => { try { await navigator.clipboard.writeText(pathText.textContent); copy.textContent = Q.qbCopied } catch (e) { line.textContent = e.message } }
+      copy.onclick = async () => { try { await navigator.clipboard.writeText(pathText.textContent); copy.textContent = Q.qbCopied } catch (e) { line.textContent = window.COPY.genericError(e.message) } }
       pair.onclick = async () => {
         pair.disabled = true; line.textContent = Q.qbPairing
-        try { const r = await window.api('/api/settings/browse-live/pair', { method: 'POST' }); line.textContent = (r.status === 'paired' ? Q.qbPaired : Q.qbPairFailed) + (r.instructions ? '\n' + r.instructions : '') }
+        try {
+          const r = await window.api('/api/settings/browse-live/pair', { method: 'POST' })
+          line.textContent = r.status === 'paired' ? Q.qbPaired : Q.qbPairFailed
+          if (r.instructions) {
+            const diagnostics = document.createElement('p'); diagnostics.textContent = r.instructions; details.append(diagnostics)
+          }
+        }
         catch (e) { line.textContent = Q.qbPairFailed + '. Check Chrome and try again.' }
         finally { pair.disabled = false; await refreshBrowse() }
       }

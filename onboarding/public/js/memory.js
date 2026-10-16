@@ -87,6 +87,7 @@
     tree: null, // { root, exists, nodes, truncated, depthCapped } | { error }
     treeSet: new Set(), // rel path of every file in the tree
     recent: [], // ledger rows
+    recentError: false,
     recentRel: new Map(), // rel path -> ts, only rows inside the agent folder
     open: new Set(['v:recent', 'v:known']), // expanded folders, kept across reloads
     renderSeq: 0, // drops a slow response after the user clicked elsewhere
@@ -553,7 +554,8 @@
     // outside (e.g. ~/.chromux/config.json) -> the OS opens it, as before.
     const recentRows = state.recent.slice(0, RECENT_LIST_MAX)
     folder(tree, 'v:recent', F.recentNode, 0, false, () => {
-      if (recentRows.length === 0) tree.appendChild(el('div', 'mem-note-row', F.recentEmpty))
+      if (state.recentError) tree.appendChild(el('div', 'mem-note-row', 'Could not load recent files. Refresh to retry.'))
+      else if (recentRows.length === 0) tree.appendChild(el('div', 'mem-note-row', F.recentEmpty))
       for (const row of recentRows) {
         const rel = relInsideHome(row.path)
         const inTree = rel && (!state.tree || state.tree.truncated || state.treeSet.has(rel))
@@ -623,8 +625,10 @@
     walk(tree.nodes)
     try {
       state.recent = ((await api('/api/files/recent')).rows || [])
+      state.recentError = false
     } catch (err) {
       console.error('recent files load failed:', err)
+      state.recentError = true
       state.recent = []
     }
     collectRecentRel()

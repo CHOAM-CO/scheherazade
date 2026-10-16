@@ -59,6 +59,10 @@
     const target = document.querySelector(`.step[data-step="${name}"]`)
     if (!target) throw new Error(`no such step section: ${name}`) // fail loud on a wiring bug
     target.classList.remove('hidden')
+    const heading = target.querySelector('h1')
+    if (heading) { heading.tabIndex = -1; heading.focus() }
+    const stages = ['0', '1', '1b', '2', '3', '4', '4b', '5']
+    if ($('wizard-progress')) $('wizard-progress').textContent = `Setup step ${stages.indexOf(String(name)) + 1} of ${stages.length}`
   }
 
   async function api(path, options) {
@@ -1117,6 +1121,7 @@
     $('s2-title').textContent = C.step2.title
     $('s2-body').textContent = C.step2.body
     $('s2-next').textContent = C.step2.button
+    $('s2-back').onclick = () => showStep('1')
     if (!$('s2-name').value) $('s2-name').value = state.displayName || C.step2.defaultName
     $('s2-next').onclick = () => {
       const name = $('s2-name').value.trim() || C.step2.defaultName
@@ -1128,6 +1133,12 @@
   // ── Step 3: persona (3 questions) ───────────────────────────────────
   function renderStep3() {
     $('s3-title').textContent = C.step3.title
+    $('s3-back').onclick = () => showStep('2')
+    if (document.documentElement.lang.startsWith('ko')) {
+      const seedCopy = { 'seed-title': '씨앗 하나', 'seed-note': '함께 자라갈 중심 하나를 골라 줘', 'seed-curiosity-label': '호기심', 'seed-care-label': '돌봄', 'seed-mischief-label': '장난기', 'seed-custom-label': '직접 쓰기', 'seed-text-label': '씨앗 문장' }
+      for (const [id, text] of Object.entries(seedCopy)) $(id).textContent = text
+      $('seed-text').placeholder = '짧은 한 줄'
+    }
     $('s3-q1-label').textContent = C.step3.q1Label
     const q1El = $('s3-q1-options')
     q1El.innerHTML = ''

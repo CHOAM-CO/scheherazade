@@ -6,6 +6,7 @@
   const pane = $('lg-pane')
   const followBox = $('lg-follow')
   let nextSeq = 0, lines = [], pollTimer, paused = false, pending = 0, file = '', errNoted = false
+  let shown = []
   let source = 'all'
   const levels = new Set(['info', 'warn', 'error'])
   const chips = {}
@@ -36,9 +37,13 @@
     $('lg-pause').textContent = paused ? P.resume : P.pause
     $('lg-pause').classList.toggle('is-paused', paused)
   }
-  function render() {
+  function shownLines() {
     const match = matcher()
-    const visible = lines.filter(e => (source === 'all' || source === e.source) && levels.has(e.level) && match(e))
+    return lines.filter(e => (source === 'all' || source === e.source) && levels.has(e.level) && match(e))
+  }
+  function render() {
+    const visible = shownLines()
+    shown = visible
     const fragment = document.createDocumentFragment()
     for (const e of visible) {
       const row = document.createElement('div')
@@ -77,7 +82,7 @@
   }
   function init() {
     $('lg-title').textContent = L.title; $('lg-subtitle').textContent = L.subtitle
-    $('lg-copy').textContent = P.copy; $('lg-open').textContent = P.open
+    $('lg-copy').textContent = 'Copy shown'; $('lg-open').textContent = P.open
     $('lg-follow-label').textContent = L.followOn; $('lg-wrap-label').textContent = P.wrap
     $('lg-search').placeholder = P.search; $('lg-search').setAttribute('aria-label', P.search)
     for (const [id, keys] of [['lg-sources', ['all', 'app', 'agent', 'engine']], ['lg-levels', ['info', 'warn', 'error']]]) {
@@ -92,6 +97,10 @@
     $('lg-pause').onclick = () => setPaused(!paused)
     $('lg-new').onclick = () => setPaused(false)
     $('lg-copy').onclick = async () => {
+      try { await navigator.clipboard.writeText(shown.map(e => e.text).join('\n')); window.showToast(L.copied) }
+      catch (err) { console.error(err); window.showToast(L.copyFailed) }
+    }
+    $('lg-copy-all').onclick = async () => {
       try { await navigator.clipboard.writeText(lines.map(e => e.text).join('\n')); window.showToast(L.copied) }
       catch (err) { console.error(err); window.showToast(L.copyFailed) }
     }

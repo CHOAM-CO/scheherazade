@@ -941,6 +941,7 @@
       if (!m.custom && !m.providers.some((p) => availableProviders.includes(p))) opt.disabled = true
       // Models withdrawn for observed production failure (see catalog note).
       if (m.disabled) opt.disabled = true
+      if (opt.disabled) opt.textContent += m.disabled ? ' (unavailable)' : ' (connect a provider first)'
       if (m.id === model) opt.selected = true
       if (m.group) {
         if (!groups.has(m.group)) {
@@ -959,6 +960,11 @@
   function populateEffortSelect(effort) {
     const sel = $('set-effort-select')
     sel.innerHTML = ''
+    if (effort && !EFFORT_LEVELS.includes(effort)) {
+      const current = document.createElement('option')
+      current.value = effort; current.textContent = `${effort} (current)`; current.selected = true
+      sel.appendChild(current)
+    }
     for (const level of EFFORT_LEVELS) {
       const opt = document.createElement('option')
       opt.value = level
