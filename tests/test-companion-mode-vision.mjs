@@ -28,7 +28,7 @@ assert.doesNotMatch(read('onboarding/public/js/chat.js'), /const VISION_YES/)
 assert.match(read('onboarding/public/chat.html'), /data-companion-mode/)
 assert.match(read('onboarding/public/js/companion-mode-control.js'), /Companion & voice/)
 assert.doesNotMatch(read('onboarding/public/js/tts.js'), /box\.onchange|set-tts-enabled/)
-assert.doesNotMatch(read('onboarding/public/js/memory.js'), /renderMarkdown\(value, formatted.value\)/)
+assert.match(read('onboarding/public/js/memory.js'), /renderMarkdown\(value, formatted.value\)/)
 assert.match(read('onboarding/public/js/memory.js'), /renderMarkdown\(prose, row.body\)/)
 console.log('Unified persisted modes, browser/server vision parity, discoverable voice and memory renderer call sites passed')
 

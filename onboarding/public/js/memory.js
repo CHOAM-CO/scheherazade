@@ -55,11 +55,11 @@
 
   const ROW_FORMATTERS = {
     user_facts: (row) => ({
-      value: row.value,
+      value: String(row.value ?? ''),
       meta: `Learned ${isoDate(row.created_at)} · Last confirmed ${isoDate(row.last_confirmed_at)}`,
     }),
     open_threads: (row) => ({
-      value: row.summary,
+      value: String(row.summary ?? ''),
       meta: `Started ${isoDate(row.opened_at)} · ${threadStatusLabel(row)}`,
     }),
     corrections: (row) => ({
@@ -222,7 +222,9 @@
       const formatted = format(row)
       const rowEl = el('div', 'entry-row')
       const main = el('div', 'entry-main')
-      main.appendChild(el('div', 'entry-value', formatted.value))
+      const value = el('div', 'entry-value markdown-body')
+      window.renderMarkdown(value, formatted.value)
+      main.appendChild(value)
       main.appendChild(el('div', 'entry-meta', formatted.meta))
       const delBtn = el('button', 'entry-delete', C.deleteLabel)
       delBtn.onclick = async () => {
