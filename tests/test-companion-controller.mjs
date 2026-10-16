@@ -148,6 +148,7 @@ try {
     assert.equal(controller.snapshot().enabled, true)
     assert.equal(controller.snapshot().variant, 'orb')
     assert.equal(controller.snapshot().callHud, true)
+    assert.deepEqual(controller.snapshot().preferences, { enabled: false, variant: 'face' })
     assert.equal(windows.at(-1).visible, true)
     await controller.command({ action: 'settings', enabled: false })
     assert.equal(controller.snapshot().enabled, true)

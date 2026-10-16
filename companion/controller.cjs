@@ -122,7 +122,7 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
       enabled: settings.enabled && connected && providerHealthy, ...fullscreen, busy: busy || !!awaiting, bubble: !!bubble })
   }
   function snapshot() {
-    return { available: true, ...settings, callHud, bubble: visibleBubble(), speaking, ring: bubble && ['question', 'approval-reply', 'error'].includes(bubble.kind) ? 'attention' : busy || awaiting ? 'thinking' : 'idle',
+    return { available: true, ...settings, preferences: parseConfig(readConfig()), callHud, bubble: visibleBubble(), speaking, ring: bubble && ['question', 'approval-reply', 'error'].includes(bubble.kind) ? 'attention' : busy || awaiting ? 'thinking' : 'idle',
       speech, connected, hiddenByFullscreen: hidden, fullscreenKnown: fullscreen.known, geometry }
   }
   async function command(body) {

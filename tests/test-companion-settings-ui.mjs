@@ -32,3 +32,11 @@ release(); await saving; pending = null
 assert.equal(server.intervalMinutes, 75); assert.equal(server.sound, true)
 assert.equal(elements.save.disabled, false)
 console.log('Companion draft preservation, rollback, retry and serialization passed')
+
+server = { ...server, enabled: true, variant: 'orb', callHud: true, preferences: { enabled: false, variant: 'face' } }
+await elements.save.onclick()
+assert.equal(elements.enabled.checked, false, 'temporary call HUD does not check persisted companion preference')
+assert.equal(radios[0].checked, true)
+assert.equal(radios[1].checked, false)
+assert.deepEqual(server.preferences, { enabled: false, variant: 'face' })
+console.log('Settings read persisted preferences during a temporary call HUD passed')

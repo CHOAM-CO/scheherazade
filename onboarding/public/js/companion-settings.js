@@ -12,8 +12,10 @@
     $('interval').disabled ||= window.HOST_PLATFORM !== 'win32'
   }
   function renderImmediate() {
-    $('enabled').checked = !!server?.enabled
-    for (const r of radios()) r.checked = r.value === (server?.variant || 'face')
+    // The runtime may force a call-only orb; settings always edit persisted preferences.
+    const preferences = server?.preferences || server
+    $('enabled').checked = !!preferences?.enabled
+    for (const r of radios()) r.checked = r.value === (preferences?.variant || 'face')
   }
   async function save(body) {
     if (busy || !server?.available) return
