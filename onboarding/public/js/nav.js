@@ -319,6 +319,9 @@
       const P = window.COPY.polish
       const entries = [
         { id: 'settings', key: 'general', href: '/settings#set-identity' },
+        { id: 'companion', label: 'Companion', href: '/settings#set-companion' },
+        { id: 'voice', label: 'Voice', href: '/settings#set-companion-voice' },
+        { id: 'call', label: 'Call', href: '/settings#set-companion-call' },
         { id: 'channels', key: 'channels', href: '/channels' },
         { id: 'appearance', key: 'appearance', href: '/appearance' },
         { id: 'profiles', key: 'profiles', href: '/profiles.html' },
@@ -328,7 +331,7 @@
       for (const t of entries) {
         const a = document.createElement('a')
         a.href = t.href
-        a.textContent = P[t.key]
+        a.textContent = t.label || P[t.key]
         a.classList.toggle('active', t.id === rawPage)
         if (t.id === rawPage) a.setAttribute('aria-current', 'page')
         a.addEventListener('click', () => {
