@@ -292,3 +292,42 @@ assert.equal(await waitSnapshot, baseline)
 assert.equal((await context.bounded(new Promise(() => {}), 5)).size, 0, 'hung snapshot is bounded')
 assert.doesNotMatch(source, /execFileSync/)
 assert.match(source, /const turnTime = Number.isFinite\(eventTime\) \? eventTime : receivedAt/)
+
+const boundaryRows = [-1, 0, 1].map((offset, i) => ({pid: 20 + i, ppid: 10,
+  startTime: new Date(turnTime - 1500 + offset).toISOString(), command: 'boundary'}))
+assert.deepEqual([...context.snapshot(boundaryRows, 10, turnTime).keys()], [20], 'strict 1500ms boundary: minus 1 survives, exact and plus 1 do not')
+for (const platform of ['darwin', 'win32']) {
+  const dead = []
+  await context.kill(10, new Map([[11, 'old']]), {platform,
+    readRows: async () => [{pid: 11, ppid: 10, startTime: 'old'}, {pid: 12, ppid: 11, startTime: 'new'}],
+    signal: pid => dead.push(pid), run: async (_cmd, args) => dead.push(Number(args[1]))})
+  assert.deepEqual(dead, [12], 'new tool under old non-transport baseline parent dies')
+}
+let deliveredDeadline
+const deadlineControl = context.create({cancel: async () => {}, clearPending: () => true,
+  interruptTimeoutMs: 15, killTools: deadline => { deliveredDeadline = deadline; return new Promise(() => {}) }})
+const deadlineStart = Date.now()
+await assert.rejects(deadlineControl.interrupt(), /interrupt timed out/)
+assert(deliveredDeadline >= deadlineStart && Date.now() - deadlineStart < 150, 'one bounded interrupt deadline reaches cleanup')
+
+// Execute the actual mux callback through its turn/start branch, returning at
+// the next branch so unrelated engine-event handlers need no synthetic state.
+const callbackStart = source.indexOf('    onEvent (sid, event) {')
+const callbackEnd = source.indexOf("      } else if (activeTurnGeneration", callbackStart)
+let releaseEnumeration
+let didReturn = false
+const callbackContext = {
+  Date, Number, Map, Set, Promise, sessionId: 's', child: {pid: 10},
+  control: {blocked: false, generation: 0, begin() {}}, turnConfig: {},
+  processStartMillis: context.startMillis, turnInfrastructureSnapshot: context.snapshot,
+  ownedProcessRows: () => new Promise(resolve => { releaseEnumeration = resolve }),
+  errLog: error => { throw new Error(error) }
+}
+vm.createContext(callbackContext)
+vm.runInContext('this.callback = ({' + source.slice(callbackStart, callbackEnd) + '}}}).onEvent', callbackContext)
+callbackContext.callback('s', {type: 'turn/start', timestamp: turnTime})
+didReturn = true
+assert(didReturn && typeof releaseEnumeration === 'function', 'real turn/start returns before delayed enumeration settles')
+releaseEnumeration(snapshotRows)
+const delayedBaseline = await vm.runInContext('turnInfrastructure', callbackContext)
+assert.deepEqual([...delayedBaseline.keys()], [11], 'real callback uses engine time despite delayed enumeration')

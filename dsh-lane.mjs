@@ -553,7 +553,7 @@ function guardSubagentRows (yamlText, agentOptions = null) {
 }
 
 // Cancellation owns a generation: asynchronous prompt work cannot revive a stop.
-export function createTurnControl ({ cancel, clearPending, killTools, timeoutMs = 5000 }) {
+export function createTurnControl ({ cancel, clearPending, killTools, timeoutMs = 5000, interruptTimeoutMs = 20000 }) {
   let generation = 0
   let stopping = null
   let blocked = false
@@ -587,14 +587,15 @@ export function createTurnControl ({ cancel, clearPending, killTools, timeoutMs 
         let cleared = false
         let clearError
         try { cleared = clearPending() } catch (error) { clearError = error }
-        const bounded = (work) => new Promise((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error('cancel timed out')), timeoutMs)
+        const deadline = Date.now() + interruptTimeoutMs
+        const bounded = (work, limit = timeoutMs) => new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('interrupt timed out')), Math.max(1, Math.min(limit, deadline - Date.now())))
           Promise.resolve().then(work).then(resolve, reject).finally(() => clearTimeout(timer))
         })
         // ESC semantics: request abort and force tool cleanup immediately, no grace.
         const cancellation = Promise.resolve().then(cancel)
         cancellation.catch(() => {})
-        await killTools()
+        await bounded(() => killTools(deadline), interruptTimeoutMs)
         await bounded(() => cancellation)
         if (clearError) throw clearError
         if (!cleared) throw new Error('pending FIFO clear failed')
@@ -676,14 +677,14 @@ export async function boundedInfrastructure (pending, timeoutMs = 10000) {
   } finally { clearTimeout(timer) }
 }
 
-export async function ownedProcessRows ({ platform = process.platform, run = execFileAsync, powershell = require('./proc.cjs').POWERSHELL_EXE } = {}) {
+export async function ownedProcessRows ({ platform = process.platform, run = execFileAsync, powershell = require('./proc.cjs').POWERSHELL_EXE, deadline = Infinity } = {}) {
   if (platform === 'win32') {
     const { stdout } = await run(powershell, ['-NoProfile', '-Command',
-      'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,CreationDate | ConvertTo-Json -Compress'], { encoding: 'utf8', timeout: 10000, maxBuffer: 32 * 1024 * 1024 })
+      'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,CreationDate | ConvertTo-Json -Compress'], { encoding: 'utf8', timeout: Math.max(1, Math.min(10000, deadline - Date.now())), maxBuffer: 32 * 1024 * 1024 })
     const parsed = JSON.parse(stdout || '[]')
     return (Array.isArray(parsed) ? parsed : [parsed]).map(r => ({ pid: r.ProcessId, ppid: r.ParentProcessId, name: r.Name, command: r.CommandLine || '', startTime: r.CreationDate }))
   }
-  const { stdout } = await run('ps', ['-axww', '-o', 'pid=,ppid=,lstart=,command='], { encoding: 'utf8', timeout: 3000, maxBuffer: 32 * 1024 * 1024 })
+  const { stdout } = await run('ps', ['-axww', '-o', 'pid=,ppid=,lstart=,command='], { encoding: 'utf8', timeout: Math.max(1, Math.min(3000, deadline - Date.now())), maxBuffer: 32 * 1024 * 1024 })
   return stdout.split('\n').flatMap(line => {
     const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\S+\s+\S+\s+\d+)\s+(.+)$/)
     return m ? [{ pid: Number(m[1]), ppid: Number(m[2]), startTime: m[3], command: m[4] }] : []
@@ -691,18 +692,20 @@ export async function ownedProcessRows ({ platform = process.platform, run = exe
 }
 
 export async function killOwnedTools (enginePid, infrastructure = new Set(), {
-  platform = process.platform, readRows = ownedProcessRows, run = execFileAsync, signal = process.kill, isInfrastructure = () => false
+  platform = process.platform, readRows = ownedProcessRows, run = execFileAsync, signal = process.kill, isInfrastructure = () => false, deadline = Infinity
 } = {}) {
-  const rows = await readRows()
-  // Validate turn-start identities against live start times to reject PID reuse.
-  infrastructure = new Set(rows.filter(row => isInfrastructure(row) ||
-    (row.startTime && infrastructure.get?.(row.pid) === row.startTime)).map(row => row.pid))
+  const rows = await readRows({ deadline })
+  // Only positively identified transport trees inherit protection. Baseline
+  // identities protect themselves, never newly spawned tool descendants.
+  const transports = new Set(rows.filter(isInfrastructure).map(row => row.pid))
   for (let changed = true; changed;) {
     changed = false
-    for (const row of rows) if (infrastructure.has(row.ppid) && !infrastructure.has(row.pid)) {
-      infrastructure.add(row.pid); changed = true
+    for (const row of rows) if (transports.has(row.ppid) && !transports.has(row.pid)) {
+      transports.add(row.pid); changed = true
     }
   }
+  infrastructure = new Set(rows.filter(row => transports.has(row.pid) ||
+    (row.startTime && infrastructure.get?.(row.pid) === row.startTime)).map(row => row.pid))
   const owned = new Set(toolProcessRoots(rows, enginePid).filter(pid => !infrastructure.has(pid)))
   // taskkill recursively removes each root. Never taskkill its dead children again.
   const targets = platform === 'win32'
@@ -710,7 +713,7 @@ export async function killOwnedTools (enginePid, infrastructure = new Set(), {
     : [...owned].reverse()
   await Promise.all(targets.map(async pid => {
     try {
-      if (platform === 'win32') await run('taskkill', ['/PID', String(pid), '/T', '/F'], { timeout: 3000 })
+      if (platform === 'win32') await run('taskkill', ['/PID', String(pid), '/T', '/F'], { timeout: Math.max(1, Math.min(3000, deadline - Date.now())) })
       else signal(pid, 'SIGKILL')
     } catch (error) {
       // taskkill exits non-zero for processes that exited during enumeration.
@@ -1095,10 +1098,13 @@ async function main () {
   const control = createTurnControl({
     cancel: () => client.cancel(sessionId),
     clearPending: () => writePending([]),
-    killTools: async () => {
+    killTools: async deadline => {
       let servers = {}
       try { servers = JSON.parse(fs.readFileSync(MCP_CONFIG_FILE, 'utf8')).mcpServers || {} } catch {}
-      return killOwnedTools(child.pid, await boundedInfrastructure(turnInfrastructure), { isInfrastructure: row => isMcpTransport(row, servers) })
+      // Reserve time for live enumeration and taskkill; snapshot waiting must
+      // not consume the shared 20-second interrupt deadline.
+      const baseline = await boundedInfrastructure(turnInfrastructure, Math.max(1, Math.min(1000, deadline - Date.now() - 13000)))
+      return killOwnedTools(child.pid, baseline, { deadline, isInfrastructure: row => isMcpTransport(row, servers) })
     }
   })
   // Deliver a mute turn's composed text as the real chat message. Unlike
