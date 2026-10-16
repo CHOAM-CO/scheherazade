@@ -123,6 +123,22 @@ const textEnd = source.indexOf('\n  // Turn-close accounting', textStart)
 vm.runInContext(source.slice(textStart, textEnd) + '\nthis.messageText = eventMessageText', context)
 assert.equal(context.messageText({ content: [{ type: 'text', text: 'claimed greeting marker' }] }), 'claimed greeting marker')
 
+// Budget warnings are status only: never promote, nudge, or create a reply.
+const warningStart = source.indexOf('        const warning = control.warning()')
+const warningEnd = source.indexOf('        if (exceeded)', warningStart)
+for (const channel of ['in-app', 'discord']) {
+  const presence = []
+  vm.runInNewContext(source.slice(warningStart, warningEnd), {
+    control: { warning: () => ({ calls: 48, budget: 60 }) }, lastInboundChannelId: channel,
+    postPresence: (...args) => presence.push(args),
+    promoteTurnText: () => { throw new Error('warnings must not promote') },
+    sendMuteNudge: () => { throw new Error('warnings must not nudge') }
+  })
+  assert.equal(presence.length, 1)
+  assert.equal(presence[0][1], 'activity')
+  assert.match(presence[0][0], channel === 'in-app' ? /Tool budget warning/ : /도구 호출/)
+}
+
 // Execute the actual lane prompt builder: only voice metadata adds a marker.
 const renderStart = source.indexOf('  async function renderInbound (content, meta) {')
 const renderEnd = source.indexOf('\n  // Redeliver', renderStart)

@@ -1274,7 +1274,9 @@ async function main () {
         log(`tool> ${d.name || '?'}`)
         const exceeded = control.tool(!isReplyClassTool(d.name))
         const warning = control.warning()
-        if (warning) promoteTurnText(`Tool budget warning: ${warning.calls}/${warning.budget} calls used.`)
+        if (warning) postPresence(lastInboundChannelId === 'in-app'
+          ? `Tool budget warning: ${warning.calls}/${warning.budget} calls used.`
+          : `도구 호출 ${warning.calls}/${warning.budget}회 썼어`, 'activity')
         if (exceeded) {
           const line = `Stopped after exceeding ${exceeded} tool calls.`
           // In-app copy is English; the platform channel uses Korean.
