@@ -498,7 +498,7 @@ const MAX_IMAGE_BYTES = 20 * 1024 * 1024 // same cap as channel.mjs downloadBuff
 // the transcript with an image block the provider 400s on every turn.
 // Gemma caption parity landed 0.1.7 via the app's authenticated caption
 // endpoint (fetchAppCaption below) -- the 0.1.5 deferral is closed.
-const VISION_YES_MODELS = new Set(['kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'gemma4', 'qwen3.5', 'minimax-m3', 'mistral-large-3', 'deepseek-v4.1-flash', 'glm-5.3-flash'])
+const VISION_YES_MODELS = new Set(['kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'gemma4', 'qwen3.5', 'minimax-m3', 'mistral-large-3', 'deepseek-v4.1-flash', 'glm-5.3-flash', 'muse-spark-open'])
 function laneHasVision(model = process.env.MODEL || '') {
   const base = String(model).replace(/:.*$/, '')
   // /^gpt-\d/, NOT /^gpt/: first-party codex ids are gpt-<digit> (gpt-5.5,

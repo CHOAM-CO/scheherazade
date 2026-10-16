@@ -3674,7 +3674,7 @@ function _resetOllamaUsageCache() { ollamaUsageCache = null }
 // AND invited a Read-tool image read that poisoned non-vision transcripts.
 // A default-'no' worst case is an unnecessary caption for a vision-capable
 // unlisted model; the old worst case was a bricked conversation.
-const VISION_YES_MODELS = new Set(['kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'gemma4', 'qwen3.5', 'minimax-m3', 'mistral-large-3', 'deepseek-v4.1-flash', 'glm-5.3-flash'])
+const VISION_YES_MODELS = new Set(['kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'gemma4', 'qwen3.5', 'minimax-m3', 'mistral-large-3', 'deepseek-v4.1-flash', 'glm-5.3-flash', 'muse-spark-open'])
 // Smallest vision model in the cloud catalog (31b, vs 397b/675b upward) --
 // caption latency and quota cost scale with this pick.
 const OLLAMA_CAPTION_MODEL = 'gemma4:31b'

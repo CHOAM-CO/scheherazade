@@ -144,6 +144,10 @@
     { id: 'deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
     { id: 'glm-5.3', label: 'GLM 5.3', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
     { id: 'glm-5.3-flash', label: 'GLM 5.3 Flash', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
+    // muse-spark-open: Meta, released 2026-10-15, ollama.com cloud-only tag
+    // (822B MoE, vision+tools+thinking). Added on Mino 2026-10-16 11:31 after a
+    // one-turn Korean probe through our ollama key (natural, 5.6 s).
+    { id: 'muse-spark-open', label: 'Muse Spark Open', group: 'Ollama', providers: ['ollama'], contextWindow: DSH_DECLARED_CONTEXT_FLOOR, contextWindowSource: 'dsh-lane-declared' },
     // DSH rows: `glm-5.2:cloud` stays even though the bare ollama glm-5.2 row
     // left on 2026-09-28 — the lane's patch pins this exact tag (see the DSH
     // note in the header).
