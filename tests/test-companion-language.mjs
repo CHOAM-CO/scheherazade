@@ -4,7 +4,8 @@ import vm from 'node:vm'
 const read = file => fs.readFileSync(new URL('../onboarding/public/' + file, import.meta.url), 'utf8')
 const html = read('companion.html')
 assert.match(html, /<html lang="en">/)
-assert.doesNotMatch(html, /[가-힣]/)
+assert.doesNotMatch(html, /[가-힣]|Stop reading/)
+assert.match(html, /aria-label="Stop voice" title="Stop speaking the reply aloud"/)
 assert.match(html, /companion-copy.js[\s\S]*companion.js/)
 const source = read('js/companion-copy.js')
 for (const [lang, expected] of [['en', 'Talk to Sera'], ['ko', '세라와 이야기하기']]) {
