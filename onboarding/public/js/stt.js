@@ -96,16 +96,17 @@
   let btn = null
   let input = null
   let mode = 'idle' // idle | listening | processing
-  let reading = false, micAvailable = false
+  let reading = false, micAvailable = false, micEnabled = false
   const micIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>'
   const stopVoiceIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M11 4L6 8H3v8h3l5 4zM16 9l6 6M22 9l-6 6"/></svg>'
   function paintMic() {
     if (!btn) return
-    btn.hidden = false
-    btn.innerHTML = reading ? stopVoiceIcon : micIcon
-    btn.title = reading ? 'Stop voice' : T.mic
+    const stoppingVoice = reading && mode !== 'listening'
+    btn.hidden = !micEnabled && !reading
+    btn.innerHTML = stoppingVoice ? stopVoiceIcon : micIcon
+    btn.title = stoppingVoice ? 'Stop voice' : mode === 'listening' ? T.listening : mode === 'processing' ? T.processing : T.mic
     btn.setAttribute('aria-label', btn.title)
-    btn.disabled = !reading && (!micAvailable || mode === 'processing' || !!window.SeraCall?.active)
+    btn.disabled = !stoppingVoice && (!micAvailable || mode === 'processing' || !!window.SeraCall?.active)
   }
   let cap = null // { stream, ctx, node, src }
   let sid = null
@@ -243,7 +244,7 @@
     btn.hidden = true
     btn.setAttribute('aria-label', T.mic)
     btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>'
-    btn.onclick = () => { if (reading) return window.SeraTTS?.stop(); if (!window.SeraCall?.active) return mode === 'listening' ? stop() : start() }
+    btn.onclick = () => { if (mode === 'listening') return stop(); if (reading) return window.SeraTTS?.stop(); if (!window.SeraCall?.active) return mode === 'listening' ? stop() : start() }
     const anchor = document.getElementById('ct-stop') || document.getElementById('ct-send')
     bar.insertBefore(btn, anchor)
     setMode('idle')
@@ -252,6 +253,7 @@
   async function syncEnabled() {
     try {
       const s = await getStatus()
+      micEnabled = !!s.enabled
       micAvailable = !!(s.enabled && s.modelsPresent)
       paintMic()
     } catch {}
