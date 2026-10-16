@@ -1985,7 +1985,9 @@ window.UI_POLISH_COPY = {
 }
 window.COPY.polish = window.UI_POLISH_COPY[(document.documentElement?.lang || 'en').startsWith('ko') ? 'ko' : 'en']
 
-// Profiles (design-0029): Korean uses the requested plain, informal register.
+// Profiles (design-0029). The app UI is English (profiles.html lang="en" since
+// 2026-10-16, Mino: the page shipped hardcoded ko inside an English app). The
+// Korean block below only applies when a page declares lang="ko".
 window.COPY.profiles = {
   title: '세라 프로필', intro: '세라를 한 명 더 만드는 거야. 기억이랑 설정이 따로야.',
   list: '이 컴퓨터의 세라', create: '새 세라 만들기', name: '프로필 이름',
