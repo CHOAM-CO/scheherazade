@@ -1055,6 +1055,7 @@ window.COPY = {
       qbSeeState: { unpaired: '연결 안 됨', off: '꺼짐', on: '알아서 함' },
       qbEnable: '같이 보기 켜기', qbExtensionPath: '확장 경로', qbCopy: '복사', qbCopied: '복사됨',
       qbInstall: '설치 안내', qbPair: '연결', qbPairing: '연결 중…', qbPaired: '연결됨', qbPairFailed: '연결 실패',
+      qbDetails: '세부 정보', qbConnect: 'Chrome 확장 프로그램 연결', qbExtensionMissing: '확장 프로그램 없음', qbNotPaired: '연결되지 않음',
       qbSettingsPointer: '같이 보기는 채팅 왼쪽 눈 아이콘에서',
       // Turn-error divider: the raw provider text rides along unparaphrased,
       // same rule as nav.turnError (the body is the only discriminator).
@@ -1065,6 +1066,7 @@ window.COPY = {
     qbSeeState: { unpaired: 'Not connected', off: 'Off', on: 'Browsing freely' },
     qbEnable: 'Enable live browsing', qbExtensionPath: 'Extension path', qbCopy: 'Copy', qbCopied: 'Copied',
     qbInstall: 'Install guide', qbPair: 'Pair', qbPairing: 'Pairing…', qbPaired: 'Paired', qbPairFailed: 'Pair failed',
+    qbDetails: 'Show details', qbConnect: 'Connect Chrome extension', qbExtensionMissing: 'Extension missing', qbNotPaired: 'Not paired',
     qbSettingsPointer: 'See together using the eye icon on the left of Chat',
 
     title: 'Chat',

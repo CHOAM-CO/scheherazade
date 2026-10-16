@@ -1092,14 +1092,14 @@
       toggle.type = 'checkbox'; toggle.checked = !!browseStatus?.enabled
       toggleLabel.append(toggle, document.createTextNode(' ' + Q.qbEnable)); popover.append(toggleLabel)
       const details = document.createElement('details')
-      const summary = document.createElement('summary'); summary.textContent = document.documentElement.lang.startsWith('ko') ? '세부 정보' : 'Show details'
+      const summary = document.createElement('summary'); summary.textContent = Q.qbDetails
       details.append(summary); popover.append(details)
       const pathLabel = document.createElement('p'); pathLabel.textContent = Q.qbExtensionPath; details.append(pathLabel)
       const pathText = document.createElement('code'); pathText.textContent = browseStatus?.extensionPath || ''; details.append(pathText)
       const copy = document.createElement('button'); copy.textContent = Q.qbCopy; copy.className = 'secondary'; copy.type = 'button'; details.append(copy)
       const guide = document.createElement('a'); guide.href = '/api/settings/browse-live/install'; guide.textContent = Q.qbInstall; guide.target = '_blank'; guide.rel = 'noopener'; popover.append(guide)
-      const pair = document.createElement('button'); pair.textContent = document.documentElement.lang.startsWith('ko') ? 'Chrome 확장 프로그램 연결' : 'Connect Chrome extension'; pair.type = 'button'; popover.append(pair)
-      const line = document.createElement('p'); line.setAttribute('role', 'status'); line.textContent = browseStatus?.paired ? Q.qbPaired : browseStatus?.extensionPresent === false ? (document.documentElement.lang.startsWith('ko') ? '확장 프로그램 없음' : 'Extension missing') : (document.documentElement.lang.startsWith('ko') ? '연결되지 않음' : 'Not paired'); popover.prepend(line)
+      const pair = document.createElement('button'); pair.textContent = Q.qbConnect; pair.type = 'button'; popover.append(pair)
+      const line = document.createElement('p'); line.setAttribute('role', 'status'); line.textContent = browseStatus?.paired ? Q.qbPaired : browseStatus?.extensionPresent === false ? Q.qbExtensionMissing : Q.qbNotPaired; popover.prepend(line)
       toggle.onchange = async () => {
         toggle.disabled = true
         try { await window.api('/api/settings/browse-live', { method: 'POST', body: JSON.stringify({ browseLive: toggle.checked }) }); await refreshBrowse() }
@@ -1539,6 +1539,9 @@
   // to a user. Token header mirrors nav.js's api() exactly -- this is a POST,
   // so the server's per-launch gate applies.
   document.addEventListener('keydown', (event) => {
+    if (event.isComposing || event.defaultPrevented) return
+    const overlay = '.qb-popover, [role="dialog"], dialog, [popover]'
+    if (event.target?.closest?.(overlay) || document.activeElement?.closest?.(overlay)) return
     if (event.key === 'Escape' && deriveTurn().inFlight && turnState !== 'gone') {
       event.preventDefault()
       requestStop()
