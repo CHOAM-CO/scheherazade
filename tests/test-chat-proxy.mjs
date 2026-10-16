@@ -122,6 +122,12 @@ try {
     chk('the channel received the text verbatim', lastChannelReq && JSON.parse(lastChannelReq.body).text === 'hello from the page', JSON.stringify(lastChannelReq))
     chk('the channel received the bearer token from the port file', lastChannelReq && lastChannelReq.auth === `Bearer ${CHANNEL_TOKEN}`)
   }
+  for (const origin of ['voice', 'text', undefined, 'unknown']) {
+    const r = await fetch(`${base}/api/chat/in`, { method: 'POST', headers: auth, body: JSON.stringify({ text: 'spoken words', origin }) })
+    const forwarded = JSON.parse(lastChannelReq.body)
+    chk(`in carries normalized origin ${origin}`, r.status === 202 && forwarded.origin === (origin === 'voice' ? 'voice' : 'text'))
+    chk('origin never changes forwarded visible text', forwarded.text === 'spoken words')
+  }
   // ── STOP proxy (0.3.1): POST /api/chat/interrupt ──────────────────────────
   // Three things to prove: the hop carries the bearer token and an empty
   // body (there is nothing caller-supplied in this route at all); 409 comes

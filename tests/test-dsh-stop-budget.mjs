@@ -123,6 +123,26 @@ const textEnd = source.indexOf('\n  // Turn-close accounting', textStart)
 vm.runInContext(source.slice(textStart, textEnd) + '\nthis.messageText = eventMessageText', context)
 assert.equal(context.messageText({ content: [{ type: 'text', text: 'claimed greeting marker' }] }), 'claimed greeting marker')
 
+// Execute the actual lane prompt builder: only voice metadata adds a marker.
+const renderStart = source.indexOf('  async function renderInbound (content, meta) {')
+const renderEnd = source.indexOf('\n  // Redeliver', renderStart)
+const renderContext = {
+  bootGreetingMarker: 'boot-token',
+  buildPromptContent: async text => ({ text, parts: [] }),
+  prependMemoryContext: text => text,
+  renderChannelTag: ({ content }) => content
+}
+vm.createContext(renderContext)
+vm.runInContext(source.slice(renderStart, renderEnd) + '\nthis.render = renderInbound', renderContext)
+for (const origin of ['voice', 'text', undefined, 'unknown']) {
+  const input = 'spoken words'
+  const parts = await renderContext.render(input, { origin })
+  assert.equal(parts[0].text, origin === 'voice' ? '[voice transcription]\nspoken words' : input)
+  assert.equal(input, 'spoken words')
+}
+const voiceBoot = await renderContext.render('hello', { origin: 'voice', bootGreeting: true })
+assert.equal(voiceBoot[0].text, 'boot-token\n[voice transcription]\nhello')
+
 // Windows-shaped test runs on every host and simulates an already-dead root.
 const taskkills = []
 await context.kill(10, new Set([11]), {

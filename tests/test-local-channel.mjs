@@ -254,6 +254,15 @@ console.log('\n7. HTTP: posting a message')
   const echoed = readOutbound(0)
   assert(echoed.items.length === 1 && echoed.items[0].role === 'user' && echoed.items[0].text === 'hi',
     '...and lands in the transcript as the user, so a reload can replay it')
+  for (const origin of ['voice', 'text', undefined, 'unknown']) {
+    resetQueueForTest()
+    seen.length = 0
+    const voice = await call(handler, { method: 'POST', url: '/in', body: JSON.stringify({ text: 'spoken words', origin }) })
+    assert(voice.code === 202, `origin ${origin} accepted`)
+    assert(seen[0].params.meta.origin === (origin === 'voice' ? 'voice' : 'text'), 'origin reaches lane notification metadata')
+    assert(seen[0].params.content === 'spoken words', 'channel notification content stays unchanged')
+    assert(readOutbound().items[0].text === 'spoken words', 'visible transcript has no voice marker')
+  }
   assert((await call(handler, { method: 'POST', url: '/in', body: '{not json' })).code === 400, 'malformed json -> 400')
   assert((await call(handler, { method: 'POST', url: '/in', body: '{}' })).code === 400, 'missing text -> 400')
   assert((await call(handler, { method: 'POST', url: '/in', body: JSON.stringify({ text: '  ' }) })).code === 400,

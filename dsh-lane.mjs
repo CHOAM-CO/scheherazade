@@ -1464,7 +1464,8 @@ async function main () {
   // would hide the markers from the caption pass behind escaping. Image
   // parts (inline routes) ride AFTER the text part.
   async function renderInbound (content, meta) {
-    const tagged = meta?.bootGreeting ? `${bootGreetingMarker}\n${content}` : content
+    const modelContent = meta?.origin === 'voice' ? `[voice transcription]\n${content}` : content
+    const tagged = meta?.bootGreeting ? `${bootGreetingMarker}\n${modelContent}` : modelContent
     const built = await buildPromptContent(prependMemoryContext(tagged, meta))
     return [{ type: 'text', text: renderChannelTag({ content: built.text, meta: meta || {} }) }, ...built.parts]
   }

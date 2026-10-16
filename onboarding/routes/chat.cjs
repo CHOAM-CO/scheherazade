@@ -138,7 +138,7 @@ function createRoutes(staticCtx) {
       method: 'POST',
       match: (pathname) => pathname === '/api/chat/in',
       handler: async (req, res) => {
-        const { text } = await readJsonBody(req)
+        const { text, origin } = await readJsonBody(req)
         if (typeof text !== 'string' || !text.trim()) {
           sendJson(res, 400, { error: 'text is required', reason: 'text_required' })
           return
@@ -148,7 +148,7 @@ function createRoutes(staticCtx) {
           sendJson(res, 503, { error: 'chat channel is not running', reason: 'not_running' })
           return
         }
-        const r = await proxyToChannel(ep, '/in', { method: 'POST', body: { text } })
+        const r = await proxyToChannel(ep, '/in', { method: 'POST', body: { text, origin: origin === 'voice' ? 'voice' : 'text' } })
         if (r.status === 0) {
           sendJson(res, 502, { error: 'chat channel did not answer', reason: 'unreachable' })
           return

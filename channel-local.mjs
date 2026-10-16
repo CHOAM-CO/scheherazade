@@ -723,13 +723,13 @@ export async function handleToolCall(name, args) {
 mcp.setRequestHandler(CallToolRequestSchema, async (req) => handleToolCall(req.params.name, req.params.arguments))
 
 // ── inbound: HTTP -> notification ─────────────────────────────────────────
-export async function deliverInbound(text, { notify, now = localNow, from, sibling = false, hop } = {}) {
+export async function deliverInbound(text, { notify, now = localNow, from, sibling = false, hop, origin = 'text' } = {}) {
   const content = String(text || '').trim() || '[empty message]'
   await notify({
     method: 'notifications/claude/channel',
     params: {
       content: sibling ? `[다른 세라 메시지: ${from}]\n자동으로 다른 세라에게 전달하지 않기\n${content}` : content,
-      meta: { sender: sibling ? from : 'user', channelId: LOCAL_CHANNEL_ID, authorId: sibling ? 'sibling-profile' : 'local-user', timestamp: now(), ...(sibling ? { sibling: true, hop } : {}) },
+      meta: { sender: sibling ? from : 'user', channelId: LOCAL_CHANNEL_ID, authorId: sibling ? 'sibling-profile' : 'local-user', timestamp: now(), origin: origin === 'voice' ? 'voice' : 'text', ...(sibling ? { sibling: true, hop } : {}) },
     },
   })
   return content
@@ -848,7 +848,7 @@ export function createRequestHandler({ notify, token, onInbound = () => {}, inte
         }
         const replyTo = sibling ? parsed.from.match(/\((default|[a-z0-9-]{1,24})\)$/)[1] : null
         const inboundText = sibling && parsed.notice !== true ? `${text.trim()}\n(답장은 '다른 세라에게 말하기'로 ${replyTo}에게 보내. 대화는 왕복 한 번까지.)` : text
-        const delivered = await deliverInbound(inboundText, { notify, sibling, from: parsed.from, hop: parsed.hop })
+        const delivered = await deliverInbound(inboundText, { notify, sibling, from: parsed.from, hop: parsed.hop, origin: parsed.origin })
         if (!sibling) siblings.resetHops(dataHome)
         if (sibling) {
           try { const memory = await import('./memory/service.mjs'); memory.journalWrite({ body: `[${parsed.from}] ${text}` }) } catch (error) { log(`sibling journal: ${error.message}`) }
