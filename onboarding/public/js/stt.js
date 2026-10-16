@@ -9,7 +9,7 @@
   const ko = (document.documentElement?.lang || navigator.language || 'en').startsWith('ko')
   const T = ko
     ? { label: '음성 입력', note: '말하면 이 기기에서 바로 글자로 받아 적습니다 (오프라인). 처음 켤 때 음성 인식 모델을 한 번 받습니다', toggle: '채팅에 마이크 버튼 표시', dl: (d, t) => `음성 인식 모델 받는 중 ${mb(d)} / ${mb(t)} MB`, ready: '준비됨', missing: t => `켜면 음성 인식 모델 ${mb(t)} MB를 받음`, err: e => `오류: ${e}`, mic: '음성 입력', listening: '듣는 중 (Esc로 멈춤)', processing: '받아 적는 중', denied: '마이크 권한이 없습니다. 시스템 설정에서 마이크를 허용해 주세요', failed: e => `음성 입력 오류: ${e}` }
-    : { label: 'Voice input', note: 'Speech is transcribed on this device (offline). The first enable downloads the speech model once.', toggle: 'Enable voice input for chat, companion and calls', dl: (d, t) => `Downloading speech model ${mb(d)} / ${mb(t)} MB`, ready: 'Ready', missing: t => `Enabling downloads ${mb(t)} MB`, err: e => `Error: ${e}`, mic: 'Voice input', listening: 'Listening (Esc to stop)', processing: 'Transcribing', denied: 'No microphone permission. Allow the microphone in System Settings.', failed: e => `Voice input error: ${e}` }
+    : { label: 'Voice input', note: 'Speech is transcribed on this device (offline). The first enable downloads the speech model once.', toggle: 'Enable voice input for chat, companion and calls', dl: (d, t) => `Downloading speech model ${mb(d)} / ${mb(t)} MB`, ready: 'Ready', missing: t => `Enabling downloads ${mb(t)} MB`, err: () => 'Voice settings could not be applied. Try again or check Logs.', mic: 'Voice input', listening: 'Listening (Esc to stop)', processing: 'Transcribing', denied: 'No microphone permission. Allow the microphone in System Settings.', failed: e => `Voice input error: ${e}` }
   function mb(n) { return Math.round((n || 0) / 1048576) }
   const token = () => window.getOnboardToken?.() || ''
   const getStatus = () => window.api('/api/stt/status')
@@ -20,7 +20,7 @@
     const about = document.getElementById('set-about')
     if (!about) return
     const card = document.createElement('div')
-    card.className = 'companion-setting-section'
+    card.className = 'category'
     card.id = 'set-stt'
     const label = document.createElement('div'); label.className = 'category-label'; label.textContent = T.label
     const note = document.createElement('p'); note.className = 'subtitle'; note.textContent = T.note

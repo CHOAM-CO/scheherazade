@@ -190,7 +190,7 @@
       // relationships on any background.
       '--fg': c.fg,
       '--fg-dim': mix(c.fg, c.bg, 0.38),
-      '--fg-faint': mix(c.fg, c.bg, 0.6),
+      '--fg-faint': mix(c.fg, c.bg, 0.42),
     }
   }
 

@@ -54,11 +54,15 @@
     }
   }
 
+  let autonomyLoaded = false
   async function loadAutonomy() {
     renderAutonomy(await api('/api/autonomy'))
+    autonomyLoaded = true
+    $('set-autonomy-save').disabled = false
   }
 
   async function saveAutonomy() {
+    if (!autonomyLoaded) return
     const statusEl = $('set-autonomy-status')
     statusEl.classList.add('hidden')
     const cap = Number(String($('set-autonomy-cap').value).replace(/[,\s]/g, ''))
@@ -409,7 +413,7 @@
         hoStatus.className = 'status-line failure'
         // api() surfaces the server's error string (reason codes are not
         // preserved) — the route's messages are already user-shaped.
-        hoStatus.textContent = err.message
+        hoStatus.textContent = GEN(err.message)
       } finally {
         hoCheck.disabled = false
       }
@@ -641,10 +645,17 @@
     $('set-autonomy-cap-note').textContent = C.autonomyCapNote
     $('set-autonomy-save').textContent = C.autonomySave
     $('set-autonomy-save').addEventListener('click', saveAutonomy)
-    loadAutonomy().catch((err) => console.error(err))
+    $('set-autonomy-save').disabled = true
+    loadAutonomy().catch((err) => {
+      console.error(err)
+      $('set-autonomy-status').classList.remove('hidden')
+      $('set-autonomy-status').textContent = 'Could not load autonomous settings. Reload this page to retry.'
+    })
 
+    $('set-rename-save').disabled = true
     try {
       const cfg = await api('/api/config')
+      $('set-rename-save').disabled = false
       $('set-rename-input').value = cfg.DISPLAY_NAME || ''
       // /api/config carries avatar {present, updatedAt} (routes/onboarding-
       // meta.cjs) so the control can render its CURRENT state without the
@@ -656,6 +667,10 @@
       if (cfg.userAvatar) $('set-user-avatar-remove').disabled = cfg.userAvatar.present !== true
     } catch (err) {
       console.error(err)
+    }
+    if ($('set-rename-save').disabled) {
+      $('set-rename-status').classList.remove('hidden')
+      $('set-rename-status').textContent = 'Could not load profile settings. Reload this page to retry.'
     }
     agentAvatar.loadAvatarPreview().catch((err) => console.error(err))
     userAvatar.loadAvatarPreview().catch((err) => console.error(err))

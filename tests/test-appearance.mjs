@@ -84,7 +84,7 @@ assert(defVars['--border'] === 'rgb(255 255 255 / 0.09)' && defVars['--edge-high
 console.log('\n1c. v3 fg seed + blur-off solid guarantee')
 const fgSeeded = M.cssVars({ fg: '#ffffff', bg: '#000000' })
 assert(fgSeeded['--fg'] === '#ffffff' && fgSeeded['--fg-dim'] === M.mix('#ffffff', '#000000', 0.38)
-  && fgSeeded['--fg-faint'] === M.mix('#ffffff', '#000000', 0.6),
+  && fgSeeded['--fg-faint'] === M.mix('#ffffff', '#000000', 0.42),
   'text hierarchy derives from the fg seed toward the bg seed')
 assert(M.normalize({ fg: 'red' }).fg === '#e8e6df', 'junk fg falls back (colors are hex-only)')
 const offVars = M.cssVars({ blur: 'off', glass: 100 })

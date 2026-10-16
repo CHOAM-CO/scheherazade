@@ -16,6 +16,7 @@
 
   let current = M.normalize(null)
   let saveTimer = null
+  let loaded = false
 
   function styleEl() {
     let el = document.getElementById('appearance-style')
@@ -56,19 +57,27 @@
   }
 
   function scheduleSave() {
+    if (!loaded) return
     clearTimeout(saveTimer)
     saveTimer = setTimeout(async () => {
       try {
         await window.api('/api/appearance', { method: 'PUT', body: JSON.stringify(current) })
         $('ap-status').textContent = C.saved
       } catch (err) {
-        $('ap-status').textContent = `${C.saveFailed}: ${err.message}`
+        $('ap-status').textContent = C.saveFailed
       }
     }, 400)
   }
 
   function update(patch) {
-    current = M.normalize({ ...current, ...patch })
+    if (!loaded) return
+    const next = M.normalize({ ...current, ...patch })
+    if (next.fg.toLowerCase() === next.bg.toLowerCase()) {
+      $('ap-status').textContent = 'Text and background need different colors. Your previous colors are kept.'
+      renderReadouts()
+      return
+    }
+    current = next
     applyLive()
     scheduleSave()
   }
@@ -145,6 +154,7 @@
     $('ap-glass-range').addEventListener('input', (e) => update({ glass: e.target.value }))
     $('ap-fontsize-range').addEventListener('input', (e) => update({ fontSize: e.target.value }))
     $('ap-reset').addEventListener('click', () => {
+      if (!loaded) return
       current = M.normalize(M.DEFAULTS)
       $('ap-glass-range').value = current.glass
       $('ap-fontsize-range').value = current.fontSize
@@ -176,15 +186,20 @@
 
   async function init() {
     renderStatic()
+    const controls = document.querySelectorAll('.settings-content input, .settings-content button')
+    for (const control of controls) control.disabled = true
     let supportsBlur = window.HOST_CAPS ? window.HOST_CAPS.supportsBlur : undefined
     try {
       const data = await window.api('/api/appearance')
       current = M.normalize(data.values)
+      loaded = true
+      for (const control of controls) control.disabled = false
       // The route is the authority (it knows the running window); the meta
       // capability is the pre-fetch answer for first paint. Same value.
       if (typeof data.supportsBlur === 'boolean') supportsBlur = data.supportsBlur
     } catch {
-      // defaults already in place; page still works as a live preview
+      $('ap-status').textContent = 'Could not load appearance. Reload this page to retry. No changes have been saved.'
+      return
     }
     applyBlurSupport(supportsBlur)
     $('ap-glass-range').value = current.glass

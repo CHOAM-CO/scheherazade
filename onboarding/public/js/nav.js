@@ -88,7 +88,8 @@
     try {
       body = await res.json()
     } catch (err) {
-      throw new Error(`non-JSON response from ${path}: ${err.message}`)
+      console.error('Invalid server response:', path, err)
+      throw new Error('The app returned an unreadable response. Try again.')
     }
     if (!res.ok) {
       const error = new Error(body.error || `HTTP ${res.status} from ${path}`)

@@ -1970,7 +1970,11 @@ window.COPY = {
   // AUTHORED (not in copy file) -- generic infra-failure banner for
   // unexpected server errors (network down, disk write failure, etc), kept
   // separate from the scripted BYOK/Discord failure copy above.
-  genericError: (message) => `Error: ${message}`,
+  genericError: (message) => {
+    console.error('UI request failed:', message)
+    if (/HTTP 40[13]|unauthorized|forbidden/i.test(String(message))) return 'Access was denied. Reopen the app and try again.'
+    return 'Could not complete the request. Try again. If it continues, check Logs.'
+  },
 }
 
 // 0.4.0 UI chrome. Keep both locales together; route/server messages stay verbatim.

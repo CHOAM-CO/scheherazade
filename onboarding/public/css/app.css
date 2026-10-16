@@ -2171,7 +2171,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .settings-content > .category { margin-bottom: var(--s4); }
 
 /* Companion is one group; read-aloud and microphone keep separate consent. */
-#set-companion .companion-setting-section { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border, #ffffff14); }
 #qb-companion[aria-pressed="true"] { color: var(--accent, #a8b8ff); background: #849aff1a; }
 
 /* Call controls stay outside the scrolling transcript. */
