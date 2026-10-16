@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import vm from 'node:vm'
-import { spawn, execFileSync } from 'node:child_process'
+import { spawn, spawnSync, execFileSync } from 'node:child_process'
 
 const source = fs.readFileSync(new URL('../dsh-lane.mjs', import.meta.url), 'utf8')
 const start = source.indexOf('export function createTurnControl')
@@ -41,12 +41,14 @@ assert.deepEqual(Array.from(context.roots([{ pid: 10, ppid: 1 }, { pid: 11, ppid
 
 // Exercise the shipped gateway patch without modifying node_modules.
 const patchPath = new URL('../patches/@deepseek-ai+dsh-host-apiproxy+0.1.0-rc.7.patch', import.meta.url)
-execFileSync('git', ['apply', '--check', patchPath.pathname], { cwd: new URL('..', import.meta.url), stdio: 'pipe' })
+const cwd = new URL('..', import.meta.url)
+const forward = spawnSync('git', ['apply', '--check', patchPath.pathname], { cwd, encoding: 'utf8' })
+if (forward.status !== 0) execFileSync('git', ['apply', '--check', '--reverse', patchPath.pathname], { cwd, stdio: 'pipe' })
 const patch = fs.readFileSync(patchPath, 'utf8')
 assert.match(patch, /keepInbox: false/)
 assert.match(patch, /await agent.whenIdle\(\)/)
 const gateway = fs.readFileSync(new URL('../node_modules/@deepseek-ai/dsh-host-apiproxy/lib/index.js', import.meta.url), 'utf8')
-const patched = gateway.replace('cancel(request) {\n\t\t\t\tconst { sessionId }', 'async cancel(request) {\n\t\t\t\tconst { sessionId }').replace('agent.cancel({ kind: "user" }, { keepInbox: true });', 'agent.cancel({ kind: "user" }, { keepInbox: false });\n\t\t\t\tawait agent.whenIdle();')
+const patched = gateway.includes('agent.cancel({ kind: "user" }, { keepInbox: false });') ? gateway : gateway.replace('cancel(request) {\n\t\t\t\tconst { sessionId }', 'async cancel(request) {\n\t\t\t\tconst { sessionId }').replace('agent.cancel({ kind: "user" }, { keepInbox: true });', 'agent.cancel({ kind: "user" }, { keepInbox: false });\n\t\t\t\tawait agent.whenIdle();')
 const method = patched.slice(patched.indexOf('async cancel(request) {'), patched.indexOf('\n\t\t},\n\t\tsubagents:', patched.indexOf('async cancel(request) {'))).trim()
 let inbox = ['queued']; let wake = true; let aborted = false; let idle
 const agent = { session: {}, cancel (_cause, options) { aborted = true; if (!options.keepInbox) { inbox = []; wake = false } }, whenIdle: () => new Promise(resolve => { idle = resolve }) }
