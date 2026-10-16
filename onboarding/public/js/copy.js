@@ -1048,6 +1048,7 @@ window.COPY = {
   // 00:28, docs/in-app-chat-plan.md). Same no-false-promise register as
   // logs: statusUnreachable says restarts "usually" clear on their own (a
   // stale port file is exactly that), never "will".
+  tts: { stopTitle: 'Stop speaking the reply aloud', stopTitleKo: '답장 음성 재생 멈춤' },
   chat: {
     // Quickbar copy: Korean first, English mirror; existing app copy defaults to English.
     quickbarKo: {

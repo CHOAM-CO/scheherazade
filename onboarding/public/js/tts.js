@@ -152,7 +152,7 @@
     stopBtn.textContent = T.stop
     stopBtn.hidden = true
     stopBtn.type = 'button'
-    stopBtn.title = ko ? '답장 음성 재생 멈춤' : 'Stop speaking the reply aloud'
+    stopBtn.title = window.COPY.tts[ko ? 'stopTitleKo' : 'stopTitle']
     stopBtn.onclick = () => queue?.stop()
     bar.insertBefore(stopBtn, document.getElementById('ct-stop') || document.getElementById('ct-send'))
   }

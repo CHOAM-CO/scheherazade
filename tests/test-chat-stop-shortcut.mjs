@@ -24,3 +24,8 @@ assert.doesNotMatch(source, /textContent = document.documentElement.lang.startsW
 assert.match(source, /Q.qbDetails/)
 assert.match(source, /Q.qbConnect/)
 console.log('PASS Escape respects IME/default prevention and overlay focus; quickbar uses COPY')
+
+const tts = fs.readFileSync(new URL('../onboarding/public/js/tts.js', import.meta.url), 'utf8')
+assert.doesNotMatch(tts, /stopBtn.title = ko \?/)
+const copy = fs.readFileSync(new URL('../onboarding/public/js/copy.js', import.meta.url), 'utf8')
+assert.match(copy, /tts: \{ stopTitle: 'Stop speaking the reply aloud'/)
