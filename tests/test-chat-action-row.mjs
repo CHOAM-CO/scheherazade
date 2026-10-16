@@ -57,3 +57,8 @@ assert.match(css, /button.icon-button \{[^}]*height: var\(--control-height\)/)
 assert.match(css, /\.tabs, \.nav-tabs \{[^}]*min-height: var\(--control-height\)/)
 assert.doesNotMatch(css, /\.chat-page-header \.chat-lane-chip \{ margin-left: auto/)
 console.log('Shared shell gutter, header rhythm, tab/icon heights and stable scrollbar geometry passed')
+
+assert.match(read('chat.html'), /\/js\/quickbar-popover.js/)
+assert.match(chat, /window.createQuickbarPopover\(browse\)/)
+assert.doesNotMatch(chat, /document.addEventListener\('pointerdown', e => \{ if \(popover/)
+console.log('Browse uses shared quickbar popover lifecycle passed')

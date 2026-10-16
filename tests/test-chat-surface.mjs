@@ -217,7 +217,8 @@ assert(js.includes("button.setAttribute('aria-label', text)") && js.includes('bu
 assert(copy.includes('quickbarKo:') && copy.includes('qbWhatsNew:'), 'Korean and English copy provided')
 assert(css.includes('.chat-quickbar { flex-wrap: wrap; gap: var(--header-row-gap);') && !css.includes('.chat-page-header .chat-lane-chip { margin-left: auto; }'), 'header components share one row rhythm instead of extra auto/margin offsets')
 assert(css.includes('.qb-dot[hidden] { display: none; }'), 'hidden dot does not flash')
-assert(js.includes("e.key === 'Escape'") && js.includes("document.addEventListener('pointerdown'"), 'popover dismisses with Escape and outside click')
+const popoverHelper = readFileSync(path.join(root, 'onboarding/public/js/quickbar-popover.js'), 'utf8')
+assert(popoverHelper.includes("e.key === 'Escape'") && popoverHelper.includes("document.addEventListener('pointerdown'"), 'popover dismisses with Escape and outside click')
 
 
 const quickbarOrder = ['whats-new', 'look-back', 'browse', 'dream', 'today'].map(name => html.indexOf(`id="qb-${name}"`))

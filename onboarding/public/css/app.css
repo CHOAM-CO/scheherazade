@@ -2102,11 +2102,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 
 /* Quickbar shares secondary-button chrome; the transcript owns the remaining width. */
 .chat-page-header { justify-content: flex-start; align-items: center; flex-wrap: wrap; gap: var(--header-row-gap); margin: 0 0 var(--header-row-gap); }
-.chat-page-header > :is(.chat-lane-chip, .chat-new-convo), .companion-mode-control select { min-height: var(--control-height); padding: var(--control-pad-y) var(--control-pad-x); line-height: 1; -webkit-app-region: no-drag; }
+.chat-page-header > :is(.chat-lane-chip, .chat-new-convo) { min-height: var(--control-height); padding: var(--control-pad-y) var(--control-pad-x); line-height: 1; -webkit-app-region: no-drag; }
 .chat-quickbar { flex-wrap: wrap; gap: var(--header-row-gap); margin: 0; padding: 0; -webkit-app-region: no-drag; }
-.companion-mode-control { display: inline-flex; align-items: center; gap: var(--s2); }
-.companion-mode-control label { font-size: 0.85rem; white-space: nowrap; }
-.companion-mode-control select[data-state="voice"] { border-color: var(--accent); }
 .markdown-body > :first-child { margin-top: 0; }
 .markdown-body > :last-child { margin-bottom: 0; }
 .markdown-body p { color: inherit; }

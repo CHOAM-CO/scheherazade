@@ -1045,13 +1045,14 @@
   function initQuickbar() {
     const Q = document.documentElement.lang.startsWith('ko') ? C.quickbarKo : C
     const whats = $('qb-whats-new'), look = $('qb-look-back'), browse = $('qb-browse'), dream = $('qb-dream'), today = $('qb-today')
-    let browseStatus = null, popover = null
+    let browseStatus = null
+    const browsePopover = window.createQuickbarPopover(browse)
+    const close = () => browsePopover.close()
     function label(button, text) {
       button.title = text; button.setAttribute('aria-label', text)
       button.querySelector('.qb-tooltip').textContent = text
     }
     label(whats, Q.qbWhatsNew); label(look, Q.qbLookBack); label(dream, Q.qbDream); label(today, Q.qbToday)
-    function close() { if (popover) { popover.remove(); popover = null; browse.setAttribute('aria-expanded', 'false') } }
     async function refresh() {
       try {
         const s = await window.api('/api/quickbar/whats-new/status')
@@ -1084,7 +1085,7 @@
     today.onclick = () => busy(today, () => window.api('/api/quickbar/today', { method: 'POST' }))
     browse.setAttribute('aria-haspopup', 'dialog'); browse.setAttribute('aria-expanded', 'false')
     function openPopover() {
-      close(); popover = document.createElement('div'); popover.className = 'qb-popover'; popover.setAttribute('role', 'dialog')
+      close(); const popover = document.createElement('div')
       popover.setAttribute('aria-label', Q.qbSeeWith.replace('{name}', browseStatus?.agentName || agentName))
       const toggleLabel = document.createElement('label'), toggle = document.createElement('input')
       toggle.type = 'checkbox'; toggle.checked = !!browseStatus?.enabled
@@ -1117,19 +1118,15 @@
         catch (e) { line.textContent = Q.qbPairFailed + '. Check Chrome and try again.' }
         finally { pair.disabled = false; await refreshBrowse() }
       }
-      document.body.append(popover)
-      const rect = browse.getBoundingClientRect(); popover.style.left = `${rect.left}px`; popover.style.top = `${rect.bottom + 8}px`
-      browse.setAttribute('aria-expanded', 'true'); toggle.focus()
+      browsePopover.open(popover, Q.qbSeeWith.replace('{name}', browseStatus?.agentName || agentName))
     }
     browse.onclick = () => busy(browse, async () => {
       await refreshBrowse()
       // Paired: the eye is the BROWSE_LIVE switch itself. Not paired: the pairing popover (extension path, guide, pair).
-      if (!browseStatus?.paired) { if (popover) close(); else openPopover(); return }
+      if (!browseStatus?.paired) { if (browsePopover.isOpen) close(); else openPopover(); return }
       await window.api('/api/settings/browse-live', { method: 'POST', body: JSON.stringify({ browseLive: !browseStatus.enabled }) })
       close()
     }).then(refreshBrowse)
-    document.addEventListener('pointerdown', e => { if (popover && !popover.contains(e.target) && !browse.contains(e.target)) close() })
-    document.addEventListener('keydown', e => { if (e.key === 'Escape' && popover) { close(); browse.focus() } })
     refresh(); refreshBrowse(); pendingTimer = setInterval(() => { refresh(); refreshBrowse() }, PENDING_MS)
   }
 
