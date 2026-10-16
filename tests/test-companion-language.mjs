@@ -18,3 +18,12 @@ for (const [lang, expected] of [['en', 'Talk to Sera'], ['ko', '세라와 이야
 assert.match(read('js/companion.js'), /b.kind === 'compose' \? \(ko \?/)
 assert.match(read('js/call.js'), /hangup.textContent = ko \? '통화 종료' : 'End call'/)
 console.log('Companion English markup, Korean gate, compose hint and call label passed')
+
+const firstOpen = read('js/companion.js').match(/    if \(!checkedFirstOpen && state.enabled\) \{[\s\S]*?\n    const orbMode/)[0].replace(/\n    const orbMode$/, '')
+const stored = new Map(), commands = []
+const context = { state: { enabled: true, bubble: null }, window: { localStorage: { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value) } }, command: name => { commands.push(name); return Promise.resolve({}) }, render() {}, showFailure() {} }
+vm.runInNewContext(`let checkedFirstOpen = false; ${firstOpen}; ${firstOpen}`, context)
+assert.deepEqual(commands, ['open'])
+vm.runInNewContext(`let checkedFirstOpen = false; ${firstOpen}`, { ...context })
+assert.deepEqual(commands, ['open'])
+console.log('First-open hint appears once without changing voice or microphone settings')

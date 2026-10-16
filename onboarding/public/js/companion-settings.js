@@ -9,6 +9,7 @@
   $('status').setAttribute('role', 'status')
   function controls() {
     for (const el of [$('enabled'), ...radios(), $('save'), $('interval'), $('sound')]) el.disabled = busy || !server?.available
+    $('interval').disabled ||= window.HOST_PLATFORM !== 'win32'
   }
   function renderImmediate() {
     $('enabled').checked = !!server?.enabled

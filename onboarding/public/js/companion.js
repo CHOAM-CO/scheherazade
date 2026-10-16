@@ -3,6 +3,7 @@
   const $ = id => document.getElementById(id)
   const ko = document.documentElement?.lang?.startsWith('ko') || false
   let shapeHeight = -1
+  let checkedFirstOpen = false
   let current = null, lastId = null, pointerInside = false, pointerQueue = Promise.resolve()
   let drag = null, dragged = false, sending = false, avatarUrl = null, avatarAt = 0
   async function api(route, body) {
@@ -35,6 +36,15 @@
   async function action(name, args) { try { render(await command(name, args)) } catch { showFailure() } }
   function render(state) {
     current = state
+    if (!checkedFirstOpen && state.enabled) {
+      checkedFirstOpen = true
+      try {
+        if (window.localStorage && !window.localStorage.getItem('companion-help-seen')) {
+          window.localStorage.setItem('companion-help-seen', '1')
+          if (!state.bubble) command('open').then(render).catch(showFailure)
+        }
+      } catch {}
+    }
     const orbMode = state.variant === 'orb'
     $('face').hidden = orbMode; $('orb-wrap').hidden = !orbMode
     document.body.dataset.variant = orbMode ? 'orb' : 'face'

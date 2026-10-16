@@ -71,7 +71,7 @@
             <button class="secondary" id="set-avatar-remove"></button>
           </div>
 
-          <p class="field-hint">이 사진이 데스크톱 컴패니언의 얼굴로도 보여요.</p>
+          <p class="field-hint">This picture is also used for the desktop companion.</p>
 
           <!-- The user's own picture (0.3.5, 2026-09-29): the same control,
                a second slot. settings.js wires both through one function;
@@ -98,10 +98,10 @@
           <div class="agent-control-row" role="radiogroup" aria-labelledby="set-companion-variant-label"><span id="set-companion-variant-label">Look</span>
             <span class="control-pair"><label><input type="radio" name="set-companion-variant" id="set-companion-variant-face" value="face" checked /> Face</label>
             <label><input type="radio" name="set-companion-variant" id="set-companion-variant-orb" value="orb" /> Sound only</label></span></div>
-          <p class="field-hint">Sound only replaces the face with a ring that moves with Sera’s voice. Hover to show the power, stop reading, and microphone controls. While companion is enabled, read-aloud plays only in the companion window.</p>
+          <p class="field-hint">Sound only replaces the face with a ring that moves with Sera’s voice. Click the face or ring to open a bubble, then type and press Enter to send. Enable Voice input below to use the microphone. Hover or use Tab to reach power, Stop voice, and microphone controls. While companion is enabled, read-aloud plays only in the companion window.</p>
           <div id="set-companion-voice"></div>
           <div id="set-companion-mic"></div>
-          <div id="set-companion-call"></div><!-- replaced by /js/call.js with the Call mode row + hint -->
+          <div id="set-companion-call"></div><!-- /js/call.js mounts the Call mode row and hint in this anchor. -->
           <div class="agent-control-row"><label for="set-companion-interval">Proactive message interval (minutes)</label><input type="number" id="set-companion-interval" min="5" max="1440" value="45" /></div>
           <div class="agent-control-row"><label for="set-companion-sound">Play an alert when hidden by a full-screen app</label><input type="checkbox" id="set-companion-sound" /></div>
           <p class="field-hint">Drag the face or ring to move it. Press Esc or click outside to dismiss the bubble. The companion is a separate window, not an in-game overlay.</p>
@@ -126,7 +126,7 @@
             <span class="control-pair">
               <input type="text" id="set-autonomy-start" placeholder="02:00" />
               <span class="control-pair-sep">to</span>
-              <input type="text" id="set-autonomy-end" placeholder="06:00" />
+              <input type="text" id="set-autonomy-end" aria-label="Autonomous window end" placeholder="06:00" />
             </span>
           </div>
           <div class="agent-control-hint" id="set-autonomy-window-note"></div>
