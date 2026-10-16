@@ -886,8 +886,9 @@ function initDb() {
   // guess a predecessor's name — see the design doc's backfill reasoning).
   if (!tableColumns(db, 'journal_entries').has('author')) {
     db.exec('ALTER TABLE journal_entries ADD COLUMN author TEXT')
-    db.prepare('UPDATE journal_entries SET author = ? WHERE author IS NULL').run(currentAuthor())
   }
+  // Restored databases may already have the column but still contain null authors.
+  db.prepare('UPDATE journal_entries SET author = ? WHERE author IS NULL').run(currentAuthor())
   // AFTER the DDL, not before: journal_mode=WAL and the first write are what
   // create the -wal/-shm siblings, so hardening earlier would find nothing to
   // chmod and silently leave them world-readable.

@@ -94,7 +94,14 @@ if (!chmodIsHonored()) {
       assert(mode(f) === 0o600, `memory.db${suffix} is 0600 (got ${oct(f)}) -- the -wal holds recent rows verbatim`)
     }
   }
+  // A restored DB can contain the author column and pre-backfill rows.
+  live.prepare("INSERT INTO journal_entries (date, body, created_at, updated_at, author) VALUES (?, ?, ?, ?, NULL)")
+    .run('2026-01-01', 'restored journal', 'then', 'then')
   live.close()
+  const restored = initDb()
+  assert(restored.prepare('SELECT author FROM journal_entries WHERE date = ?').get('2026-01-01').author !== null,
+    'existing author column still backfills restored null rows')
+  restored.close()
 
   // ── 3. the migration case: an install that already exists at 0644 ───────
   // This is the assertion that matters most. Every install created before
