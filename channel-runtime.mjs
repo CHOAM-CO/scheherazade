@@ -337,30 +337,10 @@ export function createOutboundResolver({ fetchTarget, getLastInboundId, homeId, 
   }
 }
 
-// ── boot announcement ──────────────────────────────────────────────────────
-// Detection is the harness's job, deterministically — a model asked to
-// announce its own boot forgets sometimes, and outside the window silence is
-// indistinguishable from death. Two-part unit, shared by every transport:
-//   1. a direct system line (the one non-model-mediated send — liveness must
-//      not depend on the model choosing to speak), then
-//   2. a [SYSTEM] turn asking for a greeting in the agent's voice. No
-//      "답장하지 마", so stop-reply-guard ENFORCES that the greeting lands.
-// The .boot-event.json marker is written by the supervisor before each leaf
-// spawn and consumed (unlinked) FIRST so no path can double-announce.
-// .boot-announce-ts.json is the cross-restart throttle; the decision rule
-// lives in cadence/boot-announce.cjs (pure, tested). The announce is one
-// unit: direct line -> ts advance -> greeting inject. ts advances only after
-// the direct send actually LANDS (spam requires successful sends, and a
-// Discord/Slack/Telegram outage at boot must not burn the slot); if the
-// direct send fails the whole unit aborts and the next restart retries.
-//
-// Transport adapter:
-//   fetchTarget(id) -> announce handle, throws if unreachable
-//   idOf(target)    -> string id stamped into the greeting inject's meta
-//   sendText(target, text)
-//   notify(params)  -> mcp.notification({method:'notifications/claude/channel', params})
-//   noun            -> 'channel' | 'chat', transport wording in log lines
-export function createBootAnnouncer({ dataHome, homeId, lastChannelStore, fetchTarget, idOf, sendText, notify, log, noun = 'channel' }) {
+// Boot greeting injection is shared by every transport. Startup state belongs
+// in the GUI, never in a direct system message in the conversation.
+// The existing marker, target fallback, and greeting throttle stay unchanged.
+export function createBootAnnouncer({ dataHome, homeId, lastChannelStore, fetchTarget, idOf, notify, log, noun = 'channel' }) {
   const BOOT_EVENT_PATH = path.join(dataHome, '.boot-event.json')
   const BOOT_ANNOUNCE_TS_PATH = path.join(dataHome, '.boot-announce-ts.json')
 
@@ -404,12 +384,6 @@ export function createBootAnnouncer({ dataHome, homeId, lastChannelStore, fetchT
         return
       }
     }
-    try {
-      await sendText(target, `🔁 [system] 에이전트 세션 ${plan.label} — ${localNow()}`)
-    } catch (err) {
-      log(`boot announce direct send failed -- aborting this announce unit, next restart retries: ${err.message}`)
-      return
-    }
     await atomicWriteJson(BOOT_ANNOUNCE_TS_PATH, { lastAnnounceMs: plan.nextLastAnnounceMs }).catch((err) =>
       log(`boot-announce ts write failed (worst case one extra ping next restart): ${err.message}`)
     )
@@ -420,13 +394,11 @@ export function createBootAnnouncer({ dataHome, homeId, lastChannelStore, fetchT
           '방금 그 채널에 네 목소리로 짧게 부팅 인사를 남겨라 -- 살아있다는 신호가 목적이니 한두 문장이면 된다. ' +
           '체크포인트에 이어받을 일이 있으면 뭘 이어가는지 한 줄 붙여. ' +
           '그리고 이 세션 내내 지킬 것: 작업 블록에 들어가기 전에 "뭘 시작한다 + 어느 정도 걸릴 것 같다"를 먼저 한 줄로 알리고 시작해라.',
-        // channelId = where the direct line actually LANDED, not a hardcoded
-        // HOME: with home deleted, pointing the model at a dead channel would
-        // make its guard-enforced greeting reply fail too.
+        // Use the reachable target, including the persisted fallback.
         meta: { sender: 'SYSTEM', channelId: idOf(target), authorId: '', timestamp: localNow(), bootGreeting: true },
       })
     } catch (err) {
-      log(`boot greeting inject failed (direct line already sent): ${err.message}`)
+      log(`boot greeting inject failed: ${err.message}`)
     }
   }
 }

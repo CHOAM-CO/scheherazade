@@ -444,12 +444,8 @@ console.log('\n9. orphan guard: parent death (stdin EOF) takes the process AND t
   fs.rmSync(tmp, { recursive: true, force: true })
 }
 
-console.log('\n10. boot announce: the greeting is the first thing the chat pane shows')
-// Slice 5's "setup ends at the agent's first message" depends on this:
-// wizard lands on /chat, and the boot announce unit (channel-runtime,
-// same rule as every backend: direct line -> ts advance -> greeting
-// inject) puts the first content into the queue. Real child, real marker,
-// real HTTP -- the same boot path production takes.
+console.log('\n10. boot greeting: no direct startup system line')
+// Real child and marker exercise the shared startup path without a model.
 {
   const { spawn } = await import('node:child_process')
   const fs = await import('node:fs')
@@ -480,16 +476,14 @@ console.log('\n10. boot announce: the greeting is the first thing the chat pane 
   const ep = JSON.parse(fs.readFileSync(portFile, 'utf8'))
 
   let out = { items: [] }
-  while (out.items.length === 0 && Date.now() < deadline) {
+  while (!stdoutLines.some(line => line.includes('notifications/claude/channel')) && Date.now() < deadline) {
     try {
       const r = await fetch(`http://127.0.0.1:${ep.port}/out`, { headers: { authorization: `Bearer ${ep.token}` } })
       if (r.status === 200) out = await r.json()
     } catch { /* listener racing up */ }
     if (out.items.length === 0) await new Promise((r) => setTimeout(r, 150))
   }
-  assert(out.items.length === 1, 'exactly one announce line lands in the queue')
-  assert(out.items[0] && out.items[0].text.includes('🔁') && out.items[0].text.includes('기동'),
-    'the queue item is the boot direct line (first thing the pane shows)')
+  assert(out.items.length === 0, 'startup sends no system line to the conversation')
   const greetInject = stdoutLines
     .map((l) => { try { return JSON.parse(l) } catch { return null } })
     .find((m) => m && m.method === 'notifications/claude/channel' && m.params && m.params.meta && m.params.meta.sender === 'SYSTEM')
