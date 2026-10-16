@@ -46,3 +46,33 @@ assert.match(memorySource, /value: String\(row.value \?\? ''\)/)
 assert.match(memorySource, /value: String\(row.summary \?\? ''\)/)
 assert.doesNotMatch(memorySource, /el\('div', 'entry-value', formatted.value\)/)
 console.log('About-you table values use shared markdown; nullable text normalized passed')
+
+// Run memory.js's actual table renderer and formatters with the real markdown
+// renderer, rather than asserting only that a source call site exists.
+Element.prototype.appendChild = function (node) { this.childNodes.push(node); return node }
+const memoryDocument = {
+  createElement: tag => new Element(tag),
+  createTextNode: text => { const node = new Element('#text'); node.textContent = text; return node },
+}
+const renderedTable = new Element('main')
+const memoryWindow = {}
+const memoryContext = vm.createContext({
+  window: memoryWindow, document: memoryDocument,
+  C: { categories: { user_facts: { label: 'About you' } }, deleteLabel: 'Delete' },
+  F: { tableIntro: () => '' }, displayName: 'Sera', state: { renderSeq: 1 },
+  isoDate: value => value || '',
+  resetReader: () => renderedTable,
+  api: async () => ({ ownerProfile: 'test', rows: [{ id: 1, value: '**Desktop**' }] }),
+})
+vm.runInContext(fs.readFileSync(new URL('../onboarding/public/js/markdown.js', import.meta.url), 'utf8'), memoryContext)
+const formatters = memorySource.slice(memorySource.indexOf('  const ROW_FORMATTERS ='), memorySource.indexOf("  let displayName ="))
+const elementFactory = memorySource.slice(memorySource.indexOf('  function el('), memorySource.indexOf('\n  }', memorySource.indexOf('  function el(')) + 4)
+const tableRenderer = memorySource.slice(memorySource.indexOf('  async function viewTable('), memorySource.indexOf('  async function viewSession('))
+await vm.runInContext(`${formatters}\n${elementFactory}\n${tableRenderer}\nviewTable(1, 'user_facts')`, memoryContext)
+function descendants(node) { return node.childNodes.flatMap(child => [child, ...descendants(child)]) }
+const renderedValue = descendants(renderedTable).find(node => node.className === 'entry-value markdown-body')
+assert(renderedValue)
+const bold = descendants(renderedValue).find(node => node.tag === 'strong')
+assert(bold, 'stored markdown creates a strong element inside entry-value')
+assert.equal(bold.childNodes[0].textContent, 'Desktop')
+console.log('Rendered About-you table: **Desktop** becomes entry-value > p > strong passed')

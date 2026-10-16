@@ -8,7 +8,7 @@
     ['companion', 'Companion', 'Silent companion.'],
     ['companion-voice', 'Companion + voice', 'Read replies aloud.'],
   ]
-  let busy = false, mode = 'off', voice = null
+  let busy = false, mode = 'off', voice = null, requestSequence = 0
   const callChannel = new BroadcastChannel('sera-call-settings')
   function node(tag, className, text) {
     const n = document.createElement(tag)
@@ -26,12 +26,12 @@
       catch (e) { status.textContent = `Voice setup failed: ${e.message}` }
       finally { prepare.disabled = false }
     }
-    let inputs, button, select
+    let inputs, button, select, group
     if (slot.id === 'qb-companion') {
       button = node('button', 'qb secondary icon-button'); button.type = 'button'
       button.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-2 2V11.5a9.5 9.5 0 0 1 19 0Z"/><path d="M8 10h.01M16 10h.01M8 14s4 3 8 0"/></svg>'
       const tooltip = node('span', 'qb-tooltip'); tooltip.setAttribute('role', 'tooltip'); button.append(tooltip)
-      const panel = node('div'), list = node('div'); list.setAttribute('role', 'radiogroup'); list.setAttribute('aria-label', 'Companion & voice')
+      const panel = node('div'), list = node('div'); group = list; list.setAttribute('role', 'radiogroup'); list.setAttribute('aria-label', 'Companion & voice')
       inputs = modes.map(([value, name, description]) => {
         const label = node('label'), input = node('input'); input.type = 'radio'; input.name = `companion-mode-${i}`; input.value = value
         input.onchange = () => change(input.value)
@@ -49,13 +49,19 @@
       select.onchange = () => change(select.value); inputs = [select]
       slot.replaceChildren(label, select, status, prepare)
     }
-    return { inputs, button, select, status, prepare }
+    return { inputs, button, select, group, status, prepare }
   })
   function paint(unavailable = false) {
     for (const v of views) {
-      v.inputs.forEach(input => { input.disabled = busy || unavailable; if (v.select) input.value = mode; else input.checked = input.value === mode })
+      v.group?.setAttribute('aria-busy', String(busy))
+      v.inputs.forEach(input => {
+        // Native disabling drops radio focus and lets Escape reach call shortcuts.
+        input.disabled = v.select ? busy || unavailable : false
+        input.setAttribute('aria-disabled', String(busy || unavailable))
+        if (v.select) input.value = mode; else input.checked = input.value === mode
+      })
       if (v.button) {
-        const name = modes.find(m => m[0] === mode)?.[1] || 'Off'
+        const name = `Companion & voice: ${modes.find(m => m[0] === mode)?.[1] || 'Off'}`
         v.button.dataset.state = mode === 'off' ? 'off' : 'on'; v.button.title = name; v.button.setAttribute('aria-label', name)
         v.button.querySelector('.qb-tooltip').textContent = name
       }
@@ -64,21 +70,29 @@
     }
   }
   async function change(next) {
-    if (busy) return
-    busy = true; paint()
+    if (busy) { paint(); return }
+    const previous = mode
+    ++requestSequence // Invalidate every read started before this write.
+    mode = next; busy = true; paint()
     try {
       await window.api('/api/companion', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'settings', mode: next }) })
       window.dispatchEvent(new Event('companion-mode-change'))
-    } catch { window.showToast?.('Could not change companion and voice. Check Settings > Voice and Logs.') }
+    } catch { mode = previous; window.showToast?.('Could not change companion and voice. Check Settings > Voice and Logs.') }
     finally { busy = false; await refresh() }
   }
   async function refresh() {
     if (busy) return
+    const sequence = ++requestSequence
+    const stale = () => busy || sequence !== requestSequence
     try {
-      const s = await window.api('/api/companion'); mode = s.mode
-      try { voice = await window.api('/api/tts/status') } catch { voice = null }
+      const s = await window.api('/api/companion')
+      if (stale()) return
+      let nextVoice
+      try { nextVoice = await window.api('/api/tts/status') } catch { nextVoice = null }
+      if (stale()) return
+      mode = s.mode; voice = nextVoice
       paint()
-    } catch { paint(true) }
+    } catch { if (!stale()) paint(true) }
   }
   refresh(); setInterval(refresh, 5000)
   callChannel.onmessage = refresh

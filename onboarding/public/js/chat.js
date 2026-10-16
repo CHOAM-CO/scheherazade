@@ -1083,7 +1083,6 @@
     look.onclick = () => busy(look, () => window.api('/api/quickbar/look-back', { method: 'POST' }))
     dream.onclick = () => busy(dream, async () => { await window.api('/api/quickbar/dream', { method: 'POST' }); await refresh() })
     today.onclick = () => busy(today, () => window.api('/api/quickbar/today', { method: 'POST' }))
-    browse.setAttribute('aria-haspopup', 'dialog'); browse.setAttribute('aria-expanded', 'false')
     function openPopover() {
       close(); const popover = document.createElement('div')
       popover.setAttribute('aria-label', Q.qbSeeWith.replace('{name}', browseStatus?.agentName || agentName))
