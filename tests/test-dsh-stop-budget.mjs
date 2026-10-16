@@ -140,7 +140,7 @@ assert.match(enumCommand, /System32/)
 
 // Real HTTP requests drive the actual lane ingest handler, not a fake route.
 // Each failure mode must allow the next inbound through, including Windows kill errors.
-for (const mode of ['cancel', 'timeout', 'fifo', 'kill']) {
+for (const mode of ['cancel', 'sync-cancel', 'timeout', 'fifo', 'sync-fifo', 'kill']) {
   const lane = { ...context, createServer, Buffer, JSON, Promise, Date,
     childExited: false, openTurn: true, tokenOk: () => true,
     turnText: '', turnHadUserInbound: false, sawTextThisTurn: false, sawReplyThisTurn: false,
@@ -151,8 +151,11 @@ for (const mode of ['cancel', 'timeout', 'fifo', 'kill']) {
     turnConfig: {}, nextBootTurn: false
   }
   lane.control = context.create({
-    cancel: () => mode === 'cancel' ? Promise.reject(new Error('cancel failed')) : mode === 'timeout' ? new Promise(() => {}) : Promise.resolve(),
-    clearPending: () => mode !== 'fifo',
+    cancel: () => {
+      if (mode === 'sync-cancel') throw new Error('sync cancel failed')
+      return mode === 'cancel' ? Promise.reject(new Error('cancel failed')) : mode === 'timeout' ? new Promise(() => {}) : Promise.resolve()
+    },
+    clearPending: () => { if (mode === 'sync-fifo') throw new Error('clear failed'); return mode !== 'fifo' },
     killTools: async () => { if (mode === 'kill') throw new Error('kill failed') }, timeoutMs: 5
   })
   vm.createContext(lane)

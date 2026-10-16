@@ -584,16 +584,19 @@ export function createTurnControl ({ cancel, clearPending, killTools, timeoutMs 
       generation++
       blocked = true
       stopping = (async () => {
-        const cleared = clearPending()
+        let cleared = false
+        let clearError
+        try { cleared = clearPending() } catch (error) { clearError = error }
         const bounded = (work) => new Promise((resolve, reject) => {
           const timer = setTimeout(() => reject(new Error('cancel timed out')), timeoutMs)
           Promise.resolve().then(work).then(resolve, reject).finally(() => clearTimeout(timer))
         })
         // ESC semantics: request abort and force tool cleanup immediately, no grace.
-        const cancellation = cancel()
+        const cancellation = Promise.resolve().then(cancel)
         cancellation.catch(() => {})
         await killTools()
         await bounded(() => cancellation)
+        if (clearError) throw clearError
         if (!cleared) throw new Error('pending FIFO clear failed')
         return { ok: true, stopped: true }
       })().finally(() => { blocked = false; stopping = null })
