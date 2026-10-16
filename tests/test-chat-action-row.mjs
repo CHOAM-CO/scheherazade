@@ -13,3 +13,17 @@ assert.match(call, /getElementById\('ct-quickbar'\)\?\.appendChild\(button\)/)
 assert.match(call, /enabled \? 'End call' : 'Call mode'/)
 assert.match(read('chat.html'), /class="button-row chat-composer-bar"/)
 console.log('Single Send/Stop and microphone/Stop voice slots; Call quickbar placement passed')
+
+const { runInNewContext } = await import('node:vm')
+const swap = chat.slice(chat.indexOf('      const focusedSlot ='), chat.indexOf('      // The gone state'))
+for (const inFlight of [false, true]) {
+  const sendBtn = {}, stopBtn = {}, outside = {}
+  for (const focused of [inFlight ? sendBtn : stopBtn, outside]) {
+    let focuses = 0
+    runInNewContext(swap, { st: { inFlight }, sendBtn, stopBtn, document: { activeElement: focused }, input: { focus() { focuses++ } } })
+    assert.equal(focuses, focused === outside ? 0 : 1, 'focus leaves a disappearing slot but never steals unrelated focus')
+    assert.equal(sendBtn.hidden, inFlight)
+    assert.equal(stopBtn.hidden, !inFlight)
+  }
+}
+console.log('Composer action swap preserves keyboard focus passed')

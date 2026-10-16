@@ -892,8 +892,10 @@
 
     // Send and Stop share one slot; existing stop and restart actions stay intact.
     if (stopBtn) {
+      const focusedSlot = document.activeElement === (st.inFlight ? sendBtn : stopBtn)
       stopBtn.hidden = !st.inFlight
       sendBtn.hidden = st.inFlight
+      if (focusedSlot) input.focus()
       // The gone state's composer action is a RESTART, not a Stop (design-0025
       // §gone): there is nothing left to kill. It fires the app's own lifecycle
       // route (POST /api/agent/restart) -- the same one the shell's restart
