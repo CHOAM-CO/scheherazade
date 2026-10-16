@@ -1280,7 +1280,8 @@ function routeConfigFor(env) {
 // routes answer applied:false for the MODEL and keep the spawn window).
 // Effort rides every call, effort-only switches included: the lane applies
 // it on any route and moves its own DSH_EFFORT (0.3.15). Never throws.
-async function notifyLaneSelectModel(model, effort) {
+const notifyLaneSelectModel = require('./lane-model-retry.cjs').createLaneModelRetry(tryLaneSelectModel)
+async function tryLaneSelectModel(model, effort) {
   let ep
   try {
     ep = JSON.parse(fs.readFileSync(path.join(DATA_HOME, '.ingest-endpoint.json'), 'utf8'))

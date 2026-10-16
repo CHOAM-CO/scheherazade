@@ -50,6 +50,8 @@ import os from 'node:os'
 import { resolveDataHome, resolveMemoryDb } from '../data-home.cjs'
 import { localDayKey } from '../local-date.cjs'
 import * as entityIndex from './entity-index.mjs'
+import bootProgress from '../boot-progress.cjs'
+bootProgress.bootBoundary('memory service import done')
 
 // ── Config ──────────────────────────────────────────────────────────────
 // DATA_HOME: fixed, product-keyed data directory -- matches
@@ -855,7 +857,9 @@ function initDb() {
   const dbDir = path.dirname(DB_PATH)
   if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true, mode: 0o700 })
 
+  bootProgress.bootBoundary('memory DB opening', 'memory', DATA_HOME)
   const db = new DatabaseSync(DB_PATH)
+  bootProgress.bootBoundary('memory DB connection open')
   db.exec('PRAGMA journal_mode = WAL')
   db.exec('PRAGMA foreign_keys = ON')
   // v1 fix (concurrency): wait up to 5s on a writer-lock conflict (e.g. this
@@ -867,7 +871,9 @@ function initDb() {
   // the post-delete wal_checkpoint(TRUNCATE) in memoryDelete (this pragma
   // alone does not clean the -wal file).
   db.exec('PRAGMA secure_delete = ON')
+  bootProgress.bootBoundary('memory pragmas done')
   db.exec(DDL)
+  bootProgress.bootBoundary('memory schema done')
   // Identity firewall (2026-08-15, identity-bleed bug — design:
   // docs/design-identity-firewall-and-selfops.md): the journal is a
   // first-person surface and DISPLAY_NAME is renameable, so every entry now
@@ -878,12 +884,15 @@ function initDb() {
   // renamed BEFORE this feature keeps its contamination no worse than today
   // and is covered by the standing system-prompt identity line (we never
   // guess a predecessor's name — see the design doc's backfill reasoning).
-  try { db.exec('ALTER TABLE journal_entries ADD COLUMN author TEXT') } catch { /* already migrated */ }
-  db.prepare('UPDATE journal_entries SET author = ? WHERE author IS NULL').run(currentAuthor())
+  if (!tableColumns(db, 'journal_entries').has('author')) {
+    db.exec('ALTER TABLE journal_entries ADD COLUMN author TEXT')
+    db.prepare('UPDATE journal_entries SET author = ? WHERE author IS NULL').run(currentAuthor())
+  }
   // AFTER the DDL, not before: journal_mode=WAL and the first write are what
   // create the -wal/-shm siblings, so hardening earlier would find nothing to
   // chmod and silently leave them world-readable.
   hardenDbFiles(DB_PATH)
+  bootProgress.bootBoundary('memory DB open', 'memory', DATA_HOME)
   log(`DB ready at ${DB_PATH}`)
   return db
 }

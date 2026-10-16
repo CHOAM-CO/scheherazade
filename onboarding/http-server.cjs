@@ -351,7 +351,7 @@ function computeAgentStatus() {
     return { state: 'failed', code: proc.code || 'unknown', detail: proc.detail, lastHeartbeat: marker ? marker.lastHeartbeat : null }
   }
   if (isMarkerFresh(marker)) {
-    return { state: 'live', code: null, detail: null, lastHeartbeat: marker.lastHeartbeat }
+    return { state: 'live', code: null, detail: null, boot: require('../boot-progress.cjs').readBootProgress(DATA_HOME, proc.since), lastHeartbeat: marker.lastHeartbeat }
   }
   if (proc.state === 'connecting') {
     const connectingSince = Date.parse(proc.since)
@@ -383,7 +383,7 @@ function computeAgentStatus() {
       }
     }
   }
-  return { state: 'connecting', code: null, detail: null, lastHeartbeat: marker ? marker.lastHeartbeat : null }
+  return { state: 'connecting', code: null, detail: null, boot: require('../boot-progress.cjs').readBootProgress(DATA_HOME, proc.since), lastHeartbeat: marker ? marker.lastHeartbeat : null }
 }
 
 // claude-subscription (4-provider-mode wiring, 2026-07-04): NEW mode, added

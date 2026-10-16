@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import bootProgress from './boot-progress.cjs'
+bootProgress.bootBoundary('channel import done')
 // channel-telegram.mjs — Telegram counterpart of channel.mjs (the Discord MCP
 // channel server). Same shape, same three tools, same marker files, same
 // notification contract into Claude Code -- only the wire protocol differs.
@@ -772,6 +774,7 @@ async function boot() {
   } else {
     await mcp.connect(new StdioServerTransport())
   }
+  bootProgress.bootBoundary('channel MCP up', 'engine')
   log(`MCP server up (${AGENT_NAME})`)
 
   // Always-on in-app chat surface, fail-soft (see channel.mjs's twin block).

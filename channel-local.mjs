@@ -1,3 +1,5 @@
+import bootProgress from './boot-progress.cjs'
+bootProgress.bootBoundary('channel import done')
 import siblings from './sibling-profiles.cjs'
 // channel-local.mjs — in-app chat counterpart to channel.mjs (the Discord MCP
 // channel). Same contract, same tool names, same notification method; the only
@@ -1093,6 +1095,7 @@ const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === path.
 
 async function boot() {
   await mcp.connect(new StdioServerTransport())
+  bootProgress.bootBoundary('channel MCP up', 'engine')
   log(`MCP server up (${AGENT_NAME})`)
 
   // The surface unit restores the transcript BEFORE anything can enqueue

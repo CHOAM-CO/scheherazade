@@ -38,6 +38,8 @@ import os from 'node:os'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
+const { bootBoundary } = require('./boot-progress.cjs')
+bootBoundary('lane import done', 'memory')
 const { DshClient, promptAndCollect } = require('./dsh-client.cjs')
 // The model catalog is the app's ONE list of ids and their context windows
 // (0.3 P4). The lane reads the same file the Engine page's picker loads, so a
@@ -689,6 +691,7 @@ function spawnEngine (patchPath) {
   }
   const isElectronNode = !!process.versions.electron
   const args = [...(isElectronNode ? ['--expose-internals'] : []), dshBin(), 'web', '--patch', patchPath, '--port', '0']
+  bootBoundary('engine spawn', 'memory', MEM)
   child = spawn(process.execPath, args, { cwd: MEM, env, stdio: ['ignore', 'pipe', 'pipe'] })
   child.on('exit', (code) => {
     childExited = true
@@ -708,7 +711,7 @@ function spawnEngine (patchPath) {
     }
     child.stdout.on('data', onLine)
     child.stderr.on('data', onLine)
-    setTimeout(() => { if (!settled) { settled = true; reject(new Error('dsh web did not announce a URL in 45s')) } }, 45000)
+    setTimeout(() => { if (!settled) { settled = true; reject(new Error('dsh web did not announce a URL in 90s')) } }, 90000).unref()
   })
 }
 
@@ -716,10 +719,12 @@ function spawnEngine (patchPath) {
 async function main () {
   const patch = buildPatch()
   const url = await spawnEngine(patch)
+  bootBoundary('engine URL', 'engine', MEM)
   log(`engine up at ${url}`)
   const client = new DshClient(url)
 
   const created = await client.createSession({ cwd: MEM })
+  bootBoundary('session created', 'engine', MEM)
   const sessionId = created.sessionId || created.id
   log(`session ${sessionId} (cwd=${MEM}, model=${DSH_PROVIDER}/${DSH_MODEL})`)
   try { await client.selectModel(sessionId, DSH_PROVIDER, DSH_MODEL, DSH_EFFORT === 'off' ? undefined : DSH_EFFORT) } catch (e) {
@@ -731,6 +736,7 @@ async function main () {
     killEngine(child)
     process.exit(78) // Permanent configuration failure: supervisor must not retry.
   }
+  bootBoundary('model selected', 'engine', MEM)
   writeLiveRoute(DSH_MODEL, DSH_EFFORT)
 
   // Skill-catalog nudge (0.2.4, measured 2026-08-20): the session is created
@@ -966,6 +972,8 @@ async function main () {
   // so the LANE convicts and nudges). Same decision table: reply-class
   // call -> clear; user turn composed text but sent nothing -> one nudge
   // (session cap); ledger file shared with the UI's model-revert offer.
+  let firstReplyLogged = false
+  const bootReplyCalls = new Set()
   const isReplyClassTool = (name) => /__(?:reply|send_file_to_discord|react)$/.test(String(name || ''))
   const opensMuteGate = ({ channelId, content } = {}) => {
     if (String(channelId || '') === 'system') return false
@@ -1230,6 +1238,7 @@ async function main () {
             .catch(e => errLog(`tool budget stop failed: ${e.message}`))
           return
         }
+        if (/__reply$/.test(String(d.name || '')) && d.callId) bootReplyCalls.add(d.callId)
         if (isReplyClassTool(d.name)) sawReplyThisTurn = true
         // Retire the draft on EVERY tool call, not just reply-class (0.2.17,
         // the owner 08-27 17:08: a multi-step turn's step narration -- "확인해볼게"
@@ -1275,6 +1284,10 @@ async function main () {
         // callId sits at data.callId on tool/call but inside
         // data.message.source.callId on tool/result (measured session log).
         const callId = d.callId || (d.message && d.message.source && d.message.source.callId)
+        if (bootReplyCalls.delete(callId) && !firstReplyLogged && !JSON.stringify(d).includes('"isError":true')) {
+          firstReplyLogged = true
+          bootBoundary('first reply', null, MEM)
+        }
         // Background subagent launched: the result text names the id.
         const bgLabel = callId && pendingSubagentCalls.get(callId)
         if (bgLabel !== undefined) {
@@ -1417,6 +1430,7 @@ async function main () {
         if (opensMuteGate({ channelId: (p.meta || {}).channelId, content: p.content })) turnHadUserInbound = true
         if (p.meta?.bootGreeting) nextBootTurn = true
         await client.prompt(sessionId, await renderInbound(p.content, p.meta))
+        if (p.meta?.bootGreeting) bootBoundary('greeting ingested', null, MEM)
         openTurn = true
       } catch (e) { errLog(`redelivery failed: ${e.message}`) }
     }
@@ -1558,6 +1572,7 @@ async function main () {
           turnConfig = config
           return client.prompt(sessionId, parts)
         })
+        .then(() => { if (payload.meta?.bootGreeting) bootBoundary('greeting ingested', null, MEM) })
         .then(() => log(`inbound -> session (${content.length} chars, sender=${(payload.meta && payload.meta.sender) || '?'})`))
         .catch((e) => errLog(`prompt failed: ${e.message}`))
       send(200, { ok: true })
@@ -1568,6 +1583,7 @@ async function main () {
     const port = server.address().port
     try {
       writeJsonAtomic(endpointFile(), { port, token, pid: process.pid }, 0o600)
+      bootBoundary('ingest endpoint ready', 'ready', MEM)
       log(`ingest endpoint on 127.0.0.1:${port}`)
     } catch (e) {
       errLog(`endpoint file write failed: ${e.message}`)

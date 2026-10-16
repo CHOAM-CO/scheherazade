@@ -705,6 +705,8 @@ function spawnHeadlessChild(cfg, { now = () => Date.now(), log, watchdogBounces 
   for (const k of Object.keys(baseEnv)) {
     if (k !== 'PATH' && k.toUpperCase() === 'PATH') delete baseEnv[k]
   }
+  const bootStarted = Date.now()
+  log(`boot supervisor spawn elapsed_ms=0`)
   const child = cpSpawn(process.execPath, [cfg.laneKind === 'dsh' ? DSH_LANE_PATH : HEADLESS_LANE_PATH, '--data-home', cfg.mem], {
     cwd: cfg.mem, // run.sh run_loop `cd "$MEM"` parity
     // stdin unused by the lane; stdout/stderr flow through to the
@@ -725,6 +727,7 @@ function spawnHeadlessChild(cfg, { now = () => Date.now(), log, watchdogBounces 
       ...(cfg.systemPromptFile ? { SYSTEM_PROMPT_FILE: cfg.systemPromptFile } : {}),
       ...(cfg.mcpConfigFile ? { MCP_CONFIG_FILE: cfg.mcpConfigFile } : {}),
       ...cfg.childEnvExtra,
+      SCHZ_BOOT_STARTED_MS: String(bootStarted),
     },
   })
   // A LIST, not one slot. Two independent paths arm a 10s SIGKILL grace timer

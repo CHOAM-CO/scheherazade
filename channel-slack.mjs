@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import bootProgress from './boot-progress.cjs'
+bootProgress.bootBoundary('channel import done')
 // channel-slack.mjs — Slack Socket Mode counterpart to channel.mjs (the
 // Discord MCP channel server). Same agent, same three tools, same on-disk
 // contracts (liveness marker, failure marker, boot-announce, DATA_HOME) —
@@ -916,6 +918,7 @@ async function boot() {
   } else {
     await mcp.connect(new StdioServerTransport())
   }
+  bootProgress.bootBoundary('channel MCP up', 'engine')
   log(`MCP server up (${AGENT_NAME})`)
 
   // Always-on in-app chat surface, fail-soft (see channel.mjs's twin block).

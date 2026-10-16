@@ -25,6 +25,8 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprot
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as service from './service.mjs'
+import bootProgress from '../boot-progress.cjs'
+bootProgress.bootBoundary('memory transport import done')
 import { installParentDeathExit } from '../channel-runtime.mjs'
 
 // Exported handler seam uses the same service calls as the live MCP switch.
@@ -266,6 +268,7 @@ async function main() {
   })
 
   await server.connect(new StdioServerTransport())
+  bootProgress.bootBoundary('memory MCP up', 'channels')
   log(`MCP server up (${AGENT_NAME}-memory), db=${service.DB_PATH}`)
 
   // ── parent-death exit (Windows orphan fix, 2026-08-18) ─────────────────────

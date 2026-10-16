@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import bootProgress from './boot-progress.cjs'
+bootProgress.bootBoundary('channel import done')
 // channel.mjs — minimal Discord MCP channel server for a single portable agent.
 //
 // Flow:
@@ -896,6 +898,7 @@ async function boot() {
   } else {
     await mcp.connect(new StdioServerTransport())
   }
+  bootProgress.bootBoundary('channel MCP up', 'engine')
   log(`MCP server up (${AGENT_NAME})`)
 
   // Always-on in-app chat surface, fail-soft: a surface that cannot bind
