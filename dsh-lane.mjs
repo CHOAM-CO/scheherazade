@@ -37,6 +37,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { createRequire } from 'node:module'
 import { promisify } from 'node:util'
+import { fileURLToPath } from 'node:url'
 const execFileAsync = promisify(execFile)
 
 const require = createRequire(import.meta.url)
@@ -272,8 +273,11 @@ function mcpRowsFromClaudeConfig (file) {
       const passthrough = ['DISCORD_BOT_TOKEN', 'TELEGRAM_BOT_TOKEN', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN']
         .filter((k) => process.env[k])
       const declared = s.env && typeof s.env === 'object' ? Object.entries(s.env) : []
-      if (declared.length || passthrough.length) {
+      {
         lines.push('        env:')
+        if (!declared.some(([k]) => k.toUpperCase() === 'NODE_COMPILE_CACHE')) {
+          lines.push(`          NODE_COMPILE_CACHE: ${yamlQuote(engineCompileCachePath())}`)
+        }
         for (const [k, v] of declared) lines.push(`          ${k}: ${yamlQuote(v)}`)
         for (const k of passthrough) {
           if (!declared.some(([dk]) => dk === k)) lines.push(`          ${k}: !!js process.env.${k}`)
@@ -758,11 +762,21 @@ const TURN_ERROR_RECYCLE = Number(process.env.DSH_TURN_ERROR_RECYCLE ?? 3)
 let consecutiveTurnErrors = 0
 let authRestartPending = false // AUTH recycle: waiting for main's restart
 
+function engineCompileCachePath () {
+  return process.env.NODE_COMPILE_CACHE || path.join(dshHome(), 'compile-cache')
+}
+
+function readMcpServers () {
+  try { return JSON.parse(fs.readFileSync(MCP_CONFIG_FILE, 'utf8')).mcpServers || {} } catch { return {} }
+}
+
 function spawnEngine (patchPath) {
   const env = {
     ...process.env,
     SCHZ_CHANNEL_ID: process.env.SCHZ_CHANNEL_ID || '',
     DSH_HOME: dshHome(),
+    DSH_SCHZ_COMPILE_CACHE: engineCompileCachePath(),
+    DSH_SCHZ_BOOT_SPAWNS: String(Object.values(readMcpServers()).filter(s => s.command).length),
     // The route's key env must resolve to SOMETHING or pi-ai refuses the
     // route (PI_AI_ERROR, measured); keyless local proxies get a dummy.
     [DSH_ROUTE_KEY_ENV]: process.env[DSH_ROUTE_KEY_ENV] || 'local-dummy',
@@ -778,7 +792,8 @@ function spawnEngine (patchPath) {
     DSH_PERMISSION_MODE: process.env.DSH_PERMISSION_MODE || 'danger-full-access'
   }
   const isElectronNode = !!process.versions.electron
-  const args = [...(isElectronNode ? ['--expose-internals'] : []), dshBin(), 'web', '--patch', patchPath, '--port', '0']
+  const bootstrap = path.join(path.dirname(fileURLToPath(import.meta.url)), 'engine-bootstrap.cjs')
+  const args = [...(isElectronNode ? ['--expose-internals'] : []), '--require', bootstrap, dshBin(), 'web', '--patch', patchPath, '--port', '0']
   bootBoundary('engine spawn', 'memory', MEM)
   child = spawn(process.execPath, args, { cwd: MEM, env, stdio: ['ignore', 'pipe', 'pipe'] })
   child.on('exit', (code) => {

@@ -4,7 +4,7 @@ const path = require('node:path')
 function bootBoundary(name, phase, home = process.env.MEM || process.env.AGENT_DATA_HOME) {
   const started = Number(process.env.SCHZ_BOOT_STARTED_MS) || Date.now() - process.uptime() * 1000
   const elapsedMs = Math.max(0, Math.round(Date.now() - started))
-  process.stderr.write(`[dsh-lane] boot ${name} elapsed_ms=${elapsedMs}\n`)
+  process.stderr.write(`[dsh-lane] boot ${name} elapsed_ms=${elapsedMs} pid=${process.pid} process_ms=${Math.round(process.uptime() * 1000)}\n`)
   if (home && phase) {
     try { fs.writeFileSync(path.join(home, `.boot-${phase}.json`), JSON.stringify({ name, phase, elapsedMs, started, at: Date.now() })) } catch {}
   }
