@@ -247,7 +247,7 @@
     const anchor = document.getElementById('ct-stop') || document.getElementById('ct-send')
     bar.insertBefore(btn, anchor)
     setMode('idle')
-    document.addEventListener('keydown', e => { if (e.key === 'Escape' && mode === 'listening') { e.preventDefault(); e.stopPropagation(); if (window.SeraCall?.active) window.SeraCall.stop(); else stop() } }, true)
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && mode === 'listening' && !window.SeraCall?.active) { e.preventDefault(); e.stopPropagation(); if (window.SeraCall?.active) window.SeraCall.stop(); else stop() } }, true)
   }
   async function syncEnabled() {
     try {

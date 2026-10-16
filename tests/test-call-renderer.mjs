@@ -216,3 +216,17 @@ const errorChat = await fixture({ companion: false, remote: true })
 errorChat.receive(errorBroadcast)
 assert.deepEqual(errorChat.messages, [errorBroadcast.message])
 console.log('Call HUD errors retained as chat toasts passed')
+
+const escapeChat = await fixture({ companion: false, remote: true })
+const turnStop = { id: 'ct-stop', children: [], hidden: false, dataset: { mode: 'stop' } }
+escapeChat.root.append(turnStop)
+let consumed = false
+const escapeEvent = { key: 'Escape', preventDefault() { consumed = true }, stopImmediatePropagation() { consumed = true } }
+escapeChat.keys[0](escapeEvent)
+assert.equal(consumed, false, 'running turn Escape must reach chat cancellation handler')
+assert.equal(escapeChat.element('call-controls').hidden, false)
+turnStop.hidden = true
+escapeChat.keys[0](escapeEvent)
+assert.equal(consumed, true)
+assert.equal(escapeChat.element('call-controls').hidden, true, 'idle Escape ends call')
+console.log('Escape prioritizes turn stop before call hangup passed')

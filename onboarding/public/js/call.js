@@ -176,7 +176,13 @@
     sync()
   }
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape' && enabled && !settings) { e.preventDefault(); e.stopImmediatePropagation(); window.SeraCall.stop() }
+    if (e.key !== 'Escape' || !enabled || settings || e.isComposing || e.defaultPrevented) return
+    const overlay = '.qb-popover, [role="dialog"], dialog, [popover]'
+    if (e.target?.closest?.(overlay) || document.activeElement?.closest?.(overlay)) return
+    // In chat, Escape stops the running turn first via chat.js. Only idle Escape ends the call.
+    const turnStop = document.getElementById('ct-stop')
+    if (turnStop && !turnStop.hidden && turnStop.dataset.mode !== 'restart') return
+    e.preventDefault(); e.stopImmediatePropagation(); window.SeraCall.stop()
   }, true)
   async function pollState() {
     if (!enabled) return
