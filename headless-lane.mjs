@@ -542,8 +542,9 @@ export function renderChannelTag({ content, meta = {} }) {
 }
 
 export function renderUserEvent(payload) {
+  const modelContent = payload.meta?.origin === 'voice' ? `[voice transcription]\n${payload.content}` : payload.content
   const content = payload.meta?.systemNote
-    ? `[system note: context only, do not reply to this note]\n${payload.meta.systemNote}\n[/system note]\n${payload.content}` : payload.content
+    ? `[system note: context only, do not reply to this note]\n${payload.meta.systemNote}\n[/system note]\n${modelContent}` : modelContent
   return JSON.stringify({
     type: 'user',
     message: { role: 'user', content: [{ type: 'text', text: renderChannelTag({ ...payload, content }) }] },

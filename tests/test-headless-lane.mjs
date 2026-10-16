@@ -83,6 +83,16 @@ console.log('\n1. <channel> tag matches stop-reply-guard\'s exact parser')
     'deferred call context reaches Claude only alongside the user turn, with no-reply instruction')
   assert(noteText.endsWith('hello</channel>'), 'the user content remains separate from the call note')
 
+  for (const origin of ['voice', 'text', undefined, 'unknown']) {
+    const payload = { content: 'spoken words', meta: { origin } }
+    const rendered = JSON.parse(renderUserEvent(payload)).message.content[0].text
+    assert(rendered.includes('[voice transcription]') === (origin === 'voice'), `Claude voice marker only for origin=voice (${origin})`)
+    assert(payload.content === 'spoken words', 'voice prefix never mutates visible user content')
+  }
+  const voiceNote = JSON.parse(renderUserEvent({ content: 'hello', meta: { origin: 'voice', systemNote: 'Call mode on' } })).message.content[0].text
+  assert(voiceNote.includes('do not reply to this note') && voiceNote.endsWith('[voice transcription]\nhello</channel>'),
+    'Claude keeps hidden call context and voice transcription marker together')
+
   // Slack thread attrs (2026-08-11): rendered only when supplied, and the
   // guard's parser must still extract channelId/body with them present.
   const threaded = renderChannelTag({ content: 'in thread', meta: { channelId: 'C1', messageTs: '1786414200.000010', threadTs: '1786414183.323289' } })
