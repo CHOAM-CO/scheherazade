@@ -3,7 +3,10 @@
   const core = window.SeraCallCore, ko = document.documentElement.lang.startsWith('ko')
   const settings = !!document.getElementById('set-about'), companion = !!document.getElementById('b-mic')
   const channel = new BroadcastChannel('sera-call-settings')
-  const post = (url, body) => window.api(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  const post = (url, body) => window.api(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(url === '/api/call' ? { ...body, lang: ko ? 'ko' : 'en' } : body) }).then(result => {
+    if (url === '/api/call' && result.noticeDelivered === false) presentError(ko ? '통화 상태를 에이전트에 알리지 못했어. 연결을 확인해 줘.' : 'Could not tell the agent about call mode. Check the connection.')
+    return result
+  })
   let enabled = false, retrying = false, remoteSpeaking = false, voiceMuted = false, micMuted = false
   let active = false, speaking = false, cursor = null, busy = false, audio = null, lastEnd = 0, opening = false, syncing = false, playbackStarted = 0, queueStarted = 0, speechStopped = false, detachAudio = null
   function presentError(message) {
@@ -108,7 +111,7 @@
   const utterance = core.createUtteranceAggregator({ send: text => {
     const generation = session.generation
     posting = true; turnRevision++; utterance.setBlocked(true)
-    post('/api/chat/in', { text }).catch(e => {
+    post('/api/chat/in', { text, origin: 'voice' }).catch(e => {
       if (active && generation === session.generation) presentError(e.message)
     }).finally(() => { if (generation === session.generation) posting = false })
     // A 202 acknowledges delivery, NOT agent completion. Only a fresh /out

@@ -10,6 +10,8 @@
 // PCM chunks as application/octet-stream, and each reply carries the newest
 // partial plus any finals (endpoints) since the previous reply.
 const path = require('node:path')
+const callContext = require('../call-context.cjs')
+const { createService: createSignalService } = require('./pending-signal.cjs')
 const { createDump } = require('../stt/dump.cjs')
 const { ensureModels, modelsPresent } = require('../stt/models.cjs')
 const { createEngine } = require('../stt/engine.cjs')
@@ -88,7 +90,20 @@ function createRoutes(ctx) {
         writeAgentConfig({ CALL_ENABLED: previous })
         return sendJson(res, 500, { error: 'Could not open the call window. Try again.' })
       }
-      sendJson(res, 200, { enabled: b.enabled })
+      let noticeDelivered = true
+      if ((previous === 'true') !== b.enabled) {
+        const content = callContext[b.lang === 'ko' ? 'ko' : 'en'][b.enabled ? 'start' : 'stop']
+        try {
+          if (ctx.sendCallNotice) noticeDelivered = await ctx.sendCallNotice(content)
+          else {
+            const bridge = createSignalService({ ...ctx, fs: ctx.fs || require('node:fs'), path })
+            const endpoint = bridge.readChannelEndpoint()
+            noticeDelivered = !!endpoint && (await bridge.postSystemTurn(endpoint, content)).status === 202
+          }
+        } catch { noticeDelivered = false }
+        if (!noticeDelivered) log?.('[call] Context notice could not reach the agent')
+      }
+      sendJson(res, 200, { enabled: b.enabled, noticeDelivered })
     } },
     { method: 'GET', match: p => p === '/api/stt/status', handler: async (req, res) => sendJson(res, 200, status()) },
     {
