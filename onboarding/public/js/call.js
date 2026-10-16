@@ -10,6 +10,8 @@
   let enabled = false, retrying = false, remoteSpeaking = false, voiceMuted = false, micMuted = false
   let active = false, speaking = false, cursor = null, busy = false, audio = null, lastEnd = 0, opening = false, syncing = false, playbackStarted = 0, queueStarted = 0, speechStopped = false, detachAudio = null
   function presentError(message) {
+    // A call-only companion can close immediately on hangup; retain errors in chat.
+    if (companion) channel.postMessage({ type: 'call-error', message })
     if (window.showToast) window.showToast(message)
     else window.SeraCompanionError?.(message)
   }
@@ -165,6 +167,10 @@
     try { await post('/api/call', { enabled }); channel.postMessage({ enabled }); await sync() } catch (e) { presentError(e.message); await sync() }
   }
   channel.onmessage = e => {
+    if (e.data.type === 'call-error') {
+      if (!companion && !settings && typeof e.data.message === 'string') window.showToast?.(e.data.message)
+      return
+    }
     if (e.data.type === 'call-mutes') { if (enabled) applyMutes(e.data.voiceMuted === true, e.data.micMuted === true); return }
     if (!e.data.enabled) { enabled = false; off(); voiceMuted = micMuted = false; renderState() }
     sync()
