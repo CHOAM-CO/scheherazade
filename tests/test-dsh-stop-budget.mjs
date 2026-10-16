@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import vm from 'node:vm'
 import { promisify } from 'node:util'
 import { createServer } from 'node:http'
+import { hasForcedCancelPatch } from '../tools/assert-dsh-cancel-patch.mjs'
 import { spawn, spawnSync, execFileSync, execFile } from 'node:child_process'
 
 const source = fs.readFileSync(new URL('../dsh-lane.mjs', import.meta.url), 'utf8')
@@ -67,6 +68,8 @@ const replacement = added.slice(1).join('\n')
 const patched = gateway.includes('for (const target of owned)') ? gateway : gateway
   .replace('cancel(request) {\n\t\t\t\tconst { sessionId }', 'async cancel(request) {\n\t\t\t\tconst { sessionId }')
   .replace('agent.cancel({ kind: "user" }, { keepInbox: true });', replacement.trimStart())
+assert.equal(hasForcedCancelPatch(patched), true, 'packaging accepts forced-cancel implementation')
+assert.equal(hasForcedCancelPatch(patched.replace('keepInbox: false', 'keepInbox: true')), false, 'packaging refuses undrained inbox')
 const method = patched.slice(patched.indexOf('async cancel(request) {'), patched.indexOf('\n\t\t},\n\t\tsubagents:', patched.indexOf('async cancel(request) {'))).trim()
 let inbox = ['queued']; let wake = true; let aborted = false; let idle
 const agent = { session: {}, cancel (_cause, options) { aborted = true; if (!options.keepInbox) { inbox = []; wake = false } }, whenIdle: () => new Promise(resolve => { idle = resolve }) }
@@ -114,6 +117,11 @@ await context.kill(10, new Set(), {
   platform: 'darwin', signal: pid => killed.push(pid), isInfrastructure: row => context.isMcp(row, servers)
 })
 assert.deepEqual(killed, [12], 'late MCP transport survives, its dispatched tool does not')
+
+const textStart = source.indexOf('  function eventMessageText (d) {')
+const textEnd = source.indexOf('\n  // Turn-close accounting', textStart)
+vm.runInContext(source.slice(textStart, textEnd) + '\nthis.messageText = eventMessageText', context)
+assert.equal(context.messageText({ content: [{ type: 'text', text: 'claimed greeting marker' }] }), 'claimed greeting marker')
 
 // Windows-shaped test runs on every host and simulates an already-dead root.
 const taskkills = []

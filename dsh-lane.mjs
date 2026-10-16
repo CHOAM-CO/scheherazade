@@ -1097,7 +1097,7 @@ async function main () {
   const pendingSubagentCalls = new Map() // callId -> display label
   const BG_STARTED_RE = /^started (?:background subagent job|subagent) (\S+)/
   function eventMessageText (d) {
-    const content = d && d.message && d.message.content
+    const content = d && ((d.message && d.message.content) || d.content)
     if (!Array.isArray(content)) return ''
     return content.map((p) => (p && typeof p.text === 'string') ? p.text : '').join('\n')
   }
