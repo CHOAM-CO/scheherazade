@@ -13,7 +13,7 @@
   const panel = document.createElement('div'), status = document.createElement('span'), hangup = document.createElement('button')
   panel.id = 'call-controls'; panel.className = 'call-controls'; panel.hidden = true
   status.id = 'call-state'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite')
-  hangup.id = 'call-end'; hangup.type = 'button'; hangup.textContent = '통화 종료'; hangup.className = 'secondary'
+  hangup.id = 'call-end'; hangup.type = 'button'; hangup.textContent = ko ? '통화 종료' : 'End call'; hangup.className = 'secondary'
   hangup.onclick = () => window.SeraCall.stop()
   function muteButton(id, icon) {
     const b = document.createElement('button')
@@ -49,10 +49,10 @@
   }
   function renderState() {
     panel.hidden = !enabled
-    const text = micMuted ? '마이크 꺼짐' : retrying ? '다시 보내는 중...' : (speaking || (!active && remoteSpeaking)) ? '말하는 중' : utterance.waiting ? '듣는 중...' : '듣는 중'
-    for (const [b, muted, name] of [[voiceButton, voiceMuted, '세라 목소리'], [micButton, micMuted, '내 마이크']]) {
+    const text = micMuted ? (ko ? '마이크 꺼짐' : 'Microphone muted') : retrying ? (ko ? '다시 보내는 중...' : 'Retrying...') : (speaking || (!active && remoteSpeaking)) ? (ko ? '말하는 중' : 'Speaking') : utterance.waiting ? (ko ? '듣는 중...' : 'Listening...') : (ko ? '듣는 중' : 'Listening')
+    for (const [b, muted, name] of [[voiceButton, voiceMuted, (ko ? '세라 목소리' : 'Sera voice')], [micButton, micMuted, (ko ? '내 마이크' : 'My microphone')]]) {
       b.setAttribute('aria-pressed', String(muted))
-      b.title = `${name} ${muted ? '켜기' : '끄기'}`
+      b.title = ko ? `${name} ${muted ? '켜기' : '끄기'}` : `${muted ? 'Unmute' : 'Mute'} ${name}`
       b.setAttribute('aria-label', b.title)
     }
     if (status.textContent !== text) status.textContent = text // Do not re-announce unchanged live text every tick.

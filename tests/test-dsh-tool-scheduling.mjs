@@ -200,12 +200,15 @@ console.log('5. patch files apply cleanly to the pinned versions')
   if (!fs.existsSync(bin)) {
     assert(false, 'node_modules/patch-package/index.js missing -- run npm install')
   } else {
-    const r = spawnSync(process.execPath, [bin, '--error-on-fail', '--patch-dir', 'patches'], { cwd: ROOT, encoding: 'utf8' })
-    const out = `${r.stdout}\n${r.stderr}`
-    assert(r.status === 0, `patch-package --error-on-fail exits 0 (exit ${r.status})`)
-    assert(/dsh-session@0\.1\.0-rc\.7/.test(out) && /dsh-agent-loop@0\.1\.0-rc\.7/.test(out),
-      'both patches were checked against 0.1.0-rc.7')
-    if (r.status !== 0) console.log(out.split('\n').map((l) => '      ' + l).join('\n'))
+    // Validation must not mutate the installed dependencies. Accept an
+    // already-applied patch via reverse-check, otherwise check forward.
+    for (const name of fs.readdirSync(path.join(ROOT, 'patches')).filter(n => n.endsWith('.patch'))) {
+      const file = path.join(ROOT, 'patches', name)
+      const applied = spawnSync('git', ['apply', '--check', '--reverse', file], { cwd: ROOT, encoding: 'utf8' })
+      const clean = applied.status === 0 ? applied : spawnSync('git', ['apply', '--check', file], { cwd: ROOT, encoding: 'utf8' })
+      assert(clean.status === 0, `${name} checks cleanly without writing node_modules`)
+      if (clean.status !== 0) console.log(clean.stderr)
+    }
   }
 }
 

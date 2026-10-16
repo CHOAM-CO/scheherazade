@@ -423,7 +423,7 @@ export function createBootAnnouncer({ dataHome, homeId, lastChannelStore, fetchT
         // channelId = where the direct line actually LANDED, not a hardcoded
         // HOME: with home deleted, pointing the model at a dead channel would
         // make its guard-enforced greeting reply fail too.
-        meta: { sender: 'SYSTEM', channelId: idOf(target), authorId: '', timestamp: localNow() },
+        meta: { sender: 'SYSTEM', channelId: idOf(target), authorId: '', timestamp: localNow(), bootGreeting: true },
       })
     } catch (err) {
       log(`boot greeting inject failed (direct line already sent): ${err.message}`)

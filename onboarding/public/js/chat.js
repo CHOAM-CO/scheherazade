@@ -1525,6 +1525,13 @@
   // tell "already done" from "could not stop", which are different sentences
   // to a user. Token header mirrors nav.js's api() exactly -- this is a POST,
   // so the server's per-launch gate applies.
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && deriveTurn().inFlight && turnState !== 'gone') {
+      event.preventDefault()
+      requestStop()
+    }
+  })
+
   async function requestStop() {
     if (stopBusy) return
     stopBusy = true

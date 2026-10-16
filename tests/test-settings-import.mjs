@@ -16,7 +16,7 @@
 //     /custom/plan + /discover/plan feed the picker, /import takes customRoots,
 //     secrets are held back, broad roots refused; the legacy /custom/* sweep
 //     routes and /detect + /start still answer;
-//   - the Stop text is platform-aware (win32: no restart promise);
+//   - forced Stop has the same acknowledgement on every platform;
 //   - the legacy /detect and /start routes still answer (nothing saved or
 //     scripted against them breaks) and existing imported/ content survives.
 //
@@ -52,9 +52,8 @@ chk('settings.js: custom folder plans via /api/migrate/custom/plan', settingsSrc
 chk('settings.js: discover plans via /api/migrate/discover/plan', settingsSrc.includes("'/api/migrate/discover/plan'"))
 chk('settings.js: no in-place custom/discover sweeps left', !/\/api\/migrate\/custom\/(start|preview|discover)/.test(settingsSrc))
 {
-  const m = read('js', 'copy.js').match(/\n    stopped: (window\.IS_WIN\s*\?[\s\S]*?),\n    stopNoTurn/)
-  const at = (isWin) => (m ? vm.runInNewContext(m[1], { window: { IS_WIN: isWin } }) : '')
-  chk('copy.js: Stop text is platform-aware', !!m && at(true) === 'Stopped. The conversation is kept.' && at(false).includes('back in a few seconds'), m && m[1].slice(0, 80))
+  const m = read('js', 'copy.js').match(/\n    stopped: ('[^']*'),\n    stopNoTurn/)
+  chk('copy.js: forced Stop acknowledgement', !!m && vm.runInNewContext(m[1]) === 'Stopped.')
 }
 chk('wizard.js: same shared picker, no private copy of the POST', wizardSrc.includes('window.ImportPicker.render(') && !wizardSrc.includes("'/api/migrate/import'"))
 for (const [page, script] of [['settings.html', 'settings.js'], ['index.html', 'wizard.js']]) {

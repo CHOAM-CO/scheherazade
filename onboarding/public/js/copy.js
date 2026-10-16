@@ -1142,12 +1142,7 @@ window.COPY = {
     stop: 'Stop',
     stopAria: 'Stop the run that is in progress',
     stopping: 'Stopping…',
-    // Only posix has a supervisor that relaunches the lane after a stop; on
-    // Windows the stop is final until the next message, so promising a restart
-    // there would be false. HOST_PLATFORM comes from the served page's meta.
-    stopped: window.IS_WIN
-      ? 'Stopped. The conversation is kept.'
-      : 'Stopped. The conversation is kept. If the agent restarts, it is back in a few seconds.',
+    stopped: 'Stopped.',
     stopNoTurn: 'That run had already finished.',
     stopFailed: "Couldn't stop the run. If the agent is restarting, try again in a moment.",
     // Steering: the composer stays live mid-run, and what it sends joins the

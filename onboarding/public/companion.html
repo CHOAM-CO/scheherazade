@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -7,30 +7,31 @@
     <link rel="stylesheet" href="/css/companion.css" />
   </head>
   <body>
-    <button id="face" class="surface" aria-label="세라와 이야기하기" title="눌러서 이야기하기 · 끌어서 옮기기"><img id="avatar" src="/img/agent-avatar.png" alt="" draggable="false" /></button>
+    <button id="face" class="surface" aria-label="Talk to Sera" title="Click to talk. Drag to move."><img id="avatar" src="/img/agent-avatar.png" alt="" draggable="false" /></button>
     <div id="orb-wrap" class="surface" hidden>
-      <canvas id="orb" aria-label="세라 · 소리만" title="눌러서 이야기하기 · 읽는 중이면 잠시 멈춤 · 끌어서 옮기기"></canvas>
+      <canvas id="orb" role="button" tabindex="0" aria-label="Sera, sound only" title="Click to talk or pause speech. Drag to move."></canvas>
       <p id="caption" aria-live="polite"></p>
-      <div id="ctl" role="toolbar" aria-label="컴패니언 조작">
-        <button id="b-power" class="round" aria-label="컴패니언 끄기" title="컴패니언 끄기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8M6.3 6.8a8 8 0 1 0 11.4 0"/></svg></button>
-        <button id="b-stop" class="round" aria-label="읽기 멈춤" title="읽기 멈춤"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg></button>
-        <button id="b-mic" class="round" aria-label="음성 입력" title="음성 입력" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+      <div id="ctl" role="toolbar" aria-label="Companion controls">
+        <button id="b-power" class="round" aria-label="Turn companion off" title="Turn companion off"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8M6.3 6.8a8 8 0 1 0 11.4 0"/></svg></button>
+        <button id="b-stop" class="round" aria-label="Stop reading" title="Stop reading"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg></button>
+        <button id="b-mic" class="round" aria-label="Voice input" title="Voice input" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
       </div>
       <div class="chat-composer-bar" hidden><textarea id="ct-input" tabindex="-1" aria-hidden="true"></textarea></div>
     </div>
-    <section id="bubble" class="surface" hidden aria-label="세라의 이야기">
+    <section id="bubble" class="surface" hidden aria-label="Conversation with Sera">
       <div id="message" role="status" aria-live="polite"></div>
       <p id="ghost" role="status" aria-live="polite" hidden></p>
-      <p id="approval-note" hidden>아래 버튼은 채팅 답장을 보내요. 도구 실행 권한을 바꾸지는 않아요.</p>
-      <div id="approval" hidden><button id="allow">허용한다고 답하기</button><button id="deny">거절한다고 답하기</button></div>
-      <form id="reply-form"><label class="sr-only" for="reply">답장</label><input id="reply" autocomplete="off" maxlength="16000" placeholder="짧게 답해 주세요" /><button id="send" type="submit" aria-label="답장 보내기" title="Enter로 보내기">↑</button></form>
+      <p id="approval-note" hidden>These buttons send a chat reply. They do not change tool permissions.</p>
+      <div id="approval" hidden><button id="allow">Reply with approval</button><button id="deny">Reply with refusal</button></div>
+      <form id="reply-form"><label class="sr-only" for="reply">Reply</label><input id="reply" autocomplete="off" maxlength="16000" placeholder="Type a reply" /><button id="send" type="submit" aria-label="Send reply" title="Press Enter to send">↑</button></form>
       <p id="failure" role="alert" hidden></p>
-      <footer><button id="main" hidden>앱에서 보기</button><span id="connection"></span></footer>
+      <footer><button id="main" hidden>Open in app</button><span id="connection"></span></footer>
     </section>
     <script src="/js/copy.js"></script>
     <script src="/js/tts-core.cjs"></script>
     <script src="/js/stt-core.cjs"></script>
     <script src="/js/companion-orb.cjs"></script>
+    <script src="/js/companion-copy.js"></script>
     <script src="/js/companion.js"></script>
     <script src="/js/stt.js"></script>
   <script src="/js/call-core.cjs"></script>

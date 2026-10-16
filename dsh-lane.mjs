@@ -29,7 +29,8 @@
 import { prependMemoryContext } from './memory/turn-context.mjs'
 import { writeTurnErrorMarker, clearTurnErrorMarker, turnErrorLogLine } from './turn-error-marker.mjs'
 import { createServer } from 'node:http'
-import { spawn } from 'node:child_process'
+import { spawn, execFileSync } from 'node:child_process'
+import { readAgentConfig } from './channel-runtime.mjs'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -547,6 +548,91 @@ function guardSubagentRows (yamlText, agentOptions = null) {
   return out.join('\n')
 }
 
+// Cancellation owns a generation: asynchronous prompt work cannot revive a stop.
+export function createTurnControl ({ cancel, clearPending, killTools, timeoutMs = 5000 }) {
+  let generation = 0
+  let stopping = null
+  let blocked = false
+  let calls = 0
+  let budget = 60
+  return {
+    get generation () { return generation },
+    get blocked () { return blocked },
+    valid (g) { return !blocked && g === generation },
+    resume () { blocked = false },
+    begin (boot, config = {}) {
+      calls = 0
+      const n = Number(config[boot ? 'DSH_BOOT_TOOL_BUDGET' : 'DSH_TOOL_BUDGET'])
+      budget = Number.isInteger(n) && n > 0 ? n : (boot ? 12 : 60)
+    },
+    tool () { return ++calls > budget ? budget : 0 },
+    interrupt () {
+      if (stopping) return stopping
+      generation++
+      blocked = true
+      stopping = (async () => {
+        const cleared = clearPending()
+        const bounded = (work) => new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('cancel timed out')), timeoutMs)
+          Promise.resolve().then(work).then(resolve, reject).finally(() => clearTimeout(timer))
+        })
+        // ESC semantics: request abort and force tool cleanup immediately, no grace.
+        const cancellation = cancel()
+        cancellation.catch(() => {})
+        await killTools()
+        await bounded(() => cancellation)
+        if (!cleared) throw new Error('pending FIFO clear failed')
+        return { ok: true, stopped: true }
+      })().finally(() => { stopping = null })
+      return stopping
+    }
+  }
+}
+
+// Select only descendants of this engine. Never signal the engine itself.
+export function toolProcessRoots (rows, enginePid) {
+  const descendants = new Set([Number(enginePid)])
+  for (let changed = true; changed;) {
+    changed = false
+    for (const row of rows) if (descendants.has(row.ppid) && !descendants.has(row.pid)) {
+      descendants.add(row.pid); changed = true
+    }
+  }
+  return rows.filter(r => r.pid !== Number(enginePid) && descendants.has(r.pid)).map(r => r.pid)
+}
+
+function ownedProcessRows () {
+  let rows
+  if (process.platform === 'win32') {
+    const raw = execFileSync('powershell.exe', ['-NoProfile', '-Command',
+      'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Json -Compress'], { encoding: 'utf8', timeout: 3000 })
+    const parsed = JSON.parse(raw || '[]')
+    rows = (Array.isArray(parsed) ? parsed : [parsed]).map(r => ({ pid: r.ProcessId, ppid: r.ParentProcessId, name: r.Name }))
+  } else {
+    rows = execFileSync('ps', ['-axo', 'pid=,ppid=,comm='], { encoding: 'utf8', timeout: 3000 }).split('\n').flatMap(line => {
+      const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.+)$/)
+      return m ? [{ pid: Number(m[1]), ppid: Number(m[2]), name: m[3] }] : []
+    })
+  }
+  return rows
+}
+
+export function killOwnedTools (enginePid, infrastructure = new Set()) {
+  const rows = ownedProcessRows()
+  const roots = toolProcessRoots(rows, enginePid).filter(pid => !infrastructure.has(pid))
+  const owned = new Set(roots)
+  for (let changed = true; changed;) {
+    changed = false
+    for (const r of rows) if (owned.has(r.ppid) && !owned.has(r.pid) && !infrastructure.has(r.pid)) { owned.add(r.pid); changed = true }
+  }
+  for (const pid of [...owned].reverse()) {
+    try {
+      if (process.platform === 'win32') require('./proc.cjs').killTree(pid, 'SIGKILL')
+      else process.kill(pid, 'SIGKILL')
+    } catch (e) { if (e.code !== 'ESRCH') throw e }
+  }
+}
+
 // ── engine boot ─────────────────────────────────────────────────────────────
 let child = null
 let childExited = false
@@ -757,6 +843,7 @@ async function main () {
   const THINK_FLUSH_AT = 700
   const THINK_TURN_CAP = 20000
   function flushThink (force) {
+    if (control.blocked) { thinkBuf = ''; return }
     const text = thinkBuf.trim()
     if (!text) return
     if (!force && text.length < THINK_FLUSH_AT) return
@@ -787,6 +874,7 @@ async function main () {
   const STREAM_TURN_CAP = 16000
   const PROMOTE_CAP = 9000 // /activity body cap is 10KB; leave envelope room
   function flushStream (force) {
+    if (control.blocked) { streamBuf = ''; return }
     if (lastInboundChannelId !== 'in-app') { streamBuf = ''; return }
     if (!streamBuf) return
     if (!force && streamBuf.length < STREAM_FLUSH_AT) {
@@ -906,13 +994,25 @@ async function main () {
   // SOFT path -- no engine kill, no lane reboot, no --resume. openTurn is the
   // 409 gate: set when a prompt goes out, cleared at turn/end.
   let openTurn = false
+  let nextBootTurn = false
+  let turnConfig = await readAgentConfig(MEM)
+  // MCP transport processes are infrastructure, not dispatched tools. Keep
+  // them alive so the interrupt response and the next turn remain reachable.
+  const infrastructure = new Set(toolProcessRoots(ownedProcessRows(), child.pid))
+  const control = createTurnControl({
+    cancel: () => client.cancel(sessionId),
+    clearPending: () => writePending([]),
+    killTools: () => killOwnedTools(child.pid, infrastructure)
+  })
   // Deliver a mute turn's composed text as the real chat message. Unlike
   // postPresence this is DELIVERY, not presence -- so it verifies the POST
   // landed and falls back to the nudge when it did not (channel down, port
   // stale). channel-local's promote branch enqueues the text as a normal
   // agent message and retires the draft in the same breath.
-  function promoteTurnText (text) {
+  function promoteTurnText (text, generation = control.generation) {
+    if (!control.valid(generation)) return
     const fail = (why) => {
+      if (!control.valid(generation)) return
       errLog(`mute promotion failed (${why}) -- falling back to the nudge`)
       sendMuteNudge()
     }
@@ -931,6 +1031,7 @@ async function main () {
   }
 
   function sendMuteNudge () {
+    if (control.blocked) return
     const tag = renderChannelTag({
       content: '[SYSTEM] 방금 사용자에게 보낼 답을 작성했지만 reply 도구를 호출하지 않아 실제로는 전달되지 않았다. 그 답을 새로 쓰지 말고 지금 mcp__agent-channel__reply(같은 channelId)로 그대로 전송하라. 정말로 보낼 내용이 없다고 판단했다면 그 판단을 한 줄로라도 답하라.',
       meta: { source: 'system', sender: 'system', channelId: 'system' }
@@ -961,6 +1062,13 @@ async function main () {
       // proves the engine is talking and this lane is reading it.
       lastEventTs = Date.now()
       if (sid !== sessionId || !event) return
+      if (control.blocked) return
+      if (event.type === 'turn/start') {
+        turnText = ''; sawTextThisTurn = false; sawReplyThisTurn = false
+        control.begin(nextBootTurn, turnConfig)
+        nextBootTurn = false
+        openTurn = true
+      }
       // Settlement notice (any event type that carries the injected user
       // message): retire the child from the roster by its own id.
       try {
@@ -1113,6 +1221,15 @@ async function main () {
       } else if (event.type === 'tool/call') {
         const d = event.data || {}
         log(`tool> ${d.name || '?'}`)
+        const exceeded = control.tool()
+        if (exceeded) {
+          const line = `Stopped after exceeding ${exceeded} tool calls.`
+          // In-app copy is English; the platform channel uses Korean.
+          promoteTurnText(lastInboundChannelId === 'in-app' ? line : `도구 호출 ${exceeded}회 넘어서 멈췄어`)
+          control.interrupt().then(() => { openTurn = false; postPresence('done', 'turn-end') })
+            .catch(e => errLog(`tool budget stop failed: ${e.message}`))
+          return
+        }
         if (isReplyClassTool(d.name)) sawReplyThisTurn = true
         // Retire the draft on EVERY tool call, not just reply-class (0.2.17,
         // the owner 08-27 17:08: a multi-step turn's step narration -- "확인해볼게"
@@ -1298,6 +1415,7 @@ async function main () {
     for (const p of stale) {
       try {
         if (opensMuteGate({ channelId: (p.meta || {}).channelId, content: p.content })) turnHadUserInbound = true
+        if (p.meta?.bootGreeting) nextBootTurn = true
         await client.prompt(sessionId, await renderInbound(p.content, p.meta))
         openTurn = true
       } catch (e) { errLog(`redelivery failed: ${e.message}`) }
@@ -1330,11 +1448,15 @@ async function main () {
       if (!tokenOk(req.headers['x-ingest-token'])) return send(403, { error: 'bad token' })
       if (childExited) return send(503, { error: 'agent not running' })
       if (!openTurn) return send(409, { error: 'no turn in flight' })
-      openTurn = false
-      if (!writePending([])) log('WARNING: pending FIFO clear failed -- the cancelled message may redeliver')
-      log('user STOP: cancelling the in-flight turn via session.cancel (pending FIFO cleared)')
-      client.cancel(sessionId).catch((e) => errLog(`session.cancel failed: ${e.message}`))
-      return send(200, { ok: true, stopped: true })
+      control.interrupt().then(result => {
+        openTurn = false
+        turnText = ''; turnHadUserInbound = false; sawTextThisTurn = false; sawReplyThisTurn = false
+        if (streamTimer) { clearTimeout(streamTimer); streamTimer = null }
+        streamBuf = ''
+        postPresence('done', 'turn-end')
+        send(200, result)
+      }).catch(e => { errLog(`session.cancel failed: ${e.message}`); send(504, { ok: false, error: e.message }) })
+      return
     }
     // POST /select-model {model, effort} (2026-10-07, route proxy live
     // switch): main.cjs already moved the proxy's live config; this moves the
@@ -1417,6 +1539,8 @@ async function main () {
       const content = String(payload.content == null ? '' : payload.content).trim()
       if (!content) return send(400, { error: 'content required' })
       if (childExited) return send(503, { error: 'agent not running' })
+      if (control.blocked && openTurn) return send(409, { error: 'stop pending' })
+      control.resume()
       if (!writePending([...readPending(), { content, meta: payload.meta || {}, ts: Date.now() }])) {
         return send(500, { error: 'pending persist failed' })
       }
@@ -1426,8 +1550,14 @@ async function main () {
       // to 'in-app'); platform backends send their real channel id.
       lastInboundChannelId = String((payload.meta || {}).channelId || 'in-app')
       openTurn = true // /interrupt is answerable from here until turn/end
-      renderInbound(content, payload.meta)
-        .then((parts) => client.prompt(sessionId, parts))
+      const generation = control.generation
+      if (payload.meta?.bootGreeting) nextBootTurn = true
+      Promise.all([renderInbound(content, payload.meta), readAgentConfig(MEM)])
+        .then(([parts, config]) => {
+          if (!control.valid(generation)) return
+          turnConfig = config
+          return client.prompt(sessionId, parts)
+        })
         .then(() => log(`inbound -> session (${content.length} chars, sender=${(payload.meta && payload.meta.sender) || '?'})`))
         .catch((e) => errLog(`prompt failed: ${e.message}`))
       send(200, { ok: true })

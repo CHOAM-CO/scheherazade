@@ -1,0 +1,22 @@
+diff --git a/node_modules/@deepseek-ai/dsh-host-apiproxy/lib/index.js b/node_modules/@deepseek-ai/dsh-host-apiproxy/lib/index.js
+--- a/node_modules/@deepseek-ai/dsh-host-apiproxy/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-host-apiproxy/lib/index.js
+@@ -2892,7 +2892,7 @@
+ 				}
+ 				return Promise.resolve(ok(request, { accepted: true }));
+ 			},
+-			cancel(request) {
++			async cancel(request) {
+ 				const { sessionId } = request.payload;
+ 				const agent = ctx.agents.get(sessionId);
+ 				if (agent === void 0) return Promise.resolve(err(request, {
+@@ -2901,7 +2901,8 @@
+ 					details: { sessionId }
+ 				}));
+ 				if (hasSubagentOwner(agent.session, agent)) return Promise.resolve(err(request, subagentOwnershipError(sessionId)));
+-				agent.cancel({ kind: "user" }, { keepInbox: true });
++				agent.cancel({ kind: "user" }, { keepInbox: false });
++				await agent.whenIdle();
+ 				return Promise.resolve(ok(request, { accepted: true }));
+ 			}
+ 		},

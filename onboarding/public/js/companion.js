@@ -1,6 +1,7 @@
 // A plain same-origin renderer: no preload, IPC, Node, or executable agent HTML.
 ;(function () {
   const $ = id => document.getElementById(id)
+  const ko = document.documentElement?.lang?.startsWith('ko') || false
   let shapeHeight = -1
   let current = null, lastId = null, pointerInside = false, pointerQueue = Promise.resolve()
   let drag = null, dragged = false, sending = false, avatarUrl = null, avatarAt = 0
@@ -30,7 +31,7 @@
     const speaking = !!window.SeraCall?.speaking
     if (speaking !== callSpeaking) command('call-speaking', { speaking }).then(() => { callSpeaking = speaking }).catch(() => {})
   }, 250)
-  function showFailure() { $('failure').hidden = false; $('failure').textContent = '보내지 못했어요. 연결을 확인하고 다시 보내 주세요.' }
+  function showFailure() { $('failure').hidden = false; $('failure').textContent = (ko ? '보내지 못했어요. 연결을 확인하고 다시 보내 주세요.' : 'Could not send. Check the connection and try again.') }
   async function action(name, args) { try { render(await command(name, args)) } catch { showFailure() } }
   function render(state) {
     current = state
@@ -46,13 +47,13 @@
     }
     voice.update(state)
     $('face').dataset.ring = state.ring
-    $('face').setAttribute('aria-label', state.ring === 'attention' ? '세라 · 확인할 이야기가 있어요' : '세라와 이야기하기')
+    $('face').setAttribute('aria-label', state.ring === 'attention' ? (ko ? '세라 · 확인할 이야기가 있어요' : 'Sera has a message for you') : (ko ? '세라와 이야기하기' : 'Talk to Sera'))
     $('bubble').hidden = !state.bubble
-    $('connection').textContent = state.connected ? '' : '채팅 연결 확인 중'
+    $('connection').textContent = state.connected ? '' : (ko ? '채팅 연결 확인 중' : 'Connecting to chat')
     if (!state.bubble) { lastId = null; shapeHeight = -1; return }
     const b = state.bubble
     if (b.id !== lastId) {
-      $('message').textContent = b.text
+      $('message').textContent = b.kind === 'compose' ? (ko ? '여기서 이야기해 주세요.' : 'Type a message below and press Enter. For voice input, enable Voice input in Settings, then use the microphone.') : b.text
       $('failure').hidden = true
       lastId = b.id
     }
@@ -84,13 +85,16 @@
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && !window.SeraCall?.active) action('dismiss')
     // Space = pause/resume speech, never while typing in the reply box.
-    if (e.code === 'Space' && current?.variant === 'orb' && !e.target.closest('input, textarea, button')) { e.preventDefault(); voice.togglePause() }
+    if (e.code === 'Space' && current?.variant === 'orb' && !e.target.closest('input, textarea, button, [role=button]')) { e.preventDefault(); voice.togglePause() }
   })
   document.addEventListener('pointerdown', e => { if (!e.target.closest('.surface')) action('dismiss') })
   $('main').onclick = () => action('main')
   // Face and orb share drag-to-move. A plain click on the face opens the
   // bubble; on the orb it pauses/resumes speech, or opens the bubble when quiet.
   const tap = () => (current?.variant === 'orb' && voice.togglePause()) || action('open')
+  $('orb').addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (!e.repeat) tap() }
+  })
   for (const handle of [$('face'), $('orb')]) {
     handle.addEventListener('pointerdown', e => {
       if (e.button !== 0) return
@@ -123,8 +127,8 @@
     finally { sending = false; for (const id of ['send', 'allow', 'deny']) $(id).disabled = false }
   }
   $('reply-form').onsubmit = e => { e.preventDefault(); send($('reply').value) }
-  $('allow').onclick = () => send(`이 질문에 대한 답: “${current.bubble.text.slice(0,2000)}”\n허용할게요.`)
-  $('deny').onclick = () => send(`이 질문에 대한 답: “${current.bubble.text.slice(0,2000)}”\n하지 말아 주세요.`)
+  $('allow').onclick = () => send(ko ? `이 질문에 대한 답: “${current.bubble.text.slice(0,2000)}”\n허용할게요.` : `Reply to: “${current.bubble.text.slice(0,2000)}”\nI approve.`)
+  $('deny').onclick = () => send(ko ? `이 질문에 대한 답: “${current.bubble.text.slice(0,2000)}”\n하지 말아 주세요.` : `Reply to: “${current.bubble.text.slice(0,2000)}”\nDo not proceed.`)
   async function refreshAvatar() {
     if (Date.now() - avatarAt < 30000) return
     avatarAt = Date.now()
@@ -254,7 +258,7 @@
 
   async function poll() {
     try { render(await api('/api/companion')); await refreshAvatar() }
-    catch { $('connection').textContent = '연결을 확인해 주세요' }
+    catch { $('connection').textContent = (ko ? '연결을 확인해 주세요' : 'Check your connection') }
     setTimeout(poll, 250)
   }
   poll()
