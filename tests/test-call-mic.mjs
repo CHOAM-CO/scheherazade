@@ -6,6 +6,7 @@ const require = createRequire(import.meta.url), tick = () => new Promise(r => se
 const posts = [], uploads = [], events = [], nodes = [], tracks = []
 const input = { value: '', classList: { toggle() {} }, dispatchEvent() {}, focus() {}, setSelectionRange() {} }
 const win = {
+  COPY: { call: require('../onboarding/public/js/call-copy.cjs').ko },
   SeraSTTCore: require('../onboarding/public/js/stt-core.cjs'), SeraCallCore: require('../onboarding/public/js/call-core.cjs'),
   SeraCall: { active: true, micMuted: false, speaking: false, final: t => events.push(['final', t]), partial: t => events.push(['partial', t]) },
   api: async (url, opts) => { if (opts) posts.push({ url, body: JSON.parse(opts.body) }); return url === '/api/stt/start' ? { sid: 'session-' + posts.length } : { enabled: true, modelsPresent: true } },

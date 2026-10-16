@@ -12,6 +12,7 @@ const doc = { querySelector: () => null, documentElement: { dataset: {} } }
 const ctx = { window: {}, document: doc, navigator: { platform: 'MacIntel', userAgent: 'Mac' }, console }
 Object.assign(ctx.window, { document: doc, navigator: ctx.navigator })
 vm.createContext(ctx)
+vm.runInContext(fs.readFileSync(path.join(JS, 'call-copy.cjs'), 'utf8'), ctx)
 vm.runInContext(fs.readFileSync(path.join(JS, 'copy.js'), 'utf8'), ctx)
 const COPY = ctx.window.COPY
 assert.ok(COPY && typeof COPY === 'object', 'copy.js did not define window.COPY')

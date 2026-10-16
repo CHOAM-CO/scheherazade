@@ -10,7 +10,7 @@ assert.match(stt, /btn.hidden = !micEnabled && !reading/)
 assert.match(stt, /secondary icon-button stt-mic/)
 assert.match(chat, /sendBtn.hidden = st.inFlight/)
 assert.match(call, /getElementById\('ct-quickbar'\)\?\.appendChild\(button\)/)
-assert.match(call, /enabled \? 'End call' : 'Call mode'/)
+assert.match(call, /enabled \? V.endCall : V.callMode/)
 assert.match(read('chat.html'), /class="button-row chat-composer-bar"/)
 console.log('Single Send/Stop and microphone/Stop voice slots; Call quickbar placement passed')
 
@@ -38,7 +38,7 @@ for (const [micEnabled, reading, mode, hidden, title] of [
   [true, true, 'listening', false, 'Listening'],
 ]) {
   const btn = { setAttribute() {} }
-  runInNewContext(paint, { btn, reading, mode, micEnabled, micAvailable: micEnabled, micIcon: 'mic', stopVoiceIcon: 'stop', T: { mic: 'Voice input', listening: 'Listening', processing: 'Processing' }, window: {} })
+  runInNewContext(paint, { V: { stopVoice: 'Stop voice' }, btn, reading, mode, micEnabled, micAvailable: micEnabled, micIcon: 'mic', stopVoiceIcon: 'stop', T: { mic: 'Voice input', listening: 'Listening', processing: 'Processing' }, window: {} })
   assert.equal(btn.hidden, hidden); assert.equal(btn.title, title)
   assert.equal(btn.innerHTML, reading && mode !== 'listening' ? 'stop' : 'mic')
 }

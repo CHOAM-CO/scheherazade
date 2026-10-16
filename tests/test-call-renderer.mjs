@@ -22,6 +22,7 @@ async function fixture({ failMic = false, companion = true, toast = true, remote
   let mode = 'idle', payload = { latest: 0, items: [], draft: '', state: { awaitingReplySince: null } }, enabled = true, turnError = {}, failPost = false
   const audios = []; let now = 1000
   const win = {
+    COPY: { call: require('../onboarding/public/js/call-copy.cjs').ko },
     SeraCallCore: { ...require('../onboarding/public/js/call-core.cjs'), createUtteranceAggregator: opts => require('../onboarding/public/js/call-core.cjs').createUtteranceAggregator({ ...opts, setTimer: (fn, ms) => { deadlines.set(++timerId, { fn, at: now + ms }); return timerId }, clearTimer: id => deadlines.delete(id) }), createSegmentRetry: opts => require('../onboarding/public/js/call-core.cjs').createSegmentRetry({ ...opts, wait: () => Promise.resolve() }) },
     SeraTTSCore: { cleanForSpeech: require('../onboarding/public/js/tts-core.cjs').cleanForSpeech, createSpeechQueue: require('../onboarding/public/js/tts-core.cjs').createSpeechQueue },
     SeraSTT: { get mode() { return mode }, async start() { starts++; mode = failMic ? 'idle' : 'listening' }, cancel() { cancels++; mode = 'idle' } },

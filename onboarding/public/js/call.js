@@ -1,6 +1,7 @@
 // Call owns audio only in the active voice surface; dictation stays manual off-call.
 ;(function () {
   const core = window.SeraCallCore, ko = document.documentElement.lang.startsWith('ko')
+  const V = window.COPY.call
   const settings = !!document.getElementById('set-about'), companion = !!document.getElementById('b-mic')
   const channel = new BroadcastChannel('sera-call-settings')
   const post = (url, body) => window.api(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(url === '/api/call' ? { ...body, lang: ko ? 'ko' : 'en' } : body) }).then(result => {
@@ -18,7 +19,7 @@
   const panel = document.createElement('div'), status = document.createElement('span'), hangup = document.createElement('button')
   panel.id = 'call-controls'; panel.className = 'call-controls'; panel.hidden = true
   status.id = 'call-state'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite')
-  hangup.id = 'call-end'; hangup.type = 'button'; hangup.textContent = ko ? '통화 종료' : 'End call'; hangup.className = 'secondary'
+  hangup.id = 'call-end'; hangup.type = 'button'; hangup.textContent = V.endCall; hangup.className = 'secondary'
   hangup.onclick = () => window.SeraCall.stop()
   function muteButton(id, icon) {
     const b = document.createElement('button')
@@ -55,7 +56,7 @@
   function renderState() {
     panel.hidden = !enabled
     if (!settings && !companion) {
-      button.title = enabled ? 'End call' : 'Call mode'
+      button.title = enabled ? V.endCall : V.callMode
       button.setAttribute('aria-label', button.title)
       button.classList.toggle('danger', enabled)
       button.classList.toggle('secondary', !enabled)
@@ -124,7 +125,7 @@
   window.SeraCall = { get active() { return active }, get micMuted() { return micMuted }, get voiceMuted() { return voiceMuted }, get speaking() { return active && core.suppressMic(queue.running && !speechStopped, speaking, lastEnd, Date.now()) }, stop() { enabled = false; retrying = false; off(); voiceMuted = micMuted = false; renderState(); post('/api/call', { enabled: false }).then(() => channel.postMessage({ enabled: false })).catch(e => presentError(e.message)) }, stopSpeech, final: text => { if (!micMuted) session.final(text) }, partial: text => { if (active && !micMuted) { utterance.partial(text); session.partial(text, stopSpeech) } } }
   const button = document.createElement(settings ? 'input' : 'button')
   button.id = 'call-mode'; button.type = settings ? 'checkbox' : 'button'
-  const label = ko ? '통화 모드' : 'Call mode'
+  const label = V.callMode
   button.title = label; button.setAttribute('aria-label', label)
   const hint = document.createElement('p'); hint.className = 'agent-control-hint'
   hint.textContent = ko ? '읽어주기와 음성 입력을 먼저 켜 주세요' : 'Enable Read aloud and Voice input first.'
