@@ -1018,7 +1018,11 @@
     try {
       const s = await window.api('/api/chat/status')
       if (s.up) setStatus('up', s.agent || '')
-      else setStatus(s.reason === 'not_running' ? 'not_running' : 'unreachable')
+      else {
+        setStatus(s.reason === 'not_running' ? 'not_running' : 'unreachable')
+        const status = await window.api('/api/agent/status').catch(() => null)
+        if (['connecting', 'live'].includes(status?.state) && status.boot && status.boot.phase !== 'ready') $('ct-status').textContent = `Starting: ${status.boot.phase}`
+      }
     } catch (err) {
       console.error('chat status failed:', err)
       setStatus('unreachable')
@@ -1087,12 +1091,15 @@
       const toggleLabel = document.createElement('label'), toggle = document.createElement('input')
       toggle.type = 'checkbox'; toggle.checked = !!browseStatus?.enabled
       toggleLabel.append(toggle, document.createTextNode(' ' + Q.qbEnable)); popover.append(toggleLabel)
-      const pathLabel = document.createElement('p'); pathLabel.textContent = Q.qbExtensionPath; popover.append(pathLabel)
-      const pathText = document.createElement('code'); pathText.textContent = browseStatus?.extensionPath || ''; popover.append(pathText)
-      const copy = document.createElement('button'); copy.textContent = Q.qbCopy; copy.type = 'button'; popover.append(copy)
+      const details = document.createElement('details')
+      const summary = document.createElement('summary'); summary.textContent = document.documentElement.lang.startsWith('ko') ? '세부 정보' : 'Show details'
+      details.append(summary); popover.append(details)
+      const pathLabel = document.createElement('p'); pathLabel.textContent = Q.qbExtensionPath; details.append(pathLabel)
+      const pathText = document.createElement('code'); pathText.textContent = browseStatus?.extensionPath || ''; details.append(pathText)
+      const copy = document.createElement('button'); copy.textContent = Q.qbCopy; copy.type = 'button'; details.append(copy)
       const guide = document.createElement('a'); guide.href = '/api/settings/browse-live/install'; guide.textContent = Q.qbInstall; guide.target = '_blank'; guide.rel = 'noopener'; popover.append(guide)
-      const pair = document.createElement('button'); pair.textContent = Q.qbPair; pair.type = 'button'; popover.append(pair)
-      const line = document.createElement('p'); line.setAttribute('role', 'status'); line.textContent = Q.qbSeeState.unpaired; popover.append(line)
+      const pair = document.createElement('button'); pair.textContent = document.documentElement.lang.startsWith('ko') ? 'Chrome 확장 프로그램 연결' : 'Connect Chrome extension'; pair.type = 'button'; popover.append(pair)
+      const line = document.createElement('p'); line.setAttribute('role', 'status'); line.textContent = browseStatus?.paired ? Q.qbPaired : browseStatus?.extensionPresent === false ? (document.documentElement.lang.startsWith('ko') ? '확장 프로그램 없음' : 'Extension missing') : (document.documentElement.lang.startsWith('ko') ? '연결되지 않음' : 'Not paired'); popover.prepend(line)
       toggle.onchange = async () => {
         toggle.disabled = true
         try { await window.api('/api/settings/browse-live', { method: 'POST', body: JSON.stringify({ browseLive: toggle.checked }) }); await refreshBrowse() }
@@ -1103,7 +1110,7 @@
       pair.onclick = async () => {
         pair.disabled = true; line.textContent = Q.qbPairing
         try { const r = await window.api('/api/settings/browse-live/pair', { method: 'POST' }); line.textContent = (r.status === 'paired' ? Q.qbPaired : Q.qbPairFailed) + (r.instructions ? '\n' + r.instructions : '') }
-        catch (e) { line.textContent = Q.qbPairFailed + ': ' + e.message }
+        catch (e) { line.textContent = Q.qbPairFailed + '. Check Chrome and try again.' }
         finally { pair.disabled = false; await refreshBrowse() }
       }
       document.body.append(popover)
@@ -1705,7 +1712,10 @@
       const opt = document.createElement('option')
       opt.value = m.id
       opt.textContent = m.label
-      if (!m.providers.some((p) => msAvailable.includes(p))) opt.disabled = true
+      if (m.disabled || !m.providers.some((p) => msAvailable.includes(p))) {
+        opt.disabled = true
+        opt.textContent += m.disabled ? ' (unavailable)' : ' (connect a provider first)'
+      }
       if (m.id === msModel) opt.selected = true
       if (!groups.has(m.group)) {
         const og = document.createElement('optgroup')
@@ -1722,6 +1732,11 @@
   // "(default)" marks the shipped default.
   function msPopulateEffort() {
     effortSel.replaceChildren() // NOT innerHTML — chat.js injection posture (test-chat-surface #1)
+    if (msEffort && !window.SCHZ_EFFORT_LEVELS.includes(msEffort)) {
+      const current = document.createElement('option')
+      current.value = msEffort; current.textContent = `${msEffort} (current)`; current.selected = true
+      effortSel.appendChild(current)
+    }
     for (const level of window.SCHZ_EFFORT_LEVELS) {
       const opt = document.createElement('option')
       opt.value = level

@@ -111,7 +111,7 @@ function createRoutes(ctx) {
       let agentName = process.env.AGENT_NAME || 'agent'
       const ep = pile.readChannelEndpoint()
       if (ep) try { const r = await fetch(`http://127.0.0.1:${ep.port}/health`, { headers: { authorization: `Bearer ${ep.token}` }, signal: AbortSignal.timeout(3000) }); if (r.ok) agentName = (await r.json()).agent || agentName } catch {}
-      sendJson(res, 200, { ok: true, enabled: config.BROWSE_LIVE === 'true', paired: await paired(), extensionPath: path.join(DATA_HOME, 'bin', 'chromux-portable', 'extension'), agentName })
+      sendJson(res, 200, { ok: true, enabled: config.BROWSE_LIVE === 'true', paired: await paired(), extensionPresent: fs.existsSync(path.join(DATA_HOME, 'bin', 'chromux-portable', 'extension', 'manifest.json')), extensionPath: path.join(DATA_HOME, 'bin', 'chromux-portable', 'extension'), agentName })
     }),
   ]
 }
