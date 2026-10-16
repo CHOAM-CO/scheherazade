@@ -852,8 +852,15 @@ export function createRequestHandler({ notify, token, onInbound = () => {}, inte
         const replyTo = sibling ? parsed.from.match(/\((default|[a-z0-9-]{1,24})\)$/)[1] : null
         const inboundText = sibling && parsed.notice !== true ? `${text.trim()}\n(답장은 '다른 세라에게 말하기'로 ${replyTo}에게 보내. 대화는 왕복 한 번까지.)` : text
         const systemNote = sibling ? undefined : pendingSystemNote
-        const delivered = await deliverInbound(inboundText, { notify, sibling, from: parsed.from, hop: parsed.hop, origin: parsed.origin, systemNote })
-        if (!sibling && pendingSystemNote === systemNote) pendingSystemNote = null
+        if (!sibling) pendingSystemNote = null
+        let delivered
+        try {
+          delivered = await deliverInbound(inboundText, { notify, sibling, from: parsed.from, hop: parsed.hop, origin: parsed.origin, systemNote })
+        } catch (error) {
+          // Restore only if a newer call transition has not replaced the note.
+          if (!sibling && systemNote && pendingSystemNote === null) pendingSystemNote = systemNote
+          throw error
+        }
         if (!sibling) siblings.resetHops(dataHome)
         if (sibling) {
           try { const memory = await import('./memory/service.mjs'); memory.journalWrite({ body: `[${parsed.from}] ${text}` }) } catch (error) { log(`sibling journal: ${error.message}`) }

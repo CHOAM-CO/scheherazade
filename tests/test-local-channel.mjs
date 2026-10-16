@@ -293,6 +293,26 @@ console.log('\n7.1 call notices defer context without starting a reply turn')
   assert(!seen[1].params.meta.systemNote, 'delivered context is consumed exactly once')
 }
 
+{
+  const seen = []
+  let release
+  const blocked = new Promise(resolve => { release = resolve })
+  let entered
+  const firstEntered = new Promise(resolve => { entered = resolve })
+  const handler = createRequestHandler({ token: TOKEN, notify: async n => {
+    seen.push(n)
+    if (seen.length === 1) { entered(); await blocked }
+  } })
+  await call(handler, {method: 'POST', url: '/system-turn', body: JSON.stringify({content: 'Call mode off', deferUntilUser: true})})
+  const first = call(handler, {method: 'POST', url: '/in', body: JSON.stringify({text: 'first'})})
+  await firstEntered
+  const second = await call(handler, {method: 'POST', url: '/in', body: JSON.stringify({text: 'second'})})
+  release()
+  await first
+  assert(second.code === 202 && seen.length === 2, 'overlapping inbound requests both deliver')
+  assert(seen.filter(n => n.params.meta.systemNote).length === 1, 'pending call note claimed synchronously by only one overlapping request')
+}
+
 console.log('\n7a. HTTP: POST /interrupt (turn-level STOP, 0.3.1)')
 // The stop seam's contract at the channel edge: the interrupter's fixed
 // reason enum is passed through UNCHANGED (the proxy above maps one
