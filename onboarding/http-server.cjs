@@ -3674,33 +3674,8 @@ function _resetOllamaUsageCache() { ollamaUsageCache = null }
 // AND invited a Read-tool image read that poisoned non-vision transcripts.
 // A default-'no' worst case is an unnecessary caption for a vision-capable
 // unlisted model; the old worst case was a bricked conversation.
-const VISION_YES_MODELS = new Set(['kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'gemma4', 'qwen3.5', 'minimax-m3', 'mistral-large-3', 'deepseek-v4.1-flash', 'glm-5.3-flash', 'muse-spark-open'])
-// Smallest vision model in the cloud catalog (31b, vs 397b/675b upward) --
-// caption latency and quota cost scale with this pick.
+const { laneVision } = require('./public/js/model-vision.cjs')
 const OLLAMA_CAPTION_MODEL = 'gemma4:31b'
-
-function laneVision(spawn) {
-  const provider = String((spawn && spawn.provider) || '')
-  // spawn.live.model (route proxy, 2026-10-07): the model the proxy sends
-  // NOW -- a live switch moves it without a respawn. Mirror of chat.js
-  // liveModelOf; change both together.
-  const model = String((spawn && ((spawn.live && spawn.live.model) || spawn.model)) || '')
-  const base = model.replace(/:.*$/, '') // strip :tag (deepseek-v4-flash:0731)
-  // First-party frontier lanes (Claude subscription/API, Codex proxy) all
-  // ship vision. Everything else -- ollama, custom, null spawn-info -- is
-  // 'no' unless the model is on the known-vision list. Never 'unknown'.
-  if (/^claude/.test(provider) || /^claude/.test(model) || provider === 'chatgpt') return 'yes'
-  // dsh (0.2.1): 'yes' because the LANE routes image turns itself -- it
-  // lifts [image attached:] markers into inline image parts and switches
-  // the session to the vision model for that turn (dsh-lane.mjs
-  // buildPromptContent/promptWithVision). 'no' here would fire the
-  // ollama.com caption fallback, which needs a cloud key this
-  // credential-less lane does not have. PDFs stay a known gap -- the lane
-  // rewrites their marker to an honest cannot-view note.
-  if (provider === 'dsh') return 'yes'
-  if (VISION_YES_MODELS.has(base)) return 'yes'
-  return 'no'
-}
 
 async function fetchImageCaption(imageBase64, mediaType) {
   let key = null

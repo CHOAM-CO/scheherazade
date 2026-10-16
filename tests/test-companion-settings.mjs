@@ -76,6 +76,28 @@ try {
     await ctl.command({ action: 'settings', enabled: false })
     assert.equal(windows[0].dead, true); assert.equal(ctl.active, false); assert.equal(cfg.COMPANION_ENABLED, 'false')
   })
+  await test('one mode writes companion and TTS together without changing microphone/call consent', async () => {
+    cfg.STT_ENABLED = 'true'; cfg.CALL_ENABLED = 'false'
+    for (const [mode, companion, tts] of [['voice', 'false', 'true'], ['companion-voice', 'true', 'true'], ['companion', 'true', 'false'], ['off', 'false', 'false']]) {
+      await ctl.command({ action: 'settings', mode })
+      assert.equal(cfg.COMPANION_ENABLED, companion); assert.equal(cfg.TTS_ENABLED, tts)
+      assert.equal(cfg.STT_ENABLED, 'true'); assert.equal(cfg.CALL_ENABLED, 'false')
+    }
+    let broadcasts = 0
+    Window.getAllWindows = () => [{ webContents: { executeJavaScript: async () => { broadcasts++ } } }]
+    cfg.CALL_ENABLED = 'true'
+    await ctl.command({ action: 'settings', mode: 'companion-voice' })
+    ctl.setCallEnabled(true)
+    await ctl.command({ action: 'settings', mode: 'off' })
+    assert.equal(ctl.snapshot().callHud, false)
+    await ctl.command({ action: 'settings', mode: 'off' })
+    assert.equal(broadcasts, 1, 'only the true-to-false call transition broadcasts')
+    delete Window.getAllWindows
+    await ctl.command({ action: 'settings', mode: 'companion-voice' })
+    assert.equal(cfg.CALL_ENABLED, 'false'); assert.equal(ctl.snapshot().callHud, false)
+    await ctl.command({ action: 'settings', mode: 'off' })
+    await assert.rejects(ctl.command({ action: 'settings', mode: 'invalid' }), { code: 'BAD_COMMAND' })
+  })
   await test('companion.json does not carry the switch', () => assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'companion.json'))).enabled, false))
   await test('speakable mirrors chat read-aloud filter', () => {
     assert.equal(model.speakable({ role: 'agent', kind: 'message', text: '안녕' }), true)
@@ -99,16 +121,35 @@ try {
   stub = null
   await test('route without electron: GET reports defaults from config', async () => {
     const s = await (await fetch(new URL('/api/companion', url), { headers: auth })).json()
-    assert.deepEqual(s, { available: false, enabled: false, variant: 'face' })
+    assert.deepEqual(s, { available: false, enabled: false, variant: 'face', mode: 'off' })
   })
   await test('route without electron: settings persist the keys', async () => {
     const r = await post('/api/companion', { action: 'settings', enabled: true, variant: 'orb' })
-    assert.deepEqual(await r.json(), { available: false, enabled: true, variant: 'orb' })
+    assert.deepEqual(await r.json(), { available: false, enabled: true, variant: 'orb', mode: 'companion' })
     const text = fs.readFileSync(configFile, 'utf8')
     assert.match(text, /^COMPANION_ENABLED=.?true/m); assert.match(text, /^COMPANION_VARIANT=.?orb/m)
   })
   await test('route without electron: bad variant 400', async () => assert.equal((await post('/api/companion', { action: 'settings', variant: 'x' })).status, 400))
   await test('route without electron: open after enable is 503, not a window', async () => assert.equal((await post('/api/companion', { action: 'open' })).status, 503))
+  await test('mode plus enabled rejected; TTS-only mode persists without companion', async () => {
+    assert.equal((await post('/api/companion', { action: 'settings', mode: 'off', enabled: true })).status, 400)
+    const response = await post('/api/companion', { action: 'settings', mode: 'voice' })
+    assert.equal((await response.json()).mode, 'voice')
+    assert.match(fs.readFileSync(configFile, 'utf8'), /^TTS_ENABLED=.?true/m)
+  })
+  await test('legacy TTS disable revokes persisted and runtime call consent', async () => {
+    let stopped = 0
+    stub = { setCallEnabled: enabled => { assert.equal(enabled, false); stopped++ } }
+    fs.appendFileSync(configFile, '\nCALL_ENABLED=true\nTTS_ENABLED=true\n')
+    const response = await post('/api/tts/settings', { enabled: false })
+    assert.equal(response.status, 200)
+    assert.equal((await response.json()).enabled, false)
+    assert.equal(stopped, 1)
+    const contents = fs.readFileSync(configFile, 'utf8')
+    assert.match(contents, /^CALL_ENABLED=.?false/m)
+    assert.doesNotMatch(contents, /^CALL_ENABLED=.?true/m)
+    stub = null
+  })
   await test('route: unknown action 400', async () => assert.equal((await post('/api/companion', { action: 'execute' })).status, 400))
 } finally {
   ctl.dispose()

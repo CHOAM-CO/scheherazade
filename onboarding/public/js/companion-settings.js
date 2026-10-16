@@ -8,13 +8,12 @@
   let busy = false
   $('status').setAttribute('role', 'status')
   function controls() {
-    for (const el of [$('enabled'), ...radios(), $('save'), $('interval'), $('sound')]) el.disabled = busy || !server?.available
+    for (const el of [...radios(), $('save'), $('interval'), $('sound')]) el.disabled = busy || !server?.available
     $('interval').disabled ||= window.HOST_PLATFORM !== 'win32'
   }
   function renderImmediate() {
     // The runtime may force a call-only orb; settings always edit persisted preferences.
     const preferences = server?.preferences || server
-    $('enabled').checked = !!preferences?.enabled
     for (const r of radios()) r.checked = r.value === (preferences?.variant || 'face')
   }
   async function save(body) {
@@ -40,7 +39,6 @@
     $('status').textContent = server.available ? '' : (ko ? '데스크톱 앱에서만 사용 가능' : 'Available in the desktop app only.')
   } catch { $('status').textContent = ko ? '설정 불러오기 실패' : 'Could not load settings.' }
   controls()
-  $('enabled').onchange = () => save({ enabled: $('enabled').checked })
   for (const r of radios()) r.onchange = () => { if (r.checked) return save({ variant: r.value }) }
   $('save').onclick = () => {
     if (!$('interval').reportValidity()) return

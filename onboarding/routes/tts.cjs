@@ -8,6 +8,7 @@ const { ensureModels, modelsPresent } = require('../tts/models.cjs')
 const { createEngine } = require('../tts/engine.cjs')
 const { MODEL_FILE, DEFAULT_VOICE, TOTAL_BYTES, CREDIT } = require('../tts/manifest.cjs')
 
+const { modeFields } = require('../public/js/companion-mode.cjs')
 const MAX_WAV_BYTES = 30 * 1024 * 1024
 
 function createRoutes(ctx) {
@@ -45,18 +46,20 @@ function createRoutes(ctx) {
     { method: 'GET', match: p => p === '/api/tts/status', handler: async (req, res) => sendJson(res, 200, status()) },
     {
       method: 'POST', match: p => p === '/api/tts/settings',
-      handler: async (req, res) => {
+      handler: async (req, res, call = {}) => {
         const body = await readJsonBody(req)
         const fields = {}
         if (body.enabled !== undefined) {
           if (typeof body.enabled !== 'boolean') return sendJson(res, 400, { error: 'enabled must be boolean' })
           fields.TTS_ENABLED = String(body.enabled)
+          if (!body.enabled) fields.CALL_ENABLED = modeFields('off').CALL_ENABLED
         }
         if (body.voice !== undefined) {
           if (typeof body.voice !== 'string' || !eng().hasVoice(body.voice)) return sendJson(res, 400, { error: 'unknown voice' })
           fields.TTS_VOICE = body.voice
         }
         if (Object.keys(fields).length) writeAgentConfig(fields)
+        if (fields.CALL_ENABLED === 'false') call.agentControls?.companion?.()?.setCallEnabled(false)
         if (settings().enabled) {
           if (!modelsPresent(dir())) startDownload()
           else eng().load().catch(() => {})

@@ -6,6 +6,7 @@
 // Every action except 'settings' is refused with 409 while it is off, here
 // AND in the controller, so nothing can open the window behind the toggle.
 const { readConfig: parseConfig, VARIANTS } = require('../../companion/model.cjs')
+const { modeOf, modeFields } = require('../public/js/companion-mode.cjs')
 const ACTIONS = new Set(['settings', 'pointer', 'shape', 'touch', 'dismiss', 'open', 'drag-start', 'drag-end', 'reply', 'main', 'call-error', 'call-speaking'])
 
 function createRoutes(ctx) {
@@ -15,24 +16,28 @@ function createRoutes(ctx) {
   return [
     { method: 'GET', match: p => p === '/api/companion', handler: async (_req, res, call) => {
       const companion = call.agentControls?.companion?.()
-      sendJson(res, 200, companion ? companion.snapshot() : { available: false, ...config() })
+      sendJson(res, 200, { ...(companion ? companion.snapshot() : { available: false, ...config() }), mode: modeOf(readAgentConfig()) })
     } },
     { method: 'POST', match: p => p === '/api/companion', handler: async (req, res, call) => {
       const companion = call.agentControls?.companion?.()
       const body = await readJsonBody(req)
       if (!body || typeof body !== 'object' || !ACTIONS.has(body.action)) return sendJson(res, 400, { error: 'invalid companion command' })
       if (body.action !== 'settings' && !config().enabled && !companion?.snapshot().callHud) return sendJson(res, 409, { error: 'companion disabled' })
+      if (body.mode !== undefined && body.enabled !== undefined) return sendJson(res, 400, { error: 'mode and enabled are mutually exclusive' })
+      if (body.mode !== undefined) {
+        try { modeFields(body.mode) } catch { return sendJson(res, 400, { error: 'invalid companion mode' }) }
+      }
       if (!companion) {
         // Browser-only (no Electron): the toggle still persists, nothing opens.
         if (body.action !== 'settings') return sendJson(res, 503, { error: 'companion unavailable' })
         if ((body.enabled !== undefined && typeof body.enabled !== 'boolean') || (body.variant !== undefined && !VARIANTS.includes(body.variant)))
           return sendJson(res, 400, { error: 'invalid companion command' })
-        const fields = { ...(body.enabled === undefined ? {} : { COMPANION_ENABLED: String(body.enabled) }),
+        const fields = { ...(body.mode === undefined ? {} : modeFields(body.mode)), ...(body.enabled === undefined ? {} : { COMPANION_ENABLED: String(body.enabled) }),
           ...(body.variant === undefined ? {} : { COMPANION_VARIANT: body.variant }) }
         if (Object.keys(fields).length) writeAgentConfig(fields)
-        return sendJson(res, 200, { available: false, ...config() })
+        return sendJson(res, 200, { available: false, ...config(), mode: modeOf(readAgentConfig()) })
       }
-      try { sendJson(res, 200, await companion.command(body)) }
+      try { sendJson(res, 200, { ...await companion.command(body), mode: modeOf(readAgentConfig()) }) }
       catch (e) {
         if (e.code === 'BAD_COMMAND') return sendJson(res, 400, { error: 'invalid companion command' })
         if (e.code === 'DISABLED') return sendJson(res, 409, { error: 'companion disabled' })

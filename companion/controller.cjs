@@ -1,6 +1,7 @@
 'use strict'
 
 const path = require('node:path')
+const { modeFields, modeOf } = require('../onboarding/public/js/companion-mode.cjs')
 const { isCallEnabled } = require('../onboarding/call-state.cjs')
 const { readState, writeState, initialAnchor, clampAnchor, layout, hitShape, fullscreenDecision, canProactive, classifyMessage, readConfig: parseConfig, sizeOf, VARIANTS, speakable } = require('./model.cjs')
 const { createFullscreenProbe } = require('./fullscreen.cjs')
@@ -94,14 +95,13 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
   }
   function trayFallback() {
     if (!hidden) { if (tray) { tray.destroy(); tray = null }; return }
-    if (tray) return
-    tray = new Tray(nativeImage.createFromPath(path.join(__dirname, '..', 'onboarding', 'public', 'img', 'agent-avatar.png')).resize({ width: 24, height: 24 }))
+    if (!tray) tray = new Tray(nativeImage.createFromPath(path.join(__dirname, '..', 'onboarding', 'public', 'img', 'agent-avatar.png')).resize({ width: 24, height: 24 }))
     tray.setToolTip('세라 · 전체 화면에서는 잠시 숨겨져 있어요')
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: '세라 열기', click: openMain },
-      { label: '컴패니언 끄기', click: () => command({ action: 'settings', enabled: false }).catch(e => log(e.message)) },
+      ...['off', 'voice', 'companion', 'companion-voice'].map((mode, i) => ({ label: ['Off', 'Voice', 'Companion', 'Companion + voice'][i], type: 'radio', checked: modeOf(readConfig()) === mode, click: () => command({ action: 'settings', mode }).catch(e => log(e.message)) })),
     ]))
-    tray.on('click', openMain)
+    tray.removeAllListeners('click'); tray.on('click', openMain)
   }
   function collapse() {
     bubble = null; touched = false; expiresAt = 0; bubbleHeight = 0
@@ -134,14 +134,18 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
     }
     switch (body.action) {
       case 'settings': {
+        if (body.mode !== undefined && body.enabled !== undefined) bad()
         if (body.enabled !== undefined && typeof body.enabled !== 'boolean') bad()
         if (body.sound !== undefined && typeof body.sound !== 'boolean') bad()
         if (body.intervalMinutes !== undefined && (!Number.isInteger(body.intervalMinutes) || body.intervalMinutes < 5 || body.intervalMinutes > 1440)) bad()
         if (body.variant !== undefined && !VARIANTS.includes(body.variant)) bad()
         const fields = {
+          ...(body.mode === undefined ? {} : modeFields(body.mode)),
           ...(body.enabled === undefined ? {} : { COMPANION_ENABLED: String(body.enabled) }),
           ...(body.variant === undefined ? {} : { COMPANION_VARIANT: body.variant }) }
         if (Object.keys(fields).length) writeConfig(fields)
+        if (fields.CALL_ENABLED === 'false') setCallEnabled(false)
+        if (body.mode !== undefined) trayFallback()
         const before = settings.variant
         settings = { ...persist({ ...settings,
           ...(body.sound === undefined ? {} : { sound: body.sound }),
@@ -290,6 +294,14 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
     screen.removeListener('display-metrics-changed', displaysChanged)
   }
   function setCallEnabled(enabled) {
+    if (!enabled && (callHud || callEnabled)) {
+      // Tray changes have no initiating renderer. Notify every open renderer
+      // through the same call channel used by the header/settings component.
+      for (const window of BrowserWindow.getAllWindows?.() || []) {
+        const script = "(() => { const c = new BroadcastChannel('sera-call-settings'); c.postMessage({ enabled: false }); c.close() })()"
+        Promise.resolve(window.webContents.executeJavaScript(script)).catch(e => log(`[call broadcast] ${e.message}`))
+      }
+    }
     if (callHud === !!enabled && callEnabled === !!enabled) return snapshot()
     callHud = !!enabled
     callEnabled = !!enabled

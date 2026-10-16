@@ -10,33 +10,35 @@ const read = name => fs.readFileSync(new URL(name, root), 'utf8')
 let count = 0
 async function test(name, fn) { await fn(); console.log(`ok ${++count} - ${name}`) }
 const flush = () => new Promise(resolve => setImmediate(resolve))
-await test('quick toggle reads state, preserves voice/mic consent, and refreshes', async () => {
-  const calls = [], attrs = {}, tooltip = {}
-  const button = { dataset: {}, setAttribute: (k, v) => attrs[k] = v, querySelector: () => tooltip }
-  let state = { available: true, enabled: false }, tick, focus
+await test('shared mode selector reads state, writes one mode and refreshes', async () => {
+  const calls = [], controls = []
+  const slot = { replaceChildren() {} }
+  let state = { available: true, mode: 'voice' }, tick, focus
   const window = { api: async (route, options) => {
     calls.push([route, options])
-    if (options) state = { ...state, enabled: JSON.parse(options.body).enabled }
+    if (options && route === '/api/companion') state.mode = JSON.parse(options.body).mode
     return state
-  }, addEventListener: (type, cb) => { if (type === 'focus') focus = cb } }
-  vm.runInNewContext(read('onboarding/public/js/companion-quick-toggle.js'), {
-    window, document: { documentElement: { lang: 'en' }, getElementById: () => button },
-    setInterval: (cb, ms) => { assert.equal(ms, 15000); tick = cb },
+  }, dispatchEvent() {}, addEventListener: (type, cb) => { if (type === 'focus') focus = cb } }
+  vm.runInNewContext(read('onboarding/public/js/companion-mode-control.js'), {
+    window, Event: class {}, BroadcastChannel: class { postMessage() {} }, document: { querySelectorAll: () => [slot], createElement: tag => {
+      const el = { dataset: {}, setAttribute() {}, append() {} }; if (tag === 'select') controls.push(el); return el
+    } }, setInterval: (cb, ms) => { assert.equal(ms, 5000); tick = cb },
   })
-  await flush(); assert.equal(attrs['aria-pressed'], 'false')
-  await button.onclick()
-  assert.equal(attrs['aria-pressed'], 'true')
-  assert.deepEqual(JSON.parse(calls.find(c => c[1])[1].body), { action: 'settings', enabled: true })
-  assert.ok(calls.every(([route]) => route === '/api/companion'))
-  state.enabled = false; await focus(); assert.equal(attrs['aria-pressed'], 'false')
-  state.available = false; await tick(); assert.equal(button.disabled, true)
+  const select = controls[0]
+  await flush(); assert.equal(select.value, 'voice')
+  select.value = 'voice'; await select.onchange()
+  assert.deepEqual(JSON.parse(calls.find(c => c[1])[1].body), { action: 'settings', mode: 'voice' })
+  assert.ok(calls.filter(([, options]) => options).every(([route]) => route === '/api/companion'), 'one preference write owns the mode')
+  state.mode = 'companion'; await focus(); assert.equal(select.value, 'companion')
+  state.available = false; await tick(); assert.equal(select.disabled, false, 'browser-only Voice remains usable')
 })
 await test('one settings group hosts voice and mic without introducing a call-mode key', () => {
   const html = read('onboarding/public/settings.html')
   const group = html.slice(html.indexOf('id="set-companion"'), html.indexOf('id="set-autonomy"'))
-  for (const id of ['set-companion-enabled', 'set-companion-voice', 'set-companion-mic']) assert.ok(group.includes(`id="${id}"`))
+  for (const id of ['set-companion-voice', 'set-companion-mic']) assert.ok(group.includes(`id="${id}"`))
   assert.match(group, /id="set-companion-call"/)
-  assert.doesNotMatch(group, /id="set-companion-enabled"[^>]*checked/)
+  assert.equal((group.match(/data-companion-mode/g) || []).length, 1)
+  assert.doesNotMatch(group, /id="set-companion-enabled"/)
   for (const name of ['tts', 'stt']) assert.match(read(`onboarding/public/js/${name}.js`), /Math\.round\(d.done \/ d.total \* 100\)/)
 })
 await test('bubble has no notification chrome and keeps conversational approval endpoints', () => {

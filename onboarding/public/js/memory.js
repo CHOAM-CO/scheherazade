@@ -322,10 +322,10 @@
       })
       head.appendChild(del)
       card.appendChild(head)
-      // The body is the agent's own prose, including its timestamp seams. It is
-      // shown as written -- textContent, never innerHTML: this string came from
-      // a model and must never be able to become markup.
-      card.appendChild(el('div', 'journal-body', row.body))
+      // Agent prose uses the same text-node-only markdown renderer as chat.
+      const prose = el('div', 'journal-body markdown-body')
+      renderMarkdown(prose, row.body)
+      card.appendChild(prose)
       listEl.appendChild(card)
     }
   }

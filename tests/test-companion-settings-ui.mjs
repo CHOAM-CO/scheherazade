@@ -15,19 +15,17 @@ await vm.runInNewContext(fs.readFileSync(new URL('../onboarding/public/js/compan
   window: { api }, navigator: { language: 'en' }, document: { getElementById: id => elements[id.replace('set-companion-', '')], querySelectorAll: () => radios },
 })
 elements.interval.value = '75'; elements.sound.checked = true
-elements.enabled.checked = true; await elements.enabled.onchange()
 assert.equal(elements.interval.value, '75'); assert.equal(elements.sound.checked, true)
 radios[1].checked = true; await radios[1].onchange()
 assert.equal(elements.interval.value, '75'); assert.equal(elements.sound.checked, true)
-fail = true; elements.enabled.checked = false; await elements.enabled.onchange()
-assert.equal(elements.enabled.checked, true); assert.match(elements.status.textContent, /Could not save/)
+fail = true
 radios[0].checked = true; await radios[0].onchange()
 assert.equal(radios[0].checked, false); assert.equal(radios[1].checked, true)
 assert.equal(elements.save.disabled, false)
 fail = false
 let release; pending = new Promise(resolve => { release = resolve })
 const saving = elements.save.onclick()
-assert.equal(elements.enabled.disabled, true); assert.equal(radios[0].disabled, true)
+assert.equal(radios[0].disabled, true)
 release(); await saving; pending = null
 assert.equal(server.intervalMinutes, 75); assert.equal(server.sound, true)
 assert.equal(elements.save.disabled, false)
@@ -35,7 +33,6 @@ console.log('Companion draft preservation, rollback, retry and serialization pas
 
 server = { ...server, enabled: true, variant: 'orb', callHud: true, preferences: { enabled: false, variant: 'face' } }
 await elements.save.onclick()
-assert.equal(elements.enabled.checked, false, 'temporary call HUD does not check persisted companion preference')
 assert.equal(radios[0].checked, true)
 assert.equal(radios[1].checked, false)
 assert.deepEqual(server.preferences, { enabled: false, variant: 'face' })

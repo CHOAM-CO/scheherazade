@@ -58,6 +58,8 @@ t('bare url', 'see https://example.com now', ['<a href="https://example.com">'])
 t('javascript: scheme is NOT a link', '[click](javascript:alert(1))', ['click'], ['href='])
 t('html is inert text', '<img src=x onerror=alert(1)>', ['<img src=x onerror=alert(1)>'.replace('<','<')], [])
 t('bold inside list item', '- **a** b', ['<li><strong>a</strong> b</li>'])
+t('script syntax is inert and preserved in code', '```html\n<script>alert(1)</script>\n```', ['<code><script>alert(1)</script></code>'])
+t('unclosed script prose never swallows text', '<script>literal\nkeep this', ['literal', 'keep this'])
 t('plain text unchanged', 'hello there', ['hello there'])
 
 // CSS regression pin, not a renderer test: the markdown renderer wraps plain

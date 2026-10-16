@@ -215,7 +215,7 @@ assert(js.includes('s.hasUpdate || s.unseenNotes || s.pending.total > 0'), 'all 
 assert(js.includes('setInterval(() => { refresh(); refreshBrowse() }, PENDING_MS)'), 'status uses existing polling cadence')
 assert(js.includes("button.setAttribute('aria-label', text)") && js.includes('button.title = text'), 'tooltip and accessible labels share copy')
 assert(copy.includes('quickbarKo:') && copy.includes('qbWhatsNew:'), 'Korean and English copy provided')
-assert(css.includes('.button-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); }') && css.includes('.chat-quickbar { flex-wrap: nowrap; }') && css.includes('.chat-page-header .chat-lane-chip { margin-left: auto; }'), 'quickbar is a horizontal row in the header; lane chip + New conversation pushed right')
+assert(css.includes('.chat-quickbar { flex-wrap: wrap; gap: var(--header-row-gap);') && !css.includes('.chat-page-header .chat-lane-chip { margin-left: auto; }'), 'header components share one row rhythm instead of extra auto/margin offsets')
 assert(css.includes('.qb-dot[hidden] { display: none; }'), 'hidden dot does not flash')
 assert(js.includes("e.key === 'Escape'") && js.includes("document.addEventListener('pointerdown'"), 'popover dismisses with Escape and outside click')
 

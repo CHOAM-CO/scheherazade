@@ -48,3 +48,12 @@ const btn = {}
 runInNewContext('btn.onclick = ' + click + '; btn.onclick()', { btn, mode: 'listening', reading: true, stop() { captureStops++ }, window: { SeraTTS: { stop() { voiceStops++ } } } })
 assert.equal(captureStops, 1); assert.equal(voiceStops, 0)
 console.log('Microphone visibility, mode labels, and listening priority passed')
+
+const css = read('css/app.css')
+for (const token of ['--shell-gutter: 24px', '--header-row-gap: 12px', '--control-height: 36px', '--control-pad-y: 6px']) assert.ok(css.includes(token))
+assert.match(css, /scrollbar-gutter: stable;/)
+assert.match(css, /padding: var\(--shell-gutter\) var\(--shell-gutter\)/)
+assert.match(css, /button.icon-button \{[^}]*height: var\(--control-height\)/)
+assert.match(css, /\.tabs, \.nav-tabs \{[^}]*min-height: var\(--control-height\)/)
+assert.doesNotMatch(css, /\.chat-page-header \.chat-lane-chip \{ margin-left: auto/)
+console.log('Shared shell gutter, header rhythm, tab/icon heights and stable scrollbar geometry passed')

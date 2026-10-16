@@ -255,7 +255,7 @@
       }
     }
     window.SeraCompanionSpeechStop = () => queue?.stop()
-    $('b-power').onclick = () => { window.SeraCall?.stop(); queue?.stop(); action('settings', { enabled: false }) }
+    $('b-power').onclick = () => { window.SeraCall?.stop(); queue?.stop(); action('settings', { mode: 'off' }) }
     $('b-stop').onclick = () => { window.SeraCall?.stopSpeech(); queue?.stop(); kick() }
     $('b-mic').onclick = mic
     const wrap = $('orb-wrap')

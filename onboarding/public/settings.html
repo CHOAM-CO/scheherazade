@@ -92,9 +92,9 @@
 
         <div class="category" id="set-companion">
           <div class="category-label">Companion</div>
-          <p class="subtitle">Keep Sera beside your work and exchange messages in a small bubble. Off by default. Enable companion to get started, then turn on voice and microphone separately below.</p>
+          <p class="subtitle">Keep Sera beside your work and exchange messages in a small bubble. Off by default. Choose Companion for silent presence, or Companion + voice for spoken replies. Microphone and Call remain opt-in.</p>
           <p class="field-hint">Proactive messages may use your model allowance. When a full-screen app is detected, the companion hides and remains available in the tray. Full-screen detection is limited on macOS and Linux, so proactive messages stay paused there.</p>
-          <div class="agent-control-row"><label for="set-companion-enabled">Enable companion</label><input type="checkbox" id="set-companion-enabled" /></div>
+          <div class="agent-control-row companion-mode-control" data-companion-mode></div>
           <div class="agent-control-row" role="radiogroup" aria-labelledby="set-companion-variant-label"><span id="set-companion-variant-label">Look</span>
             <span class="control-pair"><label><input type="radio" name="set-companion-variant" id="set-companion-variant-face" value="face" checked /> Face</label>
             <label><input type="radio" name="set-companion-variant" id="set-companion-variant-orb" value="orb" /> Sound only</label></span></div>
@@ -269,6 +269,7 @@
     <script src="/js/tts.js"></script>
     <script src="/js/stt-core.cjs"></script>
     <script src="/js/stt.js"></script>
+    <script src="/js/companion-mode-control.js"></script>
     <script src="/js/companion-settings.js"></script>
     <script src="/js/seed-settings.js"></script>
   <script src="/js/call-core.cjs"></script>

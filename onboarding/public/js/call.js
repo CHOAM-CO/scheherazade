@@ -197,12 +197,13 @@
   }
   // Changes to either prerequisite are propagated immediately from Settings.
   if (settings) document.addEventListener('change', e => {
-    if (!['set-tts-enabled', 'set-stt-enabled'].includes(e.target.id)) return
+    if (!['set-stt-enabled'].includes(e.target.id)) return
     if (!e.target.checked) {
       post('/api/call', { enabled: false }).then(() => channel.postMessage({ enabled: false })).catch(() => {})
     }
     setTimeout(sync, 300)
   })
+  window.addEventListener('companion-mode-change', sync)
   async function poll() {
     if (!active || busy) return
     busy = true; const generation = session.generation, revision = turnRevision, canSettle = !posting

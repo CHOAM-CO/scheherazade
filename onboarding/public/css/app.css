@@ -14,6 +14,12 @@
      columns when the window is wide (요구 ⑧ "리액티브하게") */
 
 :root {
+  --shell-gutter: 24px;
+  --header-row-gap: 12px;
+  --control-height: 36px;
+  --control-pad-y: 6px;
+  --control-pad-x: 12px;
+  --tab-track-inset: 4px;
   /* Native popup surfaces (select dropdown list, scrollbars): Chromium
      paints these from color-scheme, not from our CSS — without it the
      model picker's popup opened as a white OS panel over the dark app
@@ -115,6 +121,8 @@
 }
 
 * { box-sizing: border-box; }
+
+html { scrollbar-gutter: stable; }
 
 html, body {
   margin: 0;
@@ -244,7 +252,8 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
 
 .button-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); }
 .button-row > button { min-height: 36px; margin: 0; }
-button.icon-button { width: 36px; height: 36px; padding: 0; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+button.icon-button svg { width: 20px; height: 20px; flex-shrink: 0; }
+button.icon-button { width: var(--control-height); height: var(--control-height); padding: var(--control-pad-y); line-height: 1; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
 
 .tabs { display: flex; gap: 0.4rem; margin-bottom: 1.2rem; border-bottom: 1px solid var(--border); }
 .tab {
@@ -378,7 +387,7 @@ button.nav-ctl.is-busy::after {
      one long vertical scroll regardless of window size */
   max-width: 1100px;
   margin: 0 auto;
-  padding: var(--s5) var(--s5) var(--s6);
+  padding: var(--shell-gutter) var(--shell-gutter) var(--s6);
 }
 
 .page-header {
@@ -635,9 +644,8 @@ button.nav-ctl.is-busy::after {
   background: rgb(var(--frost-rgb) / var(--chrome-alpha));
   -webkit-backdrop-filter: var(--chrome-blur);
   backdrop-filter: var(--chrome-blur);
-  padding-top: var(--s2);
-  padding-bottom: var(--s3);
-  margin-bottom: var(--s3);
+  padding-block: 0;
+  margin-bottom: var(--header-row-gap);
   border-bottom: 1px solid var(--border);
 }
 
@@ -665,7 +673,7 @@ button.nav-ctl.is-busy::after {
 .nav-tabs {
   display: flex;
   gap: 0.4rem;
-  margin-top: 0.85rem;
+  margin-top: var(--header-row-gap);
   border-bottom: 1px solid var(--border);
 }
 .nav-tab {
@@ -1339,19 +1347,19 @@ button.mem-node:focus-visible { outline: 2px solid var(--accent-ring); outline-o
 .chat-lane-chip {
   display: inline-flex;
   align-items: center;
-  padding: 0.2rem 0.55rem;
+  min-height: var(--control-height);
+  padding: var(--control-pad-y) var(--control-pad-x);
+  line-height: 1;
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   font-size: 0.8rem;
   color: var(--fg-faint);
-  margin-left: 0.6rem;
   vertical-align: middle;
   white-space: nowrap;
 }
 /* "New conversation" clean-break control (2026-08-18): sits at the header's
    right edge next to the lane chip; the gap keeps it off the chip. */
 .chat-new-convo {
-  margin-left: 0.6rem;
   white-space: nowrap;
 }
 /* Pending signal (design-0024, 2026-09-28): the owner's "!" — she speaks first
@@ -1368,7 +1376,6 @@ button.mem-node:focus-visible { outline: 2px solid var(--accent-ring); outline-o
   min-width: 1.55rem;
   height: 1.55rem;
   padding: 0 0.35rem;
-  margin-left: 0.6rem;
   border: 1px solid var(--accent-ring);
   border-radius: var(--radius-s);
   background: rgb(var(--accent-rgb) / 0.16);
@@ -1774,7 +1781,8 @@ html {
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
-  padding: 4px;
+  padding: var(--tab-track-inset);
+  min-height: var(--control-height);
   width: max-content;
   box-shadow: var(--edge-highlight);
 }
@@ -1784,7 +1792,11 @@ html {
 .tab, .nav-tab {
   border-bottom: none;
   border-radius: var(--radius-pill);
-  padding: 8px 16px;
+  min-height: calc(var(--control-height) - 2 * var(--tab-track-inset) - 2px);
+  padding: var(--control-pad-y) var(--control-pad-x);
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
 }
 .tab.active, .nav-tab.active {
   border-bottom: none;
@@ -2089,9 +2101,15 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 }
 
 /* Quickbar shares secondary-button chrome; the transcript owns the remaining width. */
-.chat-page-header { justify-content: flex-start; align-items: center; flex-wrap: wrap; gap: var(--s2); margin: 0 0 var(--s3); }
-.chat-page-header .chat-lane-chip { margin-left: auto; }
-.chat-quickbar { flex-wrap: nowrap; }
+.chat-page-header { justify-content: flex-start; align-items: center; flex-wrap: wrap; gap: var(--header-row-gap); margin: 0 0 var(--header-row-gap); }
+.chat-page-header > :is(.chat-lane-chip, .chat-new-convo), .companion-mode-control select { min-height: var(--control-height); padding: var(--control-pad-y) var(--control-pad-x); line-height: 1; -webkit-app-region: no-drag; }
+.chat-quickbar { flex-wrap: wrap; gap: var(--header-row-gap); margin: 0; padding: 0; -webkit-app-region: no-drag; }
+.companion-mode-control { display: inline-flex; align-items: center; gap: var(--s2); }
+.companion-mode-control label { font-size: 0.85rem; white-space: nowrap; }
+.companion-mode-control select[data-state="voice"] { border-color: var(--accent); }
+.markdown-body > :first-child { margin-top: 0; }
+.markdown-body > :last-child { margin-bottom: 0; }
+.markdown-body p { color: inherit; }
 .qb { position: relative; border-radius: var(--radius-s); }
 .qb[data-state="off"] { opacity: .45; }
 .qb[data-state="lit"], .qb[data-state="on"] { color: var(--accent); border-color: var(--accent); background: var(--accent-ring); }

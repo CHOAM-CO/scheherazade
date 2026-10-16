@@ -41,7 +41,7 @@ try {
   await test('companion POST requires token', async () => assert.equal((await fetch(new URL('/api/companion', url), { method: 'POST', body: '{}' })).status, 403))
   await test('nudge requires token', async () => assert.equal((await fetch(new URL('/api/companion/nudge', url), { method: 'POST', body: '{}' })).status, 403))
   await test('foreign origin rejected even with token', async () => assert.equal((await fetch(new URL('/api/companion', url), { method: 'POST', headers: { ...auth, Origin: 'https://example.com' }, body: '{}' })).status, 403))
-  await test('authenticated snapshot reaches controller', async () => assert.deepEqual(await (await fetch(new URL('/api/companion', url), { headers: auth })).json(), { available: true, enabled: false }))
+  await test('authenticated snapshot reaches controller', async () => assert.deepEqual(await (await fetch(new URL('/api/companion', url), { headers: auth })).json(), { available: true, enabled: false, mode: 'off' }))
   await test('authenticated settings command reaches controller', async () => assert.equal((await (await fetch(new URL('/api/companion', url), { method: 'POST', headers: auth, body: '{"action":"settings","enabled":true}' })).json()).enabled, true))
   await test('bad native command rejected', async () => assert.equal((await fetch(new URL('/api/companion', url), { method: 'POST', headers: auth, body: '{"action":"execute"}' })).status, 400))
   await test('ineligible nudge cannot inject', async () => { const r = await fetch(new URL('/api/companion/nudge', url), { method: 'POST', headers: auth, body: '{}' }); assert.deepEqual(await r.json(), { injected: false }); assert.equal(received.length, 0) })

@@ -21,10 +21,6 @@
     card.id = 'set-tts'
     const label = document.createElement('div'); label.className = 'category-label'; label.textContent = T.label
     const note = document.createElement('p'); note.className = 'subtitle'; note.textContent = T.note
-    const row = document.createElement('div'); row.className = 'agent-control-row'
-    const lab = document.createElement('label'); lab.htmlFor = 'set-tts-enabled'; lab.textContent = T.toggle
-    const box = document.createElement('input'); box.type = 'checkbox'; box.id = 'set-tts-enabled'
-    row.append(lab, box)
     const row2 = document.createElement('div'); row2.className = 'agent-control-row'
     const lab2 = document.createElement('label'); lab2.htmlFor = 'set-tts-voice'; lab2.textContent = T.voice
     const sel = document.createElement('select'); sel.id = 'set-tts-voice'
@@ -39,7 +35,7 @@
     row3.append(nameLabel, nameIn, addBtn, file)
     const state = document.createElement('div'); state.className = 'agent-control-hint'; state.id = 'set-tts-state'
     const credit = document.createElement('div'); credit.className = 'agent-control-hint'; credit.id = 'set-tts-credit'
-    card.append(label, note, row, row2, row3, state, credit)
+    card.append(label, note, row2, row3, state, credit)
     const group = document.getElementById('set-companion-voice')
     if (group) group.append(card)
     else about.parentNode.insertBefore(card, about)
@@ -48,10 +44,9 @@
     let revision = 0
     let saving = false
     state.setAttribute('role', 'status')
-    box.disabled = sel.disabled = true
+    sel.disabled = true
     function paint(s) {
       last = s
-      box.checked = s.enabled
       sel.textContent = ''
       for (const v of s.voices) { const o = document.createElement('option'); o.value = v.id; o.textContent = v.builtin ? 'Sera' : v.name; sel.appendChild(o) }
       sel.value = s.voice
@@ -72,14 +67,15 @@
       try {
         const s = await getStatus()
         if (requestRevision !== revision || saving) return
-        paint(s); box.disabled = sel.disabled = false
+        paint(s); sel.disabled = false
       } catch (e) { if (requestRevision === revision) state.textContent = T.err(e.message) }
     }
+    window.addEventListener?.('companion-mode-change', refresh)
     async function saveSettings(body) {
       if (saving || !last) return
       const previous = last
       saving = true; revision++; clearTimeout(timer)
-      box.disabled = sel.disabled = del.disabled = addBtn.disabled = true
+      sel.disabled = del.disabled = addBtn.disabled = true
       try { paint(await postSettings(body)) }
       catch (e) {
         paint(previous)
@@ -87,10 +83,9 @@
         state.textContent = T.err(e.message)
       } finally {
         saving = false
-        box.disabled = sel.disabled = del.disabled = addBtn.disabled = false
+        sel.disabled = del.disabled = addBtn.disabled = false
       }
     }
-    box.onchange = () => saveSettings({ enabled: box.checked })
     sel.onchange = () => saveSettings({ voice: sel.value })
     del.onclick = async () => {
       if (last && (last.voices.find(v => v.id === sel.value) || {}).builtin) return
@@ -161,6 +156,7 @@
     stop() { queue?.stop() },
   }
 
+  window.addEventListener?.('companion-mode-change', () => { queue?.stop(); syncEnabled() })
   if (document.getElementById('set-about')) mountSettings()
   else { syncEnabled(); setInterval(syncEnabled, 15000); document.addEventListener('visibilitychange', () => { if (!document.hidden) syncEnabled() }) }
 })()
