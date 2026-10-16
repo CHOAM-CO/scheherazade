@@ -161,6 +161,25 @@ try {
     assert.equal(controller.snapshot().variant, 'face')
     await controller.command({ action: 'settings', enabled: false })
   })
+  await test('persisted call restores temporary orb at boot without enabling companion preference', () => {
+    const config = { CALL_ENABLED: 'true', COMPANION_ENABLED: 'false', COMPANION_VARIANT: 'face' }
+    const resumed = createCompanion({
+      electron: { app: new EventEmitter(), BrowserWindow: Window, screen, Tray, Menu: { buildFromTemplate: x => x }, nativeImage: { createFromPath: () => ({ resize: () => ({}) }) }, shell: { beep() {} } },
+      home, url, bootPathFor: () => '/boot?t=test-token', openMain() {}, autoPoll: false,
+      readConfig: () => ({ ...config }), writeConfig: fields => Object.assign(config, fields),
+      probeOverride: () => ({ fullscreen: false, known: true }),
+    })
+    try {
+      assert.equal(resumed.snapshot().callHud, true)
+      assert.equal(resumed.snapshot().variant, 'orb')
+      assert.equal(windows.at(-1).visible, true)
+      assert.equal(config.COMPANION_ENABLED, 'false')
+      assert.equal(config.COMPANION_VARIANT, 'face')
+      resumed.setCallEnabled(false)
+      assert.equal(resumed.snapshot().enabled, false)
+      assert.equal(windows.at(-1).dead, true)
+    } finally { resumed.dispose() }
+  })
   await test('disabled poll produces no traffic', async () => { const n = requests.length; await controller.poll(); assert.equal(requests.length, n) })
 } finally {
   controller.dispose(); srv.closeAllConnections(); await new Promise(r => srv.close(r))

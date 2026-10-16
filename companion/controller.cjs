@@ -310,7 +310,8 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
     if (win) win.destroy()
   }
   app.once('before-quit', dispose)
-  if (settings.enabled) { start(); ensureWindow(); fullscreen = probe(); applyVisibility() }
+  if (readConfig().CALL_ENABLED === 'true') setCallEnabled(true)
+  else if (settings.enabled) { start(); ensureWindow(); fullscreen = probe(); applyVisibility() }
   return { snapshot, command, setCallEnabled, dispose, poll, isWindow: candidate => candidate === win,
     get active() { return listening },
     claimNudge() {
