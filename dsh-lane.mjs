@@ -29,7 +29,7 @@
 import { prependMemoryContext } from './memory/turn-context.mjs'
 import { writeTurnErrorMarker, clearTurnErrorMarker, turnErrorLogLine } from './turn-error-marker.mjs'
 import { createServer } from 'node:http'
-import { spawn, execFile } from 'node:child_process'
+import { spawn, execFile, execFileSync } from 'node:child_process'
 import { readAgentConfig } from './channel-runtime.mjs'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
@@ -646,14 +646,14 @@ export function isMcpTransport (row, servers) {
 export async function ownedProcessRows ({ platform = process.platform, run = execFileAsync, powershell = require('./proc.cjs').POWERSHELL_EXE } = {}) {
   if (platform === 'win32') {
     const { stdout } = await run(powershell, ['-NoProfile', '-Command',
-      'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress'], { encoding: 'utf8', timeout: 10000, maxBuffer: 32 * 1024 * 1024 })
+      'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,CreationDate | ConvertTo-Json -Compress'], { encoding: 'utf8', timeout: 10000, maxBuffer: 32 * 1024 * 1024 })
     const parsed = JSON.parse(stdout || '[]')
-    return (Array.isArray(parsed) ? parsed : [parsed]).map(r => ({ pid: r.ProcessId, ppid: r.ParentProcessId, name: r.Name, command: r.CommandLine || '' }))
+    return (Array.isArray(parsed) ? parsed : [parsed]).map(r => ({ pid: r.ProcessId, ppid: r.ParentProcessId, name: r.Name, command: r.CommandLine || '', startTime: r.CreationDate }))
   }
-  const { stdout } = await run('ps', ['-axww', '-o', 'pid=,ppid=,command='], { encoding: 'utf8', timeout: 3000 })
+  const { stdout } = await run('ps', ['-axww', '-o', 'pid=,ppid=,lstart=,command='], { encoding: 'utf8', timeout: 3000 })
   return stdout.split('\n').flatMap(line => {
-    const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.+)$/)
-    return m ? [{ pid: Number(m[1]), ppid: Number(m[2]), command: m[3] }] : []
+    const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\S+\s+\S+\s+\d+)\s+(.+)$/)
+    return m ? [{ pid: Number(m[1]), ppid: Number(m[2]), startTime: m[3], command: m[4] }] : []
   })
 }
 
@@ -661,8 +661,9 @@ export async function killOwnedTools (enginePid, infrastructure = new Set(), {
   platform = process.platform, readRows = ownedProcessRows, run = execFileAsync, signal = process.kill, isInfrastructure = () => false
 } = {}) {
   const rows = await readRows()
-  // Recompute from live command lines on every stop; never trust stale boot PIDs.
-  infrastructure = new Set(rows.filter(isInfrastructure).map(row => row.pid))
+  // Validate turn-start identities against live start times to reject PID reuse.
+  infrastructure = new Set(rows.filter(row => isInfrastructure(row) ||
+    (row.startTime && infrastructure.get?.(row.pid) === row.startTime)).map(row => row.pid))
   for (let changed = true; changed;) {
     changed = false
     for (const row of rows) if (infrastructure.has(row.ppid) && !infrastructure.has(row.pid)) {
@@ -1057,13 +1058,14 @@ async function main () {
   let activeTurnGeneration = 0
   let turnConfig = await readAgentConfig(MEM)
   // Resolve transport ownership from live argv on each stop, including lazy servers.
+  let turnInfrastructure = Promise.resolve(new Map())
   const control = createTurnControl({
     cancel: () => client.cancel(sessionId),
     clearPending: () => writePending([]),
-    killTools: () => {
+    killTools: async () => {
       let servers = {}
       try { servers = JSON.parse(fs.readFileSync(MCP_CONFIG_FILE, 'utf8')).mcpServers || {} } catch {}
-      return killOwnedTools(child.pid, new Set(), { isInfrastructure: row => isMcpTransport(row, servers) })
+      return killOwnedTools(child.pid, await turnInfrastructure, { isInfrastructure: row => isMcpTransport(row, servers) })
     }
   })
   // Deliver a mute turn's composed text as the real chat message. Unlike
@@ -1126,6 +1128,14 @@ async function main () {
       if (sid !== sessionId || !event) return
       if (control.blocked) return
       if (event.type === 'turn/start') {
+        // Capture synchronously before handling any tool events for this turn.
+        turnInfrastructure = ownedProcessRows({ run: (command, args, options) =>
+          ({ stdout: execFileSync(command, args, options) })
+        }).then(rows => {
+          const descendants = new Set(toolProcessRoots(rows, child.pid))
+          return new Map(rows.filter(row => descendants.has(row.pid) && row.startTime)
+            .map(row => [row.pid, row.startTime]))
+        }).catch(error => { errLog(`turn infrastructure snapshot: ${error.message}`); return new Map() })
         turnText = ''; sawTextThisTurn = false; sawReplyThisTurn = false
         activeTurnGeneration = control.generation
         control.begin(false, turnConfig)

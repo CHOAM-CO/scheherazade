@@ -243,3 +243,14 @@ for (const mode of ['cancel', 'sync-cancel', 'timeout', 'fifo', 'sync-fifo', 'ki
   } finally { await new Promise(resolve => lane.httpServer.close(resolve)) }
 }
 console.log('PASS: stop recovery over HTTP, Windows root kill, async enumeration, budgets and owned POSIX kill')
+
+const identityKills = []
+await context.kill(10, new Map([[11, 'original'], [13, 'old']]), {
+  readRows: async () => [
+    {pid: 11, ppid: 10, startTime: 'original', command: 'unknown transport'},
+    {pid: 12, ppid: 10, startTime: 'new', command: 'tool'},
+    {pid: 13, ppid: 10, startTime: 'reused', command: 'tool'}
+  ], platform: 'darwin', signal: pid => identityKills.push(pid)
+})
+assert.deepEqual(identityKills.sort(), [12, 13], 'turn-start infrastructure survives, mid-turn tools and reused PIDs die')
+assert.match(source, /turnInfrastructure = ownedProcessRows/)
