@@ -16,7 +16,8 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
   const { app, BrowserWindow, screen, Tray, Menu, nativeImage, shell } = electron
   const token = new URL(bootPathFor('/'), url).searchParams.get('t')
   const bootAt = now()
-  const load = () => ({ ...readState(home, log), ...parseConfig(readConfig()) })
+  let callHud = false
+  const load = () => ({ ...readState(home, log), ...parseConfig(readConfig()), ...(callHud ? { enabled: true, variant: 'orb' } : {}) })
   let settings = load()
   const size = () => sizeOf(settings.variant)
   // companion.json's own 'enabled' is a 0026 leftover; the agent config is the
@@ -121,7 +122,7 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
       enabled: settings.enabled && connected && providerHealthy, ...fullscreen, busy: busy || !!awaiting, bubble: !!bubble })
   }
   function snapshot() {
-    return { available: true, ...settings, bubble: visibleBubble(), speaking, ring: bubble && ['question', 'approval-reply', 'error'].includes(bubble.kind) ? 'attention' : busy || awaiting ? 'thinking' : 'idle',
+    return { available: true, ...settings, callHud, bubble: visibleBubble(), speaking, ring: bubble && ['question', 'approval-reply', 'error'].includes(bubble.kind) ? 'attention' : busy || awaiting ? 'thinking' : 'idle',
       speech, connected, hiddenByFullscreen: hidden, fullscreenKnown: fullscreen.known, geometry }
   }
   async function command(body) {
@@ -143,7 +144,7 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
         const before = settings.variant
         settings = { ...persist({ ...settings,
           ...(body.sound === undefined ? {} : { sound: body.sound }),
-          ...(body.intervalMinutes === undefined ? {} : { intervalMinutes: body.intervalMinutes }) }), ...parseConfig(readConfig()) }
+          ...(body.intervalMinutes === undefined ? {} : { intervalMinutes: body.intervalMinutes }) }), ...parseConfig(readConfig()), ...(callHud ? { enabled: true, variant: 'orb' } : {}) }
         if (settings.enabled) {
           start(); ensureWindow(); fullscreen = probe(); applyVisibility()
           if (before !== settings.variant) { shapeKey = null; reposition() }
@@ -190,7 +191,7 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
     return snapshot()
   }
   function applyVisibility() {
-    const decision = fullscreenDecision({ enabled: settings.enabled, ...fullscreen })
+    const decision = fullscreenDecision({ enabled: settings.enabled, ...fullscreen, ...(callHud ? { fullscreen: false } : {}) })
     const changed = hidden !== decision.hiddenByFullscreen
     hidden = decision.hiddenByFullscreen
     if (win) {
@@ -212,6 +213,7 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
           request(`/api/chat/out?since=${cursor ?? 0}`), request('/api/agent/turn-error'), request('/api/agent/status'), request('/api/call'),
         ])
         if (callResult.status === 'fulfilled' && callEnabled !== !!callResult.value.enabled) {
+          if (callHud && !callResult.value.enabled) setCallEnabled(false)
           callEnabled = !!callResult.value.enabled
           if (!callEnabled) speaking = false
           reposition()
@@ -286,6 +288,22 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
     screen.removeListener('display-removed', displaysChanged)
     screen.removeListener('display-metrics-changed', displaysChanged)
   }
+  function setCallEnabled(enabled) {
+    if (callHud === !!enabled && callEnabled === !!enabled) return snapshot()
+    callHud = !!enabled
+    callEnabled = !!enabled
+    speaking = false
+    settings = load()
+    collapse(); shapeKey = null
+    if (settings.enabled) {
+      start(); ensureWindow(); fullscreen = probe(); reposition(); applyVisibility()
+    } else {
+      awaiting = null; dragging = null; hidden = false; trayFallback()
+      if (win) win.destroy()
+      cursor = null; halt()
+    }
+    return snapshot()
+  }
   function dispose() {
     halt(); stopped = true
     if (tray) { tray.destroy(); tray = null }
@@ -293,7 +311,7 @@ function createCompanion({ electron, home, url, bootPathFor, openMain, log, now 
   }
   app.once('before-quit', dispose)
   if (settings.enabled) { start(); ensureWindow(); fullscreen = probe(); applyVisibility() }
-  return { snapshot, command, dispose, poll, isWindow: candidate => candidate === win,
+  return { snapshot, command, setCallEnabled, dispose, poll, isWindow: candidate => candidate === win,
     get active() { return listening },
     claimNudge() {
       if (!eligible()) return false

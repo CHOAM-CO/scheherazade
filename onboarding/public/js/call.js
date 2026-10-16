@@ -49,6 +49,15 @@
   }
   function renderState() {
     panel.hidden = !enabled
+    if (!settings && !companion) {
+      button.title = enabled ? 'End call' : 'Call mode'
+      button.setAttribute('aria-label', button.title)
+      button.classList.toggle('danger', enabled)
+      button.classList.toggle('secondary', !enabled)
+      button.innerHTML = enabled
+        ? '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 15v-4q9-8 18 0v4h-5v-4M8 11v4H3"/></svg>'
+        : '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 3h4l2 5-3 2q2 4 6 6l2-3 5 2v4q0 2-3 2C9 20 4 15 3 6q0-3 2-3Z"/></svg>'
+    }
     const text = micMuted ? (ko ? '마이크 꺼짐' : 'Microphone muted') : retrying ? (ko ? '다시 보내는 중...' : 'Retrying...') : (speaking || (!active && remoteSpeaking)) ? (ko ? '말하는 중' : 'Speaking') : utterance.waiting ? (ko ? '듣는 중...' : 'Listening...') : (ko ? '듣는 중' : 'Listening')
     for (const [b, muted, name] of [[voiceButton, voiceMuted, (ko ? '세라 목소리' : 'Sera voice')], [micButton, micMuted, (ko ? '내 마이크' : 'My microphone')]]) {
       b.setAttribute('aria-pressed', String(muted))
@@ -122,7 +131,7 @@
     if (slot) { const row = document.createElement('div'); row.className = 'agent-control-row'; row.append(lab, button); slot.replaceChildren(row, hint) }
     else { const card = document.createElement('div'); card.className = 'category'; card.append(lab, button, hint); document.getElementById('set-about').before(card) }
   } else if (companion) { button.className = 'round'; button.textContent = '☎'; document.getElementById('b-mic').after(button) }
-  else { button.className = 'secondary'; button.textContent = label; document.getElementById('ct-mic')?.after(button) }
+  else { button.className = 'qb secondary icon-button'; document.getElementById('ct-quickbar')?.appendChild(button) }
   async function sync() {
     if (syncing) return
     syncing = true

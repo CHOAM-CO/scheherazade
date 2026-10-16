@@ -77,11 +77,18 @@ function createRoutes(ctx) {
     { method: 'GET', match: p => p === '/api/call', handler: async (_req, res) => {
       const c = readAgentConfig(); sendJson(res, 200, { enabled: c.CALL_ENABLED === 'true' && c.STT_ENABLED === 'true' && c.TTS_ENABLED === 'true', allowed: c.STT_ENABLED === 'true' && c.TTS_ENABLED === 'true' })
     } },
-    { method: 'POST', match: p => p === '/api/call', handler: async (req, res) => {
+    { method: 'POST', match: p => p === '/api/call', handler: async (req, res, call = {}) => {
       const b = await readJsonBody(req), c = readAgentConfig()
       if (typeof b.enabled !== 'boolean') return sendJson(res, 400, { error: 'enabled must be boolean' })
       if (b.enabled && (c.STT_ENABLED !== 'true' || c.TTS_ENABLED !== 'true')) return sendJson(res, 409, { error: 'Enable read aloud and voice input first' })
-      writeAgentConfig({ CALL_ENABLED: String(b.enabled) }); sendJson(res, 200, { enabled: b.enabled })
+      const previous = c.CALL_ENABLED || 'false'
+      writeAgentConfig({ CALL_ENABLED: String(b.enabled) })
+      try { call.agentControls?.companion?.()?.setCallEnabled(b.enabled) }
+      catch (error) {
+        writeAgentConfig({ CALL_ENABLED: previous })
+        return sendJson(res, 500, { error: 'Could not open the call window. Try again.' })
+      }
+      sendJson(res, 200, { enabled: b.enabled })
     } },
     { method: 'GET', match: p => p === '/api/stt/status', handler: async (req, res) => sendJson(res, 200, status()) },
     {

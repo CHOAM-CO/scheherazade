@@ -10,13 +10,13 @@ async function fixture({ failMic = false, companion = true, toast = true, remote
   const broadcasts = []; let heldOut = null
   const timers = [], spoken = [], elements = new Map(), messages = [], bubbleErrors = [], posted = [], keys = []
   function make(id = '') {
-    return { id, children: [], hidden: false, textContent: '', setAttribute(k,v) { this[k] = v }, getAttribute(k) { return this[k] },
+    return { classList: { toggle() {} }, appendChild(n) { this.append(n) }, id, children: [], hidden: false, textContent: '', setAttribute(k,v) { this[k] = v }, getAttribute(k) { return this[k] },
       append(...nodes) { for (const n of nodes) { this.children.push(n); n.parent = this } },
       prepend(...nodes) { this.append(...nodes) }, after(n) { this.parent?.append(n) }, before(n) { this.parent?.append(n) } }
   }
   const root = make('root')
   const element = id => elements.get(id) || root.children.flatMap(n => [n, ...n.children, ...n.children.flatMap(c => c.children)]).find(n => n.id === id)
-  for (const id of ['ct-status', 'ct-mic', ...(companion ? ['b-mic', 'bubble', 'caption', 'failure'] : [])]) {
+  for (const id of ['ct-status', 'ct-mic', 'ct-quickbar', ...(companion ? ['b-mic', 'bubble', 'caption', 'failure'] : [])]) {
     const el = make(id); elements.set(id, el); root.append(el)
   }
   let mode = 'idle', payload = { latest: 0, items: [], draft: '', state: { awaitingReplySince: null } }, enabled = true, turnError = {}, failPost = false

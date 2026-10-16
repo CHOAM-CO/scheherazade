@@ -12,3 +12,11 @@ cfg = { STT_ENABLED: 'true', TTS_ENABLED: 'true' }; await post.handler({}, {}); 
 cfg.STT_ENABLED = 'false'; await get.handler({}, {}); assert.equal(result.data.enabled, false)
 body = { enabled: false }; await post.handler({}, {}); assert.equal(cfg.CALL_ENABLED, 'false')
 console.log('call route: default off, validation, prerequisite gate, persisted off passed')
+
+const hud = []
+const call = { agentControls: { companion: () => ({ setCallEnabled: value => hud.push(value) }) } }
+cfg = { STT_ENABLED: 'true', TTS_ENABLED: 'true' }
+body = { enabled: true }; await post.handler({}, {}, call)
+body = { enabled: false }; await post.handler({}, {}, call)
+assert.deepEqual(hud, [true, false])
+console.log('Authenticated call route opens and restores native HUD via controller bridge')

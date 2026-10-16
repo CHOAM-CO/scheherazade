@@ -2193,3 +2193,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 #profiles-page h3 { overflow-wrap: anywhere; }
 
 .chat-shell .chat-input-row:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Primary composer actions occupy the same slot in every turn state. */
+.chat-shell #ct-send, .chat-shell #ct-stop { width: 80px; height: 36px; margin: 0; padding: 8px 12px; border-radius: var(--radius-m); }

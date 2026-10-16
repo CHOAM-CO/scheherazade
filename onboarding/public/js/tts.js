@@ -120,7 +120,6 @@
   // ── chat auto-play ──────────────────────────────────────────────────────
   let enabled = false
   let audio = null
-  let stopBtn = null
   let queue = null
   function ensureQueue() {
     if (queue) return queue
@@ -140,21 +139,9 @@
         audio.play().catch(failed)
       }),
       stopPlayback: () => { if (audio) { audio.pause(); audio._done?.() } },
-      onState: (s, e) => { if (e) { console.warn('[tts]', e); window.showToast?.('Could not play voice. Try reading the reply again.') } if (stopBtn) stopBtn.hidden = s === 'idle' },
+      onState: (s, e) => { if (e) { console.warn('[tts]', e); window.showToast?.('Could not play voice. Try reading the reply again.') } window.SeraSTT?.setReading(s !== 'idle' && s !== 'error') },
     })
     return queue
-  }
-  function mountStop() {
-    const bar = document.querySelector('.chat-composer-bar')
-    if (!bar || stopBtn) return
-    stopBtn = document.createElement('button')
-    stopBtn.className = 'secondary tts-stop'
-    stopBtn.textContent = T.stop
-    stopBtn.hidden = true
-    stopBtn.type = 'button'
-    stopBtn.title = window.COPY.tts[ko ? 'stopTitleKo' : 'stopTitle']
-    stopBtn.onclick = () => queue?.stop()
-    bar.insertBefore(stopBtn, document.getElementById('ct-stop') || document.getElementById('ct-send'))
   }
   // Audio-once rule (design-0027): while the desktop companion is on, it plays
   // read-aloud itself (one renderer, one AudioContext), so the chat stays silent.
@@ -175,5 +162,5 @@
   }
 
   if (document.getElementById('set-about')) mountSettings()
-  else { mountStop(); syncEnabled(); setInterval(syncEnabled, 15000); document.addEventListener('visibilitychange', () => { if (!document.hidden) syncEnabled() }) }
+  else { syncEnabled(); setInterval(syncEnabled, 15000); document.addEventListener('visibilitychange', () => { if (!document.hidden) syncEnabled() }) }
 })()

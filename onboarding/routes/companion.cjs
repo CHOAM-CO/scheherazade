@@ -21,7 +21,7 @@ function createRoutes(ctx) {
       const companion = call.agentControls?.companion?.()
       const body = await readJsonBody(req)
       if (!body || typeof body !== 'object' || !ACTIONS.has(body.action)) return sendJson(res, 400, { error: 'invalid companion command' })
-      if (body.action !== 'settings' && !config().enabled) return sendJson(res, 409, { error: 'companion disabled' })
+      if (body.action !== 'settings' && !config().enabled && !companion?.snapshot().callHud) return sendJson(res, 409, { error: 'companion disabled' })
       if (!companion) {
         // Browser-only (no Electron): the toggle still persists, nothing opens.
         if (body.action !== 'settings') return sendJson(res, 503, { error: 'companion unavailable' })

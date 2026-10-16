@@ -96,6 +96,17 @@
   let btn = null
   let input = null
   let mode = 'idle' // idle | listening | processing
+  let reading = false, micAvailable = false
+  const micIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>'
+  const stopVoiceIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M11 4L6 8H3v8h3l5 4zM16 9l6 6M22 9l-6 6"/></svg>'
+  function paintMic() {
+    if (!btn) return
+    btn.hidden = false
+    btn.innerHTML = reading ? stopVoiceIcon : micIcon
+    btn.title = reading ? 'Stop voice' : T.mic
+    btn.setAttribute('aria-label', btn.title)
+    btn.disabled = !reading && (!micAvailable || mode === 'processing' || !!window.SeraCall?.active)
+  }
   let cap = null // { stream, ctx, node, src }
   let sid = null
   let base = ''
@@ -112,7 +123,7 @@
     btn.dataset.state = m
     btn.title = m === 'listening' ? T.listening : m === 'processing' ? T.processing : T.mic
     btn.setAttribute('aria-pressed', String(m === 'listening'))
-    btn.disabled = m === 'processing'
+    paintMic()
     if (input) { input.classList.toggle('stt-ghost', m !== 'idle'); input.readOnly = m !== 'idle' }
   }
   function render() {
@@ -232,7 +243,7 @@
     btn.hidden = true
     btn.setAttribute('aria-label', T.mic)
     btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>'
-    btn.onclick = () => { if (!window.SeraCall?.active) return mode === 'listening' ? stop() : start() }
+    btn.onclick = () => { if (reading) return window.SeraTTS?.stop(); if (!window.SeraCall?.active) return mode === 'listening' ? stop() : start() }
     const anchor = document.getElementById('ct-stop') || document.getElementById('ct-send')
     bar.insertBefore(btn, anchor)
     setMode('idle')
@@ -241,11 +252,12 @@
   async function syncEnabled() {
     try {
       const s = await getStatus()
-      if (btn) btn.hidden = !(s.enabled && s.modelsPresent) && mode === 'idle'
+      micAvailable = !!(s.enabled && s.modelsPresent)
+      paintMic()
     } catch {}
   }
 
-  window.SeraSTT = { start, stop, cancel() { epoch++; stopCapture(); const old = sid; sid = null; queue = []; queued = 0; partial = ''; finals = []; setMode('idle'); if (old) postJson('/api/stt/stop', { sid: old, cancel: true }).catch(() => {}) }, get mode() { return mode } }
+  window.SeraSTT = { setReading(value) { reading = !!value; paintMic() }, start, stop, cancel() { epoch++; stopCapture(); const old = sid; sid = null; queue = []; queued = 0; partial = ''; finals = []; setMode('idle'); if (old) postJson('/api/stt/stop', { sid: old, cancel: true }).catch(() => {}) }, get mode() { return mode } }
 
   if (document.getElementById('set-about')) mountSettings()
   else if (document.getElementById('ct-input')) { mountMic(); syncEnabled(); setInterval(syncEnabled, 15000); document.addEventListener('visibilitychange', () => { if (!document.hidden) syncEnabled() }) }

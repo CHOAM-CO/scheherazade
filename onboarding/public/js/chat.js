@@ -890,14 +890,10 @@
     turnState = st.state
     const running = st.state === 'working' || st.state === 'stalled'
 
-    // Stop + steer ride the derived state the dots and the folds trust -- one
-    // source of truth for "work is owed", so the button cannot offer to stop a
-    // turn that is not running. Send deliberately stays visible beside Stop
-    // rather than being swapped out: mid-turn sends MERGE into the running turn
-    // (probe 6), and that steering is a feature, not an accident to disable
-    // away. (.hidden, not style.display -- [hidden] is the page's convention.)
+    // Send and Stop share one slot; existing stop and restart actions stay intact.
     if (stopBtn) {
       stopBtn.hidden = !st.inFlight
+      sendBtn.hidden = st.inFlight
       // The gone state's composer action is a RESTART, not a Stop (design-0025
       // §gone): there is nothing left to kill. It fires the app's own lifecycle
       // route (POST /api/agent/restart) -- the same one the shell's restart
